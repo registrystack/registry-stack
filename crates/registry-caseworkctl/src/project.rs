@@ -39,6 +39,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
     let mut document = json!({
         "apiVersion": "registry.registrystack.org/casework-runtime/v1alpha1",
         "kind": "CaseworkRuntimeConfig",
+        "identity": {"databaseId": "casework-example"},
         "package": {"root": project_root.join(LOCAL_PACKAGE_DIRECTORY)},
         "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
         "secretProviders": {"file": {"root": project_root.join("secrets")}},
@@ -1009,7 +1010,8 @@ const DOCTOR_CONFIGURATION_ACTION: &str =
     "Correct the operator source bindings named by the refusal so they match casework.yaml, then retry.";
 const DOCTOR_SOURCE_ACTION: &str = "Check that the source runtime is reachable and ready, and that the configured reader profile holds exact get and list access to every declared request projection, then retry.";
 const DOCTOR_PEER_VERSION_ACTION: &str = "Run Casework and every BReg source it reads from the same release: upgrade the one that is behind, then retry. Casework resumes source reads once the versions match, without a restart.";
-const DOCTOR_DATABASE_ACTION: &str = "Restore the Casework database named by database.runtimeUrlRef; if its schema is not current, apply the migrations with casework migrate or caseworkctl db migrate, then retry.";
+const DOCTOR_DATABASE_ACTION: &str = "Restore the Casework database named by database.runtimeUrlRef; if its schema is not current, run caseworkctl plan --runtime-config FILE, then caseworkctl apply --runtime-config FILE, then retry.";
+const DOCTOR_ACTIVATION_ACTION: &str = "Run caseworkctl plan --runtime-config FILE, then caseworkctl apply --runtime-config FILE, then retry.";
 const DOCTOR_DIRECTORY_ACTION: &str =
     "Authenticate as an Administrator and give every declared queue a serving team, then retry.";
 const DOCTOR_RECONCILIATION_ACTION: &str = "Restore the source named by the refusal and read the casework runtime log for the failing pass; readiness recovers after the next pass that succeeds.";
@@ -1141,6 +1143,27 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         .iter()
         .map(|(_, adapter)| adapter as &dyn registry_casework_core::SourceAdapter)
         .collect::<Vec<_>>();
+    let role_mode = runtime
+        .block_on(registry_casework::check_activation(
+            &store,
+            config.database_id(),
+            package_digest,
+            &dyn_adapters,
+        ))
+        .map_err(|error| {
+            let message = match &error {
+                registry_casework::RuntimeError::Store(_) => {
+                    "the Casework activation ledger could not be read".to_owned()
+                }
+                refusal => refusal.to_string(),
+            };
+            doctor_dependency_failure(
+                "activation",
+                message,
+                DOCTOR_ACTIVATION_ACTION,
+                error.into(),
+            )
+        })?;
     let conflicts = runtime
         .block_on(registry_casework::stranded_pinned_work(
             &store,
@@ -1193,6 +1216,8 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         "runtimeConfig": runtime_config,
         "packageRoot": package_root,
         "packageDigest": package_digest,
+        "roleMode": role_mode,
+        "singleRoleStatement": single_role_statement(Some(role_mode)),
         "checks": {
             "configuration": "ready",
             "secretFiles": "ready",
@@ -1200,6 +1225,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
             "sourceConnections": "ready",
             "audit": "ready",
             "database": "ready",
+            "activation": "ready",
             "pinnedWork": "ready",
             "oidcIssuer": "ready",
             "directory": "ready",
@@ -1272,22 +1298,169 @@ fn doctor_source_check(health: &SourceReconciliationHealth) -> Value {
     })
 }
 
-pub(super) fn db_migrate(project: &Path, runtime_config: Option<&Path>) -> Result<Value> {
-    let selected = load_runtime(project, runtime_config)?;
-    let config = &selected.config;
-    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
-    let store = PostgresStore::connect_migration(&config.database, &resolver)
+/// The verified package, secret providers, and source adapters one
+/// activation command plans or applies, built as startup builds them.
+struct ActivationInputs {
+    config: RuntimeConfig,
+    runtime_config: PathBuf,
+    package: registry_casework::LoadedCaseworkPackage,
+    resolver: SecretResolver,
+    adapters: Vec<std::sync::Arc<dyn registry_casework_core::SourceAdapter>>,
+}
+
+impl ActivationInputs {
+    fn load(runtime_config: &Path) -> Result<Self> {
+        let config = RuntimeConfig::load(runtime_config)
+            .context("loading Casework runtime configuration")?;
+        let runtime_config =
+            fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
+        let package = config
+            .load_package()
+            .context("verifying the configured Casework package")?;
+        let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+        let adapters = registry_casework::build_source_adapters(&config, &package, &resolver)
+            .context("building the Casework source adapters")?;
+        Ok(Self {
+            config,
+            runtime_config,
+            package,
+            resolver,
+            adapters,
+        })
+    }
+
+    fn adapter_refs(&self) -> Vec<&dyn registry_casework_core::SourceAdapter> {
+        self.adapters
+            .iter()
+            .map(|adapter| adapter.as_ref())
+            .collect()
+    }
+
+    fn candidate<'a>(
+        &'a self,
+        adapters: &'a [&'a dyn registry_casework_core::SourceAdapter],
+    ) -> registry_casework::ActivationCandidate<'a> {
+        registry_casework::ActivationCandidate {
+            database_id: self.config.database_id(),
+            package_digest: self.package.digest(),
+            acknowledged_stranded_work: self.config.package.acknowledge_stranded_work.as_deref(),
+            project: self.package.project(),
+            adapters,
+        }
+    }
+}
+
+/// Merge a serialized activation value into a report that already names
+/// the command and the runtime configuration.
+fn activation_report(mut report: Value, fields: impl serde::Serialize) -> Result<Value> {
+    let Value::Object(fields) =
+        serde_json::to_value(fields).context("rendering the Casework activation report")?
+    else {
+        bail!("the Casework activation report is not an object");
+    };
+    report
+        .as_object_mut()
+        .expect("activation reports are objects")
+        .extend(fields);
+    Ok(report)
+}
+
+fn single_role_statement(role_mode: Option<registry_casework::RoleMode>) -> Value {
+    if role_mode == Some(registry_casework::RoleMode::Single) {
+        Value::from(registry_casework::SINGLE_ROLE_STATEMENT)
+    } else {
+        Value::Null
+    }
+}
+
+pub(super) fn plan(runtime_config: &Path) -> Result<Value> {
+    let inputs = ActivationInputs::load(runtime_config)?;
+    let adapters = inputs.adapter_refs();
+    let candidate = inputs.candidate(&adapters);
+    let store = PostgresStore::connect_runtime(&inputs.config.database, &inputs.resolver)
+        .context("the Casework runtime database configuration is invalid")?;
+    let plan = async_runtime()?
+        .block_on(store.plan_activation(&candidate))
+        .context("planning the Casework package activation")?;
+    let refused = super::plan_is_refusal(&plan.refusals);
+    let mut report = json!({
+        "ok": !refused,
+        "command": "plan",
+        "runtimeConfig": inputs.runtime_config,
+    });
+    if refused {
+        report["diagnostics"] = Value::from(super::activation_refusal_diagnostics(&plan.refusals));
+    }
+    activation_report(report, plan)
+}
+
+pub(super) fn apply(
+    runtime_config: &Path,
+    operator_reference: Option<String>,
+    backup_references: Vec<String>,
+) -> Result<Value> {
+    let inputs = ActivationInputs::load(runtime_config)?;
+    let adapters = inputs.adapter_refs();
+    let candidate = inputs.candidate(&adapters);
+    let runtime = async_runtime()?;
+    // The role the runtime credential connects as decides the role mode;
+    // only apply resolves the migration credential.
+    let runtime_user = {
+        let store = PostgresStore::connect_runtime(&inputs.config.database, &inputs.resolver)
+            .context("the Casework runtime database configuration is invalid")?;
+        runtime
+            .block_on(store.current_user())
+            .context("reading the Casework runtime database role")?
+    };
+    let store = PostgresStore::connect_migration(&inputs.config.database, &inputs.resolver)
         .context("the Casework migration database configuration is invalid")?;
-    async_runtime()?
-        .block_on(store.migrate())
-        .context("applying Casework database migrations")?;
-    Ok(json!({
-        "ok": true,
-        "command": "db migrate",
-        "project": selected.workspace,
-        "runtimeConfig": selected.runtime_config,
-        "status": "migrated"
-    }))
+    let store = with_operator_audit(store, &inputs.config, &inputs.resolver, &runtime)?;
+    let applied = runtime
+        .block_on(store.apply_activation(
+            &runtime_user,
+            &candidate,
+            &registry_casework::ApplyRequest {
+                operator_reference,
+                backup_references,
+            },
+        ))
+        .context("applying the Casework package")?;
+    let role_mode = applied.activation.role_mode;
+    let report = activation_report(
+        json!({
+            "ok": true,
+            "command": "apply",
+            "runtimeConfig": inputs.runtime_config,
+            "schemaVersionsApplied": applied.schema_versions_applied,
+            "effects": applied.effects,
+            "singleRoleStatement": single_role_statement(Some(role_mode)),
+        }),
+        applied.activation,
+    )?;
+    Ok(report)
+}
+
+pub(super) fn status(runtime_config: &Path) -> Result<Value> {
+    let config =
+        RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
+    let runtime_config =
+        fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
+    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let store = PostgresStore::connect_runtime(&config.database, &resolver)
+        .context("the Casework runtime database configuration is invalid")?;
+    let status = async_runtime()?
+        .block_on(store.activation_status())
+        .context("reading the Casework activation ledger")?;
+    let statement = single_role_statement(status.role_mode);
+    activation_report(
+        json!({
+            "ok": true,
+            "command": "status",
+            "runtimeConfig": runtime_config,
+            "singleRoleStatement": statement,
+        }),
+        status,
+    )
 }
 
 pub(super) fn retention_erase(

@@ -41,7 +41,8 @@ up these alongside every database backup, on the same schedule:
 
 ### Registry Casework state
 
-- The PostgreSQL database, with `pg_dump` before every `casework migrate`.
+- The PostgreSQL database, with `pg_dump` before every `caseworkctl apply`; name the dump with
+  `--backup` so the activation ledger records it.
 - The installed package directory, the runtime file, and its secret files: the audit key
   (`audit.hashKeyRef`), the task-authority signing key (`taskAuthority.signingKeyRef`), the
   database URLs, and each source's client credentials.
@@ -152,8 +153,9 @@ Casework is not the system of record for source-backed work: the BReg source is.
 Casework database therefore catches up with BReg on its own, while the coordination state it
 alone holds returns to the backup point. Restore the latest dump into a database provisioned as
 [Provision PostgreSQL](../../casework/#provision-postgresql) describes, keep the package and the
-audit key the backup was taken under, and start the runtime. Its schema must match the binary;
-see [Migrate and serve](../../casework/#migrate-and-serve).
+audit key the backup was taken under, and start the runtime. Its schema must match the binary,
+and its activation ledger must name the package the runtime loads; see
+[Plan, apply, and serve](../../casework/#plan-apply-and-serve).
 
 What comes back and what does not:
 
@@ -187,8 +189,9 @@ Reconcile the gap before staff resume work:
    BReg submitted after the backup point are unknown to the restored Casework; recover them from
    the BReg side as [Repeat what the backup undid](#repeat-what-the-backup-undid) describes.
 
-A database restored under a different package can refuse to start because the package would
-strand pinned work; see
+A database restored under a different package refuses to start until `caseworkctl apply`
+activates the configured package, and that apply refuses a package that would strand pinned work;
+see
 [Refuse a package that strands pinned work](../../casework/#refuse-a-package-that-strands-pinned-work).
 
 {/* Evidence: crates/registry-casework/src/service.rs, reconcile_source_pass()
@@ -197,7 +200,8 @@ strand pinned work; see
     occurrence_state(); crates/registry-casework/migrations/0015_unified_reviews.sql and
     0017_audit_writer.sql (no audit state in the database);
     crates/registry-casework/src/audit.rs, published_audit_record() (pseudonymized fields);
-    crates/registry-casework/src/runtime.rs, serve_from_path() and check_pinned_work();
+    crates/registry-casework/src/runtime.rs, serve_from_path() and check_activation();
+    crates/registry-casework/src/activation.rs, evaluate_effects();
     crates/registry-caseworkctl/src/lib.rs, AttemptCommand. */}
 
 ### Hand over the Casework audit key

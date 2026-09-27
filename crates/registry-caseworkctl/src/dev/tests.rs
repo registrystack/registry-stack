@@ -1449,28 +1449,62 @@ fn failed_start_waits_for_the_supervisor_lock_to_be_released() {
     assert!(elapsed < SUPERVISOR_RELEASE_GRACE, "elapsed: {elapsed:?}");
 }
 
+fn refusal(code: &str) -> registry_casework::ActivationRefusal {
+    registry_casework::ActivationRefusal {
+        code: format!("casework.activation.{code}"),
+        path: "database".to_owned(),
+        message: format!("the {code} refusal"),
+    }
+}
+
 #[test]
-fn migration_failures_use_the_bounded_native_diagnostic_stream() {
+fn a_start_on_a_database_already_running_the_session_package_is_not_a_refusal() {
     let root = crate::canonical_tempdir();
-    private::directory(&root.path().join("logs")).unwrap();
-    let refusal = format!(
+    let already_active =
+        anyhow::Error::new(registry_casework::ActivationError::Refused(vec![refusal(
+            "already-active",
+        )]))
+        .context("applying the Casework package");
+    activation_outcome(Err(already_active), root.path()).unwrap();
+    activation_outcome(Ok(json!({"ok": true})), root.path()).unwrap();
+}
+
+#[test]
+fn an_activation_refusal_names_its_first_code_and_the_retained_diagnostics() {
+    let root = crate::canonical_tempdir();
+    let refused = anyhow::Error::new(registry_casework::ActivationError::Refused(vec![
+        refusal("already-active"),
+        refusal("stranded-work"),
+    ]))
+    .context("applying the Casework package");
+    let message = format!(
         "{:#}",
-        command(
-            Command::new("/bin/sh").args([
-                "-c",
-                "printf 'casework: schema upgrade refused safely\\n' >&2; exit 1",
-            ]),
-            root.path(),
-            "migrate",
-            None,
-        )
-        .unwrap_err()
+        activation_outcome(Err(refused), root.path()).unwrap_err()
     );
     assert!(
-        refusal.contains("schema upgrade refused safely"),
-        "{refusal}"
+        message.starts_with(
+            "native activation refused: casework.activation.stranded-work: the stranded-work refusal."
+        ),
+        "{message}"
     );
-    assert!(refusal.contains("owner-only diagnostics"), "{refusal}");
+    assert!(
+        message.contains("caseworkctl plan --runtime-config"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&root.path().join("logs").display().to_string()),
+        "{message}"
+    );
+
+    let failed = anyhow::anyhow!("the Casework migration database configuration is invalid");
+    let message = format!(
+        "{:#}",
+        activation_outcome(Err(failed), root.path()).unwrap_err()
+    );
+    assert!(
+        message.starts_with("native activation failed:"),
+        "{message}"
+    );
 }
 
 #[test]

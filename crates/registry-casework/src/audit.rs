@@ -69,6 +69,16 @@ impl CaseworkAudit {
     /// Append the `request` entry of one audited operation. The caller opens
     /// no transaction and reads no protected row unless this is accepted.
     pub(crate) async fn begin(&self, request: Value) -> Result<AuditOperation, StoreError> {
+        self.begin_with_schema(CASEWORK_AUDIT_SCHEMA, request).await
+    }
+
+    /// Append the `request` entry of one audited operation under `schema`;
+    /// its `response` entries carry the same schema.
+    pub(crate) async fn begin_with_schema(
+        &self,
+        schema: &str,
+        request: Value,
+    ) -> Result<AuditOperation, StoreError> {
         let record = self.minimized(request)?;
         let event = record
             .get("event")
@@ -78,12 +88,7 @@ impl CaseworkAudit {
         let unfinished = self.minimized(json!({"event": event, "outcome": "unfinished"}))?;
         let request = self
             .writer
-            .begin(
-                CASEWORK_AUDIT_SCHEMA,
-                Uuid::new_v4().to_string(),
-                record,
-                unfinished,
-            )
+            .begin(schema, Uuid::new_v4().to_string(), record, unfinished)
             .await
             .map_err(|_| StoreError::AuditUnavailable)?;
         Ok(AuditOperation {
@@ -179,6 +184,10 @@ pub(crate) enum AuditOutcome {
     Replayed,
     /// The state it asked for already held, so it recorded no domain event.
     Unchanged,
+    /// It was refused before its transaction changed anything.
+    Refused,
+    /// It failed and its transaction rolled back.
+    Failed,
 }
 
 impl AuditOutcome {
@@ -186,6 +195,8 @@ impl AuditOutcome {
         match self {
             Self::Replayed => "replayed",
             Self::Unchanged => "unchanged",
+            Self::Refused => "refused",
+            Self::Failed => "failed",
         }
     }
 }
@@ -285,6 +296,18 @@ impl AuditOperation {
     /// it.
     pub(crate) fn record_outcome(&mut self, outcome: AuditOutcome) {
         self.outcome = Some(outcome);
+    }
+
+    /// Answer a caller-requested operation whose transaction rolled back with
+    /// `outcome`, dropping any domain event it recorded before the rollback,
+    /// since none of them took effect.
+    pub(crate) async fn conclude_without_change(
+        mut self,
+        outcome: AuditOutcome,
+    ) -> Result<(), StoreError> {
+        self.responses.clear();
+        self.outcome = Some(outcome);
+        self.complete().await
     }
 
     /// Refuse a caller-requested operation that has neither a domain event
@@ -575,6 +598,13 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         "actorRef",
         "accountabilityEventId",
         "outcome",
+        "activationId",
+        "packageDigest",
+        "predecessorPackageDigest",
+        "planKind",
+        "roleMode",
+        "operatorReferenceHash",
+        "schemaVersionsApplied",
     ] {
         if let Some(value) = raw.get(field) {
             published.insert(field.to_owned(), value.clone());

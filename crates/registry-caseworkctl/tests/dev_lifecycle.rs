@@ -592,19 +592,21 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
         200
     );
 
-    // Exercise the documented migration entry point explicitly. `dev` applies
-    // the same embedded migrations before starting, so this also proves that a
-    // current candidate reports the already-current database safely.
-    let migrated = session.success(&[
-        "db",
-        "migrate",
-        project,
-        "--runtime-config",
-        first["operatorConfig"]
-            .as_str()
-            .expect("an operator config"),
-    ]);
-    assert_eq!(migrated["status"], "migrated", "{migrated:#}");
+    // Exercise the documented activation entry points explicitly. `dev`
+    // applies the session package before starting, so a plan of the same
+    // configuration reports nothing pending and status names the split roles.
+    let operator_config = first["operatorConfig"]
+        .as_str()
+        .expect("an operator config");
+    let planned = session.success(&["plan", "--runtime-config", operator_config]);
+    assert_eq!(planned["changesPending"], false, "{planned:#}");
+    let status = session.success(&["status", "--runtime-config", operator_config]);
+    assert_eq!(status["roleMode"], "split", "{status:#}");
+    assert_eq!(
+        status["singleRoleStatement"],
+        serde_json::Value::Null,
+        "{status:#}"
+    );
 
     // The session a first start leaves behind satisfies every operator check,
     // including the seeded directory the reader never had to fill in.

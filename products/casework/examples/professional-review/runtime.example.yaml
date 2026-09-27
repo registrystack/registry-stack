@@ -1,5 +1,10 @@
 apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
 kind: CaseworkRuntimeConfig
+identity:
+  # The operator-chosen logical name of this deployment's database. The first
+  # `caseworkctl apply` records it; later applies and startup refuse a
+  # database that recorded another one.
+  databaseId: casework-professional-review
 package:
   # The selected package always contains the policy at casework.yaml.
   root: /srv/registry-casework/package

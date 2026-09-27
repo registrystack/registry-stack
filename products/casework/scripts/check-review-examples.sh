@@ -88,7 +88,7 @@ cargo test --locked -p registry-casework --features postgres-test \
   --test review_postgres standalone_structured_answers_support_polling_and_completion_modes \
   -- --nocapture
 
-# J1 / J5 / I12: installed binaries author, migrate, diagnose, serve, and
+# J1 / J5 / I12: installed binaries author, apply, diagnose, serve, and
 # restart a standalone review while retaining pending and terminal state. The
 # companion also drives candidate Node and Python Casework facades over HTTP.
 products/casework/scripts/check-review-journeys.sh

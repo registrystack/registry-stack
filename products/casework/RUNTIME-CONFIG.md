@@ -1,7 +1,9 @@
 # Casework runtime configuration
 
 Casework reads one versioned operator document selected with
-`casework --runtime-config ABSOLUTE_FILE serve` or `migrate`. The selected file
+`casework --runtime-config ABSOLUTE_FILE serve`, and `caseworkctl plan`,
+`apply`, `status`, and `doctor` read the same file with `--runtime-config`.
+The selected file
 path and every operated resource path are absolute, and the selected file may
 not pass through a symbolic link. Local development tooling may resolve paths
 before it writes the file. The file is read through the shared Registry Stack
@@ -25,6 +27,15 @@ apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
 kind: CaseworkRuntimeConfig
 ```
 
+`identity.databaseId` is required: the logical name of the database this
+deployment activates packages in, such as `casework-production`. It is chosen
+by the operator, is 1 to 256 bytes with no surrounding whitespace or control
+character, and is never derived from a URL or a PostgreSQL database name. The
+first `caseworkctl apply` records it in the activation ledger. Every later
+apply, and every start of the runtime, refuses a database that recorded a
+different identity, without naming either value. A file that omits the block
+is refused with the key to add.
+
 `package.root` selects one directory. The runtime always loads
 `package.root/casework.yaml`; no second project selector can override it. In
 every listener mode, with or without `package.expectedDigest`, the directory
@@ -47,10 +58,11 @@ reviewed, so that replacing the files under `package.root` cannot change the
 policy a restart loads.
 
 `package.acknowledgeStrandedWork` is optional and takes the same digest form.
-Before it registers any source generation, the runtime compares the package it
-is about to activate with the in-flight work retained in the database. Review
+Before it registers any source generation, `caseworkctl apply` compares the
+package it is about to activate with the in-flight work retained in the
+database. Review
 requests still under review pinned their kind's policy when they were
-admitted, and open work items keep the queue they were routed to. The runtime
+admitted, and open work items keep the queue they were routed to. Apply
 refuses a package that removes a queue or access profile that work still
 needs, that declares a pinned review kind version with different content, that
 removes the source of a source-context review, or whose source read would
@@ -60,9 +72,10 @@ digest. Let that work finish under the earlier package, or set
 `package.acknowledgeStrandedWork` to that exact digest to activate the package
 anyway; the acknowledgement admits only the package it names, so it never
 carries over to a later one.
-`caseworkctl doctor` runs the same comparison as its `pinnedWork` check, so
-pointing it at a runtime file whose `package.root` holds the next package
-previews the refusal before a restart.
+`caseworkctl plan` runs the same comparison, so pointing it at a runtime file
+whose `package.root` holds the next package previews the refusal before the
+apply. `caseworkctl doctor` repeats it for the active package as its
+`pinnedWork` check.
 
 `listener` is required. `listener.bind` is required and is one numeric socket
 address, including bracketed IPv6 forms. `listener.tlsTermination` is required. Use
@@ -85,6 +98,14 @@ from one provider to another. The maintained example uses mounted files.
 
 `database.runtimeUrlRef` supplies the least-privilege service connection and
 `database.migrationUrlRef` supplies the operator-run migration connection.
+The runtime, `caseworkctl plan`, `status`, and `doctor` connect only with the
+runtime credential; only `caseworkctl apply` resolves the migration
+credential. When the two name different PostgreSQL roles, apply grants the
+runtime role the privileges it serves with (schema usage, read and write on
+the Casework tables, read-only on the activation ledger and the schema
+migration table) and records the deployment as `split`; when they name one
+role, or the runtime role can still write the ledger, it records `single` and
+`status` and `doctor` say that the runtime credential can activate packages.
 `database.trustedRootCertificateRef` is optional. Plaintext PostgreSQL is
 available only to builds with the `postgres-test` feature and an explicit
 `testOnlyPlaintext: true` setting. Unless a database URL sets them, every

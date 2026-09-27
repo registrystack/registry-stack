@@ -188,7 +188,7 @@ SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL;
 ```
 
 When the applicable count reaches zero, stop the old runtime, archive its audit file and sealed
-segments, and configure a fresh file path for the new runtime. Run `casework migrate` or
+segments, and configure a fresh file path for the new runtime. Run `caseworkctl apply` or
 `scheduling migrate` with the new release and the deployment's runtime configuration. If migration
 reports unpublished audit records, restart the previous release to finish publishing and retry;
 do not delete pending rows to bypass the refusal. Preserve the old archive outside the new

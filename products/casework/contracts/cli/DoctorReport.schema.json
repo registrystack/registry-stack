@@ -19,7 +19,9 @@
         "secretFileChecks",
         "sourceChecks",
         "pinnedWork",
-        "eventWiringGuidance"
+        "eventWiringGuidance",
+        "roleMode",
+        "singleRoleStatement"
       ],
       "properties": {
         "apiVersion": {
@@ -83,6 +85,18 @@
         },
         "eventWiringGuidance": {
           "type": "string"
+        },
+        "roleMode": {
+          "enum": [
+            "single",
+            "split"
+          ]
+        },
+        "singleRoleStatement": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -170,6 +184,7 @@
         "sourceConnections",
         "audit",
         "database",
+        "activation",
         "pinnedWork",
         "oidcIssuer",
         "directory",
@@ -192,6 +207,9 @@
           "const": "ready"
         },
         "database": {
+          "const": "ready"
+        },
+        "activation": {
           "const": "ready"
         },
         "pinnedWork": {

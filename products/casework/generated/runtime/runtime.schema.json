@@ -298,6 +298,21 @@
       },
       "type": "object"
     },
+    "IdentityConfig": {
+      "additionalProperties": false,
+      "description": "The logical identity of the database this deployment activates packages\nin. It is chosen by the operator (for example `casework-production`) and\nnever derived from a URL or a PostgreSQL database name. The first\n`caseworkctl apply` records it, and every later apply and every startup\nrefuses a database whose recorded identity differs.",
+      "properties": {
+        "databaseId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "databaseId"
+      ],
+      "type": "object"
+    },
     "JwksSource": {
       "description": "Where a runtime obtains the OIDC issuer's signing keys.",
       "oneOf": [
@@ -807,6 +822,9 @@
     "database": {
       "$ref": "#/$defs/DatabaseConfig"
     },
+    "identity": {
+      "$ref": "#/$defs/IdentityConfig"
+    },
     "kind": {
       "const": "CaseworkRuntimeConfig",
       "type": "string"
@@ -860,6 +878,7 @@
   "required": [
     "apiVersion",
     "kind",
+    "identity",
     "package",
     "listener",
     "secretProviders",

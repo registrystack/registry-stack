@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/PlanReport.schema.json",
+  "title": "PlanReport",
+  "description": "Versioned JSON report emitted by caseworkctl for plan.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "command",
+        "runtimeConfig",
+        "active",
+        "candidatePackageDigest",
+        "databaseIdCheck",
+        "planKind",
+        "schemaVersion",
+        "supportedSchemaVersion",
+        "pendingSchemaVersions",
+        "effects",
+        "refusals",
+        "runtimeRoleMode",
+        "changesPending"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
+        },
+        "kind": {
+          "const": "PlanReport"
+        },
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "plan"
+        },
+        "runtimeConfig": {
+          "type": "string"
+        },
+        "active": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/activation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidatePackageDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "databaseIdCheck": {
+          "enum": [
+            "notRecorded",
+            "matches",
+            "differs"
+          ]
+        },
+        "planKind": {
+          "enum": [
+            "initial",
+            "successor"
+          ]
+        },
+        "schemaVersion": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "supportedSchemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pendingSchemaVersions": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "effects": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "refusals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/refusal"
+          }
+        },
+        "runtimeRoleMode": {
+          "oneOf": [
+            {
+              "enum": [
+                "single",
+                "split"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changesPending": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "command",
+        "runtimeConfig",
+        "active",
+        "candidatePackageDigest",
+        "databaseIdCheck",
+        "planKind",
+        "schemaVersion",
+        "supportedSchemaVersion",
+        "pendingSchemaVersions",
+        "effects",
+        "refusals",
+        "runtimeRoleMode",
+        "changesPending",
+        "diagnostics"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
+        },
+        "kind": {
+          "const": "PlanReport"
+        },
+        "ok": {
+          "const": false
+        },
+        "command": {
+          "const": "plan"
+        },
+        "runtimeConfig": {
+          "type": "string"
+        },
+        "active": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/activation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidatePackageDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "databaseIdCheck": {
+          "enum": [
+            "notRecorded",
+            "matches",
+            "differs"
+          ]
+        },
+        "planKind": {
+          "enum": [
+            "initial",
+            "successor"
+          ]
+        },
+        "schemaVersion": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "supportedSchemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pendingSchemaVersions": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "effects": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "refusals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/refusal"
+          }
+        },
+        "runtimeRoleMode": {
+          "oneOf": [
+            {
+              "enum": [
+                "single",
+                "split"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changesPending": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "diagnostics"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
+        },
+        "kind": {
+          "const": "PlanReport"
+        },
+        "ok": {
+          "const": false
+        },
+        "command": {
+          "const": "plan"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "artifact",
+        "path",
+        "message",
+        "suggestedAction"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "suggestedAction": {
+          "type": "string"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activationId",
+        "applyOrder",
+        "packageDigest",
+        "predecessorPackageDigest",
+        "databaseId",
+        "planKind",
+        "appliedAt",
+        "operatorReferenceHash",
+        "backupReferences",
+        "roleMode"
+      ],
+      "properties": {
+        "activationId": {
+          "type": "string"
+        },
+        "applyOrder": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "packageDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "predecessorPackageDigest": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "databaseId": {
+          "type": "string"
+        },
+        "planKind": {
+          "enum": [
+            "initial",
+            "successor"
+          ]
+        },
+        "appliedAt": {
+          "type": "string"
+        },
+        "operatorReferenceHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backupReferences": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string"
+          }
+        },
+        "roleMode": {
+          "enum": [
+            "single",
+            "split"
+          ]
+        }
+      }
+    },
+    "refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "path",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

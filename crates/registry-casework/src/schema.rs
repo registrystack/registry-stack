@@ -46,6 +46,14 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 /// field is a secret reference, and a static JWKS document names an enabled
 /// provider.
 fn install_runtime_constraints(schema: &mut Value) {
+    // `identity` is optional in the Rust type only so that a missing block
+    // gets a diagnostic naming the key to add; the document requires it.
+    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+        required.insert(2, Value::String("identity".to_owned()));
+    }
+    if let Some(identity) = schema.pointer_mut("/properties/identity") {
+        *identity = serde_json::json!({"$ref": "#/$defs/IdentityConfig"});
+    }
     for (definition, property) in [("RuntimePackageConfig", "root")] {
         set_definition_property(
             schema,
@@ -278,6 +286,7 @@ mod tests {
         serde_json::json!({
             "apiVersion": RUNTIME_CONFIG_API_VERSION,
             "kind": RUNTIME_CONFIG_KIND,
+            "identity": {"databaseId": "casework-schema-test"},
             "package": {"root": "/var/lib/casework/package"},
             "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback"},
             "secretProviders": secret_providers,
@@ -292,6 +301,22 @@ mod tests {
             }},
             "audit": {"path": "/var/log/casework/audit.jsonl", "hashKeyRef": supporting_reference}
         })
+    }
+
+    #[test]
+    fn the_schema_requires_the_database_identity_the_runtime_requires() {
+        let schema = runtime_schema();
+        let instance = runtime_instance("secret:env/CASEWORK_JWKS", "both");
+        assert!(schema.is_valid(&instance));
+        let mut missing = instance.clone();
+        missing.as_object_mut().unwrap().remove("identity");
+        assert!(!schema.is_valid(&missing));
+        let mut null = instance.clone();
+        null["identity"] = Value::Null;
+        assert!(!schema.is_valid(&null));
+        let mut empty = instance;
+        empty["identity"]["databaseId"] = Value::from("");
+        assert!(!schema.is_valid(&empty));
     }
 
     #[test]

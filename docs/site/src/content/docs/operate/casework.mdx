@@ -1,11 +1,11 @@
 ---
 title: Deploy Registry Casework
-description: Install Registry Casework, write its runtime configuration, verify the reviewed policy package, migrate PostgreSQL, serve behind your TLS proxy, and establish directory authority.
+description: Install Registry Casework, write its runtime configuration, verify the reviewed policy package, plan and apply it to PostgreSQL, serve behind your TLS proxy, and establish directory authority.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-09-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -23,7 +23,8 @@ the package directory and ends at a serving deployment.
 ## What you provide
 
 - **One PostgreSQL database and two login credentials.** The migration credential owns the Casework
-  schema and applies migrations. The runtime credential serves requests and the background workers.
+  schema, and `caseworkctl apply` uses it to migrate the schema and activate a package. The runtime
+  credential serves requests and the background workers, and only reads the activation ledger.
   Casework creates no extension and no role, and its migrations carry no version-gated SQL; the
   product's own database suites run against PostgreSQL 17. The runtime requires TLS on both
   connections and refuses a plaintext one.
@@ -89,9 +90,8 @@ Each release publishes the container image `ghcr.io/registrystack/casework:<tag>
 distroless nonroot base for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
 `--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries the
 runtime binary and its license and nothing else: no shell, no healthcheck command, and no
-`caseworkctl`. `migrate` is a `casework` subcommand, so the same image runs it, given the
-migration credential instead of the runtime one; `doctor` belongs to `caseworkctl`, so it still
-runs from a separate operator host that has that binary installed. One directory is
+`caseworkctl`. `plan`, `apply`, `status`, and `doctor` belong to `caseworkctl`, so they run from a
+separate operator host that has that binary installed and reaches the database. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
 audit file; mount the runtime file, the policy package, and the secret root read-only. The
 release manifest published beside the binaries records the promoted digest of the image; pin that
@@ -103,9 +103,9 @@ digest rather than the movable tag.
 
 ## Provision PostgreSQL
 
-Create two login roles: a migration role that owns the schema and applies migrations, and a
-runtime role the serving process and background workers use. Keep the migration credential off the
-serving host when no migration is in progress.
+Create two login roles: a migration role that owns the schema and that `caseworkctl apply` connects
+as, and a runtime role the serving process and background workers use. Keep the migration
+credential off the serving host; only `apply` needs it.
 
 ```sql
 CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
@@ -124,28 +124,33 @@ REVOKE ALL ON DATABASE casework FROM PUBLIC;
 GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
 ALTER SCHEMA public OWNER TO casework_migration;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO casework_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO casework_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO casework_runtime;
 ```
 
-Those default privileges cover every table and sequence [`migrate`](#migrate-and-serve) creates
-afterwards, because it always runs as the migration role. After the first `migrate`, or when
-reusing a database an earlier session already migrated, grant the runtime role the same privileges
-on the objects that already exist:
+Grant the runtime role nothing else by hand. When the two credentials name different roles, every
+[`caseworkctl apply`](#plan-apply-and-serve) grants the runtime role `USAGE` on the schema, read and
+write on every other Casework table, its sequences, and `EXECUTE` on the Casework functions. It
+leaves the runtime role only `SELECT` on the two ledgers, `casework_activations` and
+`casework_schema_migrations`, and revokes every privilege `PUBLIC` holds on them. Default
+privileges an earlier release's provisioning set up do no harm: apply revokes the ledger writes
+they would give.
 
-```sql
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO casework_runtime;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO casework_runtime;
-```
+Apply then records the role mode from what the runtime role can actually do. A runtime role that
+is a superuser, bypasses row security, can insert, update, or delete rows of `casework_activations`,
+is a member of that table's owner or the schema's owner, or is a member of the migration role could
+record an activation no operator applied, so the activation is recorded as `single`; otherwise it is `split`. Both
+credentials may name one role, but then `caseworkctl status` and `caseworkctl doctor` state that
+the runtime credential can activate packages and rewrite the ledger, so the ledger cannot show that
+it did not. A start that finds a `split` activation whose runtime role can now write the ledger
+refuses, and names `caseworkctl apply` to reissue the grants or record the single-role mode.
 
-Casework creates no extension, no schema, and no role of its own, so a missing grant here surfaces
-as a permission-denied database error at `serve` rather than at `migrate`.
+Casework creates no extension, no schema, and no role of its own, so a missing `CONNECT` or schema
+ownership surfaces as a permission-denied database error at `caseworkctl apply`.
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, database provisioning and grants();
-    crates/registry-casework/migrations. */}
+{/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(),
+    and SINGLE_ROLE_STATEMENT; crates/registry-casework/src/runtime.rs, check_activation() and
+    RuntimeError::RoleModeWeakened; crates/registry-casework/tests/activation_postgres.rs,
+    split_role_runtime_cannot_write_the_ledgers_but_still_serves() and
+    a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until_apply_records_it(). */}
 
 ## Write the runtime file
 
@@ -156,6 +161,9 @@ project, and put no credential in it.
 ```yaml
 apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
 kind: CaseworkRuntimeConfig
+identity:
+  # The logical identity of the database this file belongs to; the first apply records it.
+  databaseId: casework-professional-review
 package:
   # The selected package always contains the policy at casework.yaml.
   root: /etc/registry-casework/package
@@ -207,6 +215,7 @@ sources:
 
 | Section | What it binds |
 | --- | --- |
+| `identity` | `databaseId`, an operator-chosen logical identity for the database. The first `caseworkctl apply` records it, and every later apply and every start refuses a database that recorded another one. |
 | `package` | The absolute root of the package containing `casework.yaml`, its `SHA256SUMS`, and exact source descriptions, and optionally the one package digest the runtime may load from it. |
 | `listener` | The listener address and the transport boundary the deployment declares for it. |
 | `metricsListener` | Optional. A second, operator-private address for `/metrics` and `/version`; see [Scrape metrics and the running version](#scrape-metrics-and-the-running-version). |
@@ -405,13 +414,13 @@ kind's content without changing its version, or change a source read so that the
 schema no longer accepts it. Each of those would leave in-flight work that no team serves, that no
 reviewer can decide, or whose context every reviewer is refused.
 
-After it connects to the database and before it registers any source generation, the runtime
-compares the package it is about to activate with the work the database retains and refuses a
-package that would strand any of it. The refusal names each conflict with its counts, never a
+Inside its transaction, before it registers any source generation, `caseworkctl apply` compares
+the package it is about to activate with the work the database retains and refuses a package that
+would strand any of it, writing nothing. The refusal names each conflict with its counts, never a
 subject:
 
 ```text
-casework: the policy package would strand work pinned under an earlier package: 3 in-flight reviews and 2 open work items are in queue intake, which the package no longer declares. Let that work finish under the earlier package, or set package.acknowledgeStrandedWork to sha256:9b2e… to activate this package anyway
+error[casework.activation.stranded-work] runtime.yaml:/package/acknowledgeStrandedWork: the policy package would strand work pinned under an earlier package: 3 in-flight reviews and 2 open work items are in queue intake, which the package no longer declares. Let that work finish under the earlier package, or set package.acknowledgeStrandedWork to sha256:9b2e… to activate this package anyway
 ```
 
 The other conflicts read the same way: an access profile the package no longer declares, a review
@@ -423,36 +432,90 @@ package active until the named work finishes; if the work may stay hidden or orp
 `package.acknowledgeStrandedWork` to the digest the refusal names. The acknowledgement admits only
 that package, so the next package is compared afresh.
 
-To preview the comparison before a restart, point `caseworkctl doctor` at a runtime file whose
-`package.root` holds the next package. Its `pinnedWork` check fails with the same sentence, and its
-report lists the conflicts it found under `pinnedWork.conflicts` with the verdict `clear` or
-`acknowledged`.
+To preview the comparison before the apply, run `caseworkctl plan` against a runtime file whose
+`package.root` holds the next package. It carries the same refusal, and its report lists the
+conflicts under `effects.pinnedWork.stranded` with the verdict `clear`, `acknowledged`, or
+`refused`. `caseworkctl doctor` repeats the comparison for the active package as its `pinnedWork`
+check.
 
 {/* Evidence: crates/registry-casework/src/pinned_work.rs, stranded_pinned_work(),
     pinned_work_verdict(), and stranded_work_refusal();
-    crates/registry-casework/src/runtime.rs, check_pinned_work() and serve_from_path();
+    crates/registry-casework/src/activation.rs, evaluate_effects() and PinnedWorkEffect;
     crates/registry-caseworkctl/src/project.rs, doctor_pinned_work();
     crates/registry-casework/tests/review_postgres.rs,
-    activation_preflight_counts_in_flight_reviews_a_package_would_strand(). */}
+    activation_preflight_counts_in_flight_reviews_a_package_would_strand();
+    crates/registry-casework/tests/activation_postgres.rs,
+    stranded_work_is_refused_until_the_exact_package_is_acknowledged(). */}
 
-## Migrate and serve
+## Plan, apply, and serve
 
-Apply the migrations with the migration credential, from the operator host:
+A package is activated in the database before the runtime serves it. From the operator host,
+preview the activation, then apply it with the migration credential:
 
 ```sh
-casework --runtime-config /etc/registry-casework/runtime.yaml migrate
+caseworkctl plan --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml \
+  --operator-reference CHANGE-1234 --backup pg_dump-2026-09-27
+caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
-`migrate` loads the same runtime file, resolves `migrationUrlRef`, takes a PostgreSQL advisory
-lock, and applies every unapplied migration in order under its ledger, so a second `migrate` on the
-same database waits rather than racing it. Run it before the first `serve` and before rolling out a
-release that adds migrations.
+`plan` connects with the runtime credential in a read-only transaction and writes nothing. It
+reports the active activation, the candidate `packageDigest`, whether the database records this
+file's `identity.databaseId`, the schema version and the migrations still pending, the source
+generations and task templates the activation would change, the work it would strand, the runtime
+role mode, and `changesPending`. On a fresh database it reports an initial activation even before
+the runtime role can use the schema.
+
+`apply` loads the same runtime file, verifies the package, and resolves `migrationUrlRef`. It
+appends an audit request entry before it opens the database; an audit destination that refuses it
+leaves the database untouched. Then, in one transaction under a PostgreSQL advisory lock, it applies
+every pending schema migration, registers the source generations, activates the task templates,
+refuses stranded work, reissues the runtime role's grants in split-role mode, and records one row in
+the `casework_activations` ledger. After the commit it appends the audit response entry. A second
+`apply` on the same database waits for the first rather than racing it, and so does an `apply` that
+meets a running service's transaction: it takes the locks the runtime takes, in the runtime's
+order, before any schema change.
+
+`--operator-reference` names your change record. It is stored and audited only as a keyed hash
+under `audit.hashKeyRef`, scoped to the activation, so the same reference in two activations
+yields different hashes and the text is never written. Each `--backup` reference, at most 16, is
+recorded as given; name snapshots with it, not people. `status` shows the activation history and
+the role mode.
+
+Re-applying the active package with nothing to change is refused and names its digest. Applying
+it again is allowed, and `plan` reports it as pending, when a source binding changed, when the
+runtime role's grants are not current, or when the effective role mode differs from the one
+recorded, such as after moving to separate roles or rotating the runtime role.
+
+The exit code is `0` for success, `1` for a refusal, `2` for a usage error, and `3` for an
+operational failure, such as an unreachable database or an audit destination that refused an entry.
+Pending changes are the `changesPending` field, never an exit code. When the audit destination
+refuses the response entry after the commit, apply exits `3` with
+`casework.activation.applied-unaudited`: the package is active, so do not apply it again; restore
+the audit destination and record the activation `status` names in your audit trail.
+
+`casework migrate` and `caseworkctl db migrate` no longer migrate. Each still parses only to exit
+`2` and name `caseworkctl plan` then `caseworkctl apply`. The first `apply` on a database an
+earlier release migrated adopts it: it migrates to the current schema and records the first
+activation.
+
+Run `plan` and `apply` before the first `serve`, before rolling out a release that adds
+migrations, and whenever the package or a source binding changes.
+
+{/* Evidence: crates/registry-casework/src/activation.rs, plan_activation(), apply_activation(),
+    lock_runtime_order(), and observe_role(); crates/registry-caseworkctl/src/lib.rs,
+    activation_failure(); crates/registry-casework/tests/activation_postgres.rs,
+    a_refused_audit_request_leaves_the_database_untouched(),
+    a_concurrent_apply_waits_for_the_migration_lock(),
+    the_same_operator_reference_in_two_activations_is_stored_under_different_hashes(), and
+    moving_to_split_and_rotating_the_runtime_role_reapply_the_active_package(). */}
 
 The unified review schema arrives in a single migration that replaces the experimental hosted-item
 tables of Casework 0.32.0 and earlier. No data is carried over, and this release has
-no in-place legacy conversion command. When those tables are empty, `migrate` replaces them. When
+no in-place legacy conversion command. When those tables are empty, `apply` replaces them. When
 any of them still holds a row, such as an in-flight hosted item or a retained accountability
-record, `migrate` refuses before applying anything and writes nothing. The refusal begins `the Casework database
+record, `apply` refuses before applying anything and writes nothing, and `plan` reports the same
+refusal. The refusal begins `the Casework database
 holds hosted work that schema migration 15 would drop`, then names each table that holds rows with
 its row count, such as `casework_hosted_items (1 row)`.
 
@@ -463,6 +526,7 @@ disposable local session, use `caseworkctl dev stop PROJECT --remove` and start 
 
 {/* Evidence: crates/registry-casework/src/store.rs, refuse_to_drop_hosted_work(),
     HOSTED_WORK_TABLES, and StoreError::HostedWorkWouldBeDropped;
+    crates/registry-casework/src/activation.rs, migration_refusal_code();
     crates/registry-casework/migrations/0015_unified_reviews.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
     migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() and
@@ -501,7 +565,7 @@ To upgrade, upgrade each BReg source first, then Casework, to the same release:
 1. Upgrade and start BReg. Until Casework matches it, Casework refuses that source's reads by name:
    work items report a source outage, `GET /ready` fails once reconciliation keeps failing, and the
    runtime log names both versions.
-2. Migrate and start Casework of the same release. It resumes source reads on the first matching
+2. Plan, apply, and start Casework of the same release. It resumes source reads on the first matching
    contract read, with no further step, and logs `Casework reads a BReg source on its own release`
    with the engine version.
 
@@ -519,11 +583,11 @@ through unchanged.
 
 Casework 0.34.0 and earlier kept pending audit records in the `casework_audit_outbox` table and
 published them to a keyed hash chain in the audit file. This release writes each entry straight to
-the audit destination, and schema migration 17 drops that table. Before the first `migrate` of
-this release:
+the audit destination, and schema migration 17 drops that table. Before the first
+`caseworkctl apply` of this release:
 
 1. Keep the earlier release serving until its audit publisher has published every pending record.
-   While the table still holds an unpublished record, `migrate` refuses before applying anything
+   While the table still holds an unpublished record, `apply` refuses before applying anything
    and writes nothing. The refusal begins `the Casework database holds N audit record(s) that
    schema migration 17 would drop before they reach the audit journal`.
 2. Stop every earlier `casework` process. While one still holds the lock beside the audit file,
@@ -557,9 +621,9 @@ this release:
     crates/registry-platform-audit/src/writer.rs, FileDestination and AuditWriter. */}
 
 :::caution[Keep the migration credential off the serving host]
-The migration credential owns the schema, and the serving process never needs it. Supply it only
-for the duration of a migration, and keep the runtime credential as the one the service manager
-holds.
+The migration credential owns the schema and activates packages, and the serving process never
+needs it. Supply it only to `caseworkctl apply` on the operator host, and keep the runtime
+credential as the one the service manager holds.
 :::
 
 Then run the service:
@@ -577,8 +641,20 @@ this process.
 
 A restart of this same version against the same package, runtime file, and database is the normal
 recovery path after process or host interruption. It reloads the verified package and resumes the
-durable review, clock, result-delivery, and reconciliation state. Run `migrate` again only when the
-release procedure calls for it; never use a restart as a legacy-state conversion.
+durable review, clock, result-delivery, and reconciliation state. Startup only reads the
+database; it never migrates, activates, or converts legacy state.
+
+`serve` refuses a database whose activation ledger does not name this configuration: no package
+applied, a schema version other than its own, an active package other than the one it loaded, a
+source binding generation the last apply did not record, another `identity.databaseId`, or a
+split-role activation whose runtime role can now write the ledger. Each refusal names
+`caseworkctl plan` then `caseworkctl apply`, except the database identity one, which names neither
+value and tells you to point `database.runtimeUrlRef` at the right database or correct
+`identity.databaseId`.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, check_activation(), serve_from_path(), and
+    RuntimeError; crates/registry-casework/tests/activation_postgres.rs,
+    startup_refuses_an_unapplied_database_another_package_and_another_database(). */}
 
 Run `serve` under your service manager and let it restart the process. `serve` refuses to start on
 an unverified production package, a listener the declared boundary does not allow, source bindings
@@ -677,7 +753,7 @@ release, drafts, decisions, attempt recovery, assignment, delegation, task previ
 approval, and caseload move apply. A caseload move preview is refused as a whole while such an item
 is among the items it reads.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path(), serve_from_path(),
+{/* Evidence: crates/registry-casework/src/runtime.rs, check_activation(), serve_from_path(),
     serve_until_worker_stops(), supervise(), operational_log_level(), and open_audit();
     crates/registry-casework/src/audit.rs, CASEWORK_AUDIT_SCHEMA and AuditOperation::commit();
     crates/registry-platform-audit/src/writer.rs, AuditWriter::ready();
@@ -748,7 +824,8 @@ caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 
 It checks the configuration, the exact imported source descriptions, each source connection and its
 reader grants, that the audit destination is writable by the user running it, the database and its
-schema version, the in-flight work the package would strand (see
+schema version, the activation the ledger records (the same checks `serve` makes at startup), the
+in-flight work the package would strand (see
 [Refuse a package that strands pinned work](#refuse-a-package-that-strands-pinned-work)), the OIDC
 issuer, directory readiness, and each source's reconciliation health, and it
 stops at the first one that refuses. A refusal carries the code `casework.doctor.check-failed`,
@@ -786,8 +863,10 @@ either product's database directly.
 ## Change the active package
 
 The runtime verifies and loads the package once, at startup. Install the reviewed successor into a
-new directory beside the current one, point `package.root` at the new directory, and
-restart or roll out the process. Keep the previous package directory until the new one serves, so a
+new directory beside the current one, point `package.root` at the new directory, run
+`caseworkctl plan` and `caseworkctl apply`, and restart or roll out the process. A process started
+on the successor before the apply refuses to serve, and a process still running the earlier
+package keeps serving it until it restarts. Keep the previous package directory until the new one serves, so a
 rollback is a configuration change rather than a rebuild. A package or source binding change that
 alters the source binding generation supersedes the source's open work items. Rolling that change
 back does not reopen the work items it superseded: they stay superseded, and the source's next
@@ -828,16 +907,23 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
-| `the Casework database schema is not current` | The database was never migrated, or an earlier release migrated it. Run `casework migrate` or `caseworkctl db migrate` with the migration credential, then start the runtime. |
+| `no Casework package has been applied to this database`, or `the Casework database schema is not current` | No package was applied, or an earlier release migrated the database. Run `caseworkctl plan` then `caseworkctl apply`, as [Plan, apply, and serve](#plan-apply-and-serve) describes, then start the runtime. |
+| `the active Casework package in this database is X, not the configured package Y`, or `the binding of source ID differs from the one the active package was applied with` | The package or a source binding changed since the last apply. Plan and apply the configured package, then restart. |
+| `the package deployment binding differs from the runtime configuration at identity.databaseId` | The runtime file points at a database that recorded another `databaseId`. Point `database.runtimeUrlRef` and `database.migrationUrlRef` at the database this file belongs to, or correct `identity.databaseId`. |
+| `the active Casework package was applied split-role, but the runtime credential can now write the activation ledger` | The runtime role gained ledger authority, or the credential now names the migration role. Remove the extra grant or membership, then run `caseworkctl apply` to reissue the grants or record the single-role mode. |
+| `casework.activation.already-active` | The active package is applied with nothing to change. Nothing needs applying. |
+| `casework.activation.audit-unavailable` | The audit destination refused the request entry, so nothing was applied. Restore the destination named at `audit`, then apply again. |
+| `casework.activation.applied-unaudited` | The package is active but its response entry did not reach the audit destination. Do not apply again; restore the destination and record the activation `caseworkctl status` names. |
+| `casework migrate` or `caseworkctl db migrate` exits `2` | Those commands were removed. Run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`. |
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
-| `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then migrate a fresh database as [Migrate and serve](#migrate-and-serve) describes. |
-| `the Casework database holds N audit record(s) that schema migration 17 would drop` | The earlier release has not published every audit record. Run it until its publisher drains the outbox, then migrate as [the upgrade steps](#upgrade-from-a-release-that-chained-the-audit-file) describe. |
+| `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then apply this release to a fresh database as [Plan, apply, and serve](#plan-apply-and-serve) describes. |
+| `the Casework database holds N audit record(s) that schema migration 17 would drop` | The earlier release has not published every audit record. Run it until its publisher drains the outbox, then apply as [the upgrade steps](#upgrade-from-a-release-that-chained-the-audit-file) describe. |
 | `the Casework audit destination could not be opened: another process holds the single-writer lock beside the audit file` | Another `casework` process writes this file. Stop it, or give this process its own `audit.path`. |
 | `the Casework audit destination could not be opened: the audit file could not be opened: ...` | The rest of the message names the rule the audit file or its directory broke and the fix, for example `chown it to the service user and chmod it 0700`, or `archive it and restart with a fresh path` for a file whose last entry is incomplete. Apply it and start again. |
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
-| `doctor` refuses at `doctor:/checks/pinnedWork`, or startup refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
+| `doctor` refuses at `doctor:/checks/pinnedWork`, or `caseworkctl apply` refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
 | `BReg source ID runs engine version X and this Casework runs Y`, or `BReg source ID does not report its engine version` | Casework and that BReg source are on different releases, or a proxy removes the `Registry-Engine-Version` header. Upgrade the one that is behind as [the lock-step upgrade](#upgrade-casework-and-breg-in-lock-step) describes, or let the header through; source reads resume on the next matching read. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |

@@ -140,7 +140,8 @@ conversion of an installed package. A directory that still carries `relay-packag
 Base Registry Engine, Casework, and Scheduling are separate runtime products outside this page's
 covered surfaces, and each owns migrated PostgreSQL state with its own migration command:
 [`bregctl apply`](../../operate/breg-changes/#activate-the-successor) activates a package and runs
-its migration, `casework migrate` applies Casework's migrations, and `scheduling migrate` applies
+its migration, [`caseworkctl apply`](../../operate/casework/#plan-apply-and-serve) activates a
+Casework package and runs its migrations, and `scheduling migrate` applies
 Scheduling's migrations. Before 1.0, an upgrade between releases of any of the three can require the
 migration steps that release's notes name; read them before upgrading.
 

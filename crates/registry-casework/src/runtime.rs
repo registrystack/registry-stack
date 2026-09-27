@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use clap::{Arg, Command};
 use registry_casework_breg::BregBinding;
-use registry_casework_core::{CaseworkProject, SourceAdapter};
+use registry_casework_core::SourceAdapter;
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
@@ -363,7 +363,17 @@ pub fn command() -> Command {
                 .required(true),
         )
         .subcommand_required(true)
-        .subcommand(Command::new("migrate").about("Apply Casework database migrations"))
+        .subcommand(
+            Command::new("migrate")
+                .hide(true)
+                .about("Removed; apply a package with caseworkctl plan and apply")
+                .arg(
+                    Arg::new("ignored")
+                        .num_args(0..)
+                        .trailing_var_arg(true)
+                        .allow_hyphen_values(true),
+                ),
+        )
         .subcommand(Command::new("serve").about("Run the Casework HTTP service"))
 }
 
@@ -381,52 +391,123 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
     }
 }
 
+/// The sentence a removed `casework` subcommand refuses with.
+pub const REMOVED_MIGRATE_MESSAGE: &str = "casework migrate was removed; database changes are applied with a package activation: run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`";
+
+/// The refusal for a removed `casework` subcommand named in `args` (the
+/// arguments after the program name), found before the runtime
+/// configuration is read so it answers even without `--runtime-config`.
+#[must_use]
+pub fn removed_command_refusal<I, S>(args: I) -> Option<&'static str>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let arg = arg.as_ref();
+        if arg == "--runtime-config" {
+            args.next();
+            continue;
+        }
+        if arg.to_string_lossy().starts_with('-') {
+            continue;
+        }
+        return (arg == "migrate").then_some(REMOVED_MIGRATE_MESSAGE);
+    }
+    None
+}
+
 pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("migrate") => migrate_from_path(path).await,
+        Some("migrate") => Err(RuntimeError::RemovedCommand(REMOVED_MIGRATE_MESSAGE)),
         Some("serve") => serve_from_path(path).await,
         _ => Err(RuntimeError::Arguments),
     }
 }
 
-pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-    let config = RuntimeConfig::load(path)?;
-    let secrets = secret_resolver(&config)?;
-    let store = PostgresStore::connect_migration(&config.database, &secrets)?;
-    store.migrate().await?;
-    Ok(())
+/// Build the source adapters the package declares from their runtime
+/// bindings, refusing a binding the package does not declare.
+pub fn build_source_adapters(
+    config: &RuntimeConfig,
+    package: &crate::LoadedCaseworkPackage,
+    secrets: &SecretResolver,
+) -> Result<Vec<Arc<dyn SourceAdapter>>, RuntimeError> {
+    let project = package.project();
+    let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
+    for source in &project.sources {
+        let binding = config
+            .sources
+            .get(&source.id)
+            .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?;
+        let adapter = binding
+            .build_adapter_from_description(
+                source,
+                package
+                    .source_description(&source.description)
+                    .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?,
+                secrets,
+            )
+            .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
+        adapters.push(Arc::new(adapter));
+    }
+    if config.sources.len() != adapters.len() {
+        let unmatched = config
+            .sources
+            .keys()
+            .find(|id| !project.sources.iter().any(|source| &&source.id == id))
+            .cloned()
+            .unwrap_or_default();
+        return Err(RuntimeError::SourceConfiguration(unmatched));
+    }
+    Ok(adapters)
 }
 
-/// Refuse to activate a package that strands in-flight work pinned under an
-/// earlier package, unless the operator acknowledged that exact package.
-async fn check_pinned_work(
+/// Refuse to serve a database whose activation ledger does not name this
+/// configuration: no package applied, another database's identity, another
+/// package, a source binding generation the last apply did not record, or a
+/// split-role activation whose runtime credential can now write the ledger.
+/// It only reads, and returns the role mode the runtime credential has.
+pub async fn check_activation(
     store: &PostgresStore,
-    project: &CaseworkProject,
-    adapters: &[Arc<dyn SourceAdapter>],
+    database_id: &str,
     package_digest: &str,
-    acknowledged: Option<&str>,
-) -> Result<(), RuntimeError> {
-    let adapters = adapters
-        .iter()
-        .map(|adapter| adapter.as_ref())
-        .collect::<Vec<_>>();
-    let conflicts = crate::stranded_pinned_work(store, project, &adapters).await?;
-    match crate::pinned_work_verdict(&conflicts, package_digest, acknowledged) {
-        crate::PinnedWorkVerdict::Clear => Ok(()),
-        crate::PinnedWorkVerdict::Acknowledged => {
-            tracing::warn!(
-                stranded = %crate::describe_stranded_work(&conflicts),
-                "activating an acknowledged Casework policy package that strands pinned work"
-            );
-            Ok(())
-        }
-        crate::PinnedWorkVerdict::Refused => Err(RuntimeError::StrandedPinnedWork(
-            crate::stranded_work_refusal(&conflicts, package_digest),
-        )),
+    adapters: &[&dyn SourceAdapter],
+) -> Result<crate::RoleMode, RuntimeError> {
+    let active = store
+        .active_activation()
+        .await?
+        .ok_or(RuntimeError::NotActivated)?;
+    if active.database_id != database_id {
+        return Err(RuntimeError::DatabaseIdMismatch);
     }
+    if active.package_digest != package_digest {
+        return Err(RuntimeError::PackageNotActive {
+            active: active.package_digest,
+            configured: package_digest.to_owned(),
+        });
+    }
+    for adapter in adapters {
+        if !store
+            .source_generation_registered(adapter.source_id(), adapter.binding_generation())
+            .await?
+        {
+            return Err(RuntimeError::SourceGenerationNotActive(
+                adapter.source_id().to_owned(),
+            ));
+        }
+    }
+    let role_mode = store
+        .effective_role_mode()
+        .await?
+        .ok_or(RuntimeError::NotActivated)?;
+    if active.role_mode == crate::RoleMode::Split && role_mode == crate::RoleMode::Single {
+        return Err(RuntimeError::RoleModeWeakened);
+    }
+    Ok(role_mode)
 }
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
@@ -443,45 +524,21 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     validate_retained_completion_destinations(&store, &config.review_completion_destinations)
         .await?;
 
-    let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
-    for source in &project.sources {
-        let binding = config
-            .sources
-            .get(&source.id)
-            .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?;
-        let adapter = binding
-            .build_adapter_from_description(
-                source,
-                package
-                    .source_description(&source.description)
-                    .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?,
-                &secrets,
-            )
-            .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
-        adapters.push(Arc::new(adapter));
-    }
-    if config.sources.len() != adapters.len() {
-        let unmatched = config
-            .sources
-            .keys()
-            .find(|id| !project.sources.iter().any(|source| &&source.id == id))
-            .cloned()
-            .unwrap_or_default();
-        return Err(RuntimeError::SourceConfiguration(unmatched));
-    }
-    // Refuse before any activation step writes to the database.
-    check_pinned_work(
-        &store,
-        project,
-        &adapters,
-        &package_digest,
-        config.package.acknowledge_stranded_work.as_deref(),
-    )
-    .await?;
-    for adapter in &adapters {
-        store
-            .register_source_generation(adapter.source_id(), adapter.binding_generation())
-            .await?;
+    let adapters = build_source_adapters(&config, &package, &secrets)?;
+    let adapter_refs = adapters
+        .iter()
+        .map(|adapter| adapter.as_ref())
+        .collect::<Vec<_>>();
+    let role_mode =
+        check_activation(&store, config.database_id(), &package_digest, &adapter_refs).await?;
+    if role_mode == crate::RoleMode::Single {
+        tracing::warn!(
+            role_mode = role_mode.as_str(),
+            "{}",
+            crate::SINGLE_ROLE_STATEMENT
+        );
+    } else {
+        tracing::info!(role_mode = role_mode.as_str(), "Casework runtime role mode");
     }
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
@@ -506,11 +563,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &secrets,
     )?);
 
-    // A bad signing key or audit configuration must not retire the live
-    // instance's task templates before this instance can serve requests.
-    store
-        .activate_task_templates(&project.task_templates)
-        .await?;
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
     let mut workers = Vec::new();
     let worker_service = service.clone();
@@ -1173,6 +1225,40 @@ mod tests {
     }
 
     #[test]
+    fn the_removed_migrate_command_names_plan_then_apply() {
+        for args in [
+            &["migrate"][..],
+            &["--runtime-config", "/etc/casework/runtime.yaml", "migrate"],
+            &[
+                "--runtime-config=/etc/casework/runtime.yaml",
+                "migrate",
+                "--extra",
+            ],
+        ] {
+            let refusal = removed_command_refusal(args).expect("migrate is refused");
+            assert!(refusal.contains("caseworkctl plan --runtime-config FILE"));
+            assert!(refusal.contains("caseworkctl apply --runtime-config FILE"));
+            assert!(
+                refusal.find("caseworkctl plan") < refusal.find("caseworkctl apply"),
+                "plan is named before apply"
+            );
+        }
+        assert_eq!(
+            removed_command_refusal(["--runtime-config", "migrate", "serve"]),
+            None
+        );
+        assert_eq!(removed_command_refusal(["serve"]), None);
+        assert_eq!(removed_command_refusal(Vec::<&str>::new()), None);
+    }
+
+    #[test]
+    fn the_removed_migrate_command_is_hidden_from_help() {
+        let help = command().render_help().to_string();
+        assert!(help.contains("serve"));
+        assert!(!help.contains("migrate"), "{help}");
+    }
+
+    #[test]
     fn operational_log_level_is_a_closed_vocabulary() {
         assert_eq!(
             operational_log_level(None).expect("default log level"),
@@ -1213,7 +1299,25 @@ pub enum RuntimeError {
     #[error("the Casework source binding for source {0} is invalid")]
     SourceConfiguration(String),
     #[error("{0}")]
-    StrandedPinnedWork(String),
+    RemovedCommand(&'static str),
+    #[error(
+        "no Casework package has been applied to this database; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+    )]
+    NotActivated,
+    #[error("{}", crate::database_id_mismatch_message())]
+    DatabaseIdMismatch,
+    #[error(
+        "the active Casework package in this database is {active}, not the configured package {configured}; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+    )]
+    PackageNotActive { active: String, configured: String },
+    #[error(
+        "the binding of source {0} differs from the one the active package was applied with; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+    )]
+    SourceGenerationNotActive(String),
+    #[error(
+        "the active Casework package was applied split-role, but the runtime credential can now write the activation ledger; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE` to reissue the runtime role's grants or record the single-role mode"
+    )]
+    RoleModeWeakened,
     #[error("the Casework audit destination could not be initialized")]
     Audit,
     #[error("the Casework audit destination could not be initialized: {0}")]

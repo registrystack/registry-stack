@@ -26,23 +26,25 @@ wire contract.
 |---|---|---|
 | `attempt settle` | `AttemptSettlementReport` | `AttemptSettlementReport.schema.json` |
 | `attempt mark-uncertain` | `AttemptUncertainMarkingReport` | `AttemptUncertainMarkingReport.schema.json` |
+| `apply` | `ApplyReport` | `ApplyReport.schema.json` |
 | `check` | `CheckReport` | `CheckReport.schema.json` |
-| `db migrate` | `DatabaseMigrationReport` | `DatabaseMigrationReport.schema.json` |
 | `doctor` | `DoctorReport` | `DoctorReport.schema.json` |
 | `explain` | `ExplainReport` | `ExplainReport.schema.json` |
 | `init` | `InitReport` | `InitReport.schema.json` |
 | `lifecycle` | `LifecycleReport` | `LifecycleReport.schema.json` |
 | `package` and `package --dry-run` | `PackageReport` | `PackageReport.schema.json` |
+| `plan` | `PlanReport` | `PlanReport.schema.json` |
 | `retention erase` | `RetentionEraseReport` | `RetentionEraseReport.schema.json` |
 | `simulate` | `SimulationReport` | `SimulationReport.schema.json` |
 | `source add` | `SourceAddReport` | `SourceAddReport.schema.json` |
+| `status` | `StatusReport` | `StatusReport.schema.json` |
 | `test` | `TestReport` | `TestReport.schema.json` |
 | `dev`, `dev start`, and `dev stop` | `DevReport` | `DevReport.schema.json` |
 | `dev events` | `DevEventsReport` | `DevEventsReport.schema.json` |
 | `dev grant` | `DevGrantReport` | `DevGrantReport.schema.json` |
 | `dev identity` | `DevIdentityReport` | `DevIdentityReport.schema.json` |
 | `dev token` | `DevTokenReport` | `DevTokenReport.schema.json` |
-| invalid command arguments | `UsageReport` | `UsageReport.schema.json` |
+| invalid command arguments, and the removed `db migrate` | `UsageReport` | `UsageReport.schema.json` |
 
 The dev-only reports are included. They are local operator surfaces, but shell
 tools still parse them and need the same explicit drift signal as adopter
@@ -75,6 +77,7 @@ promise made by this CLI contract:
 - `SourceAddReport.connection`, `bregAuthoringChanges`,
   `bregAuthoringPatch`, and `candidateRuntimeBinding`
 - `DevReport.sources` and `DevReport.clients`
+- `PlanReport.effects` and `ApplyReport.effects`
 
 Consumers of an opaque node must validate the fields they read. A stable
 `caseworkctl` `apiVersion` does not say that an opaque engine-owned structure
@@ -87,7 +90,7 @@ closed vocabulary changes, or a field is added to a pinned object. Additions
 are breaking because pinned objects reject unknown properties. Changes inside
 an explicitly opaque node do not require a CLI version change.
 
-`crates/registry-caseworkctl/src/cli_contract_tests.rs` exercises all 18 kinds
+`crates/registry-caseworkctl/src/cli_contract_tests.rs` exercises all 21 kinds
 through the real command dispatcher and validates each response against its
 schema. Commands whose successful path requires a live database, issuer,
 source, or retained dev session use a deliberate real refusal fixture, so the

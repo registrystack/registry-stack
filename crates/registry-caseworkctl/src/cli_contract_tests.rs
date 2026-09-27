@@ -170,9 +170,19 @@ fn every_public_json_report_matches_its_schema() {
             ],
         ),
         (
-            "db migrate",
-            "DatabaseMigrationReport",
-            vec!["db", "migrate", missing.to_str().unwrap()],
+            "apply",
+            "ApplyReport",
+            vec!["apply", "--runtime-config", missing.to_str().unwrap()],
+        ),
+        (
+            "plan",
+            "PlanReport",
+            vec!["plan", "--runtime-config", missing.to_str().unwrap()],
+        ),
+        (
+            "status",
+            "StatusReport",
+            vec!["status", "--runtime-config", missing.to_str().unwrap()],
         ),
         (
             "doctor",
@@ -247,7 +257,11 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "UsageReport", usage));
 
-    assert_eq!(reports.len(), 19);
+    let (exit, removed) = invoke(arguments(&["db", "migrate", "."]));
+    assert_eq!(exit, ExitCode::from(2));
+    reports.push(("removed command", "UsageReport", removed));
+
+    assert_eq!(reports.len(), 22);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }
@@ -279,7 +293,9 @@ fn execute_in_test_database(url: &str, statements: &str) {
 
 #[cfg(feature = "postgres-test")]
 #[test]
-fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
+fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+
     let base = std::env::var("CASEWORK_TEST_DATABASE_URL")
         .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
     // A schema of its own, so this test never races a suite that resets the
@@ -301,7 +317,16 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     ]);
     assert_eq!(exit, ExitCode::SUCCESS);
     package_locally(&project);
-    std::fs::create_dir(project.join("secrets")).expect("secret root");
+    let secrets = project.join("secrets");
+    std::fs::create_dir(&secrets).expect("secret root");
+    let audit_key = secrets.join("casework-audit-key");
+    std::fs::write(&audit_key, "0".repeat(64)).expect("audit key writes");
+    std::fs::set_permissions(&audit_key, std::fs::Permissions::from_mode(0o600))
+        .expect("audit key is owner-only");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(project.join("state"))
+        .expect("audit directory");
     let mut runtime: Value = serde_norway::from_slice(
         &std::fs::read(project.join("runtime.example.yaml")).expect("runtime example reads"),
     )
@@ -312,39 +337,117 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         "migrationUrlRef": format!("secret:env/{secret}"),
         "testOnlyPlaintext": true,
     });
+    let runtime_config = project.join("runtime.yaml");
     std::fs::write(
-        project.join("runtime.yaml"),
+        &runtime_config,
         serde_norway::to_string(&runtime).expect("runtime config renders"),
     )
     .expect("runtime config writes");
-    let migrate = vec![
-        OsString::from("db"),
-        OsString::from("migrate"),
-        project.as_os_str().to_owned(),
-    ];
+    let command = |name: &str| {
+        vec![
+            OsString::from(name),
+            OsString::from("--runtime-config"),
+            runtime_config.as_os_str().to_owned(),
+        ]
+    };
 
-    let (exit, migrated) = invoke(migrate.clone());
-    assert_eq!(exit, ExitCode::SUCCESS, "{migrated:#?}");
-    assert_eq!(migrated["status"], "migrated");
+    let (exit, plan) = invoke(command("plan"));
+    assert_eq!(exit, ExitCode::SUCCESS, "{plan:#?}");
+    assert_eq!(plan["planKind"], "initial");
+    assert_eq!(plan["changesPending"], true);
+    assert_eq!(plan["active"], Value::Null);
+    assert_matches_contract("plan", "PlanReport", &plan);
+
+    let raw_reference = "CHANGE-REQUEST-8431";
+    let mut apply = command("apply");
+    apply.extend(arguments(&[
+        "--operator-reference",
+        raw_reference,
+        "--backup",
+        "snapshot-before-initial-apply",
+    ]));
+    let (exit, applied) = invoke(apply.clone());
+    assert_eq!(exit, ExitCode::SUCCESS, "{applied:#?}");
+    assert_eq!(applied["roleMode"], "single");
+    assert_eq!(applied["packageDigest"], plan["candidatePackageDigest"]);
+    assert_eq!(applied["predecessorPackageDigest"], Value::Null);
+    assert!(!applied["schemaVersionsApplied"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(
+        !applied.to_string().contains(raw_reference),
+        "the raw operator reference is never reported"
+    );
+    assert_matches_contract("apply", "ApplyReport", &applied);
+
+    let (exit, status) = invoke(command("status"));
+    assert_eq!(exit, ExitCode::SUCCESS, "{status:#?}");
+    assert_eq!(status["active"]["activationId"], applied["activationId"]);
+    assert_eq!(status["history"].as_array().unwrap().len(), 1);
+    assert_eq!(status["roleMode"], "single");
+    assert_eq!(
+        status["singleRoleStatement"],
+        registry_casework::SINGLE_ROLE_STATEMENT
+    );
+    assert!(!status.to_string().contains(raw_reference));
+    assert_matches_contract("status", "StatusReport", &status);
+
+    // The active package plans as nothing to do, and applying it again is
+    // refused naming the active digest.
+    let (exit, replan) = invoke(command("plan"));
+    assert_eq!(exit, ExitCode::SUCCESS, "{replan:#?}");
+    assert_eq!(replan["changesPending"], false);
+    assert_eq!(
+        replan["refusals"][0]["code"],
+        "casework.activation.already-active"
+    );
+    let (exit, reapplied) = invoke(apply.clone());
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{reapplied:#?}");
+    assert_eq!(
+        reapplied["diagnostics"][0]["code"],
+        "casework.activation.already-active"
+    );
+    assert!(reapplied["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains(applied["packageDigest"].as_str().unwrap()));
+    assert_matches_contract("apply refusal", "ApplyReport", &reapplied);
+
+    let supported = status["supportedSchemaVersion"].as_i64().unwrap();
     execute_in_test_database(
         &scoped,
-        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(19,now())",
+        &format!(
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES({},now())",
+            supported + 1
+        ),
     );
 
-    let refusal = "the Casework database schema version 19 is newer than this binary supports (18); run a casework release that supports it";
-    let (exit, report) = invoke(migrate.clone());
+    let refusal = format!(
+        "the Casework database schema version {} is newer than this binary supports ({supported}); run a casework release that supports it",
+        supported + 1
+    );
+    let (exit, report) = invoke(apply.clone());
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
     assert_eq!(report["ok"], false);
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "casework.migration.refused"
+        "casework.activation.schema-newer"
     );
     assert_eq!(report["diagnostics"][0]["path"], "database");
     assert_eq!(report["diagnostics"][0]["message"], refusal);
-    assert_matches_contract("db migrate refusal", "DatabaseMigrationReport", &report);
+    assert_matches_contract("apply refusal", "ApplyReport", &report);
+
+    let (exit, planned) = invoke(command("plan"));
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{planned:#?}");
+    assert_eq!(
+        planned["refusals"][0]["code"],
+        "casework.activation.schema-newer"
+    );
+    assert_matches_contract("plan refusal", "PlanReport", &planned);
 
     let mut human = vec![OsString::from("caseworkctl")];
-    human.extend(migrate);
+    human.extend(apply);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let exit = main_entry_from(human, &mut stdout, &mut stderr);
@@ -352,7 +455,7 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{stderr}");
     assert!(
         stderr.starts_with(&format!(
-            "error[casework.migration.refused] database: {refusal}\n  next: "
+            "error[casework.activation.schema-newer] database: {refusal}\n  next: "
         )),
         "{stderr}"
     );

@@ -636,6 +636,8 @@ pub(super) fn operator(state: &State) -> Value {
     json!({
         "apiVersion": registry_casework::RUNTIME_CONFIG_API_VERSION,
         "kind": registry_casework::RUNTIME_CONFIG_KIND,
+        // One session owns one local database, so a fixed name identifies it.
+        "identity": {"databaseId": "casework-local-session"},
         "package": {"root": root.join(super::SESSION_PACKAGE)},
         "listener": {
             "bind": format!("127.0.0.1:{}", state.casework_port),

@@ -23,6 +23,93 @@ DIAGNOSTICS = {"$ref": "#/$defs/diagnostics"}
 FINDINGS = {"$ref": "#/$defs/findings"}
 
 
+DIGEST = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+NULLABLE_STRING = {"type": ["string", "null"]}
+ROLE_MODE = {"enum": ["single", "split"]}
+PLAN_KIND = {"enum": ["initial", "successor"]}
+SCHEMA_VERSION = {"type": "integer", "minimum": 1}
+NULLABLE_SCHEMA_VERSION = {"type": ["integer", "null"], "minimum": 1}
+SINGLE_ROLE_STATEMENT = {"type": ["string", "null"]}
+ACTIVATION = {"$ref": "#/$defs/activation"}
+NULLABLE_ACTIVATION = {"oneOf": [ACTIVATION, {"type": "null"}]}
+ACTIVATION_DEFS = {
+    "activation": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "activationId",
+            "applyOrder",
+            "packageDigest",
+            "predecessorPackageDigest",
+            "databaseId",
+            "planKind",
+            "appliedAt",
+            "operatorReferenceHash",
+            "backupReferences",
+            "roleMode",
+        ],
+        "properties": {
+            "activationId": STRING,
+            "applyOrder": {"type": "integer", "minimum": 1},
+            "packageDigest": DIGEST,
+            "predecessorPackageDigest": {"oneOf": [DIGEST, {"type": "null"}]},
+            "databaseId": STRING,
+            "planKind": PLAN_KIND,
+            "appliedAt": STRING,
+            "operatorReferenceHash": NULLABLE_STRING,
+            "backupReferences": {"type": "array", "maxItems": 16, "items": STRING},
+            "roleMode": ROLE_MODE,
+        },
+    },
+    "refusal": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["code", "path", "message"],
+        "properties": {"code": STRING, "path": STRING, "message": STRING},
+    },
+}
+ACTIVATION_FIELDS = [
+    "activationId",
+    "applyOrder",
+    "packageDigest",
+    "predecessorPackageDigest",
+    "databaseId",
+    "planKind",
+    "appliedAt",
+    "operatorReferenceHash",
+    "backupReferences",
+    "roleMode",
+]
+PLAN_REQUIRED = [
+    "runtimeConfig",
+    "active",
+    "candidatePackageDigest",
+    "databaseIdCheck",
+    "planKind",
+    "schemaVersion",
+    "supportedSchemaVersion",
+    "pendingSchemaVersions",
+    "effects",
+    "refusals",
+    "runtimeRoleMode",
+    "changesPending",
+]
+PLAN_PROPERTIES = {
+    "runtimeConfig": STRING,
+    "active": NULLABLE_ACTIVATION,
+    "candidatePackageDigest": DIGEST,
+    "databaseIdCheck": {"enum": ["notRecorded", "matches", "differs"]},
+    "planKind": PLAN_KIND,
+    "schemaVersion": NULLABLE_SCHEMA_VERSION,
+    "supportedSchemaVersion": SCHEMA_VERSION,
+    "pendingSchemaVersions": {"type": "array", "items": SCHEMA_VERSION},
+    "effects": {"type": ["object", "null"]},
+    "refusals": {"type": "array", "items": {"$ref": "#/$defs/refusal"}},
+    "runtimeRoleMode": {"oneOf": [ROLE_MODE, {"type": "null"}]},
+    "changesPending": BOOLEAN,
+}
+
+
 REPORTS = {
     "AttemptSettlementReport": {
         "command": "attempt settle",
@@ -55,14 +142,52 @@ REPORTS = {
             "databaseAccess": {"const": False},
         },
     },
-    "DatabaseMigrationReport": {
-        "command": "db migrate",
-        "required": ["project", "runtimeConfig", "status"],
+    "PlanReport": {
+        "command": "plan",
+        "required": PLAN_REQUIRED,
+        "properties": PLAN_PROPERTIES,
+        "refusal_carries_report": True,
+        "defs": ACTIVATION_DEFS,
+    },
+    "ApplyReport": {
+        "command": "apply",
+        "required": [
+            "runtimeConfig",
+            *ACTIVATION_FIELDS,
+            "schemaVersionsApplied",
+            "effects",
+            "singleRoleStatement",
+        ],
         "properties": {
-            "project": STRING,
             "runtimeConfig": STRING,
-            "status": {"const": "migrated"},
+            **ACTIVATION_DEFS["activation"]["properties"],
+            "schemaVersionsApplied": {"type": "array", "items": SCHEMA_VERSION},
+            "effects": OBJECT,
+            "singleRoleStatement": SINGLE_ROLE_STATEMENT,
         },
+        "defs": ACTIVATION_DEFS,
+    },
+    "StatusReport": {
+        "command": "status",
+        "required": [
+            "runtimeConfig",
+            "active",
+            "history",
+            "schemaVersion",
+            "supportedSchemaVersion",
+            "roleMode",
+            "singleRoleStatement",
+        ],
+        "properties": {
+            "runtimeConfig": STRING,
+            "active": NULLABLE_ACTIVATION,
+            "history": {"type": "array", "items": ACTIVATION},
+            "schemaVersion": NULLABLE_SCHEMA_VERSION,
+            "supportedSchemaVersion": SCHEMA_VERSION,
+            "roleMode": {"oneOf": [ROLE_MODE, {"type": "null"}]},
+            "singleRoleStatement": SINGLE_ROLE_STATEMENT,
+        },
+        "defs": ACTIVATION_DEFS,
     },
     "DoctorReport": {
         "command": "doctor",
@@ -75,6 +200,8 @@ REPORTS = {
             "sourceChecks",
             "pinnedWork",
             "eventWiringGuidance",
+            "roleMode",
+            "singleRoleStatement",
         ],
         "properties": {
             "runtimeConfig": STRING,
@@ -93,6 +220,8 @@ REPORTS = {
                 },
             },
             "eventWiringGuidance": STRING,
+            "roleMode": ROLE_MODE,
+            "singleRoleStatement": SINGLE_ROLE_STATEMENT,
         },
         "defs": {
             "doctorChecks": {
@@ -105,6 +234,7 @@ REPORTS = {
                     "sourceConnections",
                     "audit",
                     "database",
+                    "activation",
                     "pinnedWork",
                     "oidcIssuer",
                     "directory",
@@ -119,6 +249,7 @@ REPORTS = {
                         "sourceConnections",
                         "audit",
                         "database",
+                        "activation",
                         "pinnedWork",
                         "oidcIssuer",
                         "directory",
@@ -485,7 +616,7 @@ DIAGNOSTIC_DEFS = {
 }
 
 
-def object_schema(kind: str, report: dict, ok: bool) -> dict:
+def object_schema(kind: str, report: dict, ok: bool, carries_report: bool = False) -> dict:
     properties = {
         "apiVersion": {"const": API_VERSION},
         "kind": {"const": kind},
@@ -493,10 +624,10 @@ def object_schema(kind: str, report: dict, ok: bool) -> dict:
         "command": {"const": report["command"]},
     }
     required = ["apiVersion", "kind", "ok"]
-    if ok:
+    if ok or carries_report:
         properties.update(report.get("properties", {}))
         required.extend(["command", *report.get("required", [])])
-    else:
+    if not ok:
         properties["diagnostics"] = DIAGNOSTICS
         required.append("diagnostics")
     return {
@@ -509,6 +640,10 @@ def object_schema(kind: str, report: dict, ok: bool) -> dict:
 
 def schema(kind: str, report: dict) -> dict:
     variants = [object_schema(kind, report, False)]
+    if report.get("refusal_carries_report"):
+        # A refusal found while planning carries the plan it refused beside
+        # its diagnostics; a refusal before the plan exists carries only them.
+        variants.insert(0, object_schema(kind, report, False, carries_report=True))
     if not report.get("failure_only"):
         variants.insert(0, object_schema(kind, report, True))
     defs = dict(DIAGNOSTIC_DEFS)
