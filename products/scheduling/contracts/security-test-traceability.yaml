@@ -234,6 +234,7 @@ entries:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_naming_revoke_create, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_split_mode_naming_revoke_trigger, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_holding_the_migration_role_is_recorded_as_single, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: rotating_the_runtime_role_reapplies_the_active_package, features: [postgres-test]}
   - id: SCHEDULING-SEC-31

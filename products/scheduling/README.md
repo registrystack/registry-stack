@@ -83,7 +83,8 @@ after it, and applies nothing when the request entry cannot be written.
 hash, and each `--backup REF` is recorded as given. Applying the package that
 is already active refuses with `nothing needs applying` unless a schema
 version is pending, the runtime credential is another role than the ledger
-recorded, or its role mode changed; any other valid package, including an
+recorded, its role mode changed, or a split runtime role lost a grant apply
+issues; any other valid package, including an
 earlier one, applies as a new row. Each row records the runtime role and the
 role mode that role actually holds after the grants: `split` when it cannot
 write the ledger, `single` when it can, through a grant, ownership, membership
@@ -97,9 +98,10 @@ another package; each refusal names `schedulingctl plan` then
 `schedulingctl apply`. It also refuses when the ledger recorded `split` and the
 runtime credential can now write the ledger, naming `schedulingctl apply` to
 reissue the grants. With two roles, `plan`, `apply`, and `serve` refuse a
-runtime role that owns a Scheduling object or holds CREATE on the schema,
-naming `REASSIGN OWNED BY` or `REVOKE CREATE ON SCHEMA` and then
-`schedulingctl apply`. A `serve` that finds a schema older than the one its
+runtime role that owns a Scheduling object, holds TRIGGER on a Scheduling
+table, or holds CREATE on the schema, naming `REASSIGN OWNED BY` then
+`schedulingctl apply`, or `REVOKE TRIGGER` or `REVOKE CREATE ON SCHEMA` then
+a rerun of the refused command. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
 so an upgrade runs `schedulingctl apply` once before it restarts the new
 runtime; a database from before the ledger is adopted by that first apply,

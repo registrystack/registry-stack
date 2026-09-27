@@ -279,11 +279,14 @@ impl PostgresStore {
             }
             let mode_now =
                 role_mode_in(&*transaction, request.runtime_role, Some(&migration_role)).await?;
+            let grants_current =
+                grants_current_in(&*transaction, request.runtime_role, mode_now).await?;
             if already_active(
                 active,
                 request.package_digest,
                 request.runtime_role,
                 mode_now,
+                grants_current,
                 &schema,
             ) {
                 return Err(StoreError::PackageAlreadyActive {
@@ -432,11 +435,14 @@ impl PostgresStore {
             if active.database_id != database_id {
                 refusals.push(StoreError::DatabaseIdMismatch);
             }
+            let grants_current =
+                grants_current_in(&*transaction, &runtime_role, effective_role_mode).await?;
             if already_active(
                 active,
                 package_digest,
                 &runtime_role,
                 effective_role_mode,
+                grants_current,
                 &schema,
             ) {
                 changes_pending = false;
@@ -531,12 +537,56 @@ fn already_active(
     package_digest: &str,
     runtime_role: &str,
     role_mode: Option<RoleMode>,
+    grants_current: bool,
     schema: &SchemaState,
 ) -> bool {
     active.package_digest == package_digest
         && schema.pending.is_empty()
         && active.runtime_role == runtime_role
         && role_mode == Some(active.role_mode)
+        && grants_current
+}
+
+/// Whether `role` still holds every grant apply issues a split runtime role:
+/// USAGE on the schema, SELECT on every table, INSERT, UPDATE, and DELETE on
+/// every table but the ledger and the schema history, use of every
+/// sequence, and EXECUTE on every function. Moving an object's ownership
+/// back to the migration role drops the grants the runtime role held on it,
+/// and a reapply is what restores them. True in single role mode, where
+/// apply issues no grants.
+async fn grants_current_in(
+    client: &impl GenericClient,
+    role: &str,
+    role_mode: Option<RoleMode>,
+) -> Result<bool, StoreError> {
+    if role_mode != Some(RoleMode::Split) {
+        return Ok(true);
+    }
+    Ok(client
+        .query_one(
+            "SELECT has_schema_privilege(r.oid, n.oid, 'USAGE') \
+                 AND NOT EXISTS (SELECT 1 FROM pg_class AS t \
+                     WHERE t.relnamespace = n.oid AND t.relkind IN ('r', 'p', 'v', 'm', 'f') \
+                       AND NOT (has_table_privilege(r.oid, t.oid, 'SELECT') \
+                           AND (t.relname IN ('scheduling_activations', 'scheduling_schema_migrations') \
+                               OR (has_table_privilege(r.oid, t.oid, 'INSERT') \
+                                   AND has_table_privilege(r.oid, t.oid, 'UPDATE') \
+                                   AND has_table_privilege(r.oid, t.oid, 'DELETE'))))) \
+                 AND NOT EXISTS (SELECT 1 FROM pg_class AS q \
+                     WHERE q.relnamespace = n.oid AND q.relkind = 'S' \
+                       AND NOT (has_sequence_privilege(r.oid, q.oid, 'USAGE') \
+                           AND has_sequence_privilege(r.oid, q.oid, 'SELECT'))) \
+                 AND NOT EXISTS (SELECT 1 FROM pg_proc AS p \
+                     WHERE p.pronamespace = n.oid \
+                       AND NOT has_function_privilege(r.oid, p.oid, 'EXECUTE')) \
+             FROM pg_roles AS r \
+             CROSS JOIN pg_class AS c \
+             JOIN pg_namespace AS n ON n.oid = c.relnamespace \
+             WHERE r.rolname = $1::text AND c.oid = to_regclass('scheduling_activations')",
+            &[&role],
+        )
+        .await?
+        .get(0))
 }
 
 /// The role mode `role` holds over the activation ledger, or none before
@@ -585,9 +635,10 @@ async fn role_mode_in(
 /// How `role`, a role other than the ledger's owner, can still write the
 /// ledger although apply revoked its writes: it owns, or holds a role that
 /// owns, the Scheduling schema or a `scheduling_*` relation or function in
-/// it, or it holds CREATE on the schema. Either lets it attach code that
-/// runs as the migration role inside a later apply, such as a deferred
-/// constraint trigger on a table apply writes. None when the ledger does not
+/// it, it holds TRIGGER on a `scheduling_*` relation, or it holds CREATE on
+/// the schema. Each lets it attach code that runs as the migration role
+/// inside a later apply, such as a deferred constraint trigger on a table
+/// apply writes. None when the ledger does not
 /// exist yet, when `role` is or holds the ledger's owner or is a superuser
 /// (single role mode), or when neither holds.
 async fn split_weakness_in(
@@ -607,6 +658,11 @@ async fn split_weakness_in(
                  ) AS owners \
                  WHERE pg_has_role(r.oid, owner, 'USAGE') \
                  ORDER BY owner = r.oid DESC, pg_get_userbyid(owner) LIMIT 1), \
+                 (SELECT format('%I.%I', n.nspname, t.relname) FROM pg_class AS t \
+                     WHERE t.relnamespace = n.oid AND t.relname LIKE 'scheduling\\_%' \
+                       AND t.relkind IN ('r', 'p', 'v', 'm', 'f') \
+                       AND has_table_privilege(r.oid, t.oid, 'TRIGGER') \
+                     ORDER BY t.relname LIMIT 1), \
                  has_schema_privilege(r.oid, n.oid, 'CREATE') \
              FROM pg_roles AS r \
              CROSS JOIN pg_class AS c \
@@ -623,20 +679,33 @@ async fn split_weakness_in(
     let (runtime, schema, migration): (String, String, String) =
         (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
     let owner: Option<String> = row.try_get(3)?;
-    let creates: bool = row.try_get(4)?;
-    let (cause, fix) = match owner {
-        Some(owner) => (
+    let triggers_on: Option<String> = row.try_get(4)?;
+    let creates: bool = row.try_get(5)?;
+    // Moving ownership takes the runtime role's grants on the object with
+    // it, so only that fix needs an apply to reissue them.
+    const THEN_APPLY: &str =
+        "then run `schedulingctl apply --runtime-config FILE` to reissue the runtime role's grants";
+    const THEN_RERUN: &str = "then rerun the command that refused, or run `schedulingctl plan --runtime-config FILE` to confirm";
+    let (cause, fix, then) = match (owner, triggers_on) {
+        (Some(owner), _) => (
             format!("{owner} owns an object in the Scheduling schema {schema}"),
             format!("REASSIGN OWNED BY {owner} TO {migration}"),
+            THEN_APPLY,
         ),
-        None if creates => (
+        (None, Some(table)) => (
+            format!("it holds TRIGGER on {table}"),
+            format!("REVOKE TRIGGER ON {table} FROM {runtime}"),
+            THEN_RERUN,
+        ),
+        (None, None) if creates => (
             format!("it holds CREATE on the Scheduling schema {schema}"),
             format!("REVOKE CREATE ON SCHEMA {schema} FROM {runtime}"),
+            THEN_RERUN,
         ),
-        None => return Ok(None),
+        (None, None) => return Ok(None),
     };
     Ok(Some(StoreError::SplitRoleWeakened(format!(
-        "the runtime role {runtime} is not separated from the migration role {migration}: {cause}, so it can write the activation ledger indirectly; run `{fix}` as a database administrator, then run `schedulingctl apply --runtime-config FILE`"
+        "the runtime role {runtime} is not separated from the migration role {migration}: {cause}, so it can write the activation ledger indirectly; run `{fix}` as a database administrator, {then}"
     ))))
 }
 
@@ -882,6 +951,7 @@ async fn grant_runtime_role(
              GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO {role};\
              GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {schema} TO {role};\
              GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {schema} TO {role};\
+             REVOKE TRIGGER ON ALL TABLES IN SCHEMA {schema} FROM {role};\
              REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON \
              {schema}.scheduling_activations, {schema}.scheduling_schema_migrations FROM {role};\
              REVOKE ALL ON {schema}.scheduling_activations FROM PUBLIC;"

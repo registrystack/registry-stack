@@ -90,8 +90,8 @@ credential and only read; `schedulingctl apply` connects with the migration
 credential. When the two credentials log in as different PostgreSQL roles
 (split role mode), apply grants the runtime role USAGE on the schema,
 SELECT, INSERT, UPDATE, and DELETE on its tables, use of its sequences, and
-EXECUTE on its functions, then revokes INSERT, UPDATE, DELETE, and TRUNCATE on
-the activation ledger and the schema history. The runtime role can read the
+EXECUTE on its functions, then revokes TRIGGER on its tables and INSERT,
+UPDATE, DELETE, and TRUNCATE on the activation ledger and the schema history. The runtime role can read the
 ledger but not write it; it keeps ordinary write access to the product tables
 it serves from. When both
 credentials are the same role (single role mode), `plan`, `apply`, and
@@ -105,11 +105,14 @@ reissues the grants after the runtime role is rotated or the deployment moves
 to split mode, and `scheduling serve` refuses a ledger that recorded `split`
 for a credential that can now write it. A runtime role that owns, or is a
 member of an owner of, the Scheduling schema or any `scheduling_*` table,
-sequence, view, or function, or that holds CREATE on the schema, can write
-the ledger indirectly and no grant apply issues removes that. With two
-roles, `plan`, `apply`, and `serve` refuse it, naming `REASSIGN OWNED BY
-<owner> TO <migrator>` or `REVOKE CREATE ON SCHEMA <schema> FROM <runtime>`
-and then `schedulingctl apply --runtime-config FILE`.
+sequence, view, or function, that holds TRIGGER on a `scheduling_*` table or
+view, or that holds CREATE on the schema, can write the ledger indirectly.
+With two roles, `plan`, `apply`, and `serve` refuse it. After `REASSIGN
+OWNED BY <owner> TO <migrator>` the refusal names `schedulingctl apply
+--runtime-config FILE`, which reissues the grants the moved objects lost;
+after `REVOKE TRIGGER ON <table> FROM <runtime>` or `REVOKE CREATE ON SCHEMA
+<schema> FROM <runtime>` it names a rerun of the refused command, or
+`schedulingctl plan --runtime-config FILE` to confirm.
 Transport security on the database connection is not optional: Scheduling sets
 `sslmode` to `Require` on both connections and refuses a connection it cannot
 protect. `database.trustedRootCertificateRef` is optional and selects the PEM
