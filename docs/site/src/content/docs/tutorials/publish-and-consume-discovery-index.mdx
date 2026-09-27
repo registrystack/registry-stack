@@ -48,9 +48,15 @@ cd registry-stack
 Build the two Discovery binaries from the locked workspace and put them on your `PATH`:
 
 ```sh test-skip="builds from source; the runner serves the binaries under test"
-cargo build --locked --release -p registry-discovery -p registry-discoveryctl
+. scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --locked --release -p registry-discovery -p registry-discoveryctl
 export PATH="$PWD/target/release:$PATH"
 ```
+
+`registry_cargo_build` runs `cargo build`. On macOS the binaries also load an AWS-LC FIPS library
+that stays in Cargo's build directory, so the helper points `DYLD_FALLBACK_LIBRARY_PATH` at it for
+this shell. Run every `discoveryctl` and `discovery` command below in this shell; the second shell
+this tutorial opens only runs Python and `curl`.
 
 `discoveryctl` is the operator's offline tool: it checks the authoring project and builds the
 index. `discovery` is the runtime that serves one built index.
@@ -147,14 +153,14 @@ section is the only step that fetches the descriptions.
 ## Build the index
 
 Play the two providers by serving their descriptions at the URLs `origins.yaml` approved. The
-server keeps running, so start it in its own shell:
+server keeps running, so open a second shell at the root of the checkout and start it there:
 
 ```sh test-background="http://127.0.0.1:38090/evidence.jsonld"
 python3 products/discovery/tutorial/publication_server.py \
   --descriptions products/discovery/fixtures/descriptions
 ```
 
-Open a second shell at the root of the checkout and build the index:
+Back in the first shell, build the index:
 
 ```sh
 discoveryctl build \
@@ -167,12 +173,15 @@ discoveryctl build \
 built catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
 ```
 
-Both revisions are content addressed. The catalog revision is derived from the provider bytes
-the build fetched, and the mapping revision from the operator's mappings, so the same inputs
-build the same revisions on any machine.
+Both revisions are content addressed. The catalog revision is a digest of what the provider
+descriptions mean once normalized, and the mapping revision a digest of the operator's
+mappings, so the same inputs build the same revisions on any machine. A provider that
+reformats its file without changing its meaning keeps the same catalog revision. To detect any
+change to the exact bytes a provider published, compare each record's `originContentDigest`,
+which appears in the search results below.
 
-The build fetched each description once, and the index is now complete. Go back to the first
-shell and stop the publication server with `Ctrl+C`. Discovery never contacts a provider while it
+The build fetched each description once, and the index is now complete. In the second shell,
+stop the publication server with `Ctrl+C`. Discovery never contacts a provider while it
 serves, so nothing below needs it.
 
 ## Serve the index
