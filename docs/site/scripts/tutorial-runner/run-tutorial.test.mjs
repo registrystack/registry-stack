@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -554,6 +555,39 @@ test('a background fence that ends before it is ready stops the journey and show
     assert.match(output, /the sh fence at line 7 \(Serve\) failed/u);
     assert.doesNotMatch(output, /^never$/mu);
   });
+});
+
+test('a background fence is ready only once its URL answers with success', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/ready.txt`;
+  const body =
+    '## Serve\n\n' +
+    fence(`sh test-background="${url}"`, `(sleep 1; echo ok >ready.txt) &\nexec python3 -m http.server ${port} --bind 127.0.0.1 2>/dev/null`) +
+    fence('sh', 'cat ready.txt') +
+    fence('text test-expect', 'ok');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+  });
+});
+
+test('a background fence that ends is not ready although another service answers its URL', async () => {
+  const port = await freePort();
+  const stale = createHttpServer((request, response) => response.end('stale'));
+  await new Promise((resolvePromise) => stale.listen(port, '127.0.0.1', resolvePromise));
+  try {
+    const body = '## Serve\n\n' + fence(`sh test-background="http://127.0.0.1:${port}/"`, 'echo "port taken" >&2\nfalse') + fence('sh', 'echo never');
+    await withPage(body, async ({ page }) => {
+      const { code, output } = await run([page]);
+      assert.equal(code, 1, output);
+      assert.match(output, /port taken/u);
+      assert.match(output, /the sh fence at line 7 \(Serve\) failed/u);
+      assert.doesNotMatch(output, /^never$/mu);
+    });
+  } finally {
+    await new Promise((resolvePromise) => stale.close(resolvePromise));
+  }
 });
 
 test('an expectation on a background fence checks what it printed while it ran', async () => {
