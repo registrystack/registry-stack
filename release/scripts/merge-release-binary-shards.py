@@ -16,6 +16,7 @@ from pathlib import Path
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MINT_RETIREMENT_VERSION = (0, 31, 0)
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 
 
 class ShardError(ValueError):
@@ -38,6 +39,12 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-linux-amd64", f"bregctl-{tag}-linux-amd64"]
         image_bins.append(("breg", breg[0]))
+    if parsed >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+        # The citizen MCP gateway and its review page ship in the BReg set.
+        for service in ("breg-mcp", "breg-review"):
+            asset = f"{service}-{tag}-linux-amd64"
+            breg.append(asset)
+            image_bins.append((service, asset))
     casework: list[str] = []
     if parsed >= (0, 30, 0):
         casework = [

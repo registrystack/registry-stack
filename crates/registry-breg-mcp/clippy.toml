@@ -1,0 +1,52 @@
+# The gateway's outbound boundary, enforced after name resolution.
+#
+# `breg-mcp` acts at the Base Registry Engine only as the citizen's delegated
+# agent: every outbound call carries a token exchanged for the verified inbound
+# token, and the tools it serves only read, draft, and edit the citizen's own
+# change request. The methods below are the ways a later change could step
+# outside that, either by presenting a credential that is not the exchanged one
+# or by reaching a registry operation no tool offers.
+#
+# Clippy matches the path the compiler resolved, so an alias, a re-export, or a
+# module redirected by `#[path]` all arrive here as the name below. It finds this
+# file from this package's directory and applies it to this package only, test
+# targets included; a sibling crate resolves the workspace file at the
+# repository root instead. `products/breg/scripts/check-mcp-gateway-boundary.sh`
+# additionally fails when an entry stops resolving, because clippy reports that
+# as a warning `-D warnings` does not deny, and proves the lint still refuses
+# the shapes it was written for.
+
+# Matching the workspace file, which this one replaces rather than extends.
+cognitive-complexity-threshold = 25
+
+disallowed-methods = [
+  # A credential the gateway builds from text rather than obtains by exchange.
+  # The chat host's token must never reach the registry, and neither may any
+  # other bearer string.
+  { path = "registry_breg_client::BaseRegistryClient::with_bearer_token", reason = "outbound calls authenticate only through the per-call token exchange" },
+  { path = "registry_platform_httputil::client::StaticToken::new", reason = "outbound calls authenticate only through the per-call token exchange" },
+  { path = "registry_platform_httputil::client::BearerToken::new", reason = "outbound calls authenticate only through the per-call token exchange" },
+
+  # A credential attached some other way than the exchange. The one call that
+  # attaches the exchange to the client is `outbound::delegated`, which takes
+  # nothing but an exchange and allows this lint there alone. A bearer header
+  # written out of a token, or an HTTP client built beside the registry client,
+  # would carry a request to the registry around the client altogether.
+  { path = "registry_breg_client::BaseRegistryClientConfig::with_token_provider", reason = "only outbound::delegated attaches a credential, and only the exchange" },
+  { path = "registry_platform_httputil::client::BearerToken::authorization_header_value", reason = "outbound requests carry a credential only through the registry client" },
+  { path = "registry_platform_httputil::client::build_client", reason = "outbound requests go only through the registry client the exchange configured" },
+
+  # Registry operations no gateway tool offers. A citizen's agent drafts and
+  # edits a change request; it does not run lifecycle actions, tombstone,
+  # batch, invoke actions, manage attachments, or ingest.
+  { path = "registry_breg_client::BaseRegistryClient::execute_lifecycle_action", reason = "the gateway offers no lifecycle action" },
+  { path = "registry_breg_client::BaseRegistryClient::tombstone_record", reason = "the gateway offers no tombstone" },
+  { path = "registry_breg_client::BaseRegistryClient::batch_records", reason = "the gateway offers no batch write" },
+  { path = "registry_breg_client::BaseRegistryClient::action_target_conditions", reason = "the gateway offers no governed action" },
+  { path = "registry_breg_client::BaseRegistryClient::invoke_action", reason = "the gateway offers no governed action" },
+  { path = "registry_breg_client::BaseRegistryClient::upload_attachment", reason = "the gateway offers no attachment upload" },
+  { path = "registry_breg_client::BaseRegistryClient::delete_attachment", reason = "the gateway offers no attachment removal" },
+  { path = "registry_breg_client::BaseRegistryClient::create_ingestion_run", reason = "the gateway offers no ingestion" },
+  { path = "registry_breg_client::BaseRegistryClient::submit_ingestion_chunk", reason = "the gateway offers no ingestion" },
+  { path = "registry_breg_client::BaseRegistryClient::cancel_ingestion_run", reason = "the gateway offers no ingestion" },
+]

@@ -69,7 +69,7 @@ jobs:
           PY
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          image_names=(relay evidence discovery breg casework scheduling)
+          image_names=(relay evidence discovery breg breg-mcp breg-review casework scheduling)
 
           write_image_reports() {
             local name="$1"
@@ -108,6 +108,8 @@ jobs:
               "discovery-image",
               "evidence-image",
               "breg-image",
+              "breg-mcp-image",
+              "breg-review-image",
               "casework-image",
               "scheduling-image",
               "relay-image"

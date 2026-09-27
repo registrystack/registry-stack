@@ -626,6 +626,8 @@ class CiChangesTest(unittest.TestCase):
 
     def test_config_conformance_inputs_select_the_conformance_gate(self) -> None:
         for path in (
+            "crates/registry-breg-mcp/src/config.rs",
+            "crates/registry-breg-review/src/config.rs",
             "crates/registry-platform-config/src/blocks.rs",
             "crates/registry-breg/src/runtime_config.rs",
             "crates/registry-relay-v2/src/contract.rs",
@@ -677,12 +679,59 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(
                     classify(self.workspace, (path,))["config_conformance"]
                 )
-        digest_tests = {row.digest_mismatch.path for row in gate.ROWS}
+        digest_tests = {
+            row.digest_mismatch.path for row in gate.ROWS
+            if isinstance(row.digest_mismatch, gate.TestRef)
+        }
         for path in sorted(digest_tests):
             with self.subTest(path=path):
                 self.assertTrue(
                     classify(self.workspace, (path,))["config_conformance"]
                 )
+
+    def test_final_aggregate_refuses_a_selected_integration_job_that_skipped(
+        self,
+    ) -> None:
+        # Review skips the heavy integration tier by design, so a skip passes
+        # only where the classifier did not select the job; in the merge
+        # queue a selected job has to succeed.
+        final_job = self.workflow_jobs["ci-result"]
+        run = final_job["steps"][0]["run"]
+        script = run.removeprefix("python3 - <<'PY'\n").rsplit("\nPY", 1)[0]
+        needs = self.normalized_needs(final_job)
+        heavy = {
+            "breg-contracts": "breg_contracts",
+            "breg-wasm": "breg_integration",
+            "casework-postgres": "casework_postgres",
+            "scheduling-postgres": "scheduling_postgres",
+            "evidence-tutorials": "evidence_tutorial",
+            "breg-tutorial": "breg_tutorial",
+            "casework-tutorial": "casework_tutorial",
+            "breg-evidence-composition": "breg_evidence_composition",
+        }
+
+        def status(job: str, selected: str, result: str) -> int:
+            results = {name: {"result": "success"} for name in needs}
+            results["changes"]["outputs"] = {heavy[job]: selected}
+            results[job]["result"] = result
+            return subprocess.run(
+                (sys.executable, "-c", script),
+                env={"CI_JOB_RESULTS": json.dumps(results)},
+                check=False,
+                capture_output=True,
+                text=True,
+            ).returncode
+
+        for job in heavy:
+            for selected, result, expected in (
+                ("false", "skipped", 0),
+                ("true", "success", 0),
+                ("true", "skipped", 1),
+                ("true", "failure", 1),
+                ("false", "failure", 1),
+            ):
+                with self.subTest(job=job, selected=selected, result=result):
+                    self.assertEqual(expected, status(job, selected, result))
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]
@@ -1022,6 +1071,14 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(
                     set(outputs["rust_packages"]) & BREG_PACKAGES
                 )
+
+        # The review page's real-registry journey runs in the PostgreSQL lane
+        # of the product gate, so a change to the page selects that gate.
+        review_outputs = classify(
+            self.workspace, ("crates/registry-breg-review/src/pages.rs",)
+        )
+        self.assertTrue(review_outputs["breg_contracts"])
+        self.assertIn("registry-breg-review", review_outputs["rust_packages"])
 
         product_outputs = classify(
             self.workspace,
@@ -1747,6 +1804,37 @@ class CiChangesTest(unittest.TestCase):
             {"developer-tools", "evidence"},
         )
 
+    def test_mcp_gateway_change_runs_in_the_breg_shard(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-mcp/src/gateway.rs",),
+        )
+        self.assertIn("registry-breg-mcp", outputs["rust_packages"])
+        breg = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "breg"
+        )
+        self.assertIn("registry-breg-mcp", breg["packages"])
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))["docs"]
+        )
+
+    def test_review_page_command_change_runs_docs(self) -> None:
+        # `breg-review`'s Clap tree is built in its lib.rs, which the CLI
+        # reference renders, so a change there rebuilds the docs.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-review/src/lib.rs",),
+        )
+        self.assertTrue(outputs["docs"])
+        self.assertIn("registry-breg-review", outputs["rust_packages"])
+        self.assertFalse(
+            classify(
+                self.workspace, ("crates/registry-breg-review/src/pages.rs",)
+            )["docs"]
+        )
+
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
         self,
     ) -> None:
@@ -1913,6 +2001,8 @@ class CiChangesTest(unittest.TestCase):
         for entry_point in (
             "products/breg/scripts/check-contracts.sh",
             "products/breg/scripts/check-client-contract.sh",
+            "products/breg/scripts/check-mcp-gateway-boundary.sh",
+            "products/breg/scripts/check-service-dependencies.sh",
             "products/breg/scripts/test-postgres.sh",
             "products/breg/scripts/test-postgres-tls.sh",
             "products/breg/scripts/test-adopter-workflow.sh",

@@ -214,38 +214,121 @@ pub enum CorsValidationError {
     MalformedOrigin(String),
 }
 
+/// A content security policy built from static directive names.
+///
+/// Directives are emitted in a fixed order, and a directive with no sources is
+/// omitted. `frame-ancestors 'none'` is always present.
 #[derive(Debug, Clone)]
 pub struct CspBuilder {
-    default_src: Vec<String>,
-    script_src: Vec<String>,
-    style_src: Vec<String>,
-    img_src: Vec<String>,
-    connect_src: Vec<String>,
+    default_src: Vec<&'static str>,
+    script_src: Vec<&'static str>,
+    style_src: Vec<&'static str>,
+    img_src: Vec<&'static str>,
+    connect_src: Vec<&'static str>,
+    object_src: Vec<&'static str>,
+    form_action: Vec<&'static str>,
 }
 
 impl CspBuilder {
+    /// The same-origin baseline for services that serve their own assets.
     #[must_use]
     pub fn restrictive() -> Self {
         Self {
-            default_src: vec!["'self'".to_string()],
-            script_src: vec!["'self'".to_string()],
-            style_src: vec!["'self'".to_string()],
-            img_src: vec!["'self'".to_string(), "data:".to_string()],
-            connect_src: vec!["'self'".to_string()],
+            default_src: vec!["'self'"],
+            script_src: vec!["'self'"],
+            style_src: vec!["'self'"],
+            img_src: vec!["'self'", "data:"],
+            connect_src: vec!["'self'"],
+            object_src: vec!["'none'"],
+            form_action: Vec::new(),
         }
     }
 
-    pub fn header_value(&self) -> HeaderValue {
-        HeaderValue::from_str(&format!(
-            "default-src {}; script-src {}; style-src {}; img-src {}; connect-src {}; object-src 'none'; frame-ancestors 'none'",
-            self.default_src.join(" "),
-            self.script_src.join(" "),
-            self.style_src.join(" "),
-            self.img_src.join(" "),
-            self.connect_src.join(" "),
-        ))
-        .expect("CSP built from static directive names is a valid header")
+    /// A policy that loads nothing: `default-src 'none'` and
+    /// `frame-ancestors 'none'`. Add only the directives a page needs.
+    #[must_use]
+    pub fn deny_by_default() -> Self {
+        Self {
+            default_src: vec!["'none'"],
+            script_src: Vec::new(),
+            style_src: Vec::new(),
+            img_src: Vec::new(),
+            connect_src: Vec::new(),
+            object_src: Vec::new(),
+            form_action: Vec::new(),
+        }
     }
+
+    /// Replace the `style-src` sources.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `sources` is empty or a source is not one token of visible
+    /// ASCII without `;` or `,`. Sources are code constants, never input.
+    #[must_use]
+    #[track_caller]
+    pub fn with_style_src(mut self, sources: &[&'static str]) -> Self {
+        self.style_src = checked_sources(sources);
+        self
+    }
+
+    /// Restrict where a form on the page may submit, with `form-action`.
+    /// `form-action` does not fall back to `default-src`, so a page with forms
+    /// needs it even under [`CspBuilder::deny_by_default`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `sources` is empty or a source is not one token of visible
+    /// ASCII without `;` or `,`. Sources are code constants, never input.
+    #[must_use]
+    #[track_caller]
+    pub fn with_form_action(mut self, sources: &[&'static str]) -> Self {
+        self.form_action = checked_sources(sources);
+        self
+    }
+
+    pub fn header_value(&self) -> HeaderValue {
+        let directives = [
+            ("default-src", &self.default_src),
+            ("script-src", &self.script_src),
+            ("style-src", &self.style_src),
+            ("img-src", &self.img_src),
+            ("connect-src", &self.connect_src),
+            ("object-src", &self.object_src),
+            ("form-action", &self.form_action),
+        ];
+        let mut policy = String::new();
+        for (name, sources) in directives {
+            if sources.is_empty() {
+                continue;
+            }
+            policy.push_str(name);
+            policy.push(' ');
+            policy.push_str(&sources.join(" "));
+            policy.push_str("; ");
+        }
+        policy.push_str("frame-ancestors 'none'");
+        HeaderValue::from_str(&policy)
+            .expect("CSP built from static directive names is a valid header")
+    }
+}
+
+#[track_caller]
+fn checked_sources(sources: &[&'static str]) -> Vec<&'static str> {
+    assert!(
+        !sources.is_empty(),
+        "a CSP directive names at least one source"
+    );
+    for source in sources {
+        assert!(
+            !source.is_empty()
+                && source
+                    .bytes()
+                    .all(|byte| byte.is_ascii_graphic() && byte != b';' && byte != b','),
+            "a CSP source is one token of visible ASCII without `;` or `,`"
+        );
+    }
+    sources.to_vec()
 }
 
 /// Default HSTS value applied by [`security_headers`]: two-year max-age with
@@ -586,6 +669,57 @@ fn is_loopback_origin(url: &url::Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RESTRICTIVE_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'";
+
+    #[test]
+    fn restrictive_policy_bytes_are_unchanged() {
+        assert_eq!(
+            CspBuilder::restrictive().header_value(),
+            HeaderValue::from_static(RESTRICTIVE_POLICY)
+        );
+    }
+
+    #[test]
+    fn deny_by_default_policy_names_only_its_directives() {
+        assert_eq!(
+            CspBuilder::deny_by_default().header_value(),
+            HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'")
+        );
+        assert_eq!(
+            CspBuilder::deny_by_default()
+                .with_style_src(&["'self'"])
+                .with_form_action(&["'self'"])
+                .header_value(),
+            HeaderValue::from_static(
+                "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'"
+            )
+        );
+    }
+
+    #[test]
+    fn form_action_extends_the_restrictive_policy_before_frame_ancestors() {
+        assert_eq!(
+            CspBuilder::restrictive()
+                .with_form_action(&["'self'", "https://idp.example.test"])
+                .header_value(),
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; form-action 'self' https://idp.example.test; frame-ancestors 'none'"
+            )
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a CSP source is one token")]
+    fn csp_source_cannot_inject_a_directive() {
+        let _ = CspBuilder::deny_by_default().with_form_action(&["'self'; script-src *"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a CSP directive names at least one source")]
+    fn csp_directive_cannot_be_set_empty() {
+        let _ = CspBuilder::deny_by_default().with_style_src(&[]);
+    }
 
     #[test]
     fn trace_identifier_has_one_canonical_wire_shape() {

@@ -1,0 +1,39 @@
+{% extends "layout.html" %}
+{% block title %}{{ entity_label }}{% endblock %}
+{% block main %}
+<h1>{{ entity_label }}</h1>
+{% if notice %}
+<p class="notice" data-notice="request-changed">This request changed after you opened it. Check the values below and submit again if they are still right.</p>
+{% endif %}
+<section data-values="current">
+<h2>Now: {{ target_label }}</h2>
+<dl>
+{% for item in current %}
+<dt>{{ item.label }}</dt>
+<dd>{{ item.value }}</dd>
+{% endfor %}
+</dl>
+</section>
+<section data-values="proposed">
+<h2>Proposed change</h2>
+<dl>
+{% for item in proposed %}
+<dt>{{ item.label }}</dt>
+<dd>{{ item.value }}</dd>
+{% endfor %}
+</dl>
+</section>
+{% if view %}
+<form method="post" action="/requests/{{ request_id }}/submit">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="view" value="{{ view }}">
+<button type="submit">Submit this request</button>
+</form>
+{% else %}
+<p class="notice" data-state="not-submittable">This request is not waiting for your submission.</p>
+{% endif %}
+<form method="post" action="/signout" class="sign-out">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<button type="submit">Sign out</button>
+</form>
+{% endblock %}

@@ -15,7 +15,7 @@ mod token;
 
 pub use exchange_authorization::{
     ExchangeAssertionSource, ExchangeAuthorization, ExchangeContext, FirstPartyAssertionSource,
-    RemoteAssertionSource, SignedExchangeAssertion,
+    RemoteAssertionSource, SignedExchangeAssertion, UpstreamSubjectToken,
 };
 pub use exchange_config::exchange_authorization_from_json;
 pub use outbound::{
@@ -24,10 +24,10 @@ pub use outbound::{
 };
 pub use private_key_jwt::{
     valid_resource_uri, valid_scope_token, PrivateKeyJwt, PrivateKeyJwtConfig,
-    DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
-    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
-    MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES, MAXIMUM_SCOPE_PARAMETER_BYTES,
-    MAXIMUM_TOKEN_RESPONSE_BYTES,
+    RedeemedAuthorizationCode, SubjectTokenType, DEFAULT_ASSERTION_LIFETIME_SECONDS,
+    DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+    MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
+    MAXIMUM_SCOPE_PARAMETER_BYTES, MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
 

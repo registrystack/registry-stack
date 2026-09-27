@@ -278,6 +278,14 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "if (( release_major > 0 || release_minor >= 33 )); then", merge
         )
         self.assertIn("dist/image-bin/scheduling --version", merge)
+        self.assertIn(
+            "if (( release_major > 0 || release_minor >= 35 )); then", merge
+        )
+        self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
+        self.assertIn(
+            'dist/bin/${breg_service}-v${REHEARSAL_VERSION}-linux-amd64', merge
+        )
+        self.assertIn('dist/image-bin/${breg_service}" --version', merge)
         self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",

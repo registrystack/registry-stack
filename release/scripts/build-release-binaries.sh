@@ -38,6 +38,11 @@ include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
 fi
+# The citizen MCP gateway and its review page ship in the BReg release set.
+include_breg_services=0
+if ((version_major > 0 || version_minor >= 35)); then
+  include_breg_services=1
+fi
 include_casework=0
 if ((version_major > 0 || version_minor >= 30)) ||
    [[ "${include_casework_override}" -eq 1 ]]; then
@@ -215,6 +220,16 @@ build_payload() {
     cp target/release/breg "dist/bin/breg-${RELEASE_TAG}-linux-amd64"
     cp target/release/bregctl "dist/bin/bregctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/breg dist/image-bin/breg
+    if [[ "${include_breg_services}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-breg-mcp --bin breg-mcp
+      cargo build --release --locked \
+        -p registry-breg-review --bin breg-review
+      cp target/release/breg-mcp "dist/bin/breg-mcp-${RELEASE_TAG}-linux-amd64"
+      cp target/release/breg-review "dist/bin/breg-review-${RELEASE_TAG}-linux-amd64"
+      cp target/release/breg-mcp dist/image-bin/breg-mcp
+      cp target/release/breg-review dist/image-bin/breg-review
+    fi
   fi
 
   if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq 1 ]]; then
@@ -343,6 +358,7 @@ docker run --rm \
   --env HOME=/workspace \
   --env RELEASE_INCLUDE_DISCOVERY="${include_discovery}" \
   --env RELEASE_INCLUDE_BREG="${include_breg}" \
+  --env RELEASE_INCLUDE_BREG_SERVICES="${include_breg_services}" \
   --env RELEASE_INCLUDE_CASEWORK="${include_casework}" \
   --env RELEASE_INCLUDE_SCHEDULING="${include_scheduling}" \
   --env RELEASE_TAG="${tag}" \
@@ -381,6 +397,13 @@ if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; t
     "bregctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(breg)
+  if [[ "${include_breg_services}" -eq 1 ]]; then
+    bin_assets+=(
+      "breg-mcp-${tag}-linux-amd64"
+      "breg-review-${tag}-linux-amd64"
+    )
+    image_bin_binaries+=(breg-mcp breg-review)
+  fi
 fi
 if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq 1 ]]; then
   bin_assets+=(
