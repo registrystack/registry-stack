@@ -587,11 +587,18 @@ conformance claim:
   Features, Records, or EDR adapter and no SP-DCI synchronization surface to reason about.
 - A hostile local account on the machine that runs adopter tooling: `bregctl`, `evidencectl`,
   `caseworkctl`, `schedulingctl`, `relayctl`, and the other authoring and scaffolding commands
-  assume a single-user machine the adopter trusts. Their file writes are not a defense against
-  another account on that machine that races directory creation, plants a symbolic link, or can
-  write to a parent directory. Generate production key material on a machine where no other
-  account can write anywhere along the output path. The owner, mode, and no-follow checks
-  described for the runtimes are runtime startup checks, not tooling guarantees.
+  assume a single-user machine the adopter trusts, and resisting another account on that machine
+  is not a tooling guarantee. Some `bregctl` lifecycle writes walk directories by descriptor and
+  refuse symbolic links, so a planted link or a replaced ancestor fails them closed. Other tooling
+  writes use ordinary path-based file operations, and another account that can write to a parent
+  directory can race their directory creation or redirect them through a symbolic link. Generate
+  production key material on a machine where no other account can write anywhere along the output
+  path. The owner, mode, and no-follow checks described for the runtimes are runtime startup
+  checks.
+  {/* Evidence: descriptor-held SafeDir walk with openat and O_NOFOLLOW,
+       crates/registry-bregctl/src/safe_path.rs; path-based directory creation in
+       ensure_private_dir_impl and ensure_parent_dir, crates/registry-evidencectl/src/keygen.rs,
+       and ensure_private_parents, crates/registry-bregctl/src/field_encryption.rs. */}
 - Non-Unix targets: both runtimes are Unix-only, and both fail closed rather than degrading.
   Evidence Gateway's secret and audit invariants depend on owner, mode, no-follow, link-count,
   and open-file identity checks. Relay refuses to start on a non-Unix target outright, because
