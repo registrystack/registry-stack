@@ -826,7 +826,6 @@ The line is one JSON object:
     "registryIdentifier": "urn:example:registry:businesses",
     "resourceIdentifier": "registered-business",
     "rowBoundaryKind": "none",
-    "schema": "registry.relay.audit/v2alpha1",
     "selectedProperties": ["legalName", "legalForm"],
     "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
     "traceId": "<trace-id>",
@@ -892,7 +891,7 @@ rm -rf business-registry
 | `source.schema_fingerprint_mismatch` | The contract holds a fingerprint from a different schema, usually because the SQL was retyped rather than copied | Run `relayctl inspect registry.sqlite` again and paste the current value. |
 | `metadata.reference_visibility_invalid` | A public audience cannot resolve the schema or vocabulary the answer points at | Set `metadataVisibility.resources` and `.semantics` to `public` when any access profile is public. |
 | `classification.review_inventory_stale` | The contract changed after the review was recorded | Run `relayctl generate .` again and copy the new digest from `generated/governance/classification-review-starter.yaml`. |
-| `the required audit destination is not ready` at startup | `var/` is not owner-only, or another Relay process already writes `var/audit.jsonl` | `chmod 700 var`, and stop the other process. |
+| `the required audit destination is not ready` at startup | `var/` is not owner-only, another Relay process already writes `var/audit.jsonl`, or the audit file needs archiving | Apply the fix the preceding `the audit destination was refused` log line's `reason` names, for example `chmod 700 var`, or stop the other process. |
 
 ## Next
 

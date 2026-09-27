@@ -430,7 +430,8 @@ this release:
    and writes nothing. The refusal begins `the Casework database holds N audit record(s) that
    schema migration 17 would drop before they reach the audit journal`.
 2. Stop every earlier `casework` process. While one still holds the lock beside the audit file,
-   the new process refuses to start with `another process holds the single-writer lock`.
+   the new process refuses to start with `another process holds the single-writer lock beside the
+   audit file; stop it before starting this one`.
 3. Move the audit file and every numbered file beside it, such as `casework.ndjson.1` or
    `casework.ndjson.00000001`, into append-only storage or an archive directory outside the audit
    directory. This release refuses to start if the file at the configured path still begins with a
@@ -666,8 +667,8 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
 | `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then migrate a fresh database as [Migrate and serve](#migrate-and-serve) describes. |
 | `the Casework database holds N audit record(s) that schema migration 17 would drop` | The earlier release has not published every audit record. Run it until its publisher drains the outbox, then migrate as [the upgrade steps](#upgrade-from-a-release-that-chained-the-audit-file) describe. |
-| `the Casework audit destination could not be opened: another process holds the single-writer lock beside audit.path` | Another `casework` process writes this file. Stop it, or give this process its own `audit.path`. |
-| `the Casework audit destination could not be opened` naming a permission failure | Make the audit directory belong to the runtime user and not group- or world-writable, and `audit.path` belong to that user with mode `0600`. |
+| `the Casework audit destination could not be opened: another process holds the single-writer lock beside the audit file` | Another `casework` process writes this file. Stop it, or give this process its own `audit.path`. |
+| `the Casework audit destination could not be opened: the audit file could not be opened: ...` | The rest of the message names the rule the audit file or its directory broke and the fix, for example `chown it to the service user and chmod it 0700`, or `archive it and restart with a fresh path` for a file whose last entry is incomplete. Apply it and start again. |
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped or PostgreSQL is failing. Read the runtime log for `audit file write failed`, check the audit file, its lock, the free space, and the database, then restart the process. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |

@@ -654,7 +654,14 @@ gh workflow run release-upgrade-rehearsal.yml \
 
 The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
 because no adopter ran v0.32, so the script refuses to start from any earlier
-release rather than skipping the check. Scheduling state is not rehearsed.
+release rather than skipping the check. Scheduling state is not rehearsed:
+the script verifies and runs release binaries, and `v0.33.0` and `v0.34.0`
+shipped Scheduling only as a container image. Scheduling's
+`scheduling_audit_outbox` retirement is therefore covered by migration 8,
+which refuses while the outbox still holds unpublished rows, and by the
+operator archiving the old audit file before the upgraded runtime starts, as
+the Scheduling changelog and the retention page describe. An image-driven
+Scheduling leg is tracked separately.
 
 The audit-writer transition intentionally retires BReg's `registry_audit` and
 `registry_audit_head` tables and Casework's `casework_audit_outbox`. The rehearsal
