@@ -6043,6 +6043,53 @@ fn package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_c
     assert!(message.contains("SHA256SUMS"), "{message}");
 }
 
+#[test]
+fn field_encryption_preflight_reports_the_digest_pin_on_a_predecessor_without_the_shared_envelope()
+{
+    let legacy = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    strip_shared_package_envelope(&legacy.package);
+    let pinned_runtime = legacy.variant(
+        "pinned",
+        &format!("  trustAnchorPath: {}", path(&legacy.anchor)),
+        &format!(
+            "  trustAnchorPath: {}\n  expectedDigest: sha256:{}",
+            path(&legacy.anchor),
+            "0".repeat(64)
+        ),
+    );
+    let pinned = bregctl(&[
+        "--format",
+        "json",
+        "field-encryption",
+        "preflight",
+        "--runtime-config",
+        path(&pinned_runtime),
+        "--package",
+        path(&legacy.package),
+    ]);
+    assert_eq!(pinned.status.code(), Some(1), "{pinned:?}");
+    let report = json_stdout(&pinned);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "field_encryption.preflight.package.digest_pin_unverifiable",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["path"], "package.expectedDigest",
+        "{report}"
+    );
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "runtime_configuration",
+        "correct_runtime_configuration",
+    );
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("pin refusal message is a string");
+    assert!(message.contains("package.expectedDigest"), "{message}");
+    assert!(message.contains("SHA256SUMS"), "{message}");
+}
+
 #[cfg(unix)]
 #[test]
 fn unsafe_package_permissions_are_refused_without_rendering_paths() {

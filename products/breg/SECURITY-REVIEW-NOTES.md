@@ -300,7 +300,8 @@ load (release provenance).
 `crates/registry-bregctl/tests/cli.rs`:
 `package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_fix`,
 `package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured`,
-`diff_reads_a_running_package_without_the_shared_envelope_unless_a_digest_pin_is_configured`.
+`diff_reads_a_running_package_without_the_shared_envelope_unless_a_digest_pin_is_configured`,
+`field_encryption_preflight_reports_the_digest_pin_on_a_predecessor_without_the_shared_envelope`.
 `crates/registry-breg/src/tooling.rs`:
 `a_signed_baseline_without_an_index_reports_the_index_the_plan_adds`.
 `crates/registry-breg/tests/postgres_migration.rs`:
