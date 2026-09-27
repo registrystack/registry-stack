@@ -380,19 +380,7 @@ impl FileDestination {
                         ))
                     })?;
                 }
-                if !fs::metadata(ancestor).is_ok_and(|metadata| metadata.is_dir()) {
-                    return Err(AuditError::Io(io::Error::new(
-                        ErrorKind::NotADirectory,
-                        "audit directory cannot be created",
-                    )));
-                }
-                if rustix::fs::access(ancestor, rustix::fs::Access::WRITE_OK).is_err() {
-                    return Err(AuditError::Io(io::Error::new(
-                        ErrorKind::PermissionDenied,
-                        "audit directory cannot be created",
-                    )));
-                }
-                return Ok(());
+                return require_creatable_below(ancestor);
             }
             Err(error) => return Err(AuditError::Io(error)),
         }
@@ -1976,6 +1964,31 @@ fn create_directory(path: &Path) -> Result<(), AuditError> {
     Ok(())
 }
 
+/// Check that the writer's recursive create can make a directory inside
+/// `ancestor`, the nearest existing ancestor of a missing audit directory.
+fn require_creatable_below(ancestor: &Path) -> Result<(), AuditError> {
+    if !fs::metadata(ancestor).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err(AuditError::Io(io::Error::new(
+            ErrorKind::NotADirectory,
+            "audit directory cannot be created",
+        )));
+    }
+    // Creating an entry in a directory needs search as well as write
+    // permission on it.
+    if rustix::fs::access(
+        ancestor,
+        rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+    )
+    .is_err()
+    {
+        return Err(AuditError::Io(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "audit directory cannot be created",
+        )));
+    }
+    Ok(())
+}
+
 /// The audit directory must be a real directory owned by this user and not
 /// writable by group or others, so no other account can replace audit files.
 fn validate_directory(path: &Path) -> Result<(), AuditError> {
@@ -3413,6 +3426,25 @@ mod tests {
             .expect("absolute")
             .check_writable()
             .expect("the writer creates the directory through a linked ancestor");
+    }
+
+    #[test]
+    fn check_writable_refuses_to_create_below_an_ancestor_it_cannot_search() {
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: root searches every directory");
+            return;
+        }
+        let directory = directory();
+        let write_only = directory.path().join("write-only");
+        fs::create_dir(&write_only).expect("dir");
+        fs::set_permissions(&write_only, fs::Permissions::from_mode(0o200)).expect("mode");
+        let direct = require_creatable_below(&write_only);
+        let refused = FileDestination::new(write_only.join("audit").join("audit.jsonl"))
+            .expect("absolute")
+            .check_writable();
+        fs::set_permissions(&write_only, fs::Permissions::from_mode(0o700)).expect("restore");
+        direct.expect_err("mkdir below the ancestor needs search permission on it");
+        refused.expect_err("ancestor is writable but cannot be searched");
     }
 
     #[tokio::test]
