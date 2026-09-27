@@ -231,6 +231,41 @@ class SideTest(unittest.TestCase):
                 MODULE.check_binaries(side, "0.33.0", MODULE.BINARIES)
 
 
+class CaseworkPackageTest(unittest.TestCase):
+    def casework(self, root: Path) -> object:
+        casework = MODULE.Casework.__new__(MODULE.Casework)
+        casework.work = root
+        casework.project = root / "project"
+        casework.package = root / "package"
+        casework.runtime = root / "runtime.yaml"
+        casework.package.mkdir()
+        MODULE.dump_yaml(casework.runtime, {"package": {"root": str(casework.package)}})
+        return casework
+
+    def test_a_package_from_before_the_shared_format_is_rebuilt_by_the_new_side(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            casework = self.casework(Path(directory))
+            (casework.package / "casework.package.json").write_text("{}")
+            side = unittest.mock.Mock()
+            self.assertTrue(casework.repackage(side))
+            rebuilt = Path(directory) / "package-rebuilt"
+            side.run.assert_called_once_with("caseworkctl", "package", str(casework.project),
+                                             "--output", str(rebuilt))
+            self.assertEqual(casework.package, rebuilt)
+            self.assertEqual(MODULE.load_yaml(casework.runtime)["package"]["root"],
+                             str(rebuilt))
+
+    def test_a_shared_format_package_is_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            casework = self.casework(Path(directory))
+            (casework.package / "SHA256SUMS").write_text("")
+            side = unittest.mock.Mock()
+            self.assertFalse(casework.repackage(side))
+            side.run.assert_not_called()
+            self.assertEqual(MODULE.load_yaml(casework.runtime)["package"]["root"],
+                             str(casework.package))
+
+
 class EvidenceGrammarTest(unittest.TestCase):
     OLD_GOVERNANCE = {
         "version": 1,
