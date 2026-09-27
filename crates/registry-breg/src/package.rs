@@ -24,8 +24,8 @@ use thiserror::Error;
 use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
-    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource,
-    PackageIdentitySource, RegistryModule, RegistryProject,
+    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
+    RegistryProject,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
@@ -4499,7 +4499,6 @@ struct PredecessorGovernedModel {
     registry_id: String,
     version: String,
     model_revision: String,
-    package: PackageIdentitySource,
     entities: BTreeMap<String, CompiledEntity>,
     physical_names: PhysicalNameInventory,
     routes: CompiledRouteInventory,
@@ -4558,13 +4557,6 @@ fn signed_predecessor_governed_model(
 
     let registry_id = required_str(&value, "registryId")?.to_owned();
     let version = required_str(&value, "version")?.to_owned();
-    let package: PackageIdentitySource = serde_json::from_value(
-        value
-            .get("package")
-            .cloned()
-            .ok_or(PackageError::Derivation)?,
-    )
-    .map_err(|_| PackageError::Derivation)?;
     let entities: BTreeMap<String, CompiledEntity> = serde_json::from_value(
         value
             .get("entities")
@@ -4645,7 +4637,6 @@ fn signed_predecessor_governed_model(
         registry_id,
         version,
         model_revision: entry.sha256.clone(),
-        package,
         entities,
         physical_names,
         routes,
@@ -4957,13 +4948,7 @@ fn validate_predecessor_registry_bindings(
     manifest: &PackageManifest,
     governed: &PredecessorGovernedModel,
 ) -> Result<()> {
-    let package = &governed.package;
-    if governed.registry_id != manifest.package_id
-        || package.environment != manifest.environment
-        || package.instance_id != manifest.instance_id
-        || package.sequence != manifest.sequence
-        || package.source_revision != manifest.compiler.source_revision
-    {
+    if governed.registry_id != manifest.package_id {
         return Err(PackageError::Derivation);
     }
     Ok(())

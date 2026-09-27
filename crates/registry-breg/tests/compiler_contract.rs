@@ -2466,6 +2466,52 @@ fn production_refuses_incomplete_authoring_closure() {
 }
 
 #[test]
+fn registry_revision_is_a_function_of_the_compiled_model_only() {
+    let compile = |project: &registry_breg::contract::RegistryProject| {
+        compile_project(project, &asset_modules(), CompileProfile::Authoring)
+            .expect("the acceptance project compiles")
+    };
+    let declared = asset_project();
+    let mut relabelled = declared.clone();
+    let identity = relabelled
+        .package
+        .as_mut()
+        .expect("the acceptance project declares a package identity");
+    identity.environment = "production".to_owned();
+    identity.instance_id = "another-instance".to_owned();
+    identity.sequence += 41;
+    identity.source_revision = "another-source-revision".to_owned();
+    let mut undeclared = declared.clone();
+    undeclared.package = None;
+
+    let baseline = compile(&declared);
+    for other in [compile(&relabelled), compile(&undeclared)] {
+        assert_eq!(other.revision(), baseline.revision());
+        assert_eq!(
+            other
+                .artifacts()
+                .get("compiled/effective-model.json")
+                .expect("effective model")
+                .bytes,
+            baseline
+                .artifacts()
+                .get("compiled/effective-model.json")
+                .expect("effective model")
+                .bytes
+        );
+    }
+    let effective: Value = serde_json::from_slice(
+        &baseline
+            .artifacts()
+            .get("compiled/effective-model.json")
+            .expect("effective model")
+            .bytes,
+    )
+    .expect("effective model is JSON");
+    assert!(effective.get("package").is_none());
+}
+
+#[test]
 fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts() {
     let compiled = compile_project(
         &parse_project_json(
