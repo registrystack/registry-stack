@@ -146,7 +146,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             return Ok(DeliveryOutcome::Idle);
         };
         let attempt = self.reload_and_send(&claim).await?;
-        self.finalize(&claim, attempt).await
+        self.finalize(claim, attempt).await
     }
 
     /// Refuse startup or operator use if retained work cannot use its exact
@@ -293,7 +293,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
     ) -> Result<i64, DeliveryError> {
         // The replay runs to its response in a task of its own: once its
         // request entry is accepted, a caller that stops waiting (a timeout
-        // or a disconnect) cannot leave that request unanswered.
+        // or a disconnect) cannot leave that request unanswered while the
+        // process keeps running. A task does not outlive the runtime, so a
+        // process that exits first leaves the request unanswered.
         let service = self.clone();
         let compiled_delivery_id = compiled_delivery_id.to_owned();
         tokio::spawn(async move {
@@ -512,7 +514,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
         // The claim runs to its commit in a task of its own: once its
         // attempt entry is accepted, a caller that stops waiting (a worker
         // aborted at shutdown) cannot roll the lease back and leave that
-        // attempt with no lease for expiry recovery to answer.
+        // attempt with no lease for expiry recovery to answer, as long as
+        // the process keeps running; a task does not outlive the runtime.
         let service = self.clone();
         tokio::spawn(async move { service.claim_in().await })
             .await
@@ -1310,6 +1313,23 @@ impl<S: DeliverySeams> DeliveryService<S> {
     }
 
     async fn finalize(
+        &self,
+        claim: DeliveryClaim,
+        attempt: AttemptResult,
+    ) -> Result<DeliveryOutcome, DeliveryError> {
+        // Finalize runs to its terminal entry in a task of its own: once its
+        // disposition commits, a caller that stops waiting (a worker aborted
+        // at shutdown) cannot leave that committed disposition without its
+        // entry while the process keeps running, since a terminal row is
+        // never reaped and nothing else answers the attempt. A task does not
+        // outlive the runtime.
+        let service = self.clone();
+        tokio::spawn(async move { service.finalize_in(&claim, attempt).await })
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?
+    }
+
+    async fn finalize_in(
         &self,
         claim: &DeliveryClaim,
         attempt: AttemptResult,
@@ -3190,10 +3210,12 @@ mod tests {
         interleave: Option<(u32, String)>,
         handler_digest: Option<String>,
         hold_attempt: Option<Arc<AttemptHold>>,
+        hold_terminal: Option<Arc<AttemptHold>>,
     }
 
     /// Holds the claim inside its accepted attempt entry, before the lease
-    /// commits, until the test releases it.
+    /// commits, or finalize at its terminal entry, before that entry is
+    /// accepted, until the test releases it.
     #[derive(Default)]
     struct AttemptHold {
         accepted: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -3210,6 +3232,7 @@ mod tests {
                 interleave: None,
                 handler_digest: None,
                 hold_attempt: None,
+                hold_terminal: None,
             }
         }
     }
@@ -3257,6 +3280,16 @@ mod tests {
         }
 
         async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
+            if let Some(hold) = self
+                .hold_terminal
+                .as_ref()
+                .filter(|_| record.phase == DeliveryAuditPhase::Terminal)
+            {
+                if let Some(reached) = hold.accepted.lock().expect("hold lock").take() {
+                    let _ = reached.send(());
+                }
+                hold.release.notified().await;
+            }
             self.audit.lock().expect("audit lock").push((
                 record.phase,
                 record.outcome,
@@ -3432,7 +3465,7 @@ mod tests {
         };
 
         let result = service
-            .finalize(&claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
+            .finalize(claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
             .await;
 
         assert!(
@@ -3744,6 +3777,103 @@ mod tests {
         assert_eq!(state, "leased", "the lease committed after the cancel");
     }
 
+    /// A finalize canceled after its disposition committed and before its
+    /// terminal entry was accepted still records that entry, since a
+    /// terminal row is never reaped and nothing else answers the attempt.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn a_finalize_canceled_after_its_commit_still_records_its_terminal_entry() {
+        let url = real_database_url();
+        let schema = "hooks_delivery_finalize_cancel_test";
+        let mut client = fresh_delivery_schema(&url, schema).await;
+        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        insert_real_delivery(&mut client, schema, event_id, "1 day", false).await;
+        let lease_token = Uuid::new_v4();
+        let changed = client
+            .execute(
+                &format!(
+                    "UPDATE {schema}.registry_webhook_delivery_state
+                     SET state = 'leased',
+                         attempt = 1,
+                         next_attempt_at = NULL,
+                         attempt_started_at = transaction_timestamp(),
+                         lease_expires_at = transaction_timestamp() + interval '30 seconds',
+                         lease_token = $1
+                     WHERE event_id = $2",
+                ),
+                &[&lease_token, &event_id],
+            )
+            .await
+            .expect("lease the delivery");
+        assert_eq!(changed, 1);
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let (reached, terminal_reached) = tokio::sync::oneshot::channel();
+        let hold = Arc::new(AttemptHold {
+            accepted: Mutex::new(Some(reached)),
+            ..AttemptHold::default()
+        });
+        let service = real_service(
+            RealDbSeams {
+                hold_terminal: Some(Arc::clone(&hold)),
+                ..RealDbSeams::new(&url, &audit)
+            },
+            schema,
+        );
+        let claim = DeliveryClaim {
+            event_id,
+            compiled_delivery_id: REAL_DELIVERY_ID.to_owned(),
+            generation: 1,
+            attempt: 1,
+            attempt_started_at: SystemTime::now(),
+            lease_token,
+            deployed_maximum_attempts: 3,
+            retry_delays_ms: vec![1_000, 2_000],
+            package_revision: REAL_PACKAGE_REVISION.to_owned(),
+            handler_kind: HookHandlerKind::Rhai,
+        };
+
+        let finalize = tokio::spawn(async move {
+            service
+                .finalize(claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
+                .await
+        });
+        terminal_reached
+            .await
+            .expect("finalize reached its terminal entry");
+        finalize.abort();
+        assert!(finalize.await.is_err(), "the caller was canceled");
+        let state: String = client
+            .query_one(
+                &format!(
+                    "SELECT state FROM {schema}.registry_webhook_delivery_state
+                      WHERE event_id = $1"
+                ),
+                &[&event_id],
+            )
+            .await
+            .expect("read the delivery state")
+            .get(0);
+        assert_eq!(state, "delivered", "the disposition committed");
+        hold.release.notify_one();
+
+        let terminal = (
+            DeliveryAuditPhase::Terminal,
+            DeliveryAuditOutcome::Delivered,
+            DeliveryAuditDisposition::Delivered,
+        );
+        for _ in 0..200 {
+            if audit.lock().expect("audit lock").contains(&terminal) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            *audit.lock().expect("audit lock"),
+            vec![terminal],
+            "the committed disposition is answered after the cancel"
+        );
+    }
+
     /// A claim whose lease commit failed still records every transition of
     /// that transaction that reads back as durable, even when the lease's
     /// own fate cannot be read.
@@ -3898,7 +4028,7 @@ mod tests {
 
         let started = Instant::now();
         let result = service
-            .finalize(&claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
+            .finalize(claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
             .await;
         let elapsed = started.elapsed();
 
