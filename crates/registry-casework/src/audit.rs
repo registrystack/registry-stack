@@ -210,7 +210,53 @@ pub(crate) struct AuditOperation {
 enum ReadBack {
     Committed,
     RolledBack,
+    InProgress,
     Unknown,
+}
+
+/// How long a commit whose caller was canceled is read back before its
+/// outcome is treated as unknown, and how often.
+const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const SETTLE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Holds an operation while its `COMMIT` is in flight. Dropped armed, as
+/// when the caller's future is canceled, it settles the operation in a task
+/// of its own, so a change that commits without its caller is still
+/// answered.
+struct SettleOnCancel {
+    operation: Option<AuditOperation>,
+    transaction_id: String,
+}
+
+impl SettleOnCancel {
+    fn operation(&self) -> &AuditOperation {
+        self.operation
+            .as_ref()
+            .expect("an armed settlement holds its operation")
+    }
+
+    fn disarm(mut self) -> AuditOperation {
+        self.operation
+            .take()
+            .expect("an armed settlement holds its operation")
+    }
+}
+
+impl Drop for SettleOnCancel {
+    fn drop(&mut self) {
+        let Some(operation) = self.operation.take() else {
+            return;
+        };
+        let transaction_id = std::mem::take(&mut self.transaction_id);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(operation.settle_canceled_commit(transaction_id));
+            }
+            Err(_) => tracing::error!(
+                "a Casework commit whose caller was canceled cannot be settled outside a runtime; its response entry is unfinished"
+            ),
+        }
+    }
 }
 
 /// How an operation's `response` entries are correlated.
@@ -318,6 +364,10 @@ impl AuditOperation {
     /// committed change is answered and appended like any other, and one
     /// that rolled back or whose status cannot be read returns the commit
     /// error, so the dropped operation appends its unfinished response.
+    ///
+    /// A caller canceled once `COMMIT` was sent does not take the operation
+    /// with it: a task of its own reads the transaction's status back and
+    /// answers the operation the same way.
     pub(crate) async fn commit(
         mut self,
         transaction: deadpool_postgres::Transaction<'_>,
@@ -328,24 +378,119 @@ impl AuditOperation {
             .query_one("SELECT pg_current_xact_id()::text", &[])
             .await?
             .get(0);
+        // From here the change may commit even if the caller stops waiting,
+        // so a canceled caller hands the operation to a task that settles it.
+        let settling = SettleOnCancel {
+            operation: Some(self),
+            transaction_id,
+        };
         let committed = transaction.commit().await.map_err(StoreError::from);
         #[cfg(any(test, feature = "postgres-test"))]
-        let committed = committed.and_then(|()| self.audit.acknowledged());
+        let committed = committed.and_then(|()| settling.operation().audit.acknowledged());
         if let Err(error) = committed {
-            match self.read_back(&transaction_id).await {
+            let read_back = settling
+                .operation()
+                .read_back(&settling.transaction_id)
+                .await;
+            let this = settling.disarm();
+            match read_back {
                 ReadBack::Committed => tracing::warn!(
                     "a Casework commit was not acknowledged but took effect; its response entries are appended"
                 ),
                 ReadBack::RolledBack => return Err(error),
-                ReadBack::Unknown => {
+                ReadBack::InProgress | ReadBack::Unknown => {
                     tracing::error!(
                         "a Casework commit was not acknowledged and its outcome could not be read back; its response entry is unfinished"
                     );
+                    if this.abandon_unresolved().await.is_err() {
+                        tracing::error!(
+                            "the unfinished response entries of an unresolved Casework commit were refused"
+                        );
+                    }
                     return Err(error);
                 }
             }
+            return this.complete().await;
         }
-        self.complete().await
+        settling.disarm().complete().await
+    }
+
+    /// Settle an operation whose caller stopped waiting after its `COMMIT`
+    /// was sent. The transaction's status is read back until it resolves or
+    /// [`SETTLE_TIMEOUT`] passes: a committed change is answered like any
+    /// other, a rolled-back one is answered as a failed commit is, and one
+    /// whose outcome stays unknown is answered unfinished.
+    async fn settle_canceled_commit(self, transaction_id: String) {
+        let deadline = tokio::time::Instant::now() + SETTLE_TIMEOUT;
+        let read_back = loop {
+            let read_back = self.read_back(&transaction_id).await;
+            if read_back != ReadBack::InProgress || tokio::time::Instant::now() >= deadline {
+                break read_back;
+            }
+            tokio::time::sleep(SETTLE_POLL_INTERVAL).await;
+        };
+        let settled = match read_back {
+            ReadBack::Committed => self.complete().await,
+            // Dropping a caller-requested operation answers its request
+            // unfinished; background work that rolled back left no change.
+            ReadBack::RolledBack => Ok(()),
+            ReadBack::InProgress | ReadBack::Unknown => {
+                tracing::error!(
+                    "a Casework commit whose caller was canceled could not be read back; its response entry is unfinished"
+                );
+                self.abandon_unresolved().await
+            }
+        };
+        if settled.is_err() {
+            tracing::error!(
+                "the response entries of a Casework commit whose caller was canceled were refused"
+            );
+        }
+    }
+
+    /// Answer an operation whose commit outcome could not be read back. A
+    /// caller-requested operation is dropped, so its `request` entry is
+    /// answered unfinished. Background work has no `request` entry to answer,
+    /// so each event it recorded is appended as `{event, eventId, outcome:
+    /// "unfinished"}` under its correlation, leaving a trace of work that may
+    /// have committed. Like [`Self::complete`], the entries are written in one
+    /// task that outlives a canceled caller.
+    async fn abandon_unresolved(self) -> Result<(), StoreError> {
+        let Self {
+            audit,
+            pairing,
+            responses,
+            ..
+        } = self;
+        let Pairing::Background { correlation } = pairing else {
+            return Ok(());
+        };
+        let records = responses
+            .into_iter()
+            .map(|(_, record)| {
+                audit.minimized(json!({
+                    "event": record["event"].clone(),
+                    "eventId": record["eventId"].clone(),
+                    "outcome": "unfinished",
+                }))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let writer = audit.writer;
+        tokio::spawn(async move {
+            for record in records {
+                writer
+                    .append(AuditEntry::response(
+                        CASEWORK_AUDIT_SCHEMA,
+                        correlation.clone(),
+                        record,
+                    ))
+                    .await
+                    .map_err(|_| StoreError::AuditUnavailable)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| StoreError::AuditUnavailable)?
     }
 
     /// Read whether the transaction `transaction_id` committed, on a
@@ -364,7 +509,8 @@ impl AuditOperation {
         match status.as_ref().map(|status| status.as_deref()) {
             Ok(Some("committed")) => ReadBack::Committed,
             Ok(Some("aborted")) => ReadBack::RolledBack,
-            // Still in progress, too old to report, or unreadable.
+            Ok(Some("in progress")) => ReadBack::InProgress,
+            // Too old to report, or unreadable.
             _ => ReadBack::Unknown,
         }
     }
@@ -938,6 +1084,63 @@ mod tests {
         let operation = audit.begin_background().await.unwrap();
         operation.complete().await.unwrap();
         assert!(capture.entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unresolved_background_work_answers_each_recorded_event_unfinished() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let mut operation = audit.begin_background().await.unwrap();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        operation
+            .record(
+                first,
+                json!({"event": "casework.clock_expired", "itemId": "raw-item", "profileId": "system:clocks"}),
+            )
+            .unwrap();
+        operation
+            .record(
+                second,
+                json!({"event": "casework.task_invalidated", "profileId": "system:task-grants"}),
+            )
+            .unwrap();
+        operation.abandon_unresolved().await.unwrap();
+        let entries = capture.entries();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for (entry, (event, event_id)) in entries.iter().zip([
+            ("casework.clock_expired", first),
+            ("casework.task_invalidated", second),
+        ]) {
+            assert_eq!(entry["phase"], "response");
+            assert_eq!(entry["correlation"], entries[0]["correlation"]);
+            assert_eq!(
+                entry["record"],
+                json!({"event": event, "eventId": event_id.to_string(), "outcome": "unfinished"})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_requested_operation_is_answered_by_its_unfinished_request() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let mut operation = audit
+            .begin(request_record("task_claimed", None, "officer", json!({})))
+            .await
+            .unwrap();
+        operation
+            .record(
+                Uuid::new_v4(),
+                json!({"event": "casework.claimed", "profileId": "officer"}),
+            )
+            .unwrap();
+        operation.abandon_unresolved().await.unwrap();
+        let entries = capture.entries();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+        assert_eq!(
+            entries[1]["record"],
+            json!({"event": "casework.task_claimed", "outcome": "unfinished"})
+        );
     }
 
     #[test]

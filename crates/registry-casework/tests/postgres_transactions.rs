@@ -2403,6 +2403,145 @@ async fn a_claim_dropped_inside_its_transaction_writes_one_unfinished_response()
     );
 }
 
+/// Make every `COMMIT` that updated a Casework item wait one second inside
+/// the database, so a test can cancel its caller while the commit is in
+/// flight.
+async fn delay_item_commits(fixture: &OpenItemFixture) {
+    fixture
+        .client
+        .batch_execute(
+            "CREATE FUNCTION sleep_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN PERFORM pg_sleep(1); RETURN NULL; END $$;
+             CREATE CONSTRAINT TRIGGER sleep_item_at_commit AFTER UPDATE ON casework_items
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sleep_at_commit();",
+        )
+        .await
+        .expect("install a trigger that delays the commit");
+}
+
+/// Abort `task` once a `COMMIT` is waiting inside the delaying trigger.
+async fn abort_during_commit<T: std::fmt::Debug>(
+    fixture: &OpenItemFixture,
+    task: tokio::task::JoinHandle<T>,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let committing: i64 = fixture
+            .client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity
+                 WHERE state='active' AND query='COMMIT' AND wait_event='PgSleep'",
+                &[],
+            )
+            .await
+            .expect("read commits in flight")
+            .get(0);
+        if committing > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the operation never reached its commit"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    task.abort();
+    assert!(task
+        .await
+        .expect_err("the caller was canceled mid-commit")
+        .is_cancelled());
+}
+
+/// Wait until at least `count` entries follow the first `written`.
+async fn entries_after(
+    fixture: &OpenItemFixture,
+    written: usize,
+    count: usize,
+) -> Vec<serde_json::Value> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let entries = fixture.audit.entries()[written..].to_vec();
+        if entries.len() >= count || std::time::Instant::now() >= deadline {
+            return entries;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// A claim whose caller is canceled after `COMMIT` was sent still commits,
+/// and its request entry is answered by the claim, not by an unfinished
+/// outcome.
+#[tokio::test]
+async fn a_claim_canceled_during_its_commit_is_still_answered_by_the_committed_claim() {
+    let fixture = open_item_fixture("claim_canceled_mid_commit").await;
+    delay_item_commits(&fixture).await;
+    let written = fixture.audit.entries().len();
+    let store = fixture.store.clone();
+    let holder = fixture.holder.clone();
+    let (item_id, revision) = (fixture.item_id, fixture.revision);
+    let claim = tokio::spawn(async move {
+        store
+            .claim(&holder, item_id, revision, "claim-canceled-mid-commit")
+            .await
+    });
+    abort_during_commit(&fixture, claim).await;
+
+    let entries = entries_after(&fixture, written, 2).await;
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(
+        current.revision,
+        fixture.revision + 1,
+        "the claim committed"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(fixture.audit.entries()[written..].len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(entries[1]["record"]["event"], "casework.claimed");
+    assert!(
+        entries[1]["record"].get("outcome").is_none(),
+        "{entries:#?}"
+    );
+}
+
+/// Background work whose caller is canceled after `COMMIT` was sent still
+/// appends the response entries of the change it committed.
+#[tokio::test]
+async fn background_work_canceled_during_its_commit_still_appends_its_responses() {
+    let fixture = open_item_fixture("background_canceled_mid_commit").await;
+    delay_item_commits(&fixture).await;
+    let written = fixture.audit.entries().len();
+    let store = fixture.store.clone();
+    let closed = observation(
+        2,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Cancelled,
+    );
+    let observe = tokio::spawn(async move {
+        store
+            .apply_observation(&closed, "default", Some(172_800))
+            .await
+    });
+    abort_during_commit(&fixture, observe).await;
+
+    let entries = entries_after(&fixture, written, 1).await;
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert!(
+        current.revision > fixture.revision,
+        "the observation committed"
+    );
+    assert!(
+        !entries.is_empty(),
+        "the committed work left no audit entry"
+    );
+    for entry in &entries {
+        assert_eq!(entry["phase"], "response", "{entries:#?}");
+        assert!(entry["record"].get("outcome").is_none(), "{entries:#?}");
+    }
+}
+
 #[tokio::test]
 async fn a_live_execution_lease_refuses_settlement_and_writes_nothing() {
     let fixture = settlement_fixture("settle_live_lease", true).await;
