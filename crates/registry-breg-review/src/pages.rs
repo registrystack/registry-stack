@@ -117,17 +117,18 @@ async fn refused(
     operation: Operation,
     refusal: Refusal,
 ) -> Response {
-    let outcome = match refusal {
-        Refusal::NotFound | Refusal::SignedOut => Outcome::Refused,
-        Refusal::Unavailable(_) => Outcome::Failed,
-    };
-    if let Err(response) = finish_audit(app, operation, outcome).await {
+    // A read, or a submit the registry answered definitely, changed nothing.
+    if let Err(response) = finish_audit(app, operation, Outcome::Refused).await {
         return response;
     }
     match refusal {
         Refusal::NotFound => app.problem(Problem::NotFound),
         Refusal::SignedOut => {
             end_session(app, caller.cookie, sign_in_again(app, request_id, action))
+        }
+        Refusal::Refused(reason) => {
+            tracing::warn!(%reason, "the registry declined a review request");
+            app.problem(Problem::RegistryRefused)
         }
         Refusal::Unavailable(reason) => {
             tracing::warn!(%reason, "the registry could not answer a review");
@@ -146,7 +147,7 @@ fn end_session(app: &App, cookie: &str, mut response: Response) -> Response {
 }
 
 /// Render `review` in answer to `answering`, remembering a fresh view when
-/// it offers a submit.
+/// it offers a submit. An `Err` carries the answer that replaces the page.
 fn render(
     app: &App,
     answering: Action,
@@ -154,12 +155,12 @@ fn render(
     request_id: &str,
     review: Review,
     status: StatusCode,
-) -> Response {
+) -> Result<Response, Response> {
     let view = match review.submit {
         Some(action) => {
             let (Ok(id), Ok(key)) = (random_token(), random_token()) else {
                 tracing::error!("the operating system random source failed");
-                return app.problem(Problem::Internal);
+                return Err(app.problem(Problem::Internal));
             };
             let view = View {
                 id: id.clone(),
@@ -168,7 +169,7 @@ fn render(
                 idempotency_key: format!("breg-review-{key}"),
             };
             if !app.sessions.remember_view(caller.cookie, view) {
-                return sign_in_again(app, request_id, answering);
+                return Err(sign_in_again(app, request_id, answering));
             }
             Some(id)
         }
@@ -184,7 +185,7 @@ fn render(
         view: view.as_deref(),
         notice: status == StatusCode::CONFLICT,
     };
-    app.rendered(status, app.templates.review(&page))
+    app.try_rendered(status, app.templates.review(&page))
 }
 
 /// `GET /requests/{id}`: read the draft and the record it changes under the
@@ -208,17 +209,23 @@ pub(crate) async fn review(
             return refused(&app, &caller, Action::Read, &request_id, operation, refusal).await
         }
     };
-    if let Err(response) = finish_audit(&app, operation, Outcome::Succeeded).await {
-        return response;
-    }
-    render(
+    // The page is rendered before the read is audited, so a page that could
+    // not be offered is never recorded as one that was.
+    let (outcome, response) = match render(
         &app,
         Action::Read,
         &caller,
         &request_id,
         review,
         StatusCode::OK,
-    )
+    ) {
+        Ok(page) => (Outcome::Ok, page),
+        Err(refusal) => (Outcome::Refused, refusal),
+    };
+    if let Err(response) = finish_audit(&app, operation, outcome).await {
+        return response;
+    }
+    response
 }
 
 /// The two fields a form posted to this page may carry.
@@ -308,11 +315,12 @@ pub(crate) async fn submit(
             &request_id,
             review,
             StatusCode::CONFLICT,
-        );
+        )
+        .unwrap_or_else(|response| response);
     };
     let Ok(key) = BRegIdempotencyKey::parse(view.idempotency_key.clone()) else {
         tracing::error!("a stored idempotency key is not valid");
-        if let Err(response) = finish_audit(&app, operation, Outcome::Failed).await {
+        if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
             return response;
         }
         return app.problem(Problem::Internal);
@@ -324,8 +332,13 @@ pub(crate) async fn submit(
         .await;
     match outcome {
         Ok(_) => {
-            if let Err(response) = finish_audit(&app, operation, Outcome::Succeeded).await {
-                return response;
+            if let Err(error) = operation.finish(Outcome::Ok, None).await {
+                // The registry committed, so the page must not say nothing
+                // happened. The unanswered request records `unfinished`, and
+                // the retained view lets the person retry the same action and
+                // idempotency key to see the stored result.
+                tracing::error!(%error, "an action response could not be audited");
+                return app.problem(Problem::RegistryUnavailable);
             }
             app.rendered(
                 StatusCode::OK,
@@ -367,6 +380,7 @@ pub(crate) async fn submit(
                     fresh,
                     StatusCode::CONFLICT,
                 )
+                .unwrap_or_else(|response| response)
             }
             Some(BRegProblemCode::IdempotencyConflict) => {
                 if let Err(response) = finish_audit(&app, operation, Outcome::Conflicted).await {
@@ -451,9 +465,10 @@ pub(crate) async fn sign_out(
         }
     };
     app.sessions.remove(cookie);
-    if let Err(error) = operation.finish(Outcome::Succeeded, None).await {
+    if let Err(error) = operation.finish(Outcome::Ok, None).await {
+        // The session is already gone and is never restored, so the answer
+        // still says so. The unanswered request records `unfinished`.
         tracing::error!(%error, "a sign-out could not be audited");
-        return app.problem(Problem::AuditUnavailable);
     }
     signed_out(&app)
 }
