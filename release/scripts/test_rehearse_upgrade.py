@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import importlib.util
 import io
 import json
+import socket
 import tarfile
 import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -341,6 +344,125 @@ class EvidenceGrammarTest(unittest.TestCase):
                          ["--runtime-config", "/srv/runtime.yaml"])
         self.assertEqual(MODULE.breg_arguments(False, runtime),
                          ["--config", "/srv/runtime.yaml"])
+
+    def test_a_local_target_becomes_a_production_target_in_either_grammar(self) -> None:
+        local = {
+            "assuranceProfile": "local",
+            "service": {"providerId": "urn:registrystack:evidence:local:provider",
+                        "publicOrigin": "http://127.0.0.1:8080"},
+            "publication": {"endpointUrl": "http://127.0.0.1:8080"},
+            "responseFormats": [],
+            "signing": {"activePublicJwkFile": "public-keys/local.jwk.json"},
+            "authorityProfiles": {"local-caller": {"grants": [], "kind": "explicit-request"}},
+        }
+        for authentication, issuer_key, jwks in (
+            (self.OLD_GOVERNANCE["authentication"], ("issuer",), ("jwksUri",)),
+            ({"oidc": {"issuer": "http://127.0.0.1:8081"}}, ("oidc", "issuer"),
+             ("oidc", "jwksSource", "uri")),
+        ):
+            production = MODULE.evidence_production_governance(
+                {**local, "authentication": authentication}, "https://127.0.0.1:9443",
+                "public-keys/transit.jwk.json")
+            self.assertEqual(production["assuranceProfile"], "production")
+            self.assertEqual(production["service"], {
+                "providerId": "urn:example:upgrade-rehearsal:provider",
+                "publicOrigin": "https://evidence.example.test"})
+            self.assertEqual(production["publication"],
+                             {"endpointUrl": "https://evidence.example.test"})
+            self.assertEqual(production["responseFormats"], ["signed-jws"])
+            self.assertEqual(production["authorityProfiles"]["local-caller"]["grants"], [{
+                "requirement": MODULE.EVIDENCE_REQUIREMENT,
+                "purpose": MODULE.EVIDENCE_PURPOSE,
+                "audienceFrom": "authenticated-requester",
+                "responseFormats": ["signed-jws"],
+                "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
+                              "valueOrigin": "request"}]}])
+            self.assertEqual(production["signing"],
+                             {"activePublicJwkFile": "public-keys/transit.jwk.json"})
+            value: Any = production["authentication"]
+            for key in issuer_key:
+                value = value[key]
+            self.assertEqual(value, "https://127.0.0.1:9443")
+            value = production["authentication"]
+            for key in jwks:
+                value = value[key]
+            self.assertEqual(value, "https://127.0.0.1:9443/oauth2/jwks")
+        self.assertEqual(local["assuranceProfile"], "local")
+
+
+class TransitStubTest(unittest.TestCase):
+    def test_a_der_signature_becomes_the_fixed_width_jws_form(self) -> None:
+        der = bytes([0x30, 0x45, 0x02, 0x21, 0x00]) + b"\x81" * 32 + bytes([0x02, 0x20]) + b"\x02" * 32
+        self.assertEqual(MODULE.ecdsa_der_to_raw(der), b"\x81" * 32 + b"\x02" * 32)
+        short = bytes([0x30, 0x24, 0x02, 0x1f]) + b"\x03" * 31 + bytes([0x02, 0x01, 0x04])
+        self.assertEqual(MODULE.ecdsa_der_to_raw(short),
+                         b"\x00" + b"\x03" * 31 + b"\x00" * 31 + b"\x04")
+        with self.assertRaises(Error):
+            MODULE.ecdsa_der_to_raw(b"\x31\x00")
+
+    def test_the_stub_signs_a_prehashed_digest_the_public_key_verifies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "transit.pem"
+            MODULE.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout",
+                        "-out", str(key)])
+            jwk = MODULE.ec_public_jwk(key)
+            self.assertEqual(sorted(jwk), ["alg", "crv", "kid", "kty", "x", "y"])
+            transit = MODULE.TransitServer(key)
+            try:
+                metadata = transit_call(transit.socket_path, "GET",
+                                        "/v1/transit/keys/evidence-signing", None)
+                self.assertEqual(metadata["data"]["latest_version"], 1)
+                public_pem = metadata["data"]["keys"]["1"]["public_key"]
+                digest = hashlib.sha256(b"rehearsal").digest()
+                signed = transit_call(transit.socket_path, "POST",
+                                      "/v1/transit/sign/evidence-signing/sha2-256",
+                                      {"input": base64.b64encode(digest).decode(),
+                                       "key_version": 1, "prehashed": True,
+                                       "marshaling_algorithm": "jws"})
+                refused = transit_call(transit.socket_path, "POST",
+                                       "/v1/transit/sign/evidence-signing/sha2-256",
+                                       {"input": base64.b64encode(digest).decode(),
+                                        "key_version": 1, "prehashed": False,
+                                        "marshaling_algorithm": "jws"})
+            finally:
+                transit.stop()
+            self.assertIn("errors", refused)
+            self.assertFalse(transit.socket_path.exists())
+            prefix, raw = signed["data"]["signature"].rsplit(":", 1)
+            self.assertEqual(prefix, "vault:v1")
+            raw_bytes = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+            self.assertEqual(len(raw_bytes), 64)
+            public = Path(directory) / "public.pem"
+            public.write_text(public_pem)
+            signature = Path(directory) / "signature.der"
+            signature.write_bytes(raw_to_der(raw_bytes))
+            message = Path(directory) / "digest"
+            message.write_bytes(digest)
+            MODULE.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(public),
+                        "-in", str(message), "-sigfile", str(signature)])
+
+
+def transit_call(socket_path: Path, method: str, path: str, body: Any) -> Any:
+    data = json.dumps(body).encode() if body is not None else b""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(socket_path))
+        client.sendall(f"{method} {path} HTTP/1.1\r\nHost: transit\r\n"
+                       f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode()
+                       + data)
+        response = b""
+        while chunk := client.recv(65536):
+            response += chunk
+    return json.loads(response.split(b"\r\n\r\n", 1)[1])
+
+
+def raw_to_der(raw: bytes) -> bytes:
+    def integer(value: bytes) -> bytes:
+        value = value.lstrip(b"\0") or b"\0"
+        if value[0] & 0x80:
+            value = b"\0" + value
+        return bytes([0x02, len(value)]) + value
+    body = integer(raw[:32]) + integer(raw[32:])
+    return bytes([0x30, len(body)]) + body
 
 
 class StateComparisonTest(unittest.TestCase):
