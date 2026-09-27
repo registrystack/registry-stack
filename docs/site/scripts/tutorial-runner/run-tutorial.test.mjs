@@ -530,6 +530,17 @@ test('a test-append block adds its lines to the end of the file where the reader
   });
 });
 
+test('a test-append block whose file does not exist stops the journey instead of creating it', async () => {
+  const body = '## Write\n\n' + fence('yaml title="q.yaml" test-append', 'details:') + fence('sh', 'echo never');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the file at line 7 \(Write\) failed/u);
+    assert.match(output, /no file to append to: q\.yaml/u);
+    assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
 test('a test-file block whose directory does not exist stops the journey', async () => {
   const body = '## Write\n\n' + fence('yaml title="missing/q.yaml" test-file', 'id: q') + fence('sh', 'echo never');
   await withPage(body, async ({ page }) => {

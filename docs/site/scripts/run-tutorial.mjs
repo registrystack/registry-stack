@@ -162,6 +162,9 @@ async function journeyScript(pages, outDir, readerDir) {
         await writeFile(staged, step.text);
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         if (step.append) {
+          // Appending to a file that is not there would create it, so a block
+          // aimed at the wrong path would pass.
+          lines.push(`test -f ${quote(step.path)} || { printf 'no file to append to: %s\\n' ${quote(step.path)} >${out}; false; }`);
           lines.push(`cat -- ${quote(staged)} >>${quote(step.path)} 2>${out} </dev/null`);
           lines.push(`printf 'appended to %s\\n' ${quote(step.path)}`);
         } else {
