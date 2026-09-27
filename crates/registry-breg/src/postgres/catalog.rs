@@ -14,7 +14,7 @@ use crate::model::CompiledRegistry;
 use super::schema::install_empty_history_baseline_for_compiled_registry;
 use super::{
     migration_ledger::install_migration_ledger, spatial_bbox_role, verify_btree_gist,
-    PostgresKernelError, Result, SqlIdentifier,
+    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
 };
 
 const MANAGED_SCHEMAS: &[&str] = &[
@@ -819,23 +819,24 @@ pub(crate) async fn install_registry_state_schema(
         ))
         .await?;
     install_migration_ledger(migration, runtime_role).await?;
+    let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};\n\
+            "REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM {};\n\
              GRANT USAGE ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context TO {};\n\
-             REVOKE ALL ON TABLE registry_internal.registry_state FROM {};\n\
+             {}\n\
              GRANT SELECT ON TABLE registry_internal.registry_state TO {};\n\
-             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM {};\n\
+             {}\n\
              GRANT SELECT ON TABLE registry_internal.registry_field_encryption_keys TO {};\n\
-             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM {};\n\
+             {}\n\
              GRANT SELECT ON TABLE registry_internal.registry_field_encryption_flips TO {};",
+            revoke.with_public(),
             runtime_role.quoted(),
+            revoke.revoke_all_on("TABLE registry_internal.registry_state"),
             runtime_role.quoted(),
+            revoke.revoke_all_on("TABLE registry_internal.registry_field_encryption_keys"),
             runtime_role.quoted(),
-            runtime_role.quoted(),
-            runtime_role.quoted(),
-            runtime_role.quoted(),
-            runtime_role.quoted(),
+            revoke.revoke_all_on("TABLE registry_internal.registry_field_encryption_flips"),
             runtime_role.quoted(),
         ))
         .await?;
@@ -1040,7 +1041,13 @@ pub(crate) async fn verify_managed_catalog(
     verify_managed_owners_for_catalog(client, migration_role, runtime_role, expected_catalog)
         .await?;
     verify_closed_ambient_catalog(client).await?;
-    verify_exact_acl(client, runtime_role, expected_catalog).await?;
+    verify_exact_acl(
+        client,
+        runtime_role,
+        migration_role == runtime_role,
+        expected_catalog,
+    )
+    .await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog, runtime_role).await?;
     let actual = fingerprint_catalog(
@@ -1372,9 +1379,13 @@ async fn query_categorized_acl(
         .await?)
 }
 
+/// Compares every managed object ACL with the closed catalog. In single-role
+/// mode the runtime role owns each migration-owned object, so its grants there
+/// are the owner privileges and carry no separate runtime row.
 async fn verify_exact_acl(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
+    single_role: bool,
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<()> {
     let actual: BTreeSet<(String, String, String, String, bool)> =
@@ -1401,7 +1412,12 @@ async fn verify_exact_acl(
                 false,
             ));
         }
-        for privilege in &object.runtime_privileges {
+        let runtime_is_owner = single_role && object.owner == DdlObjectOwner::Migration;
+        for privilege in object
+            .runtime_privileges
+            .iter()
+            .filter(|_| !runtime_is_owner)
+        {
             expected.insert((
                 object.kind.as_str().to_owned(),
                 object.name.clone(),
@@ -1425,13 +1441,16 @@ async fn verify_exact_acl(
             "managed object privileges differ from the closed catalog",
         ));
     }
-    verify_exact_column_acl(client, runtime_role, expected_catalog).await?;
+    verify_exact_column_acl(client, runtime_role, single_role, expected_catalog).await?;
     Ok(())
 }
 
+/// Compares every managed column ACL with the closed catalog. In single-role
+/// mode a runtime column grant on a migration-owned table is held by the owner.
 async fn verify_exact_column_acl(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
+    single_role: bool,
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<()> {
     let checked_tables = expected_column_acl_tables(expected_catalog);
@@ -1446,7 +1465,23 @@ async fn verify_exact_column_acl(
             grantable: row.get(4),
         })
         .collect();
-    if actual != expected_catalog.column_privileges {
+    let expected: BTreeSet<ManagedColumnPrivilege> = expected_catalog
+        .column_privileges
+        .iter()
+        .cloned()
+        .map(|mut privilege| {
+            if single_role
+                && privilege.grantee == "runtime"
+                && expected_catalog.objects.iter().any(|object| {
+                    object.name == privilege.table && object.owner == DdlObjectOwner::Migration
+                })
+            {
+                "owner".clone_into(&mut privilege.grantee);
+            }
+            privilege
+        })
+        .collect();
+    if actual != expected {
         return Err(PostgresKernelError::CatalogInvariant(
             "managed column privileges differ from the closed catalog",
         ));
@@ -1529,7 +1564,13 @@ pub async fn managed_schema_fingerprint(
     verify_managed_owners_for_catalog(client, &migration_role, runtime_role, expected_catalog)
         .await?;
     verify_closed_ambient_catalog(client).await?;
-    verify_exact_acl(client, runtime_role, expected_catalog).await?;
+    verify_exact_acl(
+        client,
+        runtime_role,
+        &migration_role == runtime_role,
+        expected_catalog,
+    )
+    .await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog, runtime_role).await?;
     fingerprint_catalog(
@@ -1763,8 +1804,19 @@ async fn fingerprint_catalog(
         }
         hash_bool(&mut hasher, row.get(5));
     }
-    hasher.update(b"breg/catalog/v3/acl");
+    // The named-table algorithm leaves runtime grants out of the hash, so one
+    // package fingerprint holds in single-role and split-role mode, where the
+    // owner holds the runtime grants itself. Every runtime grant is still
+    // compared exactly with the closed catalog before a fingerprint is taken.
+    hasher.update(if named_table_columns {
+        b"breg/catalog/v6/acl"
+    } else {
+        b"breg/catalog/v3/acl"
+    });
     for row in acl_rows {
+        if named_table_columns && row.get::<_, &str>(2) == "runtime" {
+            continue;
+        }
         for index in 0..4 {
             hash_text(&mut hasher, &row.get::<_, String>(index));
         }

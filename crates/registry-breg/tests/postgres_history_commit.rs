@@ -16,7 +16,7 @@ mod model {
 #[allow(dead_code)]
 mod history_store;
 mod postgres {
-    pub use registry_breg::postgres::SqlIdentifier;
+    pub use registry_breg::postgres::{RuntimeRevoke, SqlIdentifier};
 }
 #[path = "../src/history_commit.rs"]
 #[allow(dead_code)]

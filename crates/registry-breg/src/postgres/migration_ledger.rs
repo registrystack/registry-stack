@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::{PostgresKernelError, Result, SqlIdentifier};
+use super::{PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier};
 
 const MAX_MIGRATION_STATEMENTS: usize = 1024;
 const MAX_MIGRATION_ARTIFACTS: usize = 1024;
@@ -299,12 +299,13 @@ pub(crate) async fn install_migration_ledger(
              REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;",
         )
         .await?;
+    let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
-            "REVOKE ALL ON TABLE registry_internal.registry_migrations FROM {};
-             REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM {};",
-            runtime_role.quoted(),
-            runtime_role.quoted(),
+            "{}
+             {}",
+            revoke.revoke_all_on("TABLE registry_internal.registry_migrations"),
+            revoke.revoke_all_on("TABLE registry_internal.registry_migration_steps"),
         ))
         .await?;
     Ok(())

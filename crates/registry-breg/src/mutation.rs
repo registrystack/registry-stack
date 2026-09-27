@@ -412,22 +412,30 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     let role = runtime_role.as_str();
-    migration
-        .batch_execute(&format!(
-            "REVOKE ALL ON registry_internal.registry_revisions,
+    let runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let revoke_tables = runtime_revoke.revoke_all_on(
+        "registry_internal.registry_revisions,
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
                  registry_internal.registry_webhook_delivery_state,
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
-                 registry_internal.registry_immediate_action_applications FROM \"{role}\";
+                 registry_internal.registry_immediate_action_applications",
+    );
+    let revoke_evidence_uses =
+        runtime_revoke.revoke_all_on("registry_internal.registry_action_evidence_uses");
+    migration
+        .batch_execute(&format!(
+            "{revoke_tables}
              GRANT SELECT, INSERT ON registry_internal.registry_revisions,
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
                  registry_internal.registry_immediate_action_applications TO \"{role}\";
-             REVOKE ALL ON registry_internal.registry_action_evidence_uses FROM \"{role}\";
+             {revoke_evidence_uses}
              GRANT INSERT ON registry_internal.registry_action_evidence_uses TO \"{role}\";
              GRANT UPDATE (payload) ON registry_internal.registry_outbox TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE

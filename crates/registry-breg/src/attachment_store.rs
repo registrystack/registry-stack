@@ -97,12 +97,16 @@ pub(crate) async fn install(
         CREATE INDEX IF NOT EXISTS registry_attachment_live_references
             ON registry_internal.registry_request_attachments (sha256) WHERE erased_at IS NULL;"
     ).await.map_err(unavailable)?;
+    let revoke_grantees = crate::postgres::RuntimeRevoke::detect(client, role)
+        .await
+        .map_err(unavailable)?
+        .with_public();
     for (table, grants) in ATTACHMENT_TABLES {
         // The SQL role is trusted engine code. RLS requires an admitted runtime
         // transaction, while current request-row authority is checked by callers.
         // The owning migration role retains its explicit maintenance boundary.
         client.batch_execute(&format!(
-            "REVOKE ALL ON registry_internal.{table} FROM PUBLIC, {role};
+            "REVOKE ALL ON registry_internal.{table} FROM {revoke_grantees};
              GRANT {} ON registry_internal.{table} TO {role};
              ALTER TABLE registry_internal.{table} ENABLE ROW LEVEL SECURITY;
              ALTER TABLE registry_internal.{table} FORCE ROW LEVEL SECURITY;

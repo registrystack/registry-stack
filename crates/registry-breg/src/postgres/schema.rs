@@ -20,7 +20,7 @@ use crate::mutation::{install_mutation_schema, MutationError};
 use super::config::ConnectionTls;
 use super::{
     catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist, verify_postgis,
-    PostgresKernelError, Result, SqlIdentifier,
+    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::{
@@ -117,11 +117,13 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         .as_ref()
         .map(|role| format!(", {}", role.quoted()))
         .unwrap_or_default();
+    let revoke_grantees = RuntimeRevoke::detect(client, runtime_role)
+        .await?
+        .with_public();
     client
         .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {}{bbox_revoke};
+            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM {revoke_grantees}{bbox_revoke};
              GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
-            runtime_role.quoted(),
             runtime_role.quoted(),
         ))
         .await?;
@@ -138,8 +140,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let table_name = quote_compiled_identifier(&table.physical_name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{table_name} FROM PUBLIC, {}{bbox_revoke};",
-                runtime_role.quoted(),
+                "REVOKE ALL ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke};",
             ))
             .await?;
         if !table.runtime_privileges.is_empty() {
@@ -217,8 +218,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         }
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE {schema}.{view_name} FROM PUBLIC, {}{bbox_revoke};",
-                runtime_role.quoted(),
+                "REVOKE ALL ON TABLE {schema}.{view_name} FROM {revoke_grantees}{bbox_revoke};",
             ))
             .await?;
         if !view.runtime_privileges.is_empty() {
@@ -241,9 +241,8 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let name = quote_compiled_identifier(&function.name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM PUBLIC, {}{bbox_revoke};",
+                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM {revoke_grantees}{bbox_revoke};",
                 function.arguments,
-                runtime_role.quoted(),
             ))
             .await?;
         if function.runtime_execute {

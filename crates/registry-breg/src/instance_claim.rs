@@ -120,9 +120,12 @@ pub(crate) async fn install(
                  claimed_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
              REVOKE ALL ON registry_internal.registry_instance_claim FROM PUBLIC;
-             REVOKE ALL ON registry_internal.registry_instance_claim FROM \"{role}\";
+             {runtime_revoke}
              GRANT SELECT ON registry_internal.registry_instance_claim TO \"{role}\";",
             role = runtime_role.as_str(),
+            runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+                .await?
+                .revoke_all_on("registry_internal.registry_instance_claim"),
         ))
         .await?;
     let live = live_identity(migration).await?;

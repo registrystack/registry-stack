@@ -51,6 +51,44 @@ impl fmt::Display for QuotedIdentifier<'_> {
     }
 }
 
+/// The runtime grantee of a least-privilege `REVOKE`.
+///
+/// In single-role mode the connected migration role is also the runtime role.
+/// It owns every managed object, so a `REVOKE` naming it would strip the owner
+/// privileges that later migration statements rely on. Installers therefore
+/// revoke from `PUBLIC` alone in that mode, and their grants to the runtime
+/// role change nothing for the owner.
+pub struct RuntimeRevoke<'a>(Option<&'a SqlIdentifier>);
+
+impl<'a> RuntimeRevoke<'a> {
+    pub async fn detect(
+        client: &impl GenericClient,
+        runtime_role: &'a SqlIdentifier,
+    ) -> std::result::Result<Self, tokio_postgres::Error> {
+        let current: String = client.query_one("SELECT current_user", &[]).await?.get(0);
+        Ok(Self(
+            (current != runtime_role.as_str()).then_some(runtime_role),
+        ))
+    }
+
+    /// The grantee list `PUBLIC, "runtime"`, or `PUBLIC` in single-role mode.
+    pub fn with_public(&self) -> String {
+        match self.0 {
+            Some(role) => format!("PUBLIC, {}", role.quoted()),
+            None => "PUBLIC".to_owned(),
+        }
+    }
+
+    /// A statement revoking every privilege on `objects` from the runtime
+    /// role, or nothing in single-role mode.
+    pub fn revoke_all_on(&self, objects: &str) -> String {
+        match self.0 {
+            Some(role) => format!("REVOKE ALL ON {objects} FROM {};", role.quoted()),
+            None => String::new(),
+        }
+    }
+}
+
 /// Admin-only provisioning of the managed schemas.
 pub async fn provision_managed_schemas(
     admin: &impl GenericClient,
@@ -268,12 +306,14 @@ async fn verify_postgis_spatial_bbox_role(
             "spatial bbox role membership is incomplete or invalid",
         ));
     };
+    // In single-role mode the runtime role is the migration role, which holds
+    // the bbox role for SET ROLE, so only split-role mode refuses that membership.
     let valid_membership = row.get::<_, bool>(0)
         && !row.get::<_, bool>(1)
         && row.get::<_, bool>(2)
         && !row.get::<_, bool>(3)
         && !row.get::<_, bool>(4)
-        && !row.get::<_, bool>(5)
+        && (migration_role == runtime_role || !row.get::<_, bool>(5))
         && !row.get::<_, bool>(6);
     if !valid_membership {
         return Err(PostgresKernelError::RoleInvariant(

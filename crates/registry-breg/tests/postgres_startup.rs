@@ -958,6 +958,118 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_database_role_applies_the_initial_package_and_serves_reads() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let fixture = StartupFixture::new();
+
+    // The package fingerprint is computed against a split-role rehearsal, so
+    // the same package must activate whichever role mode the operator runs.
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let verified_provisional = load_package(&provisional.root, &provisional.context())
+        .expect("provisional package verifies");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(
+        &transaction,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("split-role schema rehearses");
+    let schema_fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified_provisional.registry()),
+    )
+    .await
+    .expect("split-role fingerprint computes");
+    transaction
+        .rollback()
+        .await
+        .expect("split-role rehearsal rolls back");
+    migration_task.abort();
+    drop(provisional);
+
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let verified = load_package(&package.root, &package.context()).expect("package verifies");
+    apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &verified,
+        ActivationDeployment::new("production", INSTANCE, DATABASE),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+            .expect("test apply timeouts are bounded"),
+    ))
+    .await
+    .expect("one role applies the initial package");
+
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.migration_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let raw = fs::read_to_string(&config_path).expect("runtime config reads");
+    fs::write(
+        &config_path,
+        raw.replace(
+            "migrationUrlRef: secret:file/migration-database-url",
+            "migrationUrlRef: secret:file/database-url",
+        ),
+    )
+    .expect("single-role runtime config writes");
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.migration_config.clone())
+            .await
+            .expect("one role serves the applied package");
+    assert_ready(&prepared, StatusCode::OK).await;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock follows epoch")
+        .as_secs();
+    let token = sign_ed25519_compact_jwt(
+        testing_fixtures::ED25519_PRIVATE_JWK,
+        "JWT",
+        "registry-platform-testing-ed25519-1",
+        json!({
+            "iss": idp.issuer(),
+            "aud": "urn:breg:test",
+            "registry_actor_kind": "service",
+            "principal": "package-reader",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 120
+        }),
+    );
+    let response = prepared
+        .app()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/records/neutral-records?accessProfile=reader")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("response body reads");
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    drop(prepared);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;

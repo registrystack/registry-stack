@@ -79,6 +79,8 @@ pub use rehearsal::{
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
+#[doc(hidden)]
+pub use roles::RuntimeRevoke;
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
