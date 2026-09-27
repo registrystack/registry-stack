@@ -7,8 +7,8 @@ import test from 'node:test';
 import { planGate } from './gate.mjs';
 
 const TOOLSETS = {
-  breg: { commands: /(^|[^\w-])(bregctl|breg)([^\w-]|$)/mu },
-  casework: { commands: /(^|[^\w-])(caseworkctl|casework)([^\w-]|$)/mu, includes: ['breg'] },
+  breg: { commands: /(^|[^\w./-])(bregctl|breg)([^\w./-]|$)/mu },
+  casework: { commands: /(^|[^\w./-])(caseworkctl|casework)([^\w./-]|$)/mu, includes: ['breg'] },
   none: {},
 };
 

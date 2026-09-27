@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Replay a tutorial page the way a reader follows it.
 //
-//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...
-//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework|evidence
+//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|relay|none] <page.mdx>...
+//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework|evidence|relay
 //
 // The page is the specification (see tutorial-runner/page.mjs): its sh fences
 // run in document order in one bash shell, from an empty reader directory
@@ -21,7 +21,8 @@
 // tutorial_test.checkout, the reader directory starts as a copy of this
 // checkout instead (tutorial-runner/checkout.mjs).
 //
-// A test-file block writes its file from the shell's current directory. A
+// A test-file block writes its file from the shell's current directory, and a
+// test-append block adds to the end of one there. A
 // test-background fence runs beside the journey until its ready URL answers,
 // and stays running until the next background fence starts or its page ends
 // (tutorial-runner/background.mjs). test-cwd moves the shell to a directory
@@ -56,7 +57,7 @@ import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework|evidence';
+const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|relay|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework|evidence|relay';
 const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
 const BACKGROUND = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/background.mjs');
@@ -103,7 +104,7 @@ function printPlan(steps, checkout) {
     if (step.kind === 'run') console.log(`run   ${where(step)}: ${step.code.split('\n')[0]}${note}`);
     else if (step.kind === 'skip') console.log(`skip  ${where(step)}: ${step.reason}`);
     else if (step.kind === 'edit') console.log(`edit  ${where(step)}: ${step.path}`);
-    else if (step.kind === 'file') console.log(`file  ${where(step)}: ${step.path}`);
+    else if (step.kind === 'file') console.log(`${step.append ? 'append' : 'file '} ${where(step)}: ${step.path}`);
     else if (step.kind === 'excerpt' && step.path) console.log(`excerpt ${at(step)}: ${step.path}`);
     else if (step.kind === 'excerpt') console.log(`excerpt ${at(step)}: checks line ${steps[step.runIndex].line}`);
     else console.log(`expect ${at(step)}: checks line ${steps[step.runIndex].line}`);
@@ -160,8 +161,13 @@ async function journeyScript(pages, outDir, readerDir) {
         const staged = join(outDir, `${String(index).padStart(3, '0')}.file`);
         await writeFile(staged, step.text);
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
-        lines.push(`cp -- ${quote(staged)} ${quote(step.path)} >${out} 2>&1 </dev/null`);
-        lines.push(`printf 'wrote %s\\n' ${quote(step.path)}`);
+        if (step.append) {
+          lines.push(`cat -- ${quote(staged)} >>${quote(step.path)} 2>${out} </dev/null`);
+          lines.push(`printf 'appended to %s\\n' ${quote(step.path)}`);
+        } else {
+          lines.push(`cp -- ${quote(staged)} ${quote(step.path)} >${out} 2>&1 </dev/null`);
+          lines.push(`printf 'wrote %s\\n' ${quote(step.path)}`);
+        }
       } else if (step.kind === 'run' && step.background) {
         lines.push(stopBackground);
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)} (background)`)}`);

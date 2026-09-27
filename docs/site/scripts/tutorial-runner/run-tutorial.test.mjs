@@ -512,6 +512,24 @@ test('a test-file block writes the whole file where the reader stands', async ()
   });
 });
 
+test('a test-append block adds its lines to the end of the file where the reader stands', async () => {
+  const body =
+    '## Write\n\n' +
+    fence('yaml title="q.yaml" test-file', 'id: q') +
+    fence('yaml title="q.yaml" test-append', 'details:') +
+    fence('yaml title="q.yaml" test-append', '  purpose: check') +
+    fence('sh', 'cat q.yaml') +
+    fence('text test-expect', 'id: q\ndetails:\n  purpose: check');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /appended to q\.yaml/u);
+    assert.match(output, /tutorial PASS/u);
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /append line 11 \(Write\): q\.yaml/u);
+  });
+});
+
 test('a test-file block whose directory does not exist stops the journey', async () => {
   const body = '## Write\n\n' + fence('yaml title="missing/q.yaml" test-file', 'id: q') + fence('sh', 'echo never');
   await withPage(body, async ({ page }) => {

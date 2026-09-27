@@ -18,7 +18,8 @@
 // nearest sh fence above it.
 //
 // A block titled with a file path and marked test-file is the whole file the
-// page asks the reader to create or replace in their editor.
+// page asks the reader to create or replace in their editor; marked
+// test-append, it is what the page asks the reader to add to the end of it.
 //
 // test-background="<url>" on an sh fence is a command the page leaves running
 // while the reader carries on in another terminal: the journey goes on once
@@ -41,6 +42,7 @@ const ANNOTATIONS = new Set([
   'test-edit',
   'test-excerpt',
   'test-file',
+  'test-append',
   'test-background',
   'test-cwd',
 ]);
@@ -103,7 +105,7 @@ function* walk(node) {
 //   { kind: 'skip', line, heading, code, reason }
 //   { kind: 'expect', line, heading, format, text, runIndex }
 //   { kind: 'edit', line, heading, path, before, after }
-//   { kind: 'file', line, heading, path, text }
+//   { kind: 'file', line, heading, path, text, append? }
 //   { kind: 'excerpt', line, heading, format, text, runIndex }
 //   { kind: 'excerpt', line, heading, format, text, path }
 // where runIndex is the index in steps of the fence whose output it checks.
@@ -129,6 +131,7 @@ export function readJourney(text) {
     const edit = annotations['test-edit'];
     const excerpt = annotations['test-excerpt'];
     const file = annotations['test-file'];
+    const append = annotations['test-append'];
     const background = annotations['test-background'];
     const cwd = annotations['test-cwd'];
 
@@ -144,6 +147,7 @@ export function readJourney(text) {
         errors.push(`line ${line}: test-excerpt belongs on a block the page shows, not on an sh fence`);
       }
       if (file !== undefined) errors.push(`line ${line}: test-file belongs on a block showing the file, not on an sh fence`);
+      if (append !== undefined) errors.push(`line ${line}: test-append belongs on a block showing what to add, not on an sh fence`);
       const step = { kind: skip === undefined ? 'run' : 'skip', line, heading, code: node.value };
       if (typeof skip === 'string' && skip !== '') step.reason = skip;
       if (exit !== undefined) {
@@ -174,8 +178,8 @@ export function readJourney(text) {
     if (exit !== undefined) errors.push(`line ${line}: test-exit applies only to sh fences`);
     if (background !== undefined) errors.push(`line ${line}: test-background applies only to sh fences`);
     if (cwd !== undefined) errors.push(`line ${line}: test-cwd applies only to sh fences`);
-    if ([file, edit, expect, excerpt].filter((value) => value !== undefined).length > 1) {
-      errors.push(`line ${line}: a block is one of test-file, test-edit, test-expect, or test-excerpt`);
+    if ([file, append, edit, expect, excerpt].filter((value) => value !== undefined).length > 1) {
+      errors.push(`line ${line}: a block is one of test-file, test-append, test-edit, test-expect, or test-excerpt`);
       continue;
     }
     if (file !== undefined) {
@@ -183,6 +187,13 @@ export function readJourney(text) {
       if (node.lang === 'diff') errors.push(`line ${line}: test-file takes the whole file; a diff block is test-edit`);
       else if (!path) errors.push(`line ${line}: test-file needs the file path, as title="<path>"`);
       else steps.push({ kind: 'file', line, heading, path, text: `${node.value}\n` });
+      continue;
+    }
+    if (append !== undefined) {
+      const path = titleOf(node.meta);
+      if (node.lang === 'diff') errors.push(`line ${line}: test-append adds whole lines; a diff block is test-edit`);
+      else if (!path) errors.push(`line ${line}: test-append needs the file path, as title="<path>"`);
+      else steps.push({ kind: 'file', line, heading, path, text: `${node.value}\n`, append: true });
       continue;
     }
     if (edit !== undefined) {
