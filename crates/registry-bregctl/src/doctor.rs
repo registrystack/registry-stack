@@ -528,7 +528,9 @@ mod tests {
                 "/",
             ),
             (
-                RuntimeConfigError::Document,
+                RuntimeConfigError::Document(
+                    "cursor is invalid: missing field `secretRef`".to_owned(),
+                ),
                 "startup.runtime_config.document",
                 "/",
             ),
@@ -640,10 +642,11 @@ mod tests {
         ];
 
         for (cause, expected_code, expected_path) in cases {
+            let message = cause.to_string();
             let diagnostic = startup_diagnostic(StartupError::RuntimeConfig(cause));
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
-            assert_eq!(diagnostic.message, cause.to_string());
+            assert_eq!(diagnostic.message, message);
         }
     }
 

@@ -4,7 +4,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt, fs,
-    io::Read,
     net::{IpAddr, SocketAddr},
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -16,8 +15,8 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RuntimeConfigErrorKind, RuntimeConfigLoader,
+    redact_refused_values, AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
+    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader,
     RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
@@ -126,7 +125,7 @@ const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/breg-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "BRegRuntimeConfig";
 
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum RuntimeConfigError {
     #[error("the runtime configuration file is unavailable")]
     Unavailable,
@@ -138,8 +137,10 @@ pub enum RuntimeConfigError {
     EnvExpansion,
     #[error("runtime configuration substitutes into a secret reference or secret provider")]
     SubstitutionInReference,
-    #[error("the runtime configuration document is invalid")]
-    Document,
+    /// The document is not YAML this runtime reads, or a member does not fit
+    /// its typed shape. The message names the field and never the value.
+    #[error("the runtime configuration document is invalid: {0}")]
+    Document(String),
     #[error("runtime configuration uses an unsupported apiVersion")]
     InvalidApiVersion,
     #[error("runtime configuration uses an unsupported kind")]
@@ -238,7 +239,7 @@ impl RuntimeConfigErrorMetadata {
 
 impl RuntimeConfigError {
     #[must_use]
-    pub const fn metadata(self) -> RuntimeConfigErrorMetadata {
+    pub const fn metadata(&self) -> RuntimeConfigErrorMetadata {
         RuntimeConfigErrorMetadata {
             code: self.code(),
             path: self.path(),
@@ -246,14 +247,14 @@ impl RuntimeConfigError {
     }
 
     #[must_use]
-    pub const fn code(self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::Unavailable => "runtime_config.unavailable",
             Self::UnsafeFile => "runtime_config.unsafe_file",
             Self::Bounds => "runtime_config.bounds",
             Self::EnvExpansion => "runtime_config.env_expansion",
             Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
-            Self::Document => "runtime_config.document",
+            Self::Document(_) => "runtime_config.document",
             Self::InvalidApiVersion => "runtime_config.invalid_api_version",
             Self::InvalidKind => "runtime_config.invalid_kind",
             Self::GovernedMember => "runtime_config.governed_member",
@@ -290,14 +291,14 @@ impl RuntimeConfigError {
     }
 
     #[must_use]
-    pub const fn path(self) -> &'static str {
+    pub const fn path(&self) -> &'static str {
         match self {
             Self::Unavailable
             | Self::UnsafeFile
             | Self::Bounds
             | Self::EnvExpansion
             | Self::SubstitutionInReference
-            | Self::Document
+            | Self::Document(_)
             | Self::GovernedMember
             | Self::InvalidBinding
             | Self::Secret => "/",
@@ -349,14 +350,11 @@ pub fn load_runtime_config_with_env(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
     validate_absolute_lexical_path(path, RuntimeConfigError::UnsafeFile)?;
-    reject_symlink_components(
-        path,
-        RuntimeConfigError::UnsafeFile,
-        RuntimeConfigError::Unavailable,
-    )?;
-    let bytes = read_bounded_runtime_config(path, MAX_RUNTIME_CONFIG_BYTES)?;
-    let raw = std::str::from_utf8(&bytes).map_err(|_| RuntimeConfigError::Document)?;
-    parse_runtime_config_with_env(raw, lookup).and_then(|config| {
+    let substituted = runtime_config_loader()
+        .load_with::<Value>(path, lookup)
+        .map_err(|error| runtime_config_error_from_loader(&error))?
+        .config;
+    runtime_config_from_substituted(substituted).and_then(|config| {
         config.validate_loaded_paths()?;
         Ok(config)
     })
@@ -374,18 +372,71 @@ pub fn parse_runtime_config_with_env(
     {
         return Err(RuntimeConfigError::Bounds);
     }
-    let substituted = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let substituted = runtime_config_loader()
+        .parse_str::<Value>(raw, lookup)
+        .map_err(|error| runtime_config_error_from_loader(&error))?
+        .config;
+    runtime_config_from_substituted(substituted)
+}
+
+/// Package keys this runtime no longer reads, each with what replaces it. The
+/// shared loader refuses them before it substitutes any value.
+const REMOVED_KEYS: [RemovedKey; 4] = [
+    RemovedKey {
+        path: "package.trustAnchorPath",
+        replacement: "remove it: `bregctl apply` with the migration credential authorizes an \
+                      activation and records it in the database ledger",
+    },
+    RemovedKey {
+        path: "package.activeRevision",
+        replacement: "remove it: the database ledger records the active package, see \
+                      `bregctl status`",
+    },
+    RemovedKey {
+        path: "package.activeSequence",
+        replacement: "remove it: the database ledger records the active package, see \
+                      `bregctl status`",
+    },
+    RemovedKey {
+        path: "package.compilerSourceRevision",
+        replacement: "remove it: the package manifest records its compiler identity",
+    },
+];
+
+/// The refusal that names a removed key the shared loader found.
+fn removed_key_error(field: &str) -> Option<RuntimeConfigError> {
+    match field {
+        "package.trustAnchorPath" => Some(RuntimeConfigError::PackageTrustAnchorRemoved),
+        "package.activeRevision" => Some(RuntimeConfigError::PackageActiveRevisionRemoved),
+        "package.activeSequence" => Some(RuntimeConfigError::PackageActiveSequenceRemoved),
+        "package.compilerSourceRevision" => {
+            Some(RuntimeConfigError::PackageCompilerSourceRevisionRemoved)
+        }
+        _ => None,
+    }
+}
+
+/// The shared runtime configuration loader under BReg's envelope, bound, and
+/// removed keys. BReg reads the file through it: the loader holds the path,
+/// symbolic link, regular file, and bounded read checks.
+const fn runtime_config_loader() -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: RUNTIME_CONFIG_API_VERSION,
         kind: RUNTIME_CONFIG_KIND,
     })
     .max_bytes(MAX_RUNTIME_CONFIG_BYTES)
-    .parse_str::<Value>(raw, lookup)
-    .map_err(|error| runtime_config_error_from_loader(&error))?
-    .config;
+    .removed_keys(&REMOVED_KEYS)
+}
+
+fn runtime_config_from_substituted(substituted: Value) -> Result<RuntimeConfig> {
     // A substituted value may be longer than the expression it replaced, so
     // the substituted document is held to the same bound as the file.
     let substituted_len = serde_json::to_string(&substituted)
-        .map_err(|_| RuntimeConfigError::Document)?
+        .map_err(|_| {
+            RuntimeConfigError::Document(
+                "the runtime configuration could not be measured after substitution".to_owned(),
+            )
+        })?
         .len();
     if substituted_len > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
         return Err(RuntimeConfigError::Bounds);
@@ -393,10 +444,13 @@ pub fn parse_runtime_config_with_env(
     if contains_governed_member(&substituted) {
         return Err(RuntimeConfigError::GovernedMember);
     }
-    reject_retired_package_keys(&substituted)?;
     reject_invalid_binding_text(&substituted)?;
-    let raw: RawRuntimeConfig =
-        serde_json::from_value(substituted).map_err(|_| RuntimeConfigError::Document)?;
+    let raw: RawRuntimeConfig = serde_path_to_error::deserialize(substituted).map_err(|error| {
+        let field = error.path().to_string();
+        let field = if field == "." { "/".to_owned() } else { field };
+        let reason = redact_refused_values(&error.into_inner().to_string());
+        RuntimeConfigError::Document(format!("{field} is invalid: {reason}"))
+    })?;
     RuntimeConfig::from_raw(raw)
 }
 
@@ -420,37 +474,15 @@ fn runtime_config_error_from_loader(
             RuntimeConfigError::UnsafeFile
         }
         RuntimeConfigErrorKind::Unavailable => RuntimeConfigError::Unavailable,
-        _ => RuntimeConfigError::Document,
-    }
-}
-
-/// A package key this runtime no longer reads is refused by name, with what
-/// replaces it, before the typed document would report it as unknown.
-fn reject_retired_package_keys(document: &Value) -> Result<()> {
-    const RETIRED: [(&str, RuntimeConfigError); 4] = [
-        (
-            "trustAnchorPath",
-            RuntimeConfigError::PackageTrustAnchorRemoved,
-        ),
-        (
-            "activeRevision",
-            RuntimeConfigError::PackageActiveRevisionRemoved,
-        ),
-        (
-            "activeSequence",
-            RuntimeConfigError::PackageActiveSequenceRemoved,
-        ),
-        (
-            "compilerSourceRevision",
-            RuntimeConfigError::PackageCompilerSourceRevisionRemoved,
-        ),
-    ];
-    let Some(package) = document.get("package").and_then(Value::as_object) else {
-        return Ok(());
-    };
-    match RETIRED.iter().find(|(key, _)| package.contains_key(*key)) {
-        Some((_, error)) => Err(*error),
-        None => Ok(()),
+        RuntimeConfigErrorKind::RemovedKey => removed_key_error(error.field())
+            .unwrap_or_else(|| RuntimeConfigError::Document(error.message().to_owned())),
+        RuntimeConfigErrorKind::Syntax
+        | RuntimeConfigErrorKind::Encoding
+        | RuntimeConfigErrorKind::InvalidValue
+        | RuntimeConfigErrorKind::AuthoredExpression
+        | RuntimeConfigErrorKind::AuthoredSyntax => {
+            RuntimeConfigError::Document(error.message().to_owned())
+        }
     }
 }
 
@@ -3570,105 +3602,13 @@ fn remove_schema_default(schema: &mut Value, pointer: &str) {
     }
 }
 
-fn read_bounded_runtime_config(path: &Path, maximum: u64) -> Result<Vec<u8>> {
-    let scanned = fs::symlink_metadata(path).map_err(|_| RuntimeConfigError::Unavailable)?;
-    if scanned.file_type().is_symlink() || !scanned.is_file() {
-        return Err(RuntimeConfigError::UnsafeFile);
-    }
-    if scanned.len() == 0 || scanned.len() > maximum {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    let file = open_runtime_config_file(path)?;
-    let opened = file
-        .metadata()
-        .map_err(|_| RuntimeConfigError::Unavailable)?;
-    let current = fs::symlink_metadata(path).map_err(|_| RuntimeConfigError::Unavailable)?;
-    if current.file_type().is_symlink()
-        || !opened.is_file()
-        || !same_file(&scanned, &opened)
-        || !same_file(&opened, &current)
-    {
-        return Err(RuntimeConfigError::UnsafeFile);
-    }
-    if opened.len() == 0 || opened.len() > maximum {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    let capacity = usize::try_from(opened.len()).map_err(|_| RuntimeConfigError::Bounds)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve(capacity)
-        .map_err(|_| RuntimeConfigError::Bounds)?;
-    let mut reader = file.take(maximum + 1);
-    reader
-        .read_to_end(&mut bytes)
-        .map_err(|_| RuntimeConfigError::Unavailable)?;
-    let after = reader
-        .get_ref()
-        .metadata()
-        .map_err(|_| RuntimeConfigError::Unavailable)?;
-    if bytes.is_empty() || bytes.len() as u64 > maximum {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    if !same_file(&opened, &after) || bytes.len() as u64 != after.len() {
-        return Err(RuntimeConfigError::UnsafeFile);
-    }
-    Ok(bytes)
-}
-
-fn open_runtime_config_file(path: &Path) -> Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        options.custom_flags(runtime_config_no_follow_flag());
-    }
-    options.open(path).map_err(|_| {
-        fs::symlink_metadata(path).map_or(RuntimeConfigError::Unavailable, |metadata| {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                RuntimeConfigError::UnsafeFile
-            } else {
-                RuntimeConfigError::Unavailable
-            }
-        })
-    })
-}
-
-#[cfg(unix)]
-fn runtime_config_no_follow_flag() -> i32 {
-    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32
-}
-
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.permissions().mode() == right.permissions().mode()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-#[cfg(not(unix))]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len()
-        && left.permissions().readonly() == right.permissions().readonly()
-        && left.modified().ok() == right.modified().ok()
-        && left.created().ok() == right.created().ok()
-}
-
 fn validate_existing_directory(
     path: &Path,
     unsafe_error: RuntimeConfigError,
     unavailable_error: RuntimeConfigError,
 ) -> Result<()> {
-    reject_symlink_components(path, unsafe_error, unavailable_error)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error)?;
+    reject_symlink_components(path, unsafe_error.clone(), unavailable_error.clone())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error.clone())?;
     if metadata.file_type().is_symlink() {
         return Err(unsafe_error);
     }
