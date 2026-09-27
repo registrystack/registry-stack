@@ -27,7 +27,16 @@ import image_exposure
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE_NAMES = frozenset(
-    {"breg", "casework", "discovery", "evidence", "relay", "scheduling"}
+    {
+        "breg",
+        "breg-mcp",
+        "breg-review",
+        "casework",
+        "discovery",
+        "evidence",
+        "relay",
+        "scheduling",
+    }
 )
 # The operator tool each stateful product image may carry beside its runtime.
 OPERATOR_TOOLS = {

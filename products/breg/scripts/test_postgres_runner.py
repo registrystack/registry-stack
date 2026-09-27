@@ -87,7 +87,9 @@ class PostgresRunnerTests(unittest.TestCase):
             if call[0] == "build":
                 self.assertEqual(["build", "--locked", "-p", "registry-evidence", "--bin", "evidence", "--message-format=json"], call)
                 continue
-            self.assertEqual(["test", "--locked", "-p", "registry-breg", "--features"], call[:5])
+            self.assertEqual(["test", "--locked", "-p"], call[:3])
+            self.assertIn(call[3], VALIDATOR.POSTGRES_TEST_PACKAGES)
+            self.assertEqual("--features", call[4])
             targets = call[6:]
             self.assertTrue(targets)
             self.assertEqual(0, len(targets) % 2)
@@ -107,8 +109,8 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(4, len(ordinary))
-        self.assertEqual(5, len(default))
+        self.assertEqual(6, len(ordinary))
+        self.assertEqual(7, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)
@@ -194,6 +196,8 @@ class PostgresRunnerTests(unittest.TestCase):
             "products/breg/scripts/test-adopter-workflow.sh",
             "products/breg/quickstart/run.sh --smoke",
             "products/breg/quickstart/run.sh --spatial --smoke",
+            "products/breg/scripts/check-mcp-gateway-boundary.sh",
+            "products/breg/scripts/check-service-dependencies.sh",
         )
         for command in contract_commands:
             self.assertEqual("matrix.lane == 'contracts'", runs[command]["if"])

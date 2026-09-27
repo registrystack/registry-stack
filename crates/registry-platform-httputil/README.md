@@ -20,6 +20,14 @@ Outbound HTTP utilities for registry services.
   provider's configured resource and scopes. Every exchange is fresh and does
   not use or replace the service-token cache. Returned task bounds remain the
   consuming resource server's authorization responsibility.
+  `redeem_authorization_code` redeems an authorization code with its PKCE
+  verifier and redirect URI for a relying party that signs people in, with the
+  same client assertion and configured resource and no scope parameter. It
+  checks input shape before any request, refuses a response scope missing a
+  configured scope, and never touches the service-token cache. It returns a
+  `RedeemedAuthorizationCode`: the access token, a monotonic expiry when the
+  issuer stated one, and the unverified ID token, which the caller verifies
+  before reading any claim.
 - `ExchangeAuthorization` for one immutable host-verified person or task-grant
   context. The first-party source signs a bounded grantless JWT; the remote
   source obtains a new assertion with a narrowly configured bootstrap on each
@@ -28,6 +36,17 @@ Outbound HTTP utilities for registry services.
   first-party context can exchange once; renewed person authority requires
   fresh host source verification and a new provider. The shared closed JSON
   parser `exchange_authorization_from_json` is used by Node and Python bindings.
+  `ExchangeAuthorization::upstream` instead presents, once, an access token
+  another authorization server issued and the host has already verified,
+  including its audience (`UpstreamSubjectToken`, with a closed
+  `SubjectTokenType`). It may add the service's own client-credentials token
+  as the RFC 8693 actor token, acquired from a shared `PrivateKeyJwt` for the
+  same client and token endpoint and never returned to the caller. The context
+  deadline may not pass the subject token's expiry, so the exchanged token is
+  never handed out after the subject token ends, whatever lifetime the issuer
+  states. A stated scope must hold every requested scope; an omitted one means
+  the scope requested (RFC 6749 section 5.1), and the resource server's own
+  scope check stays authoritative.
 - Shared strict response-header bounds and exact-one delta-seconds
   `Retry-After` parsing.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
