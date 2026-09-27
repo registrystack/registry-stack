@@ -7,7 +7,6 @@
 mod postgres_harness;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +22,7 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest,
 };
 use registry_breg::migration_plan::{
@@ -32,10 +31,8 @@ use registry_breg::migration_plan::{
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageSignature, PackageSourceFile, PackageTrustAnchor,
-    SignaturePolicy, TrustAnchorKey, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
-    TRUST_ANCHOR_API_VERSION,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageSourceFile, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
     managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
@@ -46,7 +43,6 @@ use registry_breg::startup::prepare_startup;
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -67,10 +63,9 @@ journeys: []
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys() {
     let database = TestDatabase::create(8).await;
-    let signer = TestSigner::new();
 
-    let initial_registry = Arc::new(compiled_registry(Variant::NoAction, 1));
-    let initial = prepare_initial_package(&database, &signer, &initial_registry).await;
+    let initial_registry = Arc::new(compiled_registry(Variant::NoAction));
+    let initial = prepare_initial_package(&database, &initial_registry).await;
     let active_initial = apply_package(
         &database,
         &initial.package,
@@ -79,14 +74,12 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     .await;
     seed_household(&database, &initial_registry, &active_initial).await;
 
-    let action_registry = Arc::new(compiled_registry(Variant::ActionV1, 2));
+    let action_registry = Arc::new(compiled_registry(Variant::ActionV1));
     let action_package = prepare_reviewed_successor_package(
         &database,
-        &signer,
         &initial_registry,
         &active_initial,
         &action_registry,
-        2,
     )
     .await;
     assert!(
@@ -128,14 +121,12 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     );
     assert_eq!(receipt_count(&database).await, 1);
 
-    let changed_registry = Arc::new(compiled_registry(Variant::ActionV2, 3));
+    let changed_registry = Arc::new(compiled_registry(Variant::ActionV2));
     let changed_package = prepare_reviewed_successor_package(
         &database,
-        &signer,
         &action_registry,
         &active_action,
         &changed_registry,
-        3,
     )
     .await;
     let changed_sql = changed_package
@@ -200,14 +191,12 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     );
     assert_eq!(receipt_count(&database).await, 1);
 
-    let removed_registry = Arc::new(compiled_registry(Variant::NoAction, 4));
+    let removed_registry = Arc::new(compiled_registry(Variant::NoAction));
     let removed_package = prepare_reviewed_successor_package(
         &database,
-        &signer,
         &changed_registry,
         &active_changed,
         &removed_registry,
-        4,
     )
     .await;
     let removed_sql = removed_package
@@ -233,7 +222,7 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     )
     .await;
     assert_exact_catalog(&database, &removed_registry, &active_removed).await;
-    prepare_startup_for(&database, &removed_package, &active_removed)
+    prepare_startup_for(&database, &removed_package)
         .await
         .expect("removed-action package starts against the exact candidate catalog");
 
@@ -251,21 +240,18 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_keys() {
     let database = TestDatabase::create(8).await;
-    let signer = TestSigner::new();
 
-    let initial_project = consent_project_bytes(1, false);
+    let initial_project = consent_project_bytes(false);
     let initial_registry = Arc::new(compile_bytes(&initial_project));
     let initial_fingerprint = initial_schema_fingerprint(&database, &initial_registry).await;
     let initial = publish_and_load(
-        &signer,
         build_request_for_project(
             initial_project,
-            1,
             None,
             &initial_fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ),
-        package_context(PackageIntent::InitialActivation),
+        package_context(),
     );
     let active_initial = apply_package(
         &database,
@@ -288,7 +274,7 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
     assert_eq!(first.status, StatusCode::OK, "{}", first.body);
     assert_eq!(receipt_count(&database).await, 1);
 
-    let successor_project = consent_project_bytes(2, true);
+    let successor_project = consent_project_bytes(true);
     let successor_registry = Arc::new(compile_bytes(&successor_project));
     let changes = compiled_registry_change_set(
         &initial_registry,
@@ -317,20 +303,15 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
     let fresh_fingerprint = initial_schema_fingerprint(&fresh, &successor_registry).await;
     fresh.cleanup().await;
     let successor = publish_and_load(
-        &signer,
         build_request_for_project(
             successor_project,
-            2,
             Some(active_initial.package_revision.as_str()),
             &fresh_fingerprint,
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new((*initial_registry).clone()),
             },
         ),
-        package_context(PackageIntent::Activation {
-            active_revision: &active_initial.package_revision,
-            active_sequence: active_initial.package_sequence as u64,
-        }),
+        package_context(),
     );
     let statements = successor
         .package
@@ -406,57 +387,35 @@ enum Variant {
 struct PublishedPackage {
     _root: TempDir,
     package_root: PathBuf,
-    anchor_path: PathBuf,
     package: VerifiedPackage,
-}
-
-struct TestSigner {
-    key: PrivateJwk,
-    key_id: String,
-}
-
-impl TestSigner {
-    fn new() -> Self {
-        let key = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-            .expect("package signing key generates");
-        let key_id = key.public().kid.expect("generated key has a key id");
-        Self { key, key_id }
-    }
 }
 
 async fn prepare_initial_package(
     database: &TestDatabase,
-    signer: &TestSigner,
     registry: &Arc<CompiledRegistry>,
 ) -> PublishedPackage {
     let fingerprint = initial_schema_fingerprint(database, registry).await;
     publish_and_load(
-        signer,
         build_request(
             Variant::NoAction,
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ),
-        package_context(PackageIntent::InitialActivation),
+        package_context(),
     )
 }
 
 async fn prepare_reviewed_successor_package(
     database: &TestDatabase,
-    signer: &TestSigner,
     prior: &Arc<CompiledRegistry>,
     active: &ExpectedRegistryIdentity,
     candidate: &Arc<CompiledRegistry>,
-    sequence: u64,
 ) -> PublishedPackage {
     let variant = variant_for(candidate);
     let provisional = publish_and_load(
-        signer,
         build_request(
             variant,
-            sequence,
             Some(active.package_revision.as_str()),
             &active.schema_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
@@ -471,18 +430,13 @@ async fn prepare_reviewed_successor_package(
                 )],
             },
         ),
-        package_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: active.package_sequence as u64,
-        }),
+        package_context(),
     );
     let target_fingerprint = successor_schema_fingerprint(database, &provisional.package).await;
     drop(provisional);
     publish_and_load(
-        signer,
         build_request(
             variant,
-            sequence,
             Some(active.package_revision.as_str()),
             &target_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
@@ -497,23 +451,18 @@ async fn prepare_reviewed_successor_package(
                 )],
             },
         ),
-        package_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: active.package_sequence as u64,
-        }),
+        package_context(),
     )
 }
 
 fn build_request(
     variant: Variant,
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
     build_request_for_project(
-        project_bytes(variant, sequence),
-        sequence,
+        project_bytes(variant),
         prior_revision,
         schema_fingerprint,
         migration_plan,
@@ -522,23 +471,14 @@ fn build_request(
 
 fn build_request_for_project(
     project: Vec<u8>,
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
     PackageBuildRequest {
-        environment: ENVIRONMENT.to_owned(),
-        instance_id: INSTANCE_ID.to_owned(),
-        database_id: DATABASE_ID.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 1,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "registry.json".to_owned(),
             bytes: project,
@@ -553,11 +493,9 @@ fn build_request_for_project(
 }
 
 fn publish_and_load(
-    signer: &TestSigner,
-    mut request: PackageBuildRequest,
+    request: PackageBuildRequest,
     context: PackageLoadContext<'_>,
 ) -> PublishedPackage {
-    request.signature_policy.key_ids = vec![signer.key_id.clone()];
     let prepared = prepare_package(request).expect("package prepares");
     let root = tempfile::Builder::new()
         .prefix("registry-immediate-action-activation-package-")
@@ -568,44 +506,13 @@ fn publish_and_load(
         )
         .expect("package tempdir creates");
     let package_root = root.path().join("package");
-    let signature =
-        sign(prepared.canonical_signed_bytes(), &signer.key).expect("package bytes sign");
     prepared
-        .publish_to_directory(
-            &package_root,
-            vec![PackageSignature {
-                key_id: signer.key_id.clone(),
-                signature_hex: hex(&signature),
-            }],
-        )
+        .publish_to_directory(&package_root)
         .expect("package publishes");
-    let anchor_path = root.path().join("trust-anchor.json");
-    write_json(
-        &anchor_path,
-        &PackageTrustAnchor {
-            api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-            environment: ENVIRONMENT.to_owned(),
-            instance_id: INSTANCE_ID.to_owned(),
-            database_id: DATABASE_ID.to_owned(),
-            threshold: 1,
-            keys: vec![TrustAnchorKey {
-                key_id: signer.key_id.clone(),
-                jwk: serde_json::to_value(signer.key.public()).expect("public JWK serializes"),
-            }],
-        },
-    );
-    let package = load_package(
-        &package_root,
-        &PackageLoadContext {
-            trust_anchor: Some(&anchor_path),
-            ..context
-        },
-    )
-    .expect("signed package loads and verifies");
+    let package = load_package(&package_root, &context).expect("package loads and verifies");
     PublishedPackage {
         _root: root,
         package_root,
-        anchor_path,
         package,
     }
 }
@@ -618,6 +525,7 @@ async fn apply_package(
     apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new(ENVIRONMENT, INSTANCE_ID, DATABASE_ID),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
@@ -746,7 +654,7 @@ fn metadata_only_source(
     };
     let descriptor_bytes = canonical(&descriptor);
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: prior_revision.to_owned(),
+        prior_package_digest: prior_revision.to_owned(),
         prior_schema_fingerprint: prior_schema_fingerprint.to_owned(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: Vec::new(),
@@ -777,21 +685,16 @@ fn metadata_only_source(
 async fn prepare_startup_for(
     database: &TestDatabase,
     package: &PublishedPackage,
-    active: &ExpectedRegistryIdentity,
 ) -> registry_breg::startup::Result<registry_breg::startup::VerifiedStartup> {
     let pool = database
         .runtime_config
         .build_pool()
         .expect("runtime pool builds");
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let mut context = package_context(PackageIntent::Startup {
-        active_revision: &active.package_revision,
-        active_sequence: active.package_sequence as u64,
-    });
-    context.trust_anchor = Some(&package.anchor_path);
     prepare_startup(
         &package.package_root,
-        &context,
+        &package_context(),
+        DATABASE_ID,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -799,15 +702,9 @@ async fn prepare_startup_for(
     .await
 }
 
-fn package_context(intent: PackageIntent<'_>) -> PackageLoadContext<'_> {
+fn package_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
-        environment: ENVIRONMENT,
-        instance_id: INSTANCE_ID,
-        database_id: DATABASE_ID,
         database_initialization_environment: ENVIRONMENT,
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        intent,
     }
 }
 
@@ -1032,9 +929,8 @@ fn action_claims(scope: &str) -> VerifiedRequestClaims {
     .expect("authenticated action claims are valid")
 }
 
-fn compiled_registry(variant: Variant, sequence: u64) -> CompiledRegistry {
-    let project =
-        parse_project_json(&project_bytes(variant, sequence)).expect("activation project parses");
+fn compiled_registry(variant: Variant) -> CompiledRegistry {
+    let project = parse_project_json(&project_bytes(variant)).expect("activation project parses");
     compile_project(&project, &[], CompileProfile::Production).expect("activation project compiles")
 }
 
@@ -1053,7 +949,7 @@ fn variant_for(registry: &CompiledRegistry) -> Variant {
     }
 }
 
-fn project_bytes(variant: Variant, sequence: u64) -> Vec<u8> {
+fn project_bytes(variant: Variant) -> Vec<u8> {
     let required_scope = match variant {
         Variant::ActionV1 => Some("registry:contact:register"),
         Variant::ActionV2 => Some("registry:contact:register.v2"),
@@ -1110,7 +1006,7 @@ fn project_bytes(variant: Variant, sequence: u64) -> Vec<u8> {
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "package":{{"environment":"{ENVIRONMENT}","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},
+          "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[{{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{{"kind":"unique","fields":["person-code"]}}],
@@ -1146,7 +1042,7 @@ const NEW_RECIPIENT: &str = "ngo-gamma";
 
 /// The consent enforcement fixture bound to this test's package identity,
 /// optionally with one more recipient organization.
-fn consent_project_bytes(sequence: u64, with_new_recipient: bool) -> Vec<u8> {
+fn consent_project_bytes(with_new_recipient: bool) -> Vec<u8> {
     let mut project = serde_json::to_value(
         registry_breg::contract::parse_project_yaml(CONSENT_PROJECT.as_bytes())
             .expect("consent fixture parses"),
@@ -1154,9 +1050,6 @@ fn consent_project_bytes(sequence: u64, with_new_recipient: bool) -> Vec<u8> {
     .expect("consent fixture serializes");
     project["registry"]["id"] = json!(PACKAGE_ID);
     project["package"] = json!({
-        "environment": ENVIRONMENT,
-        "instanceId": INSTANCE_ID,
-        "sequence": sequence,
         "sourceRevision": SOURCE_REVISION,
     });
     if with_new_recipient {
@@ -1262,19 +1155,6 @@ fn hex(bytes: &[u8]) -> String {
 
 fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-fn write_json<T: Serialize>(path: &std::path::Path, value: &T) {
-    fs::write(path, canonical(value)).expect("canonical JSON writes");
-    set_private_permissions(path);
-}
-
-#[cfg(unix)]
-fn set_private_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .expect("private package file permissions set");
 }
 
 #[cfg(not(unix))]

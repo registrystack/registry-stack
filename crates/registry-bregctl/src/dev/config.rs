@@ -937,14 +937,7 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    private::create(&root.join("trust-anchor.json"), b"{}")?;
-    runtime(
-        root,
-        state,
-        clients,
-        &format!("sha256:{}", "1".repeat(64)),
-        true,
-    )?;
+    runtime(root, state, clients, true)?;
     Ok(())
 }
 
@@ -1289,13 +1282,7 @@ pub(super) fn assertion_issuers(
     Ok(authorities)
 }
 
-pub(super) fn runtime(
-    root: &Path,
-    state: &State,
-    clients: &Clients,
-    revision: &str,
-    test: bool,
-) -> Result<()> {
+pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
     let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
@@ -1340,7 +1327,7 @@ pub(super) fn runtime(
             "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
-            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
+            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
             "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
             "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({

@@ -81,33 +81,21 @@ RUNTIME_ROLE = "registry_demo_runtime"
 TEST_DATABASE = "registry_demo_test"
 RUNTIME_DATABASE = "registry_demo"
 EXPECTED_PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: publicschema-household-acceptance": f"  instanceId: {INSTANCE_ID}",
     "  sourceRevision: publicschema-household-acceptance-0.1.0": f"  sourceRevision: {SOURCE_REVISION}",
 }
 ASSET_SITE_PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: asset-site-placement-acceptance": f"  instanceId: {ASSET_SITE_INSTANCE_ID}",
     "  sourceRevision: asset-site-placement-acceptance-0.1.0": f"  sourceRevision: {ASSET_SITE_SOURCE_REVISION}",
 }
 ASSET_CHANGE_PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: asset-site-placement-change-requests-acceptance": f"  instanceId: {ASSET_CHANGE_INSTANCE_ID}",
     "  sourceRevision: asset-site-placement-change-requests-acceptance-0.1.0": f"  sourceRevision: {ASSET_CHANGE_SOURCE_REVISION}",
 }
 FACILITY_PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: facility-acceptance": f"  instanceId: {FACILITY_INSTANCE_ID}",
     "  sourceRevision: facility-acceptance-0.1.0": f"  sourceRevision: {FACILITY_SOURCE_REVISION}",
 }
 INSPECTION_PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: inspection-acceptance": f"  instanceId: {INSPECTION_INSTANCE_ID}",
     "  sourceRevision: inspection-acceptance-0.1.0": f"  sourceRevision: {INSPECTION_SOURCE_REVISION}",
 }
 BUSINESS_PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: business-establishments-acceptance": f"  instanceId: {BUSINESS_INSTANCE_ID}",
     "  sourceRevision: business-establishments-acceptance-0.1.0": f"  sourceRevision: {BUSINESS_SOURCE_REVISION}",
 }
 WEBHOOK_DESTINATION_ID = "household-event-receiver"

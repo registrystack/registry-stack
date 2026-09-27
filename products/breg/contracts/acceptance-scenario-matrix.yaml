@@ -68,7 +68,7 @@ scenarios:
   - id: BREG-J14
     state: enforced
     doneWhen: "Package, artifact, checksum, signature, sequence, permission, path, and schema tampering fail before serving or activation."
-    evidence: [{path: crates/registry-breg/tests/postgres_package.rs, name: local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tampering}, {path: crates/registry-breg/tests/postgres_package.rs, name: package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering}, {path: crates/registry-breg/tests/postgres_package.rs, name: package_refuses_symlinks_and_production_writable_permissions}, {path: crates/registry-breg/tests/postgres_package.rs, name: package_binding_refuses_wrong_environment_instance_database_sequence_and_prior}, {path: crates/registry-breg/tests/postgres_package.rs, name: production_package_requires_exact_trust_anchor_threshold_and_signature}, {path: crates/registry-breg/tests/postgres_package.rs, name: signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready}]
+    evidence: [{path: crates/registry-breg/tests/postgres_package.rs, name: local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tampering}, {path: crates/registry-breg/tests/postgres_package.rs, name: package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering}, {path: crates/registry-breg/tests/postgres_package.rs, name: package_refuses_symlinks_and_production_writable_permissions}, {path: crates/registry-breg/tests/postgres_package.rs, name: real_postgres_package_startup_apply_failure_and_old_process_are_closed}, {path: crates/registry-breg/tests/postgres_package.rs, name: production_package_loads_without_signatures_or_a_trust_anchor}, {path: crates/registry-breg/tests/postgres_package.rs, name: signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready}]
   - id: BREG-J15
     state: enforced
     doneWhen: "Risky backfill and destructive rehearsal prove bounds, backup binding, and failed-maintenance recovery."
@@ -80,7 +80,7 @@ scenarios:
   - id: BREG-J17
     state: enforced
     doneWhen: "An external coding agent can author and check but cannot satisfy signature or migration-role authority."
-    evidence: [{path: crates/registry-bregctl/tests/cli.rs, name: package_always_uses_production_compilation_and_never_offers_a_signing_command}, {path: crates/registry-bregctl/tests/diff.rs, name: production_trust_is_verified_without_opening_runtime_dependencies}, {path: crates/registry-breg/tests/postgres_package.rs, name: wrong_migration_role_is_refused_before_initial_control_plane_or_ddl}, {path: products/breg/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]
+    evidence: [{path: crates/registry-bregctl/tests/cli.rs, name: package_always_uses_production_compilation_and_never_offers_a_signing_command}, {path: crates/registry-bregctl/tests/diff.rs, name: a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies}, {path: crates/registry-breg/tests/postgres_package.rs, name: wrong_migration_role_is_refused_before_initial_control_plane_or_ddl}, {path: products/breg/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]
   - id: BREG-J18
     state: enforced
     domain: asset-registration-actions

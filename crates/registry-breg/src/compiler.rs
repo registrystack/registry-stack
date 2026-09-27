@@ -441,15 +441,6 @@ fn validate_project_header(
             ),
         )),
         (Some(package), _) => {
-            validate_id(&package.environment, "project.package.environment", errors);
-            validate_id(&package.instance_id, "project.package.instanceId", errors);
-            if package.sequence == 0 {
-                errors.push(Diagnostic::error(
-                    "package.sequence.invalid",
-                    "project.package.sequence",
-                    "package sequence must be positive",
-                ));
-            }
             nonempty(
                 &package.source_revision,
                 "project.package.sourceRevision",
@@ -4545,12 +4536,7 @@ fn validate_event_condition(
 
 /// The `project.package` members a production compilation requires. Authoring
 /// documentation reads this list rather than restating it.
-pub const PACKAGE_IDENTITY_KEYS: [&str; 4] = [
-    "package.environment",
-    "package.instanceId",
-    "package.sequence",
-    "package.sourceRevision",
-];
+pub const PACKAGE_IDENTITY_KEYS: [&str; 1] = ["package.sourceRevision"];
 
 /// Every change request transition a request lifecycle event may select, in
 /// workflow order. Authoring documentation reads this list rather than
@@ -4808,10 +4794,10 @@ pub(crate) fn maximum_envelope_wrapper_bytes(
     total = total.checked_add(38)?;
     // `source` is the quoted deployment URN `crate::webhook::delivery_source`
     // builds. Its package id is this registry's id; its instance id is the
-    // package manifest's, which `valid_build_id` holds to a closed grammar
-    // within MAX_BUILD_ID_BYTES at package build, and startup holds the
-    // runtime deployment identity to exact equality with the manifest value,
-    // so no longer spelling reaches the envelope.
+    // runtime configuration's `identity.instanceId`, recorded in registry
+    // state by `bregctl apply`, which the configuration loader holds to the
+    // closed `valid_build_id` grammar within MAX_BUILD_ID_BYTES, so no longer
+    // spelling reaches the envelope.
     total = total.checked_add(
         2 + "urn:registrystack:registry:".len() as u64
             + registry_id.len() as u64

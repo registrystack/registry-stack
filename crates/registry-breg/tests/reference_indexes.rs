@@ -403,7 +403,7 @@ fn production_compiles_carry_no_index_findings() {
     value["accessProfiles"][0]["permissions"][0]["filterableFields"] = json!(["code"]);
     value["accessProfiles"][0]["permissions"][0]["sortableFields"] = json!(["code"]);
     assert!(!index_findings(&compile(&value, CompileProfile::Authoring)).is_empty());
-    value["package"] = json!({"environment":"local","instanceId":"reference-index-instance","sequence":1,"sourceRevision":"reference-index-source"});
+    value["package"] = json!({"sourceRevision":"reference-index-source"});
     assert!(index_findings(&compile(&value, CompileProfile::Production)).is_empty());
 }
 

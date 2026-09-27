@@ -14,6 +14,7 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::event_destination::EventDestinationCompatibilityInventory;
+use crate::generated_ddl::DdlStatement;
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
@@ -32,6 +33,8 @@ use crate::postgres::{
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
+const MAX_BACKUP_BINDING_BYTES: u64 = 64 * 1024;
 
 /// Value-free apply failures. Authored identifiers cross this boundary, and
 /// a refused statement adds its SQLSTATE and the object names PostgreSQL
@@ -40,6 +43,13 @@ const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 pub enum MigrationError {
     #[error("the verified package is not a valid activation successor")]
     PackageBinding,
+    /// The database already records this package digest as active.
+    #[error("the database already records this package as active")]
+    AlreadyActive,
+    /// The runtime identity names a different database than the one the
+    /// registry state records.
+    #[error("the runtime identity names a different database than the registry records")]
+    DatabaseMismatch,
     #[error("the verified package has no additive migration work")]
     EmptyPlan,
     #[error("the Registry package apply failed")]
@@ -90,6 +100,17 @@ pub enum MigrationError {
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
 
+/// Whether a package applied as a successor has nothing to apply: its plan has
+/// no schema statement and no reviewed migration, and it is not an access or
+/// disclosure change alone. This reads only the package, so a caller can refuse
+/// it before opening the database.
+pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
+    let plan = &package.manifest().migration_plan;
+    plan.statements.is_empty()
+        && package.reviewed_migration_plan().is_none()
+        && !verified_metadata_only_plan(plan)
+}
+
 fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
     !plan.changes.is_empty()
         && plan.statements.is_empty()
@@ -100,45 +121,85 @@ fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
             .all(|change| change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange)
 }
 
-/// The exact registry identity one verified package activates to.
+/// Where one package activates: the runtime identity's environment,
+/// instance, and database. A package names none of them, so the same package
+/// activates into every environment of its chain.
+#[derive(Clone, Copy, Debug)]
+pub struct ActivationDeployment<'a> {
+    environment: &'a str,
+    instance_id: &'a str,
+    database_id: &'a str,
+}
+
+impl<'a> ActivationDeployment<'a> {
+    #[must_use]
+    pub fn new(environment: &'a str, instance_id: &'a str, database_id: &'a str) -> Self {
+        Self {
+            environment,
+            instance_id,
+            database_id,
+        }
+    }
+
+    #[must_use]
+    pub fn database_id(&self) -> &'a str {
+        self.database_id
+    }
+}
+
+/// The exact registry identity one verified package activates to: the
+/// deployment the runtime identity names, the package digest, and the next
+/// position in the database's own apply order.
 pub(crate) fn target_package_identity(
     package: &VerifiedPackage,
+    deployment: ActivationDeployment<'_>,
+    current: Option<&ExpectedRegistryIdentity>,
 ) -> Result<ExpectedRegistryIdentity> {
     let manifest = package.manifest();
+    let package_sequence = match current {
+        Some(current) => current
+            .package_sequence
+            .checked_add(1)
+            .ok_or(MigrationError::PackageBinding)?,
+        None => 1,
+    };
     Ok(ExpectedRegistryIdentity {
         package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
+        environment: deployment.environment.to_owned(),
+        instance_id: deployment.instance_id.to_owned(),
+        database_id: deployment.database_id.to_owned(),
+        package_revision: package.package_digest().to_owned(),
         schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: i64::try_from(manifest.sequence)
-            .map_err(|_| MigrationError::PackageBinding)?,
+        package_sequence,
     })
 }
 
 /// Confirms a verified package is the exact activation successor of one active
 /// identity, so no other package can be presented as that identity's target.
 ///
-/// The package loader owns the sequence comparison: a package verified for
-/// activation already has a sequence above the active one.
+/// Threat: an operator presents a package that skips a link of the chain, an
+/// older package, the active package again, a package of another registry,
+/// or the right package against the wrong database. Enforcement: the
+/// deployment names the database the active identity records, the package
+/// digest differs from the active digest, the registry package id is equal,
+/// and the package's `fromPackageDigest` is the active digest.
 pub(crate) fn verify_successor_package_binding(
     package: &VerifiedPackage,
+    deployment: ActivationDeployment<'_>,
     current: &ExpectedRegistryIdentity,
 ) -> Result<()> {
     current
         .validate()
         .map_err(|_| MigrationError::PackageBinding)?;
+    if deployment.database_id != current.database_id {
+        return Err(MigrationError::DatabaseMismatch);
+    }
+    if package.package_digest() == current.package_revision {
+        return Err(MigrationError::AlreadyActive);
+    }
     let manifest = package.manifest();
-    let active_sequence =
-        u64::try_from(current.package_sequence).map_err(|_| MigrationError::PackageBinding)?;
-    if !package.verified_for_activation(&current.package_revision, active_sequence)
-        || manifest.environment != current.environment
-        || manifest.package_id != current.package_id
-        || manifest.instance_id != current.instance_id
-        || manifest.database_id != current.database_id
-        || manifest.prior_revision.as_deref() != Some(current.package_revision.as_str())
-        || manifest.migration_plan.from_revision.as_deref()
+    if manifest.package_id != current.package_id
+        || manifest.migration_plan.from_package_digest.as_deref()
             != Some(current.package_revision.as_str())
     {
         return Err(MigrationError::PackageBinding);
@@ -146,12 +207,9 @@ pub(crate) fn verify_successor_package_binding(
     Ok(())
 }
 
-/// The checksums of the compiler-owned DDL statements, in manifest order.
-pub(crate) fn compiler_statement_checksums(package: &VerifiedPackage) -> Vec<String> {
-    package
-        .manifest()
-        .migration_plan
-        .statements
+/// The checksums of the compiler-owned DDL statements, in plan order.
+pub(crate) fn compiler_statement_checksums(statements: &[DdlStatement]) -> Vec<String> {
+    statements
         .iter()
         .map(|statement| statement_checksum(&statement.sql))
         .collect()
@@ -164,18 +222,16 @@ pub(crate) fn package_ledger_entry(
     target: &ExpectedRegistryIdentity,
     compiler_checksums: &[String],
 ) -> Result<MigrationLedgerEntry> {
-    if let Some(plan) = package.reviewed_migration_plan() {
-        return reviewed_ledger(
-            package,
-            current.ok_or(MigrationError::PackageBinding)?,
-            plan,
-        );
+    if let (Some(plan), Some(current)) = (package.reviewed_migration_plan(), current) {
+        return reviewed_ledger(package, current, target, plan);
     }
     Ok(MigrationLedgerEntry {
         source_revision: current.map(|identity| identity.package_revision.clone()),
         target_revision: target.package_revision.clone(),
         package_sequence: target.package_sequence,
-        plan_kind: if verified_metadata_only_plan(&package.manifest().migration_plan) {
+        plan_kind: if current.is_some()
+            && verified_metadata_only_plan(&package.manifest().migration_plan)
+        {
             MigrationPlanKind::MetadataOnly
         } else {
             MigrationPlanKind::CompiledAdditive
@@ -215,9 +271,11 @@ pub struct ApplyTimeouts {
     statement: Duration,
 }
 
-/// One local external-backup file bound to the reviewed package artifact that
-/// describes it. The path grants authority only to read and retain that exact
-/// file for this apply; it cannot add SQL, a checkpoint, or a migration target.
+/// One local backup binding file supplied for the reviewed migration whose
+/// descriptor names `binding_path`. The binding describes one database's
+/// backup, so it is an apply input and never a package file. The path grants
+/// authority only to read that binding and the backup file it names for this
+/// apply; it cannot add SQL, a checkpoint, or a migration target.
 #[derive(Clone, Copy)]
 pub struct DestructiveBackupEvidence<'a> {
     binding_path: &'a str,
@@ -254,31 +312,28 @@ impl ApplyTimeouts {
     }
 }
 
-/// Confirms that one package verified for startup is exactly the package the
-/// database records as active, with maintenance ready, and writes nothing.
+/// What the database records for one registry: its active identity and
+/// whether maintenance is ready, read under the exclusive apply lock.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedRegistryState {
+    pub identity: ExpectedRegistryIdentity,
+    pub ready: bool,
+}
+
+/// Reads the registry state the database records for one registry package
+/// id, under the exclusive apply lock, and writes nothing. `None` means the
+/// database has never been activated.
 ///
-/// Threat: re-presenting an already-active package must not report success
-/// for a package the database does not run, and a package that merely shares
-/// the active sequence must not pass as the active one. Enforcement is the
-/// startup verification of the whole package (signatures, closure, and the
-/// rederived revision digest bound to the active revision) plus equality of
-/// the full registry identity (package id, environment, instance, database,
-/// revision digest, schema fingerprint, and sequence) read by the exact
-/// migration role under the exclusive apply lock. Any difference, or a
-/// registry in maintenance, refuses.
-pub async fn confirm_active_package(
+/// The database is the only record of which package is active and of its
+/// place in the apply order; a caller binds a package and a deployment to
+/// what this returns with [`bind_active_package`].
+pub async fn read_recorded_registry_state(
     config: &ConnectionConfig,
-    package: &VerifiedPackage,
+    package_id: &str,
     migration_role: &SqlIdentifier,
     timeouts: ApplyTimeouts,
-) -> Result<ExpectedRegistryIdentity> {
-    let manifest = package.manifest();
-    if !package.verified_for_startup(&manifest.package_revision, manifest.sequence) {
-        return Err(MigrationError::PackageBinding);
-    }
-    let target = target_package_identity(package)?;
-    let lock_key =
-        RegistryLockKey::derive(&target.package_id).map_err(|_| MigrationError::ApplyFailed)?;
+) -> Result<Option<RecordedRegistryState>> {
+    let lock_key = RegistryLockKey::derive(package_id).map_err(|_| MigrationError::ApplyFailed)?;
     let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
         config,
         lock_key,
@@ -293,20 +348,36 @@ pub async fn confirm_active_package(
         .release()
         .await
         .map_err(refusal_before_maintenance)?;
-    let snapshot = match snapshot {
-        Ok(snapshot) => snapshot,
-        Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => {
-            return Err(MigrationError::ActivePackageMismatch);
-        }
-        Err(error) => return Err(refusal_before_maintenance(error)),
-    };
-    if snapshot.maintenance_status != "ready"
-        || snapshot.maintenance_target_revision.is_some()
-        || snapshot.identity != target
-    {
+    match snapshot {
+        Ok(snapshot) => Ok(Some(RecordedRegistryState {
+            ready: snapshot.maintenance_status == "ready"
+                && snapshot.maintenance_target_revision.is_none(),
+            identity: snapshot.identity,
+        })),
+        Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => Ok(None),
+        Err(error) => Err(refusal_before_maintenance(error)),
+    }
+}
+
+/// Binds one package and the runtime deployment to the identity the database
+/// records as active.
+///
+/// Threat: a lifecycle acting on the active registry could run against a
+/// database the runtime identity does not name, or with a package the
+/// database does not run. Enforcement: the recorded database id equals the
+/// deployment's, and the recorded active digest equals the package digest.
+pub fn bind_active_package(
+    recorded: &ExpectedRegistryIdentity,
+    package_digest: &str,
+    deployment: ActivationDeployment<'_>,
+) -> Result<()> {
+    if recorded.database_id != deployment.database_id {
+        return Err(MigrationError::DatabaseMismatch);
+    }
+    if recorded.package_revision != package_digest {
         return Err(MigrationError::ActivePackageMismatch);
     }
-    Ok(target)
+    Ok(())
 }
 
 /// Maps a failure to reach the migration database or to take the apply lock,
@@ -329,6 +400,7 @@ fn refusal_before_maintenance(error: crate::postgres::PostgresKernelError) -> Mi
 pub struct ApplyVerifiedPackageRequest<'a> {
     config: &'a ConnectionConfig,
     package: &'a VerifiedPackage,
+    deployment: ActivationDeployment<'a>,
     precondition: ApplyPrecondition<'a>,
     roles: ApplyRoles<'a>,
     timeouts: ApplyTimeouts,
@@ -364,6 +436,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
     pub fn new(
         config: &'a ConnectionConfig,
         package: &'a VerifiedPackage,
+        deployment: ActivationDeployment<'a>,
         precondition: ApplyPrecondition<'a>,
         roles: ApplyRoles<'a>,
         timeouts: ApplyTimeouts,
@@ -371,6 +444,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         Self {
             config,
             package,
+            deployment,
             precondition,
             roles,
             timeouts,
@@ -480,24 +554,22 @@ pub async fn apply_verified_package(
     request: ApplyVerifiedPackageRequest<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
     let manifest = request.package.manifest();
-    let target = target_package_identity(request.package)?;
     let current = match request.precondition {
-        ApplyPrecondition::InitialActivation => {
-            if !request.package.verified_for_initial_activation()
-                || manifest.sequence != 1
-                || manifest.prior_revision.is_some()
-                || manifest.migration_plan.from_revision.is_some()
-            {
-                return Err(MigrationError::PackageBinding);
-            }
-            None
-        }
+        ApplyPrecondition::InitialActivation => None,
         ApplyPrecondition::Successor { current } => {
-            verify_successor_package_binding(request.package, current)?;
+            verify_successor_package_binding(request.package, request.deployment, current)?;
             Some(current)
         }
     };
-    let reviewed_plan = request.package.reviewed_migration_plan();
+    let target = target_package_identity(request.package, request.deployment, current)?;
+    // An uninitialized database accepts any package of a chain: it installs
+    // the package's full compiled catalog, so neither the package's successor
+    // plan nor its reviewed migrations apply to it.
+    let compiler_statements = match current {
+        Some(_) => &manifest.migration_plan.statements,
+        None => &request.package.registry().ddl().statements,
+    };
+    let reviewed_plan = current.and(request.package.reviewed_migration_plan());
     let declares_encrypted_fields = request
         .package
         .registry()
@@ -512,8 +584,8 @@ pub async fn apply_verified_package(
     if declares_encrypted_fields && request.field_encryption.is_none() {
         return Err(MigrationError::PackageBinding);
     }
-    if manifest.migration_plan.reviewed_descriptors.is_empty() != reviewed_plan.is_none()
-        || reviewed_plan.is_some() && current.is_none()
+    if current.is_some()
+        && manifest.migration_plan.reviewed_descriptors.is_empty() != reviewed_plan.is_none()
     {
         return Err(MigrationError::PackageBinding);
     }
@@ -523,7 +595,7 @@ pub async fn apply_verified_package(
             request.predecessor_migration_baseline,
         )?;
         if predecessor_baseline
-            .is_some_and(|baseline| baseline.package_revision != plan_current.package_revision)
+            .is_some_and(|baseline| baseline.package_digest != plan_current.package_revision)
             || request
                 .predecessor_history_descriptor
                 .is_some_and(|descriptor| {
@@ -536,18 +608,13 @@ pub async fn apply_verified_package(
     } else {
         None
     };
-    if manifest.migration_plan.statements.is_empty()
-        && reviewed_plan.is_none()
-        && !verified_metadata_only_plan(&manifest.migration_plan)
-    {
+    if current.is_some() && successor_plan_is_empty(request.package) {
         return Err(MigrationError::EmptyPlan);
     }
 
-    let compiler_checksums = compiler_statement_checksums(request.package);
+    let compiler_checksums = compiler_statement_checksums(compiler_statements);
     let ledger = package_ledger_entry(request.package, current, &target, &compiler_checksums)?;
-    let statements = manifest
-        .migration_plan
-        .statements
+    let statements = compiler_statements
         .iter()
         .zip(&compiler_checksums)
         .enumerate()
@@ -567,16 +634,11 @@ pub async fn apply_verified_package(
 
     // Threat: a path-only backup check could be swapped between validation
     // and the maintenance transition. The library opens with NOFOLLOW, checks
-    // exact package-bound metadata and bytes, and retains every descriptor
+    // the binding's metadata and bytes, and retains every descriptor
     // through activation. It never interprets backup contents or grants them
     // package or migration authority.
-    let _retained_backup_evidence = verify_destructive_backup_evidence(
-        reviewed_plan,
-        current,
-        &target,
-        request.backup_evidence,
-    )
-    .await?;
+    let _retained_backup_evidence =
+        verify_destructive_backup_evidence(reviewed_plan, current, request.backup_evidence).await?;
 
     let lock_key =
         RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
@@ -927,6 +989,7 @@ async fn fail_with_error_and_release(
 fn reviewed_ledger(
     package: &VerifiedPackage,
     current: &ExpectedRegistryIdentity,
+    target: &ExpectedRegistryIdentity,
     plan: &ValidatedReviewedMigrationPlan,
 ) -> Result<MigrationLedgerEntry> {
     let manifest = package.manifest();
@@ -939,7 +1002,7 @@ fn reviewed_ledger(
 
     let mut statement_checksums = Vec::new();
     for migration in plan.migrations() {
-        if migration.rehearsal_receipt.prior_revision != current.package_revision
+        if migration.rehearsal_receipt.prior_package_digest != current.package_revision
             || migration.rehearsal_receipt.prior_schema_fingerprint != current.schema_fingerprint
             || migration.rehearsal_receipt.final_schema_fingerprint != manifest.schema_fingerprint
         {
@@ -981,7 +1044,6 @@ fn reviewed_ledger(
                     | PackageFileRole::ReviewedMigrationStepSql
                     | PackageFileRole::ReviewedMigrationAssertionSql
                     | PackageFileRole::MigrationRehearsalReceipt
-                    | PackageFileRole::ExternalBackupBinding
                     | PackageFileRole::MigrationRehearsalFixture
             )
         })
@@ -1029,9 +1091,8 @@ fn reviewed_ledger(
 
     let ledger = MigrationLedgerEntry {
         source_revision: Some(current.package_revision.clone()),
-        target_revision: manifest.package_revision.clone(),
-        package_sequence: i64::try_from(manifest.sequence)
-            .map_err(|_| MigrationError::PackageBinding)?,
+        target_revision: target.package_revision.clone(),
+        package_sequence: target.package_sequence,
         plan_kind: MigrationPlanKind::Reviewed,
         statement_checksums,
         artifact_bindings,
@@ -1064,7 +1125,7 @@ fn predecessor_baselines_match(
     target: &CompiledRegistryMigrationBaseline,
     verified: &CompiledRegistryMigrationBaseline,
 ) -> bool {
-    target.package_revision == verified.package_revision
+    target.package_digest == verified.package_digest
         && target.registry_id == verified.registry_id
         && target.registry_version == verified.registry_version
         && target.entities == verified.entities
@@ -1074,42 +1135,25 @@ fn predecessor_baselines_match(
         && target.queries == verified.queries
 }
 
-/// The reviewed migrations that require external backup evidence, each paired
-/// with the binding path that names it inside the package.
-fn required_backup_bindings(
-    plan: &ValidatedReviewedMigrationPlan,
-) -> Vec<(&str, &ExternalBackupBinding)> {
-    plan.migrations()
-        .iter()
-        .filter_map(|migration| {
-            migration
-                .descriptor
-                .backup_binding_path
-                .as_deref()
-                .zip(migration.backup_binding.as_ref())
-        })
-        .collect()
-}
-
-/// The package binding paths an apply of this plan requires backup evidence
-/// for, in plan order, so a caller that refuses evidence can name the exact set
-/// an operator has to supply.
+/// The binding paths an apply of this plan requires backup evidence for, in
+/// plan order, so a caller that refuses evidence can name the exact set an
+/// operator has to supply.
 #[must_use]
 pub fn required_backup_binding_paths(plan: &ValidatedReviewedMigrationPlan) -> Vec<&str> {
-    required_backup_bindings(plan)
-        .into_iter()
-        .map(|(binding_path, _)| binding_path)
+    plan.migrations()
+        .iter()
+        .filter_map(|migration| migration.descriptor.backup_binding_path.as_deref())
         .collect()
 }
 
-/// Pairs every required backup binding with the supplied evidence that names
-/// the same binding path, so the order evidence arrives in carries no meaning.
-/// The supplied binding paths must be exactly the required set, each named
-/// once, and every pair keeps the plan order of the requirement.
+/// Pairs every required binding path with the supplied evidence that names
+/// it, so the order evidence arrives in carries no meaning. The supplied
+/// binding paths must be exactly the required set, each named once, and the
+/// pairs keep the plan order of the requirement.
 fn pair_backup_evidence<'a>(
-    required: &[(&'a str, &'a ExternalBackupBinding)],
+    required: &[&'a str],
     evidence: &[DestructiveBackupEvidence<'a>],
-) -> Result<Vec<(&'a ExternalBackupBinding, &'a Path)>> {
+) -> Result<Vec<&'a Path>> {
     if required.len() != evidence.len() {
         return Err(MigrationError::BackupEvidence);
     }
@@ -1124,19 +1168,63 @@ fn pair_backup_evidence<'a>(
     }
     required
         .iter()
-        .map(|(binding_path, binding)| {
+        .map(|binding_path| {
             supplied
                 .remove(binding_path)
-                .map(|local_path| (*binding, local_path))
                 .ok_or(MigrationError::BackupEvidence)
         })
         .collect()
 }
 
+/// Reads one bounded, closed backup binding document.
+fn read_backup_binding(path: &Path) -> Result<ExternalBackupBinding> {
+    if !path.is_absolute() {
+        return Err(MigrationError::BackupEvidence);
+    }
+    let file = File::open(path).map_err(|_| MigrationError::BackupEvidence)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_BACKUP_BINDING_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| MigrationError::BackupEvidence)?;
+    if u64::try_from(bytes.len()).map_err(|_| MigrationError::BackupEvidence)?
+        > MAX_BACKUP_BINDING_BYTES
+    {
+        return Err(MigrationError::BackupEvidence);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| MigrationError::BackupEvidence)
+}
+
+/// Checks one backup binding against the identity the database records as
+/// active: the same database, the active package digest and schema
+/// fingerprint, a bounded freshness window that has not elapsed, and an
+/// absolute backup file.
+fn check_backup_binding(
+    binding: &ExternalBackupBinding,
+    current: &ExpectedRegistryIdentity,
+    now: OffsetDateTime,
+) -> Result<()> {
+    let created = OffsetDateTime::parse(&binding.created_at, &Rfc3339)
+        .map_err(|_| MigrationError::BackupEvidence)?;
+    let max_age =
+        i64::try_from(binding.max_age_seconds).map_err(|_| MigrationError::BackupEvidence)?;
+    if binding.database_id != current.database_id
+        || binding.prior_package_digest != current.package_revision
+        || binding.prior_schema_fingerprint != current.schema_fingerprint
+        || !Path::new(&binding.backup_file).is_absolute()
+        || binding.byte_length == 0
+        || binding.max_age_seconds == 0
+        || binding.max_age_seconds > MAX_BACKUP_AGE_SECONDS
+        || created > now
+        || (now - created).whole_seconds() > max_age
+    {
+        return Err(MigrationError::BackupEvidence);
+    }
+    Ok(())
+}
+
 async fn verify_destructive_backup_evidence(
     plan: Option<&ValidatedReviewedMigrationPlan>,
     current: Option<&ExpectedRegistryIdentity>,
-    target: &ExpectedRegistryIdentity,
     evidence: &[DestructiveBackupEvidence<'_>],
 ) -> Result<Vec<File>> {
     let Some(plan) = plan else {
@@ -1147,31 +1235,13 @@ async fn verify_destructive_backup_evidence(
         };
     };
     let current = current.ok_or(MigrationError::PackageBinding)?;
-    let paired = pair_backup_evidence(&required_backup_bindings(plan), evidence)?;
+    let paired = pair_backup_evidence(&required_backup_binding_paths(plan), evidence)?;
 
     let mut retained = Vec::with_capacity(paired.len());
-    for (binding, local_path) in paired {
-        if !local_path.is_absolute()
-            || binding.database_id != current.database_id
-            || binding.prior_revision != current.package_revision
-            || binding.prior_schema_fingerprint != current.schema_fingerprint
-            || target.database_id != current.database_id
-            || target.package_revision == current.package_revision
-        {
-            return Err(MigrationError::BackupEvidence);
-        }
-        let created = OffsetDateTime::parse(&binding.created_at, &Rfc3339)
-            .map_err(|_| MigrationError::BackupEvidence)?;
-        let now = OffsetDateTime::now_utc();
-        if created > now
-            || (now - created).whole_seconds()
-                > i64::try_from(binding.max_age_seconds)
-                    .map_err(|_| MigrationError::BackupEvidence)?
-        {
-            return Err(MigrationError::BackupEvidence);
-        }
-        let path = local_path.to_path_buf();
-        let binding = binding.clone();
+    for local_path in paired {
+        let binding = read_backup_binding(local_path)?;
+        check_backup_binding(&binding, current, OffsetDateTime::now_utc())?;
+        let path = PathBuf::from(&binding.backup_file);
         retained.push(
             tokio::task::spawn_blocking(move || open_bound_backup(path, &binding))
                 .await
@@ -1275,9 +1345,9 @@ mod tests {
 
     use super::*;
 
-    fn baseline(package_revision: &str, registry_id: &str) -> CompiledRegistryMigrationBaseline {
+    fn baseline(package_digest: &str, registry_id: &str) -> CompiledRegistryMigrationBaseline {
         CompiledRegistryMigrationBaseline {
-            package_revision: package_revision.to_owned(),
+            package_digest: package_digest.to_owned(),
             registry_id: registry_id.to_owned(),
             registry_version: "1".to_owned(),
             registry_revision: "ignored-descriptor-revision".to_owned(),
@@ -1316,11 +1386,25 @@ mod tests {
         );
     }
 
+    fn active_identity() -> ExpectedRegistryIdentity {
+        ExpectedRegistryIdentity {
+            package_id: "registry-a".to_owned(),
+            environment: "production".to_owned(),
+            instance_id: "instance-a".to_owned(),
+            database_id: "database-a".to_owned(),
+            package_revision: format!("sha256:{}", "a".repeat(64)),
+            schema_fingerprint: format!("sha256:{}", "f".repeat(64)),
+            package_sequence: 3,
+        }
+    }
+
     fn backup_binding(database_id: &str) -> ExternalBackupBinding {
+        let active = active_identity();
         ExternalBackupBinding {
             database_id: database_id.to_owned(),
-            prior_revision: "package-a".to_owned(),
-            prior_schema_fingerprint: "sha256:00".to_owned(),
+            prior_package_digest: active.package_revision,
+            prior_schema_fingerprint: active.schema_fingerprint,
+            backup_file: "/backups/registry.dump".to_owned(),
             sha256: "sha256:11".to_owned(),
             byte_length: 1,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
@@ -1328,33 +1412,93 @@ mod tests {
         }
     }
 
+    fn shortly_after_backup() -> OffsetDateTime {
+        OffsetDateTime::parse("2026-01-01T00:10:00Z", &Rfc3339).expect("fixed instant parses")
+    }
+
+    #[test]
+    fn a_backup_binding_of_the_active_database_and_package_is_accepted() {
+        assert_eq!(
+            check_backup_binding(
+                &backup_binding("database-a"),
+                &active_identity(),
+                shortly_after_backup()
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_backup_binding_of_another_database_is_refused() {
+        assert_eq!(
+            check_backup_binding(
+                &backup_binding("database-b"),
+                &active_identity(),
+                shortly_after_backup()
+            ),
+            Err(MigrationError::BackupEvidence)
+        );
+    }
+
+    #[test]
+    fn a_backup_binding_of_another_active_package_is_refused() {
+        let mut binding = backup_binding("database-a");
+        binding.prior_package_digest = format!("sha256:{}", "b".repeat(64));
+        assert_eq!(
+            check_backup_binding(&binding, &active_identity(), shortly_after_backup()),
+            Err(MigrationError::BackupEvidence)
+        );
+    }
+
+    #[test]
+    fn a_stale_or_future_backup_binding_is_refused() {
+        let binding = backup_binding("database-a");
+        let stale = OffsetDateTime::parse("2026-01-01T02:00:00Z", &Rfc3339).expect("parses");
+        let future = OffsetDateTime::parse("2025-12-31T23:00:00Z", &Rfc3339).expect("parses");
+        assert_eq!(
+            check_backup_binding(&binding, &active_identity(), stale),
+            Err(MigrationError::BackupEvidence)
+        );
+        assert_eq!(
+            check_backup_binding(&binding, &active_identity(), future),
+            Err(MigrationError::BackupEvidence)
+        );
+    }
+
+    #[test]
+    fn a_backup_binding_naming_a_relative_backup_file_is_refused() {
+        let mut binding = backup_binding("database-a");
+        binding.backup_file = "registry.dump".to_owned();
+        assert_eq!(
+            check_backup_binding(&binding, &active_identity(), shortly_after_backup()),
+            Err(MigrationError::BackupEvidence)
+        );
+    }
+
     #[test]
     fn backup_evidence_pairs_with_the_binding_path_it_names_in_any_order() {
-        let first = backup_binding("database-first");
-        let second = backup_binding("database-second");
         let required = [
-            ("migrations/first/backup.json", &first),
-            ("migrations/second/backup.json", &second),
+            "migrations/first/backup.json",
+            "migrations/second/backup.json",
         ];
-        let first_dump = Path::new("/backups/first.dump");
-        let second_dump = Path::new("/backups/second.dump");
+        let first_binding = Path::new("/backups/first.json");
+        let second_binding = Path::new("/backups/second.json");
         let reversed = [
-            DestructiveBackupEvidence::new("migrations/second/backup.json", second_dump),
-            DestructiveBackupEvidence::new("migrations/first/backup.json", first_dump),
+            DestructiveBackupEvidence::new("migrations/second/backup.json", second_binding),
+            DestructiveBackupEvidence::new("migrations/first/backup.json", first_binding),
         ];
         assert_eq!(
             pair_backup_evidence(&required, &reversed),
-            Ok(vec![(&first, first_dump), (&second, second_dump)])
+            Ok(vec![first_binding, second_binding])
         );
     }
 
     #[test]
     fn backup_evidence_naming_an_unrequired_binding_path_is_refused() {
-        let binding = backup_binding("database-first");
-        let required = [("migrations/first/backup.json", &binding)];
+        let required = ["migrations/first/backup.json"];
         let misnamed = [DestructiveBackupEvidence::new(
             "migrations/typo/backup.json",
-            Path::new("/backups/first.dump"),
+            Path::new("/backups/first.json"),
         )];
         assert_eq!(
             pair_backup_evidence(&required, &misnamed),
@@ -1363,11 +1507,11 @@ mod tests {
         let duplicated = [
             DestructiveBackupEvidence::new(
                 "migrations/first/backup.json",
-                Path::new("/backups/first.dump"),
+                Path::new("/backups/first.json"),
             ),
             DestructiveBackupEvidence::new(
                 "migrations/first/backup.json",
-                Path::new("/backups/second.dump"),
+                Path::new("/backups/second.json"),
             ),
         ];
         assert_eq!(

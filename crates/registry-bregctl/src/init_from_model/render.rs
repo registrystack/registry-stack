@@ -211,15 +211,12 @@ fn registry(plan: &Plan) -> String {
     yaml.blank();
     yaml.comment(
         0,
-        "Package identity binds a compiled package to one environment, one instance, and one \
-         reviewed source revision. `local` is the unsigned environment that `bregctl dev` runs \
-         on your machine; a package for any other environment must be signed. Raise `sequence` \
-         by one for each package you build.",
+        "Package identity names the reviewed source revision a package is built from. A \
+         package carries no environment: the same package directory is applied unchanged to \
+         every environment, and each runtime file names its own `identity.environment` and \
+         `identity.instanceId`.",
     );
     yaml.line(0, "package:");
-    yaml.line(1, "environment: local");
-    yaml.entry(1, "instanceId", &format!("{id}-1"));
-    yaml.line(1, "sequence: 1");
     yaml.entry(1, "sourceRevision", &format!("{id}-0.1.0"));
     yaml.blank();
     yaml.comment(
@@ -1500,6 +1497,10 @@ mod tests {
         serde_norway::from_slice(&files[path]).expect("valid YAML")
     }
 
+    fn yaml_value(source: &str) -> Value {
+        serde_norway::from_str(source).expect("valid YAML")
+    }
+
     #[test]
     fn scalars_are_plain_only_when_yaml_reads_them_back_unchanged() {
         assert_eq!(scalar("given-name"), "given-name");
@@ -1878,7 +1879,10 @@ mod tests {
         let files = render(&plan, &selection);
         let registry = yaml(&files, "registry.yaml");
         assert_eq!(registry["registry"]["id"], "household-registry");
-        assert_eq!(registry["package"]["instanceId"], "household-registry-1");
+        assert_eq!(
+            registry["package"],
+            yaml_value("sourceRevision: household-registry-0.1.0")
+        );
         assert_eq!(
             registry["manifestProjection"]["classificationCeiling"],
             "restricted"

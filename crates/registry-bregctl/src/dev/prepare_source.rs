@@ -202,7 +202,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     if !matches!(state.status, Status::Stopped)
         || !state.activated
-        || state.package_revision.is_none()
+        || state.package_digest.is_none()
     {
         bail!("prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source");
     }
@@ -337,7 +337,6 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .sequence
         .checked_add(1)
         .context("package sequence exhausted")?;
-    registry["package"]["sequence"] = json!(sequence);
     let client = config::Client {
         id: args.client.clone(),
         access_profiles: vec![args.access_profile.clone()],
@@ -401,7 +400,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         let changes = registry_breg::package::compiled_registry_change_set(
             &previous,
             &compiled,
-            state.package_revision.as_deref().unwrap(),
+            state.package_digest.as_deref().unwrap(),
         );
         let plan = registry_breg::package::change_set_to_applicable_migration_plan(&changes)
             .with_context(|| {
@@ -560,18 +559,12 @@ fn finish(original: &State, transition: &Transition) -> Result<()> {
     state.sequence = transition.sequence;
     state.baseline_runtime = Some(baseline.join("runtime.yaml"));
     state.source_digest = transition.target_digest.clone();
-    state.package_revision = None;
+    state.package_digest = None;
     state.activated = false;
     if root.join("runtime-test.yaml").exists() {
         fs::remove_file(root.join("runtime-test.yaml"))?;
     }
-    config::runtime(
-        &root,
-        &state,
-        &transition.clients,
-        &format!("sha256:{}", "1".repeat(64)),
-        true,
-    )?;
+    config::runtime(&root, &state, &transition.clients, true)?;
     state.save()?;
     private::replace(
         &root.join(format!("source-prepared-{}.json", transition.client.id)),
@@ -751,7 +744,7 @@ mod tests {
         state.source_digest = capture.digest;
         state.instance_id = capture.instance_id;
         state.source_revision = capture.source_revision;
-        state.package_revision = Some(format!("sha256:{}", "a".repeat(64)));
+        state.package_digest = Some(format!("sha256:{}", "a".repeat(64)));
         state.activated = true;
         initialize(&state.root(), &state, &clients, &capture.files).unwrap();
         (temporary, state)
@@ -824,14 +817,7 @@ mod tests {
         let clients: Clients =
             serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
-        config::runtime(
-            &root,
-            &state,
-            &clients,
-            state.package_revision.as_deref().unwrap(),
-            false,
-        )
-        .unwrap();
+        config::runtime(&root, &state, &clients, false).unwrap();
         let mut selected = args(&state);
         selected.apply = true;
         let applied = run(selected).unwrap();
@@ -894,14 +880,7 @@ mod tests {
         let old_clients: Clients =
             serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
-        config::runtime(
-            &root,
-            &state,
-            &old_clients,
-            state.package_revision.as_deref().unwrap(),
-            false,
-        )
-        .unwrap();
+        config::runtime(&root, &state, &old_clients, false).unwrap();
         let operator_path = root.join("credentials/operator/assertion-key.jwk");
         let operator = private::read(&operator_path, MAX_BYTES).unwrap();
         let originals = BTreeMap::from([
@@ -1237,14 +1216,7 @@ mod tests {
         let clients: Clients =
             serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
-        config::runtime(
-            &root,
-            &state,
-            &clients,
-            state.package_revision.as_deref().unwrap(),
-            false,
-        )
-        .unwrap();
+        config::runtime(&root, &state, &clients, false).unwrap();
         let mut apply = selected();
         apply.apply = true;
         assert_eq!(run(apply).unwrap()["status"], "prepared");

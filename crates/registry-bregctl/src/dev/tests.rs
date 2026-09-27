@@ -49,7 +49,7 @@ seed: []
         container_id: None,
         tls_files_copied: false,
         database_ready: false,
-        package_revision: None,
+        package_digest: None,
         activated: false,
         seeded: BTreeSet::new(),
         outputs: vec![],
@@ -131,15 +131,15 @@ fn write_init_project() -> (tempfile::TempDir, PathBuf) {
 
 #[test]
 fn a_fresh_init_project_starts_without_edits() {
-    // `bregctl dev` initializes only a `local` package at sequence 1 and needs
-    // one client per profile the journeys use, so the project `bregctl init`
-    // writes must satisfy both with its own clients file: a reader's first
-    // start needs no edit between the two commands.
+    // `bregctl dev` runs the local session as the registry's one instance and
+    // needs one client per profile the journeys use, so the project `bregctl
+    // init` writes must satisfy both with its own clients file: a reader's
+    // first start needs no edit between the two commands.
     let (_temporary, project) = write_init_project();
     let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
     let clients = config::clients(&client_bytes).expect("the initialized clients parse");
     let captured = capture(&project, &client_bytes).expect("a fresh init project is a dev project");
-    assert_eq!(captured.instance_id, "generic-registry-1");
+    assert_eq!(captured.instance_id, "generic-registry");
     bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
         .expect("every journey profile has a client");
 }
@@ -1754,7 +1754,7 @@ fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     state.tls_files_copied = true;
     state.database_ready = true;
     state.activated = true;
-    state.package_revision = Some("revision-1".into());
+    state.package_digest = Some("revision-1".into());
     state.seeded.insert("first-record".into());
     state.status = Status::Ready;
     let owner = state.owner.clone();
@@ -1770,7 +1770,7 @@ fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     // ports, credentials and already built package.
     assert_eq!(state.owner, owner);
     assert_eq!(state.clients_file, clients_file);
-    assert_eq!(state.package_revision.as_deref(), Some("revision-1"));
+    assert_eq!(state.package_digest.as_deref(), Some("revision-1"));
     assert_eq!(state.database_port, 55448);
     assert_eq!(state.volume_name(), format!("breg-dev-{owner}"));
 }
@@ -1804,7 +1804,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         container_id,
         tls_files_copied: false,
         database_ready: false,
-        package_revision: None,
+        package_digest: None,
         activated: false,
         seeded: BTreeSet::new(),
         outputs: vec![],
@@ -2318,14 +2318,7 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     let root = state.root();
     private::directory(&root.join("build")).unwrap();
     private::directory(&root.join("build/package")).unwrap();
-    config::runtime(
-        &root,
-        &state,
-        &clients,
-        &format!("sha256:{}", "1".repeat(64)),
-        false,
-    )
-    .unwrap();
+    config::runtime(&root, &state, &clients, false).unwrap();
     let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
     for filename in ["runtime-test.yaml", "runtime.yaml"] {
@@ -2363,14 +2356,7 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     old.status = Status::Failed;
     fs::remove_file(root.join("secrets/webhook-key")).unwrap();
     fs::remove_file(root.join("runtime-test.yaml")).unwrap();
-    config::runtime(
-        &root,
-        &old,
-        &clients,
-        &format!("sha256:{}", "1".repeat(64)),
-        true,
-    )
-    .unwrap();
+    config::runtime(&root, &old, &clients, true).unwrap();
     old.save().unwrap();
     prepare_receiver(&mut old, &clients).unwrap();
     let retained_port = old.webhook_port.unwrap();

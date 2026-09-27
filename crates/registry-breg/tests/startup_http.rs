@@ -636,6 +636,12 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::DatabaseIdentityMismatch => {
+            "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
+        }
+        StartupError::ActivePackageMismatch => {
+            "the Registry database has not activated the package at package.root; run `bregctl plan --package DIR` then `bregctl apply --package DIR`"
+        }
         StartupError::InstanceClaimMismatch => {
             "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
         }
@@ -1363,10 +1369,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -1404,8 +1406,7 @@ operationalTimeouts:
   migrationStatementMilliseconds: 60000
 "#,
         root.display(),
-        root.display(),
-        root.join("trust-anchor.json").display()
+        root.display()
     )
 }
 

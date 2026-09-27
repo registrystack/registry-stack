@@ -33,7 +33,7 @@ use crate::history_maintenance::profile_is_keyed;
 
 use crate::migration::{
     compiler_statement_checksums, package_ledger_entry, target_package_identity,
-    verify_successor_package_binding, MigrationError,
+    verify_successor_package_binding, ActivationDeployment, MigrationError,
 };
 use crate::model::CompiledRegistry;
 use crate::package::VerifiedPackage;
@@ -202,6 +202,8 @@ impl From<MigrationError> for ReconcileError {
             MigrationError::ApplyFailed
             | MigrationError::StatementFailed(_)
             | MigrationError::ActivePackageMismatch
+            | MigrationError::AlreadyActive
+            | MigrationError::DatabaseMismatch
             | MigrationError::HistoryCoverage
             | MigrationError::DatabaseUnavailable
             | MigrationError::FieldPatternSyntax { .. }
@@ -221,9 +223,18 @@ pub async fn reconcile_failed_migration(
     request: ReconcileRequest<'_>,
 ) -> Result<ReconcileReport, ReconcileError> {
     validate_request(&request)?;
-    let target = target_package_identity(request.target_package)?;
-    verify_successor_package_binding(request.target_package, request.current)?;
-    let checksums = compiler_statement_checksums(request.target_package);
+    // The failed apply targeted the deployment the database records, so the
+    // recovery binds the target to that same deployment.
+    let deployment = ActivationDeployment::new(
+        &request.current.environment,
+        &request.current.instance_id,
+        &request.current.database_id,
+    );
+    verify_successor_package_binding(request.target_package, deployment, request.current)?;
+    let target =
+        target_package_identity(request.target_package, deployment, Some(request.current))?;
+    let checksums =
+        compiler_statement_checksums(&request.target_package.manifest().migration_plan.statements);
     let ledger = package_ledger_entry(
         request.target_package,
         Some(request.current),

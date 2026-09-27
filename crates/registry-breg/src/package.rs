@@ -12,10 +12,9 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::package::{
-    write_sum_file, PackageLimits as SharedPackageLimits, VerifiedPackage as SharedVerifiedPackage,
-    REVISION_FILE, SUM_FILE,
+    plan_package, write_sum_file, PackageLimits as SharedPackageLimits,
+    VerifiedPackage as SharedVerifiedPackage, REVISION_FILE, SUM_FILE,
 };
-use registry_platform_crypto::{verify, PublicJwk};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -57,8 +56,10 @@ use crate::model::{
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
 
-pub const PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v1";
-pub const TRUST_ANCHOR_API_VERSION: &str = "registry.registrystack.org/package-trust/v1";
+pub const PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v2";
+/// The manifest format that bound one environment and carried signatures. It
+/// is recognized only to refuse it with the command that rebuilds it.
+const LEGACY_PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v1";
 pub const COMPILER_ID: &str = "breg";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -80,24 +81,15 @@ const MAX_MIGRATION_BASELINE_BYTES: usize = 4 * 1024 * 1024;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PackageEnvelope {
     pub api_version: String,
-    pub signed: PackageManifest,
-    pub signatures: Vec<PackageSignature>,
+    pub manifest: PackageManifest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PackageManifest {
     pub package_id: String,
-    pub package_revision: String,
-    pub environment: String,
-    pub instance_id: String,
-    pub database_id: String,
-    pub sequence: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prior_revision: Option<String>,
     pub compiler: CompilerIdentity,
     pub schema_fingerprint: String,
-    pub signature_policy: SignaturePolicy,
     pub sources: CapturedSources,
     pub files: Vec<PackageFile>,
     pub migration_plan: MigrationPlan,
@@ -115,20 +107,6 @@ pub struct CompilerIdentity {
 #[serde(rename_all = "snake_case")]
 pub enum PackageCompileProfile {
     Production,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct SignaturePolicy {
-    pub threshold: u16,
-    pub key_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct PackageSignature {
-    pub key_id: String,
-    pub signature_hex: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -188,15 +166,16 @@ pub enum PackageFileRole {
     ReviewedMigrationStepSql,
     ReviewedMigrationAssertionSql,
     MigrationRehearsalReceipt,
-    ExternalBackupBinding,
     MigrationRehearsalFixture,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MigrationPlan {
+    /// The digest of the package this plan migrates from, absent for the root
+    /// package of a chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_revision: Option<String>,
+    pub from_package_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prior_baseline: Option<CompiledRegistryMigrationBaseline>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -211,7 +190,7 @@ pub struct MigrationPlan {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRegistryMigrationBaseline {
-    pub package_revision: String,
+    pub package_digest: String,
     pub registry_id: String,
     pub registry_version: String,
     pub registry_revision: String,
@@ -227,9 +206,9 @@ pub struct CompiledRegistryMigrationBaseline {
 }
 
 impl CompiledRegistryMigrationBaseline {
-    pub fn from_compiled(package_revision: &str, compiled: &CompiledRegistry) -> Self {
+    pub fn from_compiled(package_digest: &str, compiled: &CompiledRegistry) -> Self {
         Self {
-            package_revision: package_revision.to_owned(),
+            package_digest: package_digest.to_owned(),
             registry_id: compiled.registry_id().to_owned(),
             registry_version: compiled.version().to_owned(),
             registry_revision: compiled.revision().to_owned(),
@@ -247,7 +226,7 @@ impl CompiledRegistryMigrationBaseline {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRegistryChangeSet {
-    pub from_revision: String,
+    pub from_package_digest: String,
     pub changes: Vec<CompiledRegistryChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migration_plan: Option<MigrationPlan>,
@@ -363,140 +342,12 @@ pub enum CompiledRegistryChangeTargetKind {
     Recipient,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct PackageTrustAnchor {
-    pub api_version: String,
-    pub environment: String,
-    pub instance_id: String,
-    pub database_id: String,
-    pub threshold: u16,
-    pub keys: Vec<TrustAnchorKey>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct TrustAnchorKey {
-    pub key_id: String,
-    pub jwk: Value,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PackageIntent<'a> {
-    InitialActivation,
-    Activation {
-        active_revision: &'a str,
-        active_sequence: u64,
-    },
-    Startup {
-        active_revision: &'a str,
-        active_sequence: u64,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum VerifiedPackageIntent {
-    InitialActivation,
-    Activation {
-        active_revision: String,
-        active_sequence: u64,
-    },
-    Startup {
-        active_revision: String,
-        active_sequence: u64,
-    },
-}
-
-impl VerifiedPackageIntent {
-    fn from_intent(intent: PackageIntent<'_>) -> Self {
-        match intent {
-            PackageIntent::InitialActivation => Self::InitialActivation,
-            PackageIntent::Activation {
-                active_revision,
-                active_sequence,
-            } => Self::Activation {
-                active_revision: active_revision.to_owned(),
-                active_sequence,
-            },
-            PackageIntent::Startup {
-                active_revision,
-                active_sequence,
-            } => Self::Startup {
-                active_revision: active_revision.to_owned(),
-                active_sequence,
-            },
-        }
-    }
-}
-
+/// What package loading needs from the deployment. A package carries no
+/// environment, so the only deployment input is how strictly the package
+/// directory's permissions are checked.
 pub struct PackageLoadContext<'a> {
-    pub environment: &'a str,
-    pub instance_id: &'a str,
-    pub database_id: &'a str,
     /// Environment durably recorded when the database was initialized.
     pub database_initialization_environment: &'a str,
-    pub compiler_source_revision: &'a str,
-    pub trust_anchor: Option<&'a Path>,
-    pub intent: PackageIntent<'a>,
-}
-
-/// Deployment bindings available to read-only package inspection.
-///
-/// The expected revision and sequence are configuration bindings only. This
-/// context carries no activation intent or durable database-state claim, so a
-/// successful inspection proves package closure, derivation, signature, and
-/// configured identity only, never readiness or activation authority.
-pub struct PackageInspectionContext<'a> {
-    pub environment: &'a str,
-    pub instance_id: &'a str,
-    pub database_id: &'a str,
-    pub database_initialization_environment: &'a str,
-    pub compiler_source_revision: &'a str,
-    pub trust_anchor: Option<&'a Path>,
-    pub expected_package_revision: &'a str,
-    pub expected_sequence: u64,
-}
-
-/// Database-active predecessor bindings for successor planning.
-///
-/// This context intentionally has no compiler source revision and no startup or
-/// activation intent. The caller must bind the package to the exact active
-/// revision and sequence already recorded for the database.
-pub struct PredecessorPackageContext<'a> {
-    pub environment: &'a str,
-    pub instance_id: &'a str,
-    pub database_id: &'a str,
-    pub database_initialization_environment: &'a str,
-    pub trust_anchor: Option<&'a Path>,
-    pub expected_package_revision: &'a str,
-    pub expected_sequence: u64,
-}
-
-/// The two deployment identity keys whose values must be identical. A package
-/// binds exactly one environment, so a deployment context that names two
-/// different ones can never be satisfied by any package.
-pub const ENVIRONMENT_IDENTITY_KEYS: [&str; 2] = [
-    "identity.environment",
-    "identity.databaseInitializationEnvironment",
-];
-
-/// The sentence a caller reports when the two environment identity keys of one
-/// deployment configuration disagree, naming both keys and both values. `None`
-/// when they are identical, so a binding refusal has another cause.
-#[must_use]
-pub fn environment_identity_conflict(
-    environment: &str,
-    database_initialization_environment: &str,
-) -> Option<String> {
-    if environment == database_initialization_environment {
-        return None;
-    }
-    let [environment_key, initialization_key] = ENVIRONMENT_IDENTITY_KEYS;
-    Some(format!(
-        "`{environment_key}` and `{initialization_key}` must be identical: \
-         `{environment_key}` is `{environment}`, \
-         `{initialization_key}` is `{database_initialization_environment}`"
-    ))
 }
 
 /// Closed operator-facing migration facts retained only by a fully rederived
@@ -508,7 +359,7 @@ pub fn environment_identity_conflict(
 #[serde(rename_all = "camelCase")]
 pub struct MigrationInspectionSummary {
     plan_kind: MigrationInspectionPlanKind,
-    has_prior_revision: bool,
+    has_predecessor: bool,
     has_prior_baseline: bool,
     change_count: usize,
     change_counts: MigrationInspectionChangeCounts,
@@ -522,8 +373,8 @@ impl MigrationInspectionSummary {
         self.plan_kind
     }
 
-    pub fn has_prior_revision(&self) -> bool {
-        self.has_prior_revision
+    pub fn has_predecessor(&self) -> bool {
+        self.has_predecessor
     }
 
     pub fn has_prior_baseline(&self) -> bool {
@@ -694,7 +545,7 @@ impl ReviewedChunkedStepBounds {
 ///
 /// Unlike [`VerifiedPackage`], this type cannot authorize startup or apply.
 pub struct IntegrityInspectedPackage {
-    package_revision: String,
+    package_digest: String,
     schema_fingerprint: String,
     registry: CompiledRegistry,
     #[cfg(feature = "tooling")]
@@ -702,8 +553,8 @@ pub struct IntegrityInspectedPackage {
 }
 
 impl IntegrityInspectedPackage {
-    pub fn package_revision(&self) -> &str {
-        &self.package_revision
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
     }
 
     /// The fingerprint bound by the inspected package, not a measurement of a live database.
@@ -715,21 +566,22 @@ impl IntegrityInspectedPackage {
         &self.registry
     }
 
-    /// Return a value-minimized operator summary. Its presence proves only the
-    /// package inspection described by [`PackageInspectionContext`], never
-    /// startup readiness, database state, or activation authority.
+    /// Return a value-minimized operator summary. Its presence proves only
+    /// package closure and derivation, never startup readiness, database
+    /// state, or activation authority.
     #[cfg(feature = "tooling")]
     pub fn migration_summary(&self) -> &MigrationInspectionSummary {
         &self.migration
     }
 }
 
-/// A database-active predecessor package verified for read-only successor
-/// planning. It proves signed package bytes and active database identity, but it
-/// does not rederive historical generated artifacts with the current compiler
-/// and cannot authorize startup or package execution.
+/// A predecessor package verified for read-only successor planning. It proves
+/// the package bytes against their sum file, but it does not rederive
+/// historical generated artifacts with the current compiler and cannot
+/// authorize startup or package execution.
 pub struct VerifiedPredecessorPackage {
     manifest: PackageManifest,
+    package_digest: String,
     migration_baseline: CompiledRegistryMigrationBaseline,
     history_schema_descriptor: HistorySchemaDescriptor,
 }
@@ -739,28 +591,12 @@ impl VerifiedPredecessorPackage {
         &self.manifest.package_id
     }
 
-    pub fn environment(&self) -> &str {
-        &self.manifest.environment
-    }
-
-    pub fn instance_id(&self) -> &str {
-        &self.manifest.instance_id
-    }
-
-    pub fn database_id(&self) -> &str {
-        &self.manifest.database_id
-    }
-
-    pub fn package_revision(&self) -> &str {
-        &self.manifest.package_revision
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
     }
 
     pub fn schema_fingerprint(&self) -> &str {
         &self.manifest.schema_fingerprint
-    }
-
-    pub fn sequence(&self) -> u64 {
-        self.manifest.sequence
     }
 
     pub fn migration_baseline(&self) -> &CompiledRegistryMigrationBaseline {
@@ -768,7 +604,7 @@ impl VerifiedPredecessorPackage {
     }
 
     /// Return the retained schema descriptor derived from the predecessor's
-    /// verified signed governed model. This descriptor preserves only the
+    /// verified governed model. This descriptor preserves only the
     /// historical snapshot decode contract; it never authorizes startup,
     /// runtime access, SQL execution, or successor activation.
     pub fn history_schema_descriptor(&self) -> HistorySchemaDescriptor {
@@ -776,12 +612,12 @@ impl VerifiedPredecessorPackage {
     }
 }
 
-/// A package whose filesystem closure, signatures, bindings, sources, compiler
+/// A package whose filesystem closure, sum file, sources, compiler
 /// derivation, generated bytes, and migration plan have all been verified.
 pub struct VerifiedPackage {
     manifest: PackageManifest,
     registry: CompiledRegistry,
-    intent: VerifiedPackageIntent,
+    package_digest: String,
     reviewed_migration_plan: Option<ValidatedReviewedMigrationPlan>,
 }
 
@@ -801,32 +637,9 @@ impl VerifiedPackage {
         self.reviewed_migration_plan.as_ref()
     }
 
-    pub(crate) fn verified_for_initial_activation(&self) -> bool {
-        self.intent == VerifiedPackageIntent::InitialActivation
-    }
-
-    pub(crate) fn verified_for_startup(&self, active_revision: &str, active_sequence: u64) -> bool {
-        matches!(
-            &self.intent,
-            VerifiedPackageIntent::Startup {
-                active_revision: verified_revision,
-                active_sequence: verified_sequence,
-            } if verified_revision == active_revision && *verified_sequence == active_sequence
-        )
-    }
-
-    pub(crate) fn verified_for_activation(
-        &self,
-        active_revision: &str,
-        active_sequence: u64,
-    ) -> bool {
-        matches!(
-            &self.intent,
-            VerifiedPackageIntent::Activation {
-                active_revision: verified_revision,
-                active_sequence: verified_sequence,
-            } if verified_revision == active_revision && *verified_sequence == active_sequence
-        )
+    /// The package identity: the SHA-256 of its `SHA256SUMS` file.
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
     }
 }
 
@@ -848,36 +661,18 @@ pub enum PackageError {
     Integrity,
     #[error("the shared package envelope is invalid")]
     Envelope,
-    /// A predecessor built before the shared package format has no
-    /// `SHA256SUMS`, so a `package.expectedDigest` pin cannot be checked
-    /// against it. The pin refuses the package rather than being skipped.
-    #[error("{}", DIGEST_PIN_UNVERIFIABLE)]
-    DigestPinUnverifiable,
-    #[error("the package deployment binding is invalid")]
+    /// The package was built in the manifest format that bound one
+    /// environment and carried signatures. The same sources rebuild it.
+    #[error("{}", LEGACY_PACKAGE_FORMAT)]
+    LegacyFormat,
+    #[error("the package identity binding is invalid")]
     Binding,
-    /// One deployment binding differs from the runtime configuration. Only
-    /// the configuration key is named; neither value is.
-    #[error("the package deployment binding differs from the runtime configuration at {0}")]
-    BindingMismatch(PackageBindingField),
-    /// The package is the active package itself, not a successor of it. The
-    /// claim is read before signature verification, so it only routes a caller
-    /// to verify the package as the active one; it never grants anything.
-    #[error("the package is the active package")]
-    AlreadyActive,
-    /// The package's sequence is below the active package's. Packages apply
-    /// forward only, so a rollback is a new successor, never an older package.
-    #[error("the package is older than the active package")]
-    OlderThanActive,
-    #[error("the package signature policy failed")]
-    Signature,
     #[error("the package compiler derivation failed")]
     Derivation,
     #[error("the package migration plan is invalid")]
     MigrationPlan,
     #[error("the package permissions are unsafe")]
     Permissions,
-    #[error("the package trust anchor is not canonical JSON")]
-    TrustAnchorNotCanonical,
     // The wrapped reason is one of `ReviewedMigrationError`'s own fixed,
     // value-free messages, so it carries no source value either.
     #[cfg(feature = "tooling")]
@@ -887,44 +682,9 @@ pub enum PackageError {
 
 pub type Result<T> = std::result::Result<T, PackageError>;
 
-/// The operator-facing refusal for [`PackageError::DigestPinUnverifiable`].
-pub const DIGEST_PIN_UNVERIFIABLE: &str =
-    "package.expectedDigest cannot be checked on a package without SHA256SUMS; remove \
-     package.expectedDigest until a successor packaged by this bregctl is active";
-
-/// The runtime configuration key whose value a package binding must equal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PackageBindingField {
-    Environment,
-    DatabaseInitializationEnvironment,
-    InstanceId,
-    DatabaseId,
-    CompilerSourceRevision,
-    ActiveRevision,
-    ActiveSequence,
-}
-
-impl PackageBindingField {
-    /// The runtime configuration key path, for example `identity.databaseId`.
-    #[must_use]
-    pub const fn runtime_config_path(self) -> &'static str {
-        match self {
-            Self::Environment => "identity.environment",
-            Self::DatabaseInitializationEnvironment => "identity.databaseInitializationEnvironment",
-            Self::InstanceId => "identity.instanceId",
-            Self::DatabaseId => "identity.databaseId",
-            Self::CompilerSourceRevision => "package.compilerSourceRevision",
-            Self::ActiveRevision => "package.activeRevision",
-            Self::ActiveSequence => "package.activeSequence",
-        }
-    }
-}
-
-impl std::fmt::Display for PackageBindingField {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.runtime_config_path())
-    }
-}
+/// The operator-facing refusal for [`PackageError::LegacyFormat`].
+pub const LEGACY_PACKAGE_FORMAT: &str =
+    "the package uses the retired package/v1 manifest format; rebuild it with `bregctl package`";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageSourceFile {
@@ -965,41 +725,29 @@ pub enum PackageMigrationPlanInput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageBuildRequest {
-    pub environment: String,
-    pub instance_id: String,
-    pub database_id: String,
-    pub sequence: u64,
-    pub prior_revision: Option<String>,
+    /// The digest of the predecessor package, absent for the root package of
+    /// a chain.
+    pub from_package_digest: Option<String>,
     pub compiler_source_revision: String,
     pub schema_fingerprint: String,
-    pub signature_policy: SignaturePolicy,
     pub project: PackageSourceFile,
     pub modules: Vec<PackageModuleSource>,
     pub fixture_journeys: PackageSourceFile,
     pub migration_plan: PackageMigrationPlanInput,
 }
 
-/// A deterministic package payload with its revision fixed before any caller
-/// supplies signatures.
+/// A deterministic package payload. Its identity, the digest of its sum file,
+/// exists once it is published.
 #[derive(Debug)]
 pub struct PreparedPackage {
     manifest: PackageManifest,
     registry: CompiledRegistry,
     files: BTreeMap<String, Vec<u8>>,
-    signed_bytes: Vec<u8>,
 }
 
 impl PreparedPackage {
     pub fn manifest(&self) -> &PackageManifest {
         &self.manifest
-    }
-
-    pub fn canonical_signed_bytes(&self) -> &[u8] {
-        &self.signed_bytes
-    }
-
-    pub fn package_revision(&self) -> &str {
-        &self.manifest.package_revision
     }
 
     /// The exact Production compilation captured by this candidate package.
@@ -1018,33 +766,46 @@ impl PreparedPackage {
         rederive_reviewed_migration_plan(&self.manifest, &self.files, &self.registry)
     }
 
-    pub fn envelope(&self, signatures: Vec<PackageSignature>) -> Result<PackageEnvelope> {
-        validate_publication_signatures(&self.manifest, &signatures)?;
-        Ok(PackageEnvelope {
+    pub fn envelope(&self) -> PackageEnvelope {
+        PackageEnvelope {
             api_version: PACKAGE_API_VERSION.to_owned(),
-            signed: self.manifest.clone(),
-            signatures,
-        })
+            manifest: self.manifest.clone(),
+        }
     }
 
-    /// Publish into a new package directory. The manifest is written last, so
-    /// a partial directory is never accepted as a package by `load_package`.
-    pub fn publish_to_directory(
-        &self,
-        destination: &Path,
-        signatures: Vec<PackageSignature>,
-    ) -> Result<()> {
-        self.publish_to_directory_with_revision(destination, signatures, None)
-            .map(|_| ())
+    /// The package identity this candidate has once published without a
+    /// `REVISION` file: the digest of the sum file over its files and
+    /// manifest. Nothing is written.
+    pub fn package_digest(&self) -> Result<String> {
+        let mut files = self.files.clone();
+        let manifest_bytes = canonicalize_json(
+            &serde_json::to_value(self.envelope()).map_err(|_| PackageError::CanonicalJson)?,
+        )
+        .map_err(|_| PackageError::CanonicalJson)?;
+        files.insert(MANIFEST_PATH.to_owned(), manifest_bytes);
+        plan_package(
+            Path::new("."),
+            &files,
+            None,
+            &shared_package_limits(),
+            "bregctl package",
+        )
+        .map_err(|_| PackageError::Bounds)
     }
 
-    /// Publish the existing signed BReg package inside the shared Registry
-    /// Stack package envelope. BReg signatures and deployment bindings remain
-    /// authoritative until the package-ledger work removes them.
+    /// Publish into a new package directory. The manifest and then the sum
+    /// file are written last, so a partial directory is never accepted as a
+    /// package by `load_package`.
+    pub fn publish_to_directory(&self, destination: &Path) -> Result<SharedVerifiedPackage> {
+        self.publish_to_directory_with_revision(destination, None)
+    }
+
+    /// Publish inside the shared Registry Stack package envelope, optionally
+    /// with a `REVISION` file. A package carries no environment, so every
+    /// directory and file is written owner-only.
     pub fn publish_to_directory_with_revision(
         &self,
         destination: &Path,
-        signatures: Vec<PackageSignature>,
         revision: Option<&str>,
     ) -> Result<SharedVerifiedPackage> {
         reject_symlink_components(destination)?;
@@ -1057,31 +818,22 @@ impl PreparedPackage {
             return Err(PackageError::UnsafePath);
         }
         fs::create_dir(destination).map_err(|_| PackageError::Closure)?;
-        if self.manifest.environment != "local" {
-            set_safe_directory_permissions(destination)?;
-        }
+        set_safe_directory_permissions(destination)?;
         let publish = (|| {
             for (path, bytes) in &self.files {
                 let relative = Path::new(path);
                 let full = destination.join(relative);
                 if let Some(parent) = full.parent() {
                     fs::create_dir_all(parent).map_err(|_| PackageError::Closure)?;
-                    if self.manifest.environment != "local" {
-                        set_safe_directory_permissions(parent)?;
-                    }
+                    set_safe_directory_permissions(parent)?;
                 }
-                write_new_file(&full, bytes, self.manifest.environment != "local")?;
+                write_new_file(&full, bytes)?;
             }
-            let envelope = self.envelope(signatures)?;
             let manifest_bytes = canonicalize_json(
-                &serde_json::to_value(&envelope).map_err(|_| PackageError::CanonicalJson)?,
+                &serde_json::to_value(self.envelope()).map_err(|_| PackageError::CanonicalJson)?,
             )
             .map_err(|_| PackageError::CanonicalJson)?;
-            write_new_file(
-                &destination.join(MANIFEST_PATH),
-                &manifest_bytes,
-                self.manifest.environment != "local",
-            )?;
+            write_new_file(&destination.join(MANIFEST_PATH), &manifest_bytes)?;
             let package = write_sum_file(
                 destination,
                 revision,
@@ -1089,11 +841,9 @@ impl PreparedPackage {
                 "bregctl package",
             )
             .map_err(|_| PackageError::Closure)?;
-            if self.manifest.environment != "local" {
-                set_safe_file_permissions(&destination.join(SUM_FILE))?;
-                if revision.is_some() {
-                    set_safe_file_permissions(&destination.join(REVISION_FILE))?;
-                }
+            set_safe_file_permissions(&destination.join(SUM_FILE))?;
+            if revision.is_some() {
+                set_safe_file_permissions(&destination.join(REVISION_FILE))?;
             }
             Ok(package)
         })();
@@ -1120,15 +870,11 @@ pub(crate) fn shared_package_limits() -> SharedPackageLimits {
 pub fn compiled_registry_change_set(
     previous: &CompiledRegistry,
     candidate: &CompiledRegistry,
-    prior_package_revision: &str,
+    from_package_digest: &str,
 ) -> CompiledRegistryChangeSet {
     let previous_baseline =
-        CompiledRegistryMigrationBaseline::from_compiled(prior_package_revision, previous);
-    compiled_registry_change_set_from_baseline(
-        &previous_baseline,
-        candidate,
-        prior_package_revision,
-    )
+        CompiledRegistryMigrationBaseline::from_compiled(from_package_digest, previous);
+    compiled_registry_change_set_from_baseline(&previous_baseline, candidate, from_package_digest)
 }
 
 /// Compare a retained predecessor baseline with the current candidate without
@@ -1136,7 +882,7 @@ pub fn compiled_registry_change_set(
 pub fn compiled_registry_change_set_from_baseline(
     previous: &CompiledRegistryMigrationBaseline,
     candidate: &CompiledRegistry,
-    prior_package_revision: &str,
+    from_package_digest: &str,
 ) -> CompiledRegistryChangeSet {
     let candidate_baseline = CompiledRegistryMigrationBaseline::from_compiled("", candidate);
     let mut changes = Vec::new();
@@ -1150,7 +896,7 @@ pub fn compiled_registry_change_set_from_baseline(
     changes.dedup();
 
     let mut change_set = CompiledRegistryChangeSet {
-        from_revision: prior_package_revision.to_owned(),
+        from_package_digest: from_package_digest.to_owned(),
         changes,
         migration_plan: None,
     };
@@ -1158,7 +904,7 @@ pub fn compiled_registry_change_set_from_baseline(
         change_set.migration_plan = Some(additive_migration_plan(
             previous,
             candidate,
-            prior_package_revision,
+            from_package_digest,
             change_set.changes.clone(),
         ));
     }
@@ -2165,7 +1911,7 @@ fn route_grants_query(
 fn additive_migration_plan(
     previous: &CompiledRegistryMigrationBaseline,
     candidate: &CompiledRegistry,
-    prior_package_revision: &str,
+    from_package_digest: &str,
     changes: Vec<CompiledRegistryChange>,
 ) -> MigrationPlan {
     let mut new_statement_ids = BTreeSet::<String>::new();
@@ -2551,7 +2297,7 @@ fn additive_migration_plan(
         }
     }
     MigrationPlan {
-        from_revision: Some(prior_package_revision.to_owned()),
+        from_package_digest: Some(from_package_digest.to_owned()),
         prior_baseline: Some(previous.clone()),
         changes,
         statements,
@@ -2610,7 +2356,7 @@ fn replacement_statement(statement: &DdlStatement) -> DdlStatement {
 
 fn initial_migration_plan(compiled: &CompiledRegistry) -> MigrationPlan {
     MigrationPlan {
-        from_revision: None,
+        from_package_digest: None,
         prior_baseline: None,
         changes: Vec::new(),
         statements: compiled.ddl().statements.clone(),
@@ -2643,7 +2389,7 @@ fn reviewed_successor_migration_plan(
     let additive = additive_migration_plan(
         baseline,
         candidate,
-        &change_set.from_revision,
+        &change_set.from_package_digest,
         additive_changes,
     );
     let refresh_views = additive.statements.iter().any(|statement| {
@@ -2692,7 +2438,7 @@ fn reviewed_successor_migration_plan(
     let (_, policy_creates) = successor_managed_policy_delta(&previous_ddl, candidate.ddl());
     statements.extend(policy_creates);
     Ok(MigrationPlan {
-        from_revision: Some(change_set.from_revision.clone()),
+        from_package_digest: Some(change_set.from_package_digest.clone()),
         prior_baseline: Some(baseline.clone()),
         changes: change_set.changes.clone(),
         statements,
@@ -2910,94 +2656,82 @@ pub fn prepare_package_with_project_assets(
     )
     .map_err(|_| PackageError::Derivation)?;
     validate_build_bindings(&request, &project, &compiled)?;
-    let request_sequence = request.sequence;
-    let request_prior_revision = request.prior_revision.clone();
+    let from_package_digest = request.from_package_digest.clone();
     #[cfg(feature = "tooling")]
     let request_schema_fingerprint = request.schema_fingerprint.clone();
-    #[cfg(feature = "tooling")]
-    let request_database_id = request.database_id.clone();
 
-    let (migration_plan, reviewed_files): (MigrationPlan, BTreeMap<String, Vec<u8>>) = match request
-        .migration_plan
-    {
-        PackageMigrationPlanInput::InitialCompiledDdl => {
-            if request_sequence != 1 || request_prior_revision.is_some() {
-                return Err(PackageError::MigrationPlan);
+    let (migration_plan, reviewed_files): (MigrationPlan, BTreeMap<String, Vec<u8>>) =
+        match request.migration_plan {
+            PackageMigrationPlanInput::InitialCompiledDdl => {
+                if from_package_digest.is_some() {
+                    return Err(PackageError::MigrationPlan);
+                }
+                (initial_migration_plan(&compiled), BTreeMap::new())
             }
-            (initial_migration_plan(&compiled), BTreeMap::new())
-        }
-        PackageMigrationPlanInput::Successor { prior_registry } => {
-            if request_sequence == 1 || request_prior_revision.is_none() {
-                return Err(PackageError::MigrationPlan);
+            PackageMigrationPlanInput::Successor { prior_registry } => {
+                let from_package_digest = from_package_digest
+                    .as_deref()
+                    .ok_or(PackageError::MigrationPlan)?;
+                let change_set =
+                    compiled_registry_change_set(&prior_registry, &compiled, from_package_digest);
+                (
+                    change_set_to_applicable_migration_plan(&change_set)?,
+                    BTreeMap::new(),
+                )
             }
-            let prior_revision = request_prior_revision
-                .as_deref()
-                .ok_or(PackageError::MigrationPlan)?;
-            let change_set =
-                compiled_registry_change_set(&prior_registry, &compiled, prior_revision);
-            (
-                change_set_to_applicable_migration_plan(&change_set)?,
-                BTreeMap::new(),
-            )
-        }
-        PackageMigrationPlanInput::SuccessorFromBaseline { prior_baseline } => {
-            if request_sequence == 1 || request_prior_revision.is_none() {
-                return Err(PackageError::MigrationPlan);
+            PackageMigrationPlanInput::SuccessorFromBaseline { prior_baseline } => {
+                let from_package_digest = from_package_digest
+                    .as_deref()
+                    .ok_or(PackageError::MigrationPlan)?;
+                if prior_baseline.package_digest != from_package_digest {
+                    return Err(PackageError::MigrationPlan);
+                }
+                let change_set = compiled_registry_change_set_from_baseline(
+                    &prior_baseline,
+                    &compiled,
+                    from_package_digest,
+                );
+                (
+                    change_set_to_applicable_migration_plan(&change_set)?,
+                    BTreeMap::new(),
+                )
             }
-            let prior_revision = request_prior_revision
-                .as_deref()
-                .ok_or(PackageError::MigrationPlan)?;
-            if prior_baseline.package_revision != prior_revision {
-                return Err(PackageError::MigrationPlan);
-            }
-            let change_set = compiled_registry_change_set_from_baseline(
-                &prior_baseline,
-                &compiled,
-                prior_revision,
-            );
-            (
-                change_set_to_applicable_migration_plan(&change_set)?,
-                BTreeMap::new(),
-            )
-        }
-        #[cfg(feature = "tooling")]
-        PackageMigrationPlanInput::ReviewedSuccessor {
-            prior_registry,
-            prior_schema_fingerprint,
-            migrations,
-        } => {
-            let prior_revision = request_prior_revision
-                .as_deref()
-                .ok_or(PackageError::MigrationPlan)?;
-            let baseline =
-                CompiledRegistryMigrationBaseline::from_compiled(prior_revision, &prior_registry);
-            reviewed_successor_inputs(
-                request_sequence,
-                request_prior_revision.as_deref(),
-                &request_schema_fingerprint,
-                &request_database_id,
-                &compiled,
-                &baseline,
+            #[cfg(feature = "tooling")]
+            PackageMigrationPlanInput::ReviewedSuccessor {
+                prior_registry,
                 prior_schema_fingerprint,
                 migrations,
-            )?
-        }
-        #[cfg(feature = "tooling")]
-        PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
-            prior_baseline,
-            prior_schema_fingerprint,
-            migrations,
-        } => reviewed_successor_inputs(
-            request_sequence,
-            request_prior_revision.as_deref(),
-            &request_schema_fingerprint,
-            &request_database_id,
-            &compiled,
-            &prior_baseline,
-            prior_schema_fingerprint,
-            migrations,
-        )?,
-    };
+            } => {
+                let from_package_digest = from_package_digest
+                    .as_deref()
+                    .ok_or(PackageError::MigrationPlan)?;
+                let baseline = CompiledRegistryMigrationBaseline::from_compiled(
+                    from_package_digest,
+                    &prior_registry,
+                );
+                reviewed_successor_inputs(
+                    Some(from_package_digest),
+                    &request_schema_fingerprint,
+                    &compiled,
+                    &baseline,
+                    prior_schema_fingerprint,
+                    migrations,
+                )?
+            }
+            #[cfg(feature = "tooling")]
+            PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
+                prior_baseline,
+                prior_schema_fingerprint,
+                migrations,
+            } => reviewed_successor_inputs(
+                from_package_digest.as_deref(),
+                &request_schema_fingerprint,
+                &compiled,
+                &prior_baseline,
+                prior_schema_fingerprint,
+                migrations,
+            )?,
+        };
 
     let mut files = BTreeMap::new();
     files.insert(request.project.path.clone(), request.project.bytes.clone());
@@ -3097,21 +2831,14 @@ pub fn prepare_package_with_project_assets(
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     ensure_unique_file_entries(&entries)?;
 
-    let mut manifest = PackageManifest {
+    let manifest = PackageManifest {
         package_id: compiled.registry_id().to_owned(),
-        package_revision: String::new(),
-        environment: request.environment,
-        instance_id: request.instance_id,
-        database_id: request.database_id,
-        sequence: request.sequence,
-        prior_revision: request.prior_revision,
         compiler: CompilerIdentity {
             id: COMPILER_ID.to_owned(),
             source_revision: request.compiler_source_revision,
             profile: PackageCompileProfile::Production,
         },
         schema_fingerprint: request.schema_fingerprint,
-        signature_policy: request.signature_policy,
         sources: CapturedSources {
             project: request.project.path,
             project_assets: project_assets
@@ -3134,43 +2861,34 @@ pub fn prepare_package_with_project_assets(
     };
     validate_migration_plan(&manifest, &compiled)?;
     validate_source_inventory(&manifest)?;
-    manifest.package_revision = derive_package_revision(&manifest)?;
-    let signed_bytes = canonical_signed_bytes(&manifest)?;
     Ok(PreparedPackage {
         manifest,
         registry: compiled,
         files,
-        signed_bytes,
     })
 }
 
 #[cfg(feature = "tooling")]
-#[allow(clippy::too_many_arguments)] // These are independent signed package bindings.
 fn reviewed_successor_inputs(
-    sequence: u64,
-    prior_revision: Option<&str>,
+    from_package_digest: Option<&str>,
     schema_fingerprint: &str,
-    database_id: &str,
     compiled: &CompiledRegistry,
     baseline: &CompiledRegistryMigrationBaseline,
     prior_schema_fingerprint: String,
     migrations: Vec<ReviewedMigrationSource>,
 ) -> Result<(MigrationPlan, BTreeMap<String, Vec<u8>>)> {
-    if sequence == 1 || prior_revision.is_none() || !valid_digest(&prior_schema_fingerprint) {
+    let from_package_digest = from_package_digest.ok_or(PackageError::MigrationPlan)?;
+    if !valid_digest(&prior_schema_fingerprint) || baseline.package_digest != from_package_digest {
         return Err(PackageError::MigrationPlan);
     }
-    let prior_revision = prior_revision.ok_or(PackageError::MigrationPlan)?;
-    if baseline.package_revision != prior_revision {
-        return Err(PackageError::MigrationPlan);
-    }
-    let change_set = compiled_registry_change_set_from_baseline(baseline, compiled, prior_revision);
+    let change_set =
+        compiled_registry_change_set_from_baseline(baseline, compiled, from_package_digest);
     let reviewed = prepare_reviewed_migration_plan(
         &migrations,
         &ReviewedPlanBindings {
-            prior_revision,
+            prior_package_digest: from_package_digest,
             prior_schema_fingerprint: &prior_schema_fingerprint,
             final_schema_fingerprint: schema_fingerprint,
-            database_id,
             changes: &change_set.changes,
             prior_entities: &baseline.entities,
             candidate_entities: compiled.entities(),
@@ -3468,12 +3186,6 @@ fn package_module_asset_role(asset_path: &str) -> Result<PackageFileRole> {
     }
 }
 
-/// Return the exact canonical bytes signed by every package signer.
-pub fn canonical_signed_bytes(manifest: &PackageManifest) -> Result<Vec<u8>> {
-    canonicalize_json(&serde_json::to_value(manifest).map_err(|_| PackageError::CanonicalJson)?)
-        .map_err(|_| PackageError::CanonicalJson)
-}
-
 fn add_compiled_artifacts(
     compiled: &CompiledRegistry,
     migration_plan: &MigrationPlan,
@@ -3607,7 +3319,6 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
             ReviewedArtifactKind::StepSql => PackageFileRole::ReviewedMigrationStepSql,
             ReviewedArtifactKind::AssertionSql => PackageFileRole::ReviewedMigrationAssertionSql,
             ReviewedArtifactKind::RehearsalReceipt => PackageFileRole::MigrationRehearsalReceipt,
-            ReviewedArtifactKind::BackupBinding => PackageFileRole::ExternalBackupBinding,
             ReviewedArtifactKind::Fixture => PackageFileRole::MigrationRehearsalFixture,
         });
     }
@@ -3672,7 +3383,6 @@ fn reviewed_package_role(role: PackageFileRole) -> bool {
             | PackageFileRole::ReviewedMigrationStepSql
             | PackageFileRole::ReviewedMigrationAssertionSql
             | PackageFileRole::MigrationRehearsalReceipt
-            | PackageFileRole::ExternalBackupBinding
             | PackageFileRole::MigrationRehearsalFixture
     )
 }
@@ -3702,16 +3412,16 @@ fn ensure_unique_file_entries(entries: &[PackageFile]) -> Result<()> {
 }
 
 fn validate_build_identity(request: &PackageBuildRequest) -> Result<()> {
-    if !valid_build_id(&request.environment)
-        || !valid_build_id(&request.instance_id)
-        || !valid_build_id(&request.database_id)
-        || request.sequence == 0
-        || request.compiler_source_revision.is_empty()
+    if request.compiler_source_revision.is_empty()
         || !valid_digest(&request.schema_fingerprint)
+        || request
+            .from_package_digest
+            .as_deref()
+            .is_some_and(|digest| !valid_digest(digest))
     {
         return Err(PackageError::Binding);
     }
-    validate_signature_policy(&request.environment, &request.signature_policy)
+    Ok(())
 }
 
 /// The closed grammar the envelope wrapper proof budgets: no byte serde_json
@@ -3728,18 +3438,6 @@ pub(crate) fn valid_build_id(value: &str) -> bool {
         })
 }
 
-fn validate_signature_policy(environment: &str, policy: &SignaturePolicy) -> Result<()> {
-    let ids = exact_sorted_unique(policy.key_ids.iter().map(String::as_str))?;
-    if environment == "local" {
-        if policy.threshold != 0 || !ids.is_empty() {
-            return Err(PackageError::Signature);
-        }
-    } else if policy.threshold == 0 || usize::from(policy.threshold) > ids.len() {
-        return Err(PackageError::Signature);
-    }
-    Ok(())
-}
-
 fn validate_build_bindings(
     request: &PackageBuildRequest,
     project: &RegistryProject,
@@ -3747,9 +3445,6 @@ fn validate_build_bindings(
 ) -> Result<()> {
     let identity = project.package.as_ref().ok_or(PackageError::Derivation)?;
     if project.registry.id != compiled.registry_id()
-        || identity.environment != request.environment
-        || identity.instance_id != request.instance_id
-        || identity.sequence != request.sequence
         || identity.source_revision != request.compiler_source_revision
     {
         return Err(PackageError::Derivation);
@@ -3764,42 +3459,7 @@ fn validate_build_bindings(
     Ok(())
 }
 
-fn validate_publication_signatures(
-    manifest: &PackageManifest,
-    signatures: &[PackageSignature],
-) -> Result<()> {
-    validate_signature_policy(&manifest.environment, &manifest.signature_policy)?;
-    if manifest.environment == "local" {
-        if !signatures.is_empty() {
-            return Err(PackageError::Signature);
-        }
-        return Ok(());
-    }
-    let policy_ids = manifest
-        .signature_policy
-        .key_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let mut seen = BTreeSet::new();
-    let mut previous = None;
-    for signature in signatures {
-        if previous.is_some_and(|id: &str| id >= signature.key_id.as_str())
-            || !seen.insert(signature.key_id.as_str())
-            || !policy_ids.contains(signature.key_id.as_str())
-        {
-            return Err(PackageError::Signature);
-        }
-        previous = Some(signature.key_id.as_str());
-        decode_hex(&signature.signature_hex)?;
-    }
-    if seen.len() < usize::from(manifest.signature_policy.threshold) {
-        return Err(PackageError::Signature);
-    }
-    Ok(())
-}
-
-fn write_new_file(path: &Path, bytes: &[u8], production: bool) -> Result<()> {
+fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     reject_symlink_components(path)?;
     let mut file = OpenOptions::new()
         .write(true)
@@ -3808,10 +3468,7 @@ fn write_new_file(path: &Path, bytes: &[u8], production: bool) -> Result<()> {
         .map_err(|_| PackageError::Closure)?;
     file.write_all(bytes).map_err(|_| PackageError::Read)?;
     file.sync_all().map_err(|_| PackageError::Read)?;
-    if production {
-        set_safe_file_permissions(path)?;
-    }
-    Ok(())
+    set_safe_file_permissions(path)
 }
 
 #[cfg(unix)]
@@ -3848,14 +3505,6 @@ fn remove_created_package_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Compute the package revision over the complete signed manifest with only
-/// its self-referential revision member cleared.
-pub fn derive_package_revision(manifest: &PackageManifest) -> Result<String> {
-    let mut unsigned = manifest.clone();
-    unsigned.package_revision.clear();
-    Ok(digest(&canonical_signed_bytes(&unsigned)?))
-}
-
 /// Load one package from the caller-selected local root. This function performs
 /// no network resolution and must complete before a database mutation or
 /// listener construction is attempted.
@@ -3865,63 +3514,29 @@ pub fn load_package(root: &Path, context: &PackageLoadContext<'_>) -> Result<Ver
 }
 
 /// Load the BReg package whose complete shared envelope was just verified.
+/// The package carries no deployment binding: its identity is the digest of
+/// its sum file, which the caller compares with the database's active
+/// package.
 pub fn load_package_with_verified_envelope(
     root: &Path,
     context: &PackageLoadContext<'_>,
     shared: &SharedVerifiedPackage,
 ) -> Result<VerifiedPackage> {
-    validate_root(root)?;
     let production = context.database_initialization_environment != "local";
-    if production {
-        ensure_safe_permissions(root)?;
-    }
-    bind_shared_envelope_files(root, shared, production)?;
-
-    let manifest_path = root.join(MANIFEST_PATH);
-    let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
-    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
-    let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
-    if envelope.api_version != PACKAGE_API_VERSION
-        || envelope.signed.files.is_empty()
-        || envelope.signed.files.len() > MAX_PACKAGE_FILES
-    {
-        return Err(PackageError::Integrity);
-    }
-
-    let signed_bytes = canonical_signed_bytes(&envelope.signed)?;
-    if derive_package_revision(&envelope.signed)? != envelope.signed.package_revision {
-        return Err(PackageError::Integrity);
-    }
-    validate_bindings(&envelope.signed, context)?;
-    let inspection_context = PackageInspectionContext {
-        environment: context.environment,
-        instance_id: context.instance_id,
-        database_id: context.database_id,
-        database_initialization_environment: context.database_initialization_environment,
-        compiler_source_revision: context.compiler_source_revision,
-        trust_anchor: context.trust_anchor,
-        expected_package_revision: &envelope.signed.package_revision,
-        expected_sequence: envelope.signed.sequence,
-    };
-    verify_signatures(&envelope, &inspection_context, production, &signed_bytes)?;
-    let loaded = load_closure(
-        root,
-        &envelope.signed.files,
-        manifest_bytes.len(),
-        production,
-        Some(shared),
-    )?;
-    let (registry, reviewed_migration_plan) = rederive(&envelope.signed, &loaded)?;
+    let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    let (registry, reviewed_migration_plan) = rederive(&manifest, &loaded)?;
 
     Ok(VerifiedPackage {
-        manifest: envelope.signed,
+        manifest,
         registry,
-        intent: VerifiedPackageIntent::from_intent(context.intent),
+        package_digest: shared.digest().to_owned(),
         reviewed_migration_plan,
     })
 }
 
-fn verify_shared_package(root: &Path) -> Result<SharedVerifiedPackage> {
+/// Verify the shared envelope of the package at `root` and return its
+/// digest, the package identity every activation and startup check names.
+pub fn verify_shared_package(root: &Path) -> Result<SharedVerifiedPackage> {
     registry_platform_config::package::verify_package(
         root,
         &shared_package_limits(),
@@ -3939,34 +3554,6 @@ fn shared_package_error(error: registry_platform_config::package::PackageError) 
             PackageError::UnsafePath
         }
         _ => PackageError::Envelope,
-    }
-}
-
-/// Verify the shared envelope of a database-active predecessor. A predecessor
-/// written by a `bregctl` release before the shared package format has no
-/// `SHA256SUMS`, and it cannot gain one without editing a live package. Its
-/// signed manifest already binds the size and digest of every file, and the
-/// predecessor closure check still refuses any file it does not list,
-/// `SHA256SUMS` and `REVISION` included, so such a package returns `None`
-/// here and is verified from its signature and signed manifest alone. Only
-/// predecessor reads take this path: startup, activation targets, and
-/// integrity inspection keep requiring the shared envelope.
-pub fn verify_predecessor_shared_package(root: &Path) -> Result<Option<SharedVerifiedPackage>> {
-    match registry_platform_config::package::verify_package(
-        root,
-        &shared_package_limits(),
-        "bregctl package",
-    ) {
-        Ok(shared) => Ok(Some(shared)),
-        Err(error)
-            if matches!(
-                error.kind(),
-                registry_platform_config::package::PackageErrorKind::SumFileMissing
-            ) =>
-        {
-            Ok(None)
-        }
-        Err(error) => Err(shared_package_error(error)),
     }
 }
 
@@ -3993,64 +3580,125 @@ fn bind_shared_envelope_files(
     Ok(())
 }
 
-/// Rederive a closed package for integrity-only comparison.
-///
-/// Signatures are checked for structural consistency but are not treated as a
-/// trust decision because this mode has no configured trust anchor. Safe
-/// permissions are still mandatory. The returned type carries no startup or
-/// activation authority.
+/// Parse a package manifest, refusing the retired `package/v1` format with
+/// the rebuild instruction before its shape is read.
+fn parse_package_envelope(bytes: &[u8]) -> Result<PackageEnvelope> {
+    let value = parse_json_strict(bytes).map_err(|_| PackageError::CanonicalJson)?;
+    if value.get("apiVersion").and_then(Value::as_str) == Some(LEGACY_PACKAGE_API_VERSION) {
+        return Err(PackageError::LegacyFormat);
+    }
+    let envelope: PackageEnvelope = parse_canonical(bytes)?;
+    if envelope.api_version != PACKAGE_API_VERSION
+        || envelope.manifest.files.is_empty()
+        || envelope.manifest.files.len() > MAX_PACKAGE_FILES
+    {
+        return Err(PackageError::Integrity);
+    }
+    Ok(envelope)
+}
+
+/// Read the manifest and every listed file of a package whose shared envelope
+/// was verified, binding each byte to the sum file and the manifest.
+fn load_verified_closure(
+    root: &Path,
+    shared: &SharedVerifiedPackage,
+    production: bool,
+) -> Result<(PackageManifest, BTreeMap<String, Vec<u8>>)> {
+    validate_root(root)?;
+    if production {
+        ensure_safe_permissions(root)?;
+    }
+    bind_shared_envelope_files(root, shared, production)?;
+
+    let manifest_path = root.join(MANIFEST_PATH);
+    let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
+    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
+    let envelope = parse_package_envelope(&manifest_bytes)?;
+    validate_intrinsic_bindings(&envelope.manifest)?;
+    let loaded = load_closure(
+        root,
+        &envelope.manifest.files,
+        manifest_bytes.len(),
+        production,
+        shared,
+    )?;
+    Ok((envelope.manifest, loaded))
+}
+
+/// Rederive a closed package for integrity-only comparison. Safe permissions
+/// are mandatory. The returned type carries no startup or activation
+/// authority.
 pub fn inspect_package_integrity(root: &Path) -> Result<IntegrityInspectedPackage> {
     let shared = verify_shared_package(root)?;
-    inspect_package(root, None, &shared)
+    inspect_package_integrity_with_verified_envelope(root, &shared)
 }
 
-/// Verify the active predecessor package for read-only successor planning.
+/// Inspect a BReg package through the retained shared envelope verification
+/// that selected it.
+pub fn inspect_package_integrity_with_verified_envelope(
+    root: &Path,
+    shared: &SharedVerifiedPackage,
+) -> Result<IntegrityInspectedPackage> {
+    let (manifest, loaded) = load_verified_closure(root, shared, true)?;
+    let (registry, _reviewed_migration_plan) = rederive(&manifest, &loaded)?;
+    #[cfg(feature = "tooling")]
+    let migration = migration_inspection_summary(&manifest, _reviewed_migration_plan.as_ref())?;
+
+    Ok(IntegrityInspectedPackage {
+        package_digest: shared.digest().to_owned(),
+        schema_fingerprint: manifest.schema_fingerprint,
+        registry,
+        #[cfg(feature = "tooling")]
+        migration,
+    })
+}
+
+/// Verify a predecessor package for read-only successor planning.
 ///
-/// The predecessor's filesystem closure and signatures are verified against the
-/// signed manifest and trust anchor, then bound to the caller's exact active
-/// database package revision and sequence. Historical generated artifacts are
-/// not rederived with the current compiler; only the signed governed model is
-/// parsed from the verified closure to expose a baseline.
+/// The predecessor's filesystem closure is verified against its sum file and
+/// manifest. The caller compares the returned package digest with the
+/// database's active package, or names the predecessor directly with
+/// `--baseline-package`. Historical generated artifacts are not rederived
+/// with the current compiler; only the packaged governed model is parsed from
+/// the verified closure to expose a baseline.
 pub fn load_predecessor_package(
     root: &Path,
-    context: &PredecessorPackageContext<'_>,
+    context: &PackageLoadContext<'_>,
 ) -> Result<VerifiedPredecessorPackage> {
-    let shared = verify_predecessor_shared_package(root)?;
-    load_predecessor_package_with_verified_envelope(root, context, shared.as_ref())
+    let shared = verify_shared_package(root)?;
+    load_predecessor_package_with_verified_envelope(root, context, &shared)
 }
 
-/// Load an active predecessor from the same shared envelope verification used
-/// to select it. `None` is a predecessor built before the shared package
-/// format, which has no `SHA256SUMS`: its signed manifest alone binds the
-/// closure, see [`verify_predecessor_shared_package`].
+/// Load a predecessor from the same shared envelope verification used to
+/// select it.
 pub fn load_predecessor_package_with_verified_envelope(
     root: &Path,
-    context: &PredecessorPackageContext<'_>,
-    shared: Option<&SharedVerifiedPackage>,
+    context: &PackageLoadContext<'_>,
+    shared: &SharedVerifiedPackage,
 ) -> Result<VerifiedPredecessorPackage> {
     load_predecessor_closure(root, context, shared).map(|(package, _)| package)
 }
 
-/// Verify the active predecessor package exactly as
-/// [`load_predecessor_package`] does, then compile its signed sources with the
-/// current compiler so a successor can be rehearsed over the predecessor's
-/// schema. The historical generated artifacts are still not compared: the
-/// rehearsal instead holds the installed schema to the signed predecessor
-/// fingerprint, and refuses when the current compiler cannot reproduce it.
+/// Verify a predecessor package exactly as [`load_predecessor_package`] does,
+/// then compile its packaged sources with the current compiler so a successor
+/// can be rehearsed over the predecessor's schema. The historical generated
+/// artifacts are still not compared: the rehearsal instead holds the installed
+/// schema to the packaged predecessor fingerprint, and refuses when the
+/// current compiler cannot reproduce it.
 #[cfg(feature = "tooling")]
 pub fn load_predecessor_rehearsal_baseline(
     root: &Path,
-    context: &PredecessorPackageContext<'_>,
+    context: &PackageLoadContext<'_>,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
-    let shared = verify_predecessor_shared_package(root)?;
-    load_predecessor_rehearsal_baseline_with_verified_envelope(root, context, shared.as_ref())
+    let shared = verify_shared_package(root)?;
+    load_predecessor_rehearsal_baseline_with_verified_envelope(root, context, &shared)
 }
 
 #[cfg(feature = "tooling")]
 pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     root: &Path,
-    context: &PredecessorPackageContext<'_>,
-    shared: Option<&SharedVerifiedPackage>,
+    context: &PackageLoadContext<'_>,
+    shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
     let registry = compile_signed_sources(&package.manifest, &loaded)?;
@@ -4059,146 +3707,28 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
 
 fn load_predecessor_closure(
     root: &Path,
-    context: &PredecessorPackageContext<'_>,
-    shared: Option<&SharedVerifiedPackage>,
+    context: &PackageLoadContext<'_>,
+    shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
-    validate_root(root)?;
     let production = context.database_initialization_environment != "local";
-    if production {
-        ensure_safe_permissions(root)?;
-    }
-    if let Some(shared) = shared {
-        bind_shared_envelope_files(root, shared, production)?;
-    }
-
-    let manifest_path = root.join(MANIFEST_PATH);
-    let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
-    if let Some(shared) = shared {
-        bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
-    }
-    let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
-    if envelope.api_version != PACKAGE_API_VERSION
-        || envelope.signed.files.is_empty()
-        || envelope.signed.files.len() > MAX_PACKAGE_FILES
-    {
-        return Err(PackageError::Integrity);
-    }
-
-    let signed_bytes = canonical_signed_bytes(&envelope.signed)?;
-    if derive_package_revision(&envelope.signed)? != envelope.signed.package_revision {
-        return Err(PackageError::Integrity);
-    }
-    validate_intrinsic_bindings(&envelope.signed)?;
-    validate_predecessor_bindings(&envelope.signed, context)?;
-    let signature_context = PackageInspectionContext {
-        environment: context.environment,
-        instance_id: context.instance_id,
-        database_id: context.database_id,
-        database_initialization_environment: context.database_initialization_environment,
-        compiler_source_revision: envelope.signed.compiler.source_revision.as_str(),
-        trust_anchor: context.trust_anchor,
-        expected_package_revision: context.expected_package_revision,
-        expected_sequence: context.expected_sequence,
-    };
-    verify_signatures(&envelope, &signature_context, production, &signed_bytes)?;
-
-    let loaded = load_closure(
-        root,
-        &envelope.signed.files,
-        manifest_bytes.len(),
-        production,
-        shared,
-    )?;
-    validate_source_inventory(&envelope.signed)?;
-    let governed = signed_predecessor_governed_model(&envelope.signed, &loaded)?;
-    validate_predecessor_registry_bindings(&envelope.signed, &governed)?;
-    let migration_baseline = governed.migration_baseline(&envelope.signed.package_revision);
+    let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    validate_source_inventory(&manifest)?;
+    let governed = signed_predecessor_governed_model(&manifest, &loaded)?;
+    validate_predecessor_registry_bindings(&manifest, &governed)?;
+    let package_digest = shared.digest().to_owned();
+    let migration_baseline = governed.migration_baseline(&package_digest);
     validate_migration_baseline(&migration_baseline)?;
-    let history_schema_descriptor =
-        governed.history_schema_descriptor(&envelope.signed.package_revision)?;
+    let history_schema_descriptor = governed.history_schema_descriptor(&package_digest)?;
 
     Ok((
         VerifiedPredecessorPackage {
-            manifest: envelope.signed,
+            manifest,
+            package_digest,
             migration_baseline,
             history_schema_descriptor,
         },
         loaded,
     ))
-}
-
-/// Rederive a closed package and verify its configured deployment bindings and
-/// signature policy without making a startup or activation claim.
-pub fn inspect_package_with_context(
-    root: &Path,
-    context: &PackageInspectionContext<'_>,
-) -> Result<IntegrityInspectedPackage> {
-    let shared = verify_shared_package(root)?;
-    inspect_package_with_context_and_verified_envelope(root, context, &shared)
-}
-
-/// Inspect a runtime-selected BReg package through the retained shared
-/// envelope verification that selected it.
-pub fn inspect_package_with_context_and_verified_envelope(
-    root: &Path,
-    context: &PackageInspectionContext<'_>,
-    shared: &SharedVerifiedPackage,
-) -> Result<IntegrityInspectedPackage> {
-    inspect_package(root, Some(context), shared)
-}
-
-fn inspect_package(
-    root: &Path,
-    context: Option<&PackageInspectionContext<'_>>,
-    shared: &SharedVerifiedPackage,
-) -> Result<IntegrityInspectedPackage> {
-    validate_root(root)?;
-    ensure_safe_permissions(root)?;
-    bind_shared_envelope_files(root, shared, true)?;
-
-    let manifest_path = root.join(MANIFEST_PATH);
-    let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, true)?;
-    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
-    let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
-    if envelope.api_version != PACKAGE_API_VERSION
-        || envelope.signed.files.is_empty()
-        || envelope.signed.files.len() > MAX_PACKAGE_FILES
-    {
-        return Err(PackageError::Integrity);
-    }
-
-    let signed_bytes = canonical_signed_bytes(&envelope.signed)?;
-    if derive_package_revision(&envelope.signed)? != envelope.signed.package_revision {
-        return Err(PackageError::Integrity);
-    }
-    validate_intrinsic_bindings(&envelope.signed)?;
-    match context {
-        Some(context) => {
-            validate_inspection_bindings(&envelope.signed, context)?;
-            let production = context.database_initialization_environment != "local";
-            verify_signatures(&envelope, context, production, &signed_bytes)?;
-        }
-        None => validate_publication_signatures(&envelope.signed, &envelope.signatures)?,
-    }
-    let loaded = load_closure(
-        root,
-        &envelope.signed.files,
-        manifest_bytes.len(),
-        true,
-        Some(shared),
-    )?;
-    let (registry, _reviewed_migration_plan) = rederive(&envelope.signed, &loaded)?;
-    #[cfg(feature = "tooling")]
-    let migration =
-        migration_inspection_summary(&envelope.signed, _reviewed_migration_plan.as_ref())?;
-
-    Ok(IntegrityInspectedPackage {
-        package_revision: envelope.signed.package_revision,
-        schema_fingerprint: envelope.signed.schema_fingerprint,
-        registry,
-        #[cfg(feature = "tooling")]
-        migration,
-    })
 }
 
 #[cfg(feature = "tooling")]
@@ -4209,7 +3739,7 @@ fn migration_inspection_summary(
     let plan = &manifest.migration_plan;
     let plan_kind = if !plan.reviewed_descriptors.is_empty() {
         MigrationInspectionPlanKind::Reviewed
-    } else if plan.from_revision.is_some() {
+    } else if plan.from_package_digest.is_some() {
         MigrationInspectionPlanKind::CompatibleAdditive
     } else {
         MigrationInspectionPlanKind::Initial
@@ -4239,7 +3769,7 @@ fn migration_inspection_summary(
     };
     Ok(MigrationInspectionSummary {
         plan_kind,
-        has_prior_revision: manifest.prior_revision.is_some(),
+        has_predecessor: plan.from_package_digest.is_some(),
         has_prior_baseline: plan.prior_baseline.is_some(),
         change_count: plan.changes.len(),
         change_counts,
@@ -4314,185 +3844,21 @@ fn validate_root(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Refuses the first deployment binding field whose package claim differs
-/// from the runtime configuration, naming the field and never either value.
-fn require_binding(matches: bool, field: PackageBindingField) -> Result<()> {
-    if matches {
-        Ok(())
-    } else {
-        Err(PackageError::BindingMismatch(field))
-    }
-}
-
-fn validate_deployment_bindings(
-    manifest: &PackageManifest,
-    environment: &str,
-    database_initialization_environment: &str,
-    instance_id: &str,
-    database_id: &str,
-) -> Result<()> {
-    require_binding(
-        manifest.environment == environment,
-        PackageBindingField::Environment,
-    )?;
-    require_binding(
-        manifest.environment == database_initialization_environment,
-        PackageBindingField::DatabaseInitializationEnvironment,
-    )?;
-    require_binding(
-        manifest.instance_id == instance_id,
-        PackageBindingField::InstanceId,
-    )?;
-    require_binding(
-        manifest.database_id == database_id,
-        PackageBindingField::DatabaseId,
-    )
-}
-
-fn validate_bindings(manifest: &PackageManifest, context: &PackageLoadContext<'_>) -> Result<()> {
-    validate_intrinsic_bindings(manifest)?;
-    validate_deployment_bindings(
-        manifest,
-        context.environment,
-        context.database_initialization_environment,
-        context.instance_id,
-        context.database_id,
-    )?;
-    require_binding(
-        manifest.compiler.source_revision == context.compiler_source_revision,
-        PackageBindingField::CompilerSourceRevision,
-    )?;
-    match context.intent {
-        PackageIntent::InitialActivation => {
-            if manifest.sequence != 1
-                || manifest.prior_revision.is_some()
-                || manifest.migration_plan.from_revision.is_some()
-            {
-                return Err(PackageError::Binding);
-            }
-        }
-        PackageIntent::Activation {
-            active_revision,
-            active_sequence,
-        } => {
-            if manifest.sequence < active_sequence {
-                return Err(PackageError::OlderThanActive);
-            }
-            // The whole revision digest names the active package, never the
-            // sequence alone: another package at the active sequence still
-            // refuses below.
-            if manifest.package_revision == active_revision && manifest.sequence == active_sequence
-            {
-                return Err(PackageError::AlreadyActive);
-            }
-            require_binding(
-                manifest.sequence != active_sequence,
-                PackageBindingField::ActiveSequence,
-            )?;
-            // The intrinsic checks already hold the plan's source revision
-            // equal to the prior revision.
-            require_binding(
-                manifest.prior_revision.as_deref() == Some(active_revision)
-                    && manifest.migration_plan.from_revision.as_deref() == Some(active_revision),
-                PackageBindingField::ActiveRevision,
-            )?;
-        }
-        PackageIntent::Startup {
-            active_revision,
-            active_sequence,
-        } => {
-            require_binding(
-                manifest.package_revision == active_revision,
-                PackageBindingField::ActiveRevision,
-            )?;
-            require_binding(
-                manifest.sequence == active_sequence,
-                PackageBindingField::ActiveSequence,
-            )?;
-            if manifest.sequence == 1 && manifest.prior_revision.is_some() {
-                return Err(PackageError::Binding);
-            }
-            if manifest.sequence > 1 && manifest.prior_revision.is_none() {
-                return Err(PackageError::Binding);
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_intrinsic_bindings(manifest: &PackageManifest) -> Result<()> {
     if manifest.package_id.is_empty()
-        || manifest.package_revision.is_empty()
-        || manifest.environment.is_empty()
-        || manifest.instance_id.is_empty()
-        || manifest.database_id.is_empty()
-        || manifest.sequence == 0
         || manifest.compiler.id != COMPILER_ID
         || manifest.compiler.source_revision.is_empty()
         || manifest.compiler.profile != PackageCompileProfile::Production
         || !valid_digest(&manifest.schema_fingerprint)
-        || manifest.migration_plan.from_revision != manifest.prior_revision
-        || (manifest.sequence == 1 && manifest.prior_revision.is_some())
-        || (manifest.sequence > 1 && manifest.prior_revision.is_none())
+        || manifest
+            .migration_plan
+            .from_package_digest
+            .as_deref()
+            .is_some_and(|digest| !valid_digest(digest))
     {
         return Err(PackageError::Binding);
     }
     Ok(())
-}
-
-fn validate_inspection_bindings(
-    manifest: &PackageManifest,
-    context: &PackageInspectionContext<'_>,
-) -> Result<()> {
-    validate_deployment_bindings(
-        manifest,
-        context.environment,
-        context.database_initialization_environment,
-        context.instance_id,
-        context.database_id,
-    )?;
-    require_binding(
-        manifest.compiler.source_revision == context.compiler_source_revision,
-        PackageBindingField::CompilerSourceRevision,
-    )?;
-    require_expected_package(
-        manifest,
-        context.expected_package_revision,
-        context.expected_sequence,
-    )
-}
-
-fn require_expected_package(
-    manifest: &PackageManifest,
-    expected_package_revision: &str,
-    expected_sequence: u64,
-) -> Result<()> {
-    require_binding(
-        manifest.package_revision == expected_package_revision,
-        PackageBindingField::ActiveRevision,
-    )?;
-    require_binding(
-        manifest.sequence == expected_sequence,
-        PackageBindingField::ActiveSequence,
-    )
-}
-
-fn validate_predecessor_bindings(
-    manifest: &PackageManifest,
-    context: &PredecessorPackageContext<'_>,
-) -> Result<()> {
-    validate_deployment_bindings(
-        manifest,
-        context.environment,
-        context.database_initialization_environment,
-        context.instance_id,
-        context.database_id,
-    )?;
-    require_expected_package(
-        manifest,
-        context.expected_package_revision,
-        context.expected_sequence,
-    )
 }
 
 struct PredecessorGovernedModel {
@@ -4509,9 +3875,9 @@ struct PredecessorGovernedModel {
 }
 
 impl PredecessorGovernedModel {
-    fn migration_baseline(&self, package_revision: &str) -> CompiledRegistryMigrationBaseline {
+    fn migration_baseline(&self, package_digest: &str) -> CompiledRegistryMigrationBaseline {
         CompiledRegistryMigrationBaseline {
-            package_revision: package_revision.to_owned(),
+            package_digest: package_digest.to_owned(),
             registry_id: self.registry_id.clone(),
             registry_version: self.version.clone(),
             registry_revision: self.model_revision.clone(),
@@ -4525,11 +3891,11 @@ impl PredecessorGovernedModel {
         }
     }
 
-    fn history_schema_descriptor(&self, package_revision: &str) -> Result<HistorySchemaDescriptor> {
+    fn history_schema_descriptor(&self, package_digest: &str) -> Result<HistorySchemaDescriptor> {
         let descriptor = HistorySchemaDescriptor {
             encoding_version: HISTORY_SCHEMA_ENCODING_VERSION.to_owned(),
             registry_id: self.registry_id.clone(),
-            package_revision: package_revision.to_owned(),
+            package_revision: package_digest.to_owned(),
             lifecycle: HistoryLifecycleDescriptor {
                 source: HistoryLifecycleSource::RevisionJournalRecordLifecycle,
                 active_value: "active".to_owned(),
@@ -4954,90 +4320,12 @@ fn validate_predecessor_registry_bindings(
     Ok(())
 }
 
-fn verify_signatures(
-    envelope: &PackageEnvelope,
-    context: &PackageInspectionContext<'_>,
-    production: bool,
-    signed_bytes: &[u8],
-) -> Result<()> {
-    if !production {
-        if context.trust_anchor.is_some()
-            || envelope.signed.signature_policy.threshold != 0
-            || !envelope.signed.signature_policy.key_ids.is_empty()
-            || !envelope.signatures.is_empty()
-        {
-            return Err(PackageError::Signature);
-        }
-        return Ok(());
-    }
-
-    let anchor_path = context.trust_anchor.ok_or(PackageError::Signature)?;
-    reject_symlink_components(anchor_path)?;
-    let anchor_bytes = read_bounded_regular(anchor_path, MAX_MANIFEST_BYTES, true)?;
-    let anchor: PackageTrustAnchor = parse_canonical_trust_anchor(&anchor_bytes)?;
-    if anchor.api_version != TRUST_ANCHOR_API_VERSION
-        || anchor.environment != context.database_initialization_environment
-        || anchor.instance_id != context.instance_id
-        || anchor.database_id != context.database_id
-        || anchor.threshold == 0
-        || usize::from(anchor.threshold) > anchor.keys.len()
-    {
-        return Err(PackageError::Signature);
-    }
-
-    let policy = &envelope.signed.signature_policy;
-    let anchor_ids = exact_sorted_unique(anchor.keys.iter().map(|key| key.key_id.as_str()))?;
-    let policy_ids = exact_sorted_unique(policy.key_ids.iter().map(String::as_str))?;
-    if policy.threshold != anchor.threshold || policy_ids != anchor_ids {
-        return Err(PackageError::Signature);
-    }
-
-    let mut trusted = BTreeMap::new();
-    for key in &anchor.keys {
-        let jwk = parse_public_jwk(&key.jwk)?;
-        if jwk.kid.as_deref() != Some(key.key_id.as_str()) {
-            return Err(PackageError::Signature);
-        }
-        trusted.insert(key.key_id.as_str(), jwk);
-    }
-    let mut verified = BTreeSet::new();
-    let mut prior_signature_id = None;
-    for signature in &envelope.signatures {
-        if prior_signature_id.is_some_and(|prior: &str| prior >= signature.key_id.as_str())
-            || !verified.insert(signature.key_id.as_str())
-        {
-            return Err(PackageError::Signature);
-        }
-        prior_signature_id = Some(signature.key_id.as_str());
-        let jwk = trusted
-            .get(signature.key_id.as_str())
-            .ok_or(PackageError::Signature)?;
-        let bytes = decode_hex(&signature.signature_hex)?;
-        verify(signed_bytes, &bytes, jwk).map_err(|_| PackageError::Signature)?;
-    }
-    if verified.len() < usize::from(anchor.threshold) {
-        return Err(PackageError::Signature);
-    }
-    Ok(())
-}
-
-fn parse_public_jwk(value: &Value) -> Result<PublicJwk> {
-    let members = value.as_object().ok_or(PackageError::Signature)?;
-    let allowed = BTreeSet::from(["alg", "crv", "e", "kid", "kty", "n", "x", "y"]);
-    if members.keys().any(|key| !allowed.contains(key.as_str())) {
-        return Err(PackageError::Signature);
-    }
-    let bytes = canonicalize_json(value).map_err(|_| PackageError::Signature)?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| PackageError::Signature)?;
-    PublicJwk::parse(text).map_err(|_| PackageError::Signature)
-}
-
 fn load_closure(
     root: &Path,
     entries: &[PackageFile],
     manifest_size: usize,
     production: bool,
-    shared: Option<&SharedVerifiedPackage>,
+    shared: &SharedVerifiedPackage,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut listed = BTreeSet::new();
     let mut loaded = BTreeMap::new();
@@ -5057,9 +4345,7 @@ fn load_closure(
         reject_relative_symlinks(root, relative)?;
         let path = root.join(relative);
         let bytes = read_bounded_regular(&path, MAX_FILE_BYTES, production)?;
-        if let Some(shared) = shared {
-            bind_shared_file(shared, &entry.path, &bytes)?;
-        }
+        bind_shared_file(shared, &entry.path, &bytes)?;
         if bytes.len() as u64 != entry.size || digest(&bytes) != entry.sha256 {
             return Err(PackageError::Integrity);
         }
@@ -5075,16 +4361,14 @@ fn load_closure(
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     expected.insert(MANIFEST_PATH.to_owned());
-    if let Some(shared) = shared {
-        let shared_files = shared.files().map(str::to_owned).collect::<BTreeSet<_>>();
-        if shared_files.contains(REVISION_FILE) {
-            expected.insert(REVISION_FILE.to_owned());
-        }
-        if shared_files != expected {
-            return Err(PackageError::Envelope);
-        }
-        expected.insert(SUM_FILE.to_owned());
+    let shared_files = shared.files().map(str::to_owned).collect::<BTreeSet<_>>();
+    if shared_files.contains(REVISION_FILE) {
+        expected.insert(REVISION_FILE.to_owned());
     }
+    if shared_files != expected {
+        return Err(PackageError::Envelope);
+    }
+    expected.insert(SUM_FILE.to_owned());
     if actual != expected {
         return Err(PackageError::Closure);
     }
@@ -5276,8 +4560,9 @@ fn rederive_reviewed_migration_plan(
         .prior_baseline
         .as_ref()
         .ok_or(PackageError::MigrationPlan)?;
-    let prior_revision = manifest
-        .prior_revision
+    let prior_package_digest = manifest
+        .migration_plan
+        .from_package_digest
         .as_deref()
         .ok_or(PackageError::MigrationPlan)?;
     let prior_schema_fingerprint = manifest
@@ -5289,10 +4574,9 @@ fn rederive_reviewed_migration_plan(
         &manifest.migration_plan.reviewed_descriptors,
         &files,
         &ReviewedPlanBindings {
-            prior_revision,
+            prior_package_digest,
             prior_schema_fingerprint,
             final_schema_fingerprint: &manifest.schema_fingerprint,
-            database_id: &manifest.database_id,
             changes: &manifest.migration_plan.changes,
             prior_entities: &baseline.entities,
             candidate_entities: compiled.entities(),
@@ -5466,9 +4750,6 @@ fn validate_captured_bindings(
 ) -> Result<()> {
     let identity = project.package.as_ref().ok_or(PackageError::Derivation)?;
     if project.registry.id != manifest.package_id
-        || identity.environment != manifest.environment
-        || identity.instance_id != manifest.instance_id
-        || identity.sequence != manifest.sequence
         || identity.source_revision != manifest.compiler.source_revision
     {
         return Err(PackageError::Derivation);
@@ -5526,11 +4807,8 @@ fn expected_migration_plan(
     manifest: &PackageManifest,
     compiled: &CompiledRegistry,
 ) -> Result<MigrationPlan> {
-    match (
-        manifest.prior_revision.as_deref(),
-        manifest.migration_plan.from_revision.as_deref(),
-    ) {
-        (None, None) => {
+    match manifest.migration_plan.from_package_digest.as_deref() {
+        None => {
             if manifest.migration_plan.prior_baseline.is_some()
                 || !manifest.migration_plan.changes.is_empty()
                 || !manifest.migration_plan.reviewed_descriptors.is_empty()
@@ -5540,17 +4818,17 @@ fn expected_migration_plan(
             }
             Ok(initial_migration_plan(compiled))
         }
-        (Some(prior_revision), Some(from_revision)) if prior_revision == from_revision => {
+        Some(from_package_digest) => {
             let baseline = manifest
                 .migration_plan
                 .prior_baseline
                 .as_ref()
                 .ok_or(PackageError::MigrationPlan)?;
-            if baseline.package_revision != prior_revision {
+            if baseline.package_digest != from_package_digest {
                 return Err(PackageError::MigrationPlan);
             }
             let change_set =
-                compiled_registry_change_set_from_baseline(baseline, compiled, prior_revision);
+                compiled_registry_change_set_from_baseline(baseline, compiled, from_package_digest);
             if manifest.migration_plan.reviewed_descriptors.is_empty() {
                 if manifest.migration_plan.prior_schema_fingerprint.is_some() {
                     return Err(PackageError::MigrationPlan);
@@ -5572,7 +4850,6 @@ fn expected_migration_plan(
                 )
             }
         }
-        _ => Err(PackageError::MigrationPlan),
     }
 }
 
@@ -5587,35 +4864,11 @@ fn validate_migration_baseline(baseline: &CompiledRegistryMigrationBaseline) -> 
     Ok(())
 }
 
-fn exact_sorted_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<Vec<&'a str>> {
-    let mut result = Vec::new();
-    for value in values {
-        if value.is_empty() || result.last().is_some_and(|prior| *prior >= value) {
-            return Err(PackageError::Signature);
-        }
-        result.push(value);
-    }
-    Ok(result)
-}
-
 fn parse_canonical<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
     let value = parse_json_strict(bytes).map_err(|_| PackageError::CanonicalJson)?;
     let canonical = canonicalize_json(&value).map_err(|_| PackageError::CanonicalJson)?;
     if canonical != bytes {
         return Err(PackageError::CanonicalJson);
-    }
-    serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)
-}
-
-// The trust anchor is an operator-maintained file, not a signed package
-// artifact, so a well-formed but non-canonically-formatted anchor is refused
-// with its own cause instead of the generic `CanonicalJson` a malformed or
-// mis-shaped anchor still gets.
-fn parse_canonical_trust_anchor(bytes: &[u8]) -> Result<PackageTrustAnchor> {
-    let value = parse_json_strict(bytes).map_err(|_| PackageError::CanonicalJson)?;
-    let canonical = canonicalize_json(&value).map_err(|_| PackageError::CanonicalJson)?;
-    if canonical != bytes {
-        return Err(PackageError::TrustAnchorNotCanonical);
     }
     serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)
 }
@@ -5807,24 +5060,4 @@ fn digest(bytes: &[u8]) -> String {
         write!(&mut result, "{byte:02x}").expect("writing to a String cannot fail");
     }
     result
-}
-
-fn decode_hex(value: &str) -> Result<Vec<u8>> {
-    if value.is_empty()
-        || value.len() > 32 * 1024
-        || !value.len().is_multiple_of(2)
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(PackageError::Signature);
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let text = std::str::from_utf8(pair).map_err(|_| PackageError::Signature)?;
-            u8::from_str_radix(text, 16).map_err(|_| PackageError::Signature)
-        })
-        .collect()
 }

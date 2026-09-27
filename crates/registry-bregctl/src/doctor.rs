@@ -135,6 +135,16 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::DatabaseIdentityMismatch => (
+            "startup.database.identity_mismatch",
+            "database",
+            "the database records a different database id than identity.databaseId: point database.runtimeUrlRef at the database it names or correct identity.databaseId",
+        ),
+        StartupError::ActivePackageMismatch => (
+            "startup.package.not_active",
+            "package",
+            "the database has not activated the package at package.root: run bregctl plan --package DIR then bregctl apply --package DIR",
+        ),
         StartupError::InstanceClaimMismatch => (
             "startup.instance_claim.mismatch",
             "database",
@@ -230,7 +240,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_breg::package::{PackageBindingField, PackageError};
+    use registry_breg::package::PackageError;
     use std::collections::HashSet;
 
     #[test]
@@ -264,6 +274,8 @@ mod tests {
             StartupError::DatabaseConnection,
             StartupError::DatabaseUnready,
             StartupError::InstanceClaimMismatch,
+            StartupError::DatabaseIdentityMismatch,
+            StartupError::ActivePackageMismatch,
             StartupError::Audit,
             StartupError::Cursor,
             StartupError::Oidc,
@@ -446,15 +458,11 @@ mod tests {
             PackageError::Closure,
             PackageError::Integrity,
             PackageError::Binding,
-            PackageError::BindingMismatch(PackageBindingField::Environment),
-            PackageError::BindingMismatch(PackageBindingField::DatabaseId),
-            PackageError::AlreadyActive,
-            PackageError::OlderThanActive,
-            PackageError::Signature,
             PackageError::Derivation,
             PackageError::MigrationPlan,
             PackageError::Permissions,
-            PackageError::TrustAnchorNotCanonical,
+            PackageError::Envelope,
+            PackageError::LegacyFormat,
         ];
         let mut messages = HashSet::new();
         for cause in causes {
@@ -472,6 +480,20 @@ mod tests {
             );
         }
         assert_eq!(messages.len(), causes.len());
+    }
+
+    #[test]
+    fn a_database_that_runs_another_package_or_database_id_names_the_next_command() {
+        let database = startup_diagnostic(StartupError::DatabaseIdentityMismatch);
+        assert_eq!(database.code, "startup.database.identity_mismatch");
+        assert_eq!(database.path, "database");
+        assert!(database.message.contains("identity.databaseId"));
+
+        let package = startup_diagnostic(StartupError::ActivePackageMismatch);
+        assert_eq!(package.code, "startup.package.not_active");
+        assert_eq!(package.path, "package");
+        assert!(package.message.contains("bregctl plan --package DIR"));
+        assert!(package.message.contains("bregctl apply --package DIR"));
     }
 
     #[test]
@@ -574,16 +596,6 @@ mod tests {
                 RuntimeConfigError::UnsafePackageRoot,
                 "startup.runtime_config.unsafe_package_root",
                 "/package/root",
-            ),
-            (
-                RuntimeConfigError::TrustAnchorUnavailable,
-                "startup.runtime_config.trust_anchor_unavailable",
-                "/package/trustAnchorPath",
-            ),
-            (
-                RuntimeConfigError::UnsafeTrustAnchor,
-                "startup.runtime_config.unsafe_trust_anchor",
-                "/package/trustAnchorPath",
             ),
             (
                 RuntimeConfigError::InvalidOidc,

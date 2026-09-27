@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: acceptance
-  instanceId: consent-person-registry-fixture
-  sequence: 1
   sourceRevision: consent-person-registry-fixture-0.1.0
 manifestProjection:
   accessProfile: person-registry-operator

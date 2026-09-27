@@ -5,15 +5,13 @@ use std::path::{Path, PathBuf};
 
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    apply_verified_package, confirm_active_package, AppliedFieldEncryptionKeySource,
+    apply_verified_package, bind_active_package, read_recorded_registry_state,
+    successor_plan_is_empty, ActivationDeployment, AppliedFieldEncryptionKeySource,
     ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
     DestructiveBackupEvidence, MigrationError,
 };
-use registry_breg::package::{
-    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPredecessorPackage,
-};
-use registry_breg::postgres::ExpectedRegistryIdentity;
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
+use registry_breg::package::{load_package, PackageError, VerifiedPredecessorPackage};
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 
 #[derive(Debug)]
 pub(crate) enum ApplyLifecycleError {
@@ -22,6 +20,7 @@ pub(crate) enum ApplyLifecycleError {
     TargetPackagePath,
     CurrentPackage(PackageError),
     TargetPackage(PackageError),
+    Uninitialized,
     EventDestinations,
     FieldEncryptionConfiguration,
     FieldEncryptionCustody,
@@ -44,12 +43,11 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
 pub(crate) enum ApplyLifecycleActivation {
     Initial,
     Successor,
-    AlreadyActive,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyLifecycleOutcome {
-    pub package_revision: String,
+    pub package_digest: String,
     pub schema_fingerprint: String,
     pub package_sequence: i64,
     pub activation: ApplyLifecycleActivation,
@@ -68,43 +66,32 @@ pub(crate) fn run(
     let config =
         load_runtime_config(request.runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
 
+    let target = load_package(request.package, &config.package_load_context())
+        .map_err(ApplyLifecycleError::TargetPackage)?;
+    let identity = config.identity();
+    let deployment = ActivationDeployment::new(
+        identity.environment(),
+        identity.instance_id(),
+        identity.database_id(),
+    );
+    // Everything the package and the runtime file decide is checked before
+    // any database authority is resolved.
     let current_package = if request.initial {
         None
     } else {
+        // An empty successor plan is a property of the package alone.
+        if successor_plan_is_empty(&target) {
+            return Err(ApplyLifecycleError::Apply(MigrationError::EmptyPlan));
+        }
         Some(
             config
                 .load_active_predecessor_package()
                 .map_err(ApplyLifecycleError::CurrentPackage)?,
         )
     };
-    let current_identity = current_package
-        .as_ref()
-        .map(expected_identity)
-        .transpose()?;
     let current_history_descriptor = current_package
         .as_ref()
         .map(VerifiedPredecessorPackage::history_schema_descriptor);
-    let target_intent = match current_identity.as_ref() {
-        Some(current) => PackageIntent::Activation {
-            active_revision: &current.package_revision,
-            active_sequence: u64::try_from(current.package_sequence)
-                .map_err(|_| ApplyLifecycleError::TargetPackage(PackageError::Binding))?,
-        },
-        None => PackageIntent::InitialActivation,
-    };
-    let target = match load_package(request.package, &target_context(&config, target_intent)) {
-        Err(PackageError::AlreadyActive) => {
-            return confirm_already_active(&config, request.package)
-        }
-        loaded => loaded.map_err(ApplyLifecycleError::TargetPackage)?,
-    };
-    if request.initial
-        && (target.manifest().package_revision != config.package().active_revision()
-            || target.manifest().sequence != config.package().active_sequence()
-            || target.manifest().sequence != 1)
-    {
-        return Err(ApplyLifecycleError::TargetPackage(PackageError::Binding));
-    }
     let declares_encrypted_fields = target.registry().entities().values().any(|entity| {
         entity
             .fields
@@ -141,6 +128,39 @@ pub(crate) fn run(
         config.operational_timeouts().migration_statement,
     )
     .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| ApplyLifecycleError::Runtime)?;
+
+    // A package carries no place in the apply order, so a successor is bound
+    // to what the database records: the active package digest, and the
+    // configured active package that must be that exact package.
+    let current_identity = match current_package.as_ref() {
+        None => None,
+        Some(current_package) => {
+            let recorded = runtime
+                .block_on(read_recorded_registry_state(
+                    &connection,
+                    &target.manifest().package_id,
+                    config.database().roles().migration(),
+                    timeouts,
+                ))
+                .map_err(ApplyLifecycleError::Apply)?
+                .ok_or(ApplyLifecycleError::Uninitialized)?;
+            if target.package_digest() == recorded.identity.package_revision {
+                return Err(ApplyLifecycleError::Apply(MigrationError::AlreadyActive));
+            }
+            bind_active_package(
+                &recorded.identity,
+                current_package.package_digest(),
+                deployment,
+            )
+            .map_err(ApplyLifecycleError::Apply)?;
+            Some(recorded.identity)
+        }
+    };
+
     let backup_evidence = backup_arguments
         .iter()
         .map(|backup| {
@@ -155,6 +175,7 @@ pub(crate) fn run(
     let mut apply = ApplyVerifiedPackageRequest::new(
         &connection,
         &target,
+        deployment,
         precondition,
         ApplyRoles::new(
             config.database().roles().migration(),
@@ -178,15 +199,11 @@ pub(crate) fn run(
             provider, secrets,
         ));
     }
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| ApplyLifecycleError::Runtime)?;
     let activated = runtime
         .block_on(apply_verified_package(apply))
         .map_err(ApplyLifecycleError::Apply)?;
     Ok(ApplyLifecycleOutcome {
-        package_revision: activated.package_revision,
+        package_digest: activated.package_revision,
         schema_fingerprint: activated.schema_fingerprint,
         package_sequence: activated.package_sequence,
         activation: if request.initial {
@@ -194,71 +211,6 @@ pub(crate) fn run(
         } else {
             ApplyLifecycleActivation::Successor
         },
-    })
-}
-
-fn target_context<'a>(
-    config: &'a RuntimeConfig,
-    intent: PackageIntent<'a>,
-) -> PackageLoadContext<'a> {
-    PackageLoadContext {
-        environment: config.identity().environment(),
-        instance_id: config.identity().instance_id(),
-        database_id: config.identity().database_id(),
-        database_initialization_environment: config
-            .identity()
-            .database_initialization_environment(),
-        compiler_source_revision: config.package().compiler_source_revision(),
-        trust_anchor: config.package_trust_anchor(),
-        intent,
-    }
-}
-
-/// Re-presenting the active package is a no-op, so repeated deploys stay
-/// idempotent. The activation load only routed here from an unverified
-/// manifest claim; the target is then verified in full as the configured
-/// active package, and the database must record that exact identity as active
-/// and ready. Nothing is written.
-fn confirm_already_active(
-    config: &RuntimeConfig,
-    package: &Path,
-) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
-    let target = load_package(
-        package,
-        &target_context(
-            config,
-            PackageIntent::Startup {
-                active_revision: config.package().active_revision(),
-                active_sequence: config.package().active_sequence(),
-            },
-        ),
-    )
-    .map_err(ApplyLifecycleError::TargetPackage)?;
-    let connection = config
-        .migration_database_connection_config()
-        .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
-    let timeouts = ApplyTimeouts::new(
-        config.operational_timeouts().migration_lock,
-        config.operational_timeouts().migration_statement,
-    )
-    .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| ApplyLifecycleError::Runtime)?;
-    let confirmed = runtime
-        .block_on(confirm_active_package(
-            &connection,
-            &target,
-            config.database().roles().migration(),
-            timeouts,
-        ))
-        .map_err(ApplyLifecycleError::Apply)?;
-    Ok(ApplyLifecycleOutcome {
-        package_revision: confirmed.package_revision,
-        schema_fingerprint: confirmed.schema_fingerprint,
-        package_sequence: confirmed.package_sequence,
-        activation: ApplyLifecycleActivation::AlreadyActive,
     })
 }
 
@@ -280,21 +232,6 @@ fn validate_field_encryption_custody_kind(
         return Err(ApplyLifecycleError::FieldEncryptionCustody);
     }
     Ok(())
-}
-
-fn expected_identity(
-    package: &VerifiedPredecessorPackage,
-) -> Result<ExpectedRegistryIdentity, ApplyLifecycleError> {
-    Ok(ExpectedRegistryIdentity {
-        package_id: package.package_id().to_owned(),
-        environment: package.environment().to_owned(),
-        instance_id: package.instance_id().to_owned(),
-        database_id: package.database_id().to_owned(),
-        package_revision: package.package_revision().to_owned(),
-        schema_fingerprint: package.schema_fingerprint().to_owned(),
-        package_sequence: i64::try_from(package.sequence())
-            .map_err(|_| ApplyLifecycleError::CurrentPackage(PackageError::Binding))?,
-    })
 }
 
 struct BackupArgument {

@@ -994,7 +994,7 @@ fn handler_bounds_execution_inputs_and_decoded_results() {
 fn handler_package_captures_exact_project_and_module_script_origins() {
     use registry_breg::package::{
         inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
-        PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
+        PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
     let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
     let asset = PackageSourceFile {
@@ -1002,19 +1002,11 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
         bytes: script.as_bytes().to_vec(),
     };
     let mut source = project();
-    source["package"] = json!({"environment":"local","instanceId":"instance-under-test","sequence":1,"sourceRevision":"compiler-source-revision"});
+    source["package"] = json!({"sourceRevision":"compiler-source-revision"});
     let request = PackageBuildRequest {
-        environment: "local".into(),
-        instance_id: "instance-under-test".into(),
-        database_id: "database-under-test".into(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: "compiler-source-revision".into(),
         schema_fingerprint: format!("sha256:{}", "2".repeat(64)),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: vec![],
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".into(),
             bytes: serde_json::to_vec(&source).unwrap(),
@@ -1030,10 +1022,11 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
     let package =
         prepare_package_with_project_assets(request.clone(), vec![asset.clone()]).unwrap();
     assert_eq!(
-        package.package_revision(),
+        package.package_digest().unwrap(),
         prepare_package_with_project_assets(request.clone(), vec![asset.clone()])
             .unwrap()
-            .package_revision()
+            .package_digest()
+            .unwrap()
     );
     assert!(prepare_package_with_project_assets(request.clone(), vec![]).is_err());
     let mut revised_asset = asset.clone();
@@ -1041,14 +1034,15 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
         .bytes
         .extend_from_slice(b"\n// revised governed source");
     assert_ne!(
-        package.package_revision(),
+        package.package_digest().unwrap(),
         prepare_package_with_project_assets(request.clone(), vec![revised_asset])
             .unwrap()
-            .package_revision()
+            .package_digest()
+            .unwrap()
     );
     let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let published = directory.path().join("project");
-    package.publish_to_directory(&published, vec![]).unwrap();
+    package.publish_to_directory(&published).unwrap();
     inspect_package_integrity(&published).unwrap();
     std::fs::write(
         published.join("source/project/handlers/register.rhai"),
@@ -1079,7 +1073,7 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
     }];
     let package = prepare_package_with_project_assets(module_request.clone(), vec![]).unwrap();
     let published = directory.path().join("module");
-    package.publish_to_directory(&published, vec![]).unwrap();
+    package.publish_to_directory(&published).unwrap();
     inspect_package_integrity(&published).unwrap();
     module_request.modules[0].assets.clear();
     assert!(prepare_package_with_project_assets(module_request, vec![asset]).is_err());

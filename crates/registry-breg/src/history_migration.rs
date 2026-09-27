@@ -384,7 +384,7 @@ async fn establish_existing_history_baseline(
     predecessor_baseline: &CompiledRegistryMigrationBaseline,
     predecessor_descriptor: &HistorySchemaDescriptor,
 ) -> Result<()> {
-    if predecessor_baseline.package_revision != current.package_revision
+    if predecessor_baseline.package_digest != current.package_revision
         || predecessor_descriptor.package_revision != current.package_revision
     {
         return Err(HistoryMigrationError::RevisionUnavailable);
@@ -396,7 +396,7 @@ async fn establish_existing_history_baseline(
     let members = verify_live_rows_match_journal_heads(
         transaction,
         &predecessor_baseline.entities,
-        Some(&predecessor_baseline.package_revision),
+        Some(&predecessor_baseline.package_digest),
     )
     .await?;
     insert_existing_history_baseline(transaction, &current.package_revision, &members).await
@@ -612,7 +612,7 @@ async fn verify_revision_journal_uses_active_descriptor(
         if entity_id.is_empty()
             || package_revision.is_empty()
             || !predecessor_baseline.entities.contains_key(&entity_id)
-            || package_revision != predecessor_baseline.package_revision
+            || package_revision != predecessor_baseline.package_digest
         {
             return Err(HistoryMigrationError::RevisionUnavailable);
         }

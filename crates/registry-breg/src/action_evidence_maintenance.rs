@@ -51,6 +51,7 @@ impl ActionEvidenceRetentionOperatorService {
         let mut client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
+            config.identity().database_id(),
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),

@@ -145,7 +145,7 @@ struct TokenArgs {
 
 #[derive(Debug, Args)]
 struct StartArgs {
-    /// Existing authored registry project. Its package environment must be local.
+    /// Existing authored registry project.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
     /// Local clients, profile bindings, and optional seed records (default on
@@ -247,7 +247,7 @@ struct State {
     container_id: Option<String>,
     tls_files_copied: bool,
     database_ready: bool,
-    package_revision: Option<String>,
+    package_digest: Option<String>,
     activated: bool,
     seeded: BTreeSet<String>,
     outputs: Vec<CredentialOutput>,
@@ -296,6 +296,14 @@ struct CredentialOutput {
 impl State {
     fn root(&self) -> PathBuf {
         self.project.join(".breg/dev")
+    }
+    /// The retained predecessor package a successor is built and rehearsed
+    /// over: the package the database runs until the successor activates.
+    fn baseline_package(&self) -> Option<PathBuf> {
+        self.baseline_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.parent())
+            .map(|baseline| baseline.join("build/package"))
     }
     fn database_image(&self) -> &'static str {
         if self.requires_postgis {
@@ -353,7 +361,7 @@ impl State {
             "clientAssertionAudience":self.issuer_origin(),"resource":self.audience(),
             "webhookUrl":self.webhook_port.map(|port|format!("http://127.0.0.1:{port}/events")),
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
-            "audience":self.audience(),"packageRevision":self.package_revision,"packageSequence":self.sequence,"activationPending":!self.activated,
+            "audience":self.audience(),"packageDigest":self.package_digest,"packageSequence":self.sequence,"activationPending":!self.activated,
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,"scopes":client.scopes,
                 "clientIdFile":client.client_id_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("client-id")),
                 "assertionKeyFile":client.assertion_key_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("assertion-key.jwk"))})).collect::<Vec<_>>()}),
@@ -673,7 +681,7 @@ fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
     if compiled.event_deliveries().deliveries.is_empty() {
         return Ok(());
     }
-    if state.package_revision.is_some() || state.activated {
+    if state.package_digest.is_some() || state.activated {
         bail!("an activated local event package lacks its retained receiver binding; preserve its state for inspection");
     }
     let port = receiver_port(state)?;
@@ -689,13 +697,7 @@ fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
         private::check(&runtime, false)?;
         fs::remove_file(runtime)?;
     }
-    config::runtime(
-        &root,
-        state,
-        clients,
-        &format!("sha256:{}", "1".repeat(64)),
-        true,
-    )?;
+    config::runtime(&root, state, clients, true)?;
     state.save()
 }
 
@@ -839,9 +841,6 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     let identity = compiled
         .package()
         .context("local development requires an authored package identity")?;
-    if identity.environment != "local" {
-        bail!("dev requires package.environment: local");
-    }
     let mut files = BTreeMap::from([("registry.yaml".into(), source.project_bytes)]);
     for asset in source.project_assets {
         files.insert(asset.path.trim_start_matches("source/").into(), asset.bytes);
@@ -874,7 +873,10 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     Ok(CapturedSource {
         files,
         digest,
-        instance_id: identity.instance_id.clone(),
+        // A package names no deployment, so the local session is the one
+        // instance of its registry and takes the registry id, which satisfies
+        // the instance id grammar, as its runtime `identity.instanceId`.
+        instance_id: compiled.registry_id().to_owned(),
         source_revision: identity.source_revision.clone(),
     })
 }
@@ -966,9 +968,6 @@ fn start(args: StartArgs) -> Result<Value> {
     } else {
         let compiled = crate::compile(&project, crate::ProfileArg::Production, "dev")
             .map_err(|_| anyhow::anyhow!("project no longer compiles"))?;
-        if compiled.package().context("package missing")?.sequence != 1 {
-            bail!("first dev start requires package.sequence: 1");
-        }
         let previous = previous.as_ref();
         let issuer_project = requested_issuer
             .clone()
@@ -1026,7 +1025,7 @@ fn start(args: StartArgs) -> Result<Value> {
             container_id: None,
             tls_files_copied: false,
             database_ready: false,
-            package_revision: None,
+            package_digest: None,
             activated: false,
             seeded: BTreeSet::new(),
             outputs: vec![],
@@ -1052,7 +1051,7 @@ fn start(args: StartArgs) -> Result<Value> {
         read_state(&root)?
     };
     if state.sequence > 1 && state.container_id.is_none() {
-        bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Create a fresh project with package.sequence: 1 before starting a new database");
+        bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session");
     }
     prepare_receiver(&mut state, &clients)?;
     verify_outputs(&state)?;
@@ -1434,7 +1433,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
     let result = (|| {
         ensure_active(&terminate)?;
         if let Some(port) = state.webhook_port {
-            children.receiver = Some(events::Receiver::start(&root, port)?);
+            children.receiver = Some(events::Receiver::start(&root, port, &state.instance_id)?);
         }
         database(&args.docker_bin, &mut state)?;
         ensure_active(&terminate)?;
@@ -1444,7 +1443,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         // is retained across stop/start exactly like the registry's own.
         issuer(&args.docker_bin, &state, &clients)?;
         ensure_active(&terminate)?;
-        if state.package_revision.is_none() {
+        if state.package_digest.is_none() {
             // The schema-test rehearsal presents these tokens to its own
             // disposable runtime; the seed below acquires its own.
             tokens(&state, &clients)?;
@@ -2590,12 +2589,10 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         .arg(root.join("runtime-test.yaml"))
         .arg("--credentials")
         .arg(root.join("schema-test-credentials.yaml"))
-        .arg("--database-id")
-        .arg(DATABASE_ID)
         .arg("--output")
         .arg(root.join("schema-test-receipt.json"));
-    if let Some(baseline) = &state.baseline_runtime {
-        test.arg("--baseline-runtime-config").arg(baseline);
+    if let Some(baseline) = state.baseline_package() {
+        test.arg("--baseline-package").arg(baseline);
     }
     let report: Value = serde_json::from_slice(&command(&mut test, &root, "schema-test", None)?)?;
     let fingerprint = report["schemaFingerprint"]
@@ -2605,23 +2602,21 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     package
         .arg("package")
         .arg(root.join("project"))
-        .arg("--database-id")
-        .arg(DATABASE_ID)
         .arg("--schema-fingerprint")
         .arg(fingerprint)
         .arg("--test-receipt")
         .arg(root.join("schema-test-receipt.json"))
         .arg("--output")
         .arg(root.join("build"));
-    if let Some(baseline) = &state.baseline_runtime {
-        package.arg("--baseline-runtime-config").arg(baseline);
+    if let Some(baseline) = state.baseline_package() {
+        package.arg("--baseline-package").arg(baseline);
     }
     let report: Value = serde_json::from_slice(&command(&mut package, &root, "package", None)?)?;
-    let revision = report["packageRevision"]
+    let digest = report["packageDigest"]
         .as_str()
-        .context("package report has no revision")?;
-    config::runtime(&root, state, clients, revision, false)?;
-    state.package_revision = Some(revision.into());
+        .context("package report has no package digest")?;
+    config::runtime(&root, state, clients, false)?;
+    state.package_digest = Some(digest.into());
     state.save()
 }
 

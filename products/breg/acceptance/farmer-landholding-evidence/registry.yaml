@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: acceptance
-  instanceId: farmer-landholding-evidence-acceptance
-  sequence: 1
   sourceRevision: farmer-landholding-evidence-acceptance-0.1.0
 manifestProjection:
   accessProfile: landholding-reader

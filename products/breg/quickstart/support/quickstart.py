@@ -20,7 +20,7 @@ def replace_package(project: Path):
     path=project/'registry.yaml'; source=path.read_text()
     start=source.find('\npackage:\n'); end=source.find('\nmanifestProjection:\n')
     if start<0 or end<=start: raise QuickstartError('project must contain package before manifestProjection')
-    package=f'\npackage:\n  environment: local\n  instanceId: {INSTANCE_ID}\n  sequence: 1\n  sourceRevision: {SOURCE_REVISION}\n'
+    package=f'\npackage:\n  sourceRevision: {SOURCE_REVISION}\n'
     path.write_text(source[:start]+package+source[end:])
 
 def prepare_spatial(fixture: Path, project: Path):

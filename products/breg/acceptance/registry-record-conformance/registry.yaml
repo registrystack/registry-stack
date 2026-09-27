@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: acceptance
-  instanceId: cross-product-conformance-acceptance
-  sequence: 1
   sourceRevision: cross-product-conformance-0.1.0
 manifestProjection:
   accessProfile: public-reader

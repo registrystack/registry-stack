@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: synthetic-evidence-registry
-  sequence: 1
   sourceRevision: synthetic-evidence-registry-v1
 manifestProjection:
   accessProfile: operator

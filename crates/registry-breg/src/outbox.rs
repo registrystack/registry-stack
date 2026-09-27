@@ -724,10 +724,10 @@ mod tests {
     /// The wrapper proof budgets `source`'s instance id at its raw byte
     /// length, `compiler::MAX_BUILD_ID_BYTES`, so the budget only holds while
     /// `package::valid_build_id` accepts nothing longer and no byte its
-    /// grammar admits needs JSON escaping. The runtime deployment identity
-    /// cannot extend the value either: startup holds it to exact equality
-    /// with the package manifest identity, whose instance id `valid_build_id`
-    /// already bound at package build.
+    /// grammar admits needs JSON escaping. The instance id reaches the
+    /// envelope from the runtime configuration's `identity.instanceId`, which
+    /// the configuration loader holds to `valid_build_id`, through the
+    /// registry state `bregctl apply` records from it.
     #[test]
     fn the_widest_build_id_fits_the_envelope_source_term_unescaped() {
         let widest = "i".repeat(crate::compiler::MAX_BUILD_ID_BYTES as usize);

@@ -2394,7 +2394,6 @@ struct DestinationFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
     receiver_port: u16,
 }
 
@@ -2412,8 +2411,6 @@ impl DestinationFixture {
         let package_root = root.join("package");
         fs::create_dir_all(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         write_secret(&secret_root.join(KEY_REF_CANARY), HMAC_KEY);
         write_secret(
             &secret_root.join(CA_REF_CANARY),
@@ -2423,7 +2420,6 @@ impl DestinationFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
             receiver_port: receiver.address.port(),
         }
     }
@@ -2500,10 +2496,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -2541,8 +2533,6 @@ cursor:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
-            PACKAGE_REVISION,
         )
     }
 }

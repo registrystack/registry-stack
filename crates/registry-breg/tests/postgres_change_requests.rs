@@ -3053,7 +3053,7 @@ fn attachment_runtime_config(root: &std::path::Path) -> Value {
         "identity":{"environment":"local","instanceId":"attachment-http-test","databaseId":Uuid::new_v4().to_string(),"databaseInitializationEnvironment":"local"},
         "secretProviders":{"file":{"root":root}},
         "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
-        "package":{"root":root,"trustAnchorPath":root.join("anchor"),"compilerSourceRevision":"test-source","activeRevision":PACKAGE_REVISION,"activeSequence":1},
+        "package":{"root":root},
         "authentication":{"oidc":{"issuer":"https://issuer.example","audience":"urn:breg:test","allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
         "audit":{"hashKeyRef":"secret:file/audit","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},

@@ -25,7 +25,7 @@ use registry_breg::compiler::{
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use registry_breg::event_destination::EventDestinationCompatibilityInventory;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, MigrationError,
 };
 #[cfg(feature = "tooling")]
@@ -34,14 +34,12 @@ use registry_breg::migration_plan::{
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{
-    change_set_to_applicable_migration_plan, compiled_registry_change_set, derive_package_revision,
-    load_package, load_package_with_verified_envelope, load_predecessor_package, prepare_package,
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBindingField,
-    PackageBuildRequest, PackageEnvelope, PackageError, PackageFile, PackageFileRole,
-    PackageIntent, PackageLoadContext, PackageManifest, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor,
-    PredecessorPackageContext, SignaturePolicy, TrustAnchorKey, MAX_PACKAGE_SOURCE_FILE_BYTES,
-    TRUST_ANCHOR_API_VERSION,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set, load_package,
+    load_package_with_verified_envelope, load_predecessor_package, prepare_package,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest, PackageEnvelope,
+    PackageError, PackageFile, PackageFileRole, PackageLoadContext, PackageManifest,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    MAX_PACKAGE_SOURCE_FILE_BYTES,
 };
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
@@ -54,7 +52,6 @@ use registry_platform_config::package::{
     verify_package as verify_shared_package, write_sum_file, PackageLimits as SharedPackageLimits,
     REVISION_FILE, SUM_FILE,
 };
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -81,37 +78,31 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 fn package_builder_is_deterministic_and_local_publication_loads() {
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-    let project_bytes = project_bytes("local", 1, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let request = build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
         project_bytes,
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     });
     let first = prepare_package(request.clone()).expect("first package prepares");
     let second = prepare_package(request).expect("second package prepares");
     assert_eq!(first.manifest(), second.manifest());
     assert_eq!(
-        first.canonical_signed_bytes(),
-        second.canonical_signed_bytes()
+        first.package_digest().unwrap(),
+        second.package_digest().unwrap()
     );
     assert_eq!(first.file_bytes(), second.file_bytes());
     assert_eq!(first.registry(), second.registry());
 
     let root = TempRoot::create();
     let first_shared = first
-        .publish_to_directory_with_revision(root.path(), Vec::new(), Some("source-1"))
+        .publish_to_directory_with_revision(root.path(), Some("source-1"))
         .expect("local package publishes");
     let repeated_root = TempRoot::create();
     let repeated_shared = second
-        .publish_to_directory_with_revision(repeated_root.path(), Vec::new(), Some("source-1"))
+        .publish_to_directory_with_revision(repeated_root.path(), Some("source-1"))
         .expect("the same local package publishes again");
     assert_eq!(first_shared.digest(), repeated_shared.digest());
     assert_eq!(first_shared.revision(), Some("source-1"));
@@ -127,24 +118,20 @@ fn package_builder_is_deterministic_and_local_publication_loads() {
     );
     let replacement_root = TempRoot::create();
     second
-        .publish_to_directory_with_revision(replacement_root.path(), Vec::new(), Some("source-2"))
+        .publish_to_directory_with_revision(replacement_root.path(), Some("source-2"))
         .expect("same signed package publishes with different operator revision");
     assert!(matches!(
         load_package_with_verified_envelope(
             replacement_root.path(),
-            &local_context(PackageIntent::InitialActivation),
+            &local_context(),
             &first_shared,
         ),
         Err(PackageError::Envelope)
     ));
-    load_package(
-        root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("published local package loads");
+    load_package(root.path(), &local_context()).expect("published local package loads");
     assert_eq!(
         first
-            .publish_to_directory(root.path(), Vec::new())
+            .publish_to_directory(root.path())
             .expect_err("package publication refuses replacement"),
         PackageError::Closure
     );
@@ -154,10 +141,8 @@ fn package_builder_is_deterministic_and_local_publication_loads() {
 fn package_builder_refuses_successor_without_prior_compiled_registry() {
     let module_bytes = module_bytes(PlanChoice::SecondTable);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-    let project_bytes = project_bytes("local", 2, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let refused = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 2,
         prior_revision: Some(
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         ),
@@ -165,10 +150,6 @@ fn package_builder_refuses_successor_without_prior_compiled_registry() {
         project_bytes,
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     }));
     assert_eq!(refused.err(), Some(PackageError::MigrationPlan));
 }
@@ -192,19 +173,13 @@ fn package_layout_contract_conditional_manifest_projection_is_in_projected_closu
 
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-    let project_bytes = project_bytes("local", 1, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let package = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
         project_bytes,
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     }))
     .expect("maximal coherent package prepares");
     assert!(package
@@ -280,27 +255,21 @@ fn package_layout_contract_conditional_manifest_projection_is_in_projected_closu
 fn projection_free_package_omits_manifest_projection_from_signed_closure_and_loads() {
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-    let project_bytes = project_bytes_without_manifest("local", 1, &module_digest(&module));
+    let project_bytes = project_bytes_without_manifest(&module_digest(&module));
     let request = build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
         project_bytes,
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     });
 
     let first = prepare_package(request.clone()).expect("projection-free package prepares");
     let second = prepare_package(request).expect("projection-free package prepares again");
     assert_eq!(first.manifest(), second.manifest());
     assert_eq!(
-        first.canonical_signed_bytes(),
-        second.canonical_signed_bytes()
+        first.package_digest().unwrap(),
+        second.package_digest().unwrap()
     );
     assert_eq!(first.file_bytes(), second.file_bytes());
     assert!(first.registry().manifest_projection().is_none());
@@ -340,13 +309,10 @@ fn projection_free_package_omits_manifest_projection_from_signed_closure_and_loa
 
     let root = TempRoot::create();
     first
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("projection-free package publishes");
-    let loaded = load_package(
-        root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("projection-free package loads through full closure rederivation");
+    let loaded = load_package(root.path(), &local_context())
+        .expect("projection-free package loads through full closure rederivation");
     assert!(loaded.registry().manifest_projection().is_none());
 }
 
@@ -355,22 +321,16 @@ fn projection_free_package_refuses_claimed_manifest_artifacts() {
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
     let package = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
-        project_bytes: project_bytes_without_manifest("local", 1, &module_digest(&module)),
+        project_bytes: project_bytes_without_manifest(&module_digest(&module)),
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     }))
     .expect("projection-free package prepares");
     let root = TempRoot::create();
     package
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("projection-free package publishes");
 
     let registry_manifest = br#"{"schema_version":"registry-manifest/v1"}"#;
@@ -404,10 +364,7 @@ fn projection_free_package_refuses_claimed_manifest_artifacts() {
     });
 
     assert_eq!(
-        load_error(
-            root.path(),
-            &local_context(PackageIntent::InitialActivation),
-        ),
+        load_error(root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
@@ -416,19 +373,13 @@ fn projection_free_package_refuses_claimed_manifest_artifacts() {
 fn fixture_journeys_are_required_at_the_fixed_path_and_change_the_package_revision() {
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-    let project_bytes = project_bytes("local", 1, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let request = build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
         project_bytes,
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     });
 
     let mut wrong_path = request.clone();
@@ -452,7 +403,10 @@ fn fixture_journeys_are_required_at_the_fixed_path_and_change_the_package_revisi
     let mut changed = request;
     changed.fixture_journeys.bytes.extend_from_slice(b"\n");
     let second = prepare_package(changed).expect("changed journey closure prepares");
-    assert_ne!(first.package_revision(), second.package_revision());
+    assert_ne!(
+        first.package_digest().unwrap(),
+        second.package_digest().unwrap()
+    );
     assert_eq!(first.registry(), second.registry());
 }
 
@@ -483,7 +437,10 @@ fn derived_sql_assets_are_captured_and_bound_to_revisions() {
         second.registry().module_closure()
     );
     assert_ne!(first.registry().revision(), second.registry().revision());
-    assert_ne!(first.package_revision(), second.package_revision());
+    assert_ne!(
+        first.package_digest().unwrap(),
+        second.package_digest().unwrap()
+    );
 }
 
 #[test]
@@ -494,9 +451,9 @@ fn derived_sql_asset_tampering_is_refused_before_activation() {
     .expect("derived package prepares");
     let root = TempRoot::create();
     prepared
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("package publishes");
-    let context = local_context(PackageIntent::InitialActivation);
+    let context = local_context();
     load_package(root.path(), &context).expect("untampered asset package loads");
 
     let asset_path = root.path().join("source/modules/core/sql/summary.sql");
@@ -523,9 +480,9 @@ fn derived_sql_asset_extra_path_swap_and_size_are_refused() {
     .expect("derived package prepares");
     let root = TempRoot::create();
     prepared
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("package publishes");
-    let context = local_context(PackageIntent::InitialActivation);
+    let context = local_context();
 
     fs::write(
         root.path().join("source/modules/core/sql/unlisted.sql"),
@@ -558,18 +515,14 @@ fn derived_sql_asset_extra_path_swap_and_size_are_refused() {
     let bytes = vec![b'x'; 256 * 1024 + 1];
     let module = parse_module_yaml(&oversized.modules[0].bytes).expect("module parses");
     oversized.modules[0].assets[0].bytes = bytes.clone();
-    oversized.project.bytes = project_bytes(
-        "local",
-        1,
-        &module_digest_with_assets(
-            &module,
-            &[ModuleAssetSource {
-                module: Some("core".to_owned()),
-                path: "sql/summary.sql".to_owned(),
-                bytes,
-            }],
-        ),
-    );
+    oversized.project.bytes = project_bytes(&module_digest_with_assets(
+        &module,
+        &[ModuleAssetSource {
+            module: Some("core".to_owned()),
+            path: "sql/summary.sql".to_owned(),
+            bytes,
+        }],
+    ));
     assert_eq!(
         prepare_package(oversized).err(),
         Some(PackageError::Derivation)
@@ -577,36 +530,20 @@ fn derived_sql_asset_extra_path_swap_and_size_are_refused() {
 }
 
 #[test]
-fn signed_package_refuses_missing_or_rehashed_substituted_fixture_journeys() {
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("package signing key generates");
-
-    let missing = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
+fn package_refuses_missing_fixture_journeys_and_a_rehashed_substitution_is_another_package() {
+    let missing = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     fs::remove_file(missing.root.path().join("tests/journeys.yaml"))
         .expect("fixture journeys remove");
     assert_eq!(
-        load_error(
-            missing.root.path(),
-            &missing.context(PackageIntent::InitialActivation),
-        ),
+        load_error(missing.root.path(), &missing.context()),
         PackageError::Envelope
     );
 
-    let substituted = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
+    // A package carries no signature, so a consistently rehashed substitution
+    // loads, but as a different package: its digest is not the one the
+    // database ledger records for the original.
+    let substituted = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let original_digest = substituted.digest();
     let replacement = [FIXTURE_JOURNEYS, b"\n"].concat();
     fs::write(
         substituted.root.path().join("tests/journeys.yaml"),
@@ -615,29 +552,22 @@ fn signed_package_refuses_missing_or_rehashed_substituted_fixture_journeys() {
     .expect("fixture journeys substitution writes");
     rewrite_envelope(substituted.root.path(), |envelope| {
         let entry = envelope
-            .signed
+            .manifest
             .files
             .iter_mut()
             .find(|entry| entry.role == PackageFileRole::FixtureJourneys)
             .expect("fixture journey entry exists");
         entry.size = replacement.len() as u64;
         entry.sha256 = format!("sha256:{}", hex(&Sha256::digest(&replacement)));
-        envelope.signed.package_revision.clear();
-        envelope.signed.package_revision =
-            derive_package_revision(&envelope.signed).expect("substituted revision derives");
     });
-    assert_eq!(
-        load_error(
-            substituted.root.path(),
-            &substituted.context(PackageIntent::InitialActivation),
-        ),
-        PackageError::Signature
-    );
+    let loaded = load_package(substituted.root.path(), &substituted.context())
+        .expect("a consistently rehashed package loads as itself");
+    assert_ne!(loaded.package_digest(), original_digest);
 }
 
 #[test]
 fn package_rederivation_refuses_a_rehashed_fixture_journey_role_substitution() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(fixture.root.path(), |manifest| {
         manifest
             .files
@@ -648,17 +578,14 @@ fn package_rederivation_refuses_a_rehashed_fixture_journey_role_substitution() {
     });
 
     assert_eq!(
-        load_error(
-            fixture.root.path(),
-            &local_context(PackageIntent::InitialActivation),
-        ),
+        load_error(fixture.root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
 
 #[test]
 fn package_rederivation_refuses_rehashed_empty_fixture_journeys() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     fs::write(fixture.root.path().join("tests/journeys.yaml"), b"")
         .expect("empty fixture journeys write");
     rewrite_unsigned(fixture.root.path(), |manifest| {
@@ -672,17 +599,14 @@ fn package_rederivation_refuses_rehashed_empty_fixture_journeys() {
     });
 
     assert_eq!(
-        load_error(
-            fixture.root.path(),
-            &local_context(PackageIntent::InitialActivation),
-        ),
+        load_error(fixture.root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
 
 #[test]
 fn package_rederivation_refuses_rehashed_substituted_caller_safe_metadata() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     let path = fixture.root.path().join("metadata/registry.json");
     let substituted = br#"{"entities":[],"registryId":"neutral-registry","version":"1"}"#;
     fs::write(&path, substituted).expect("caller-safe metadata substitution writes");
@@ -697,17 +621,14 @@ fn package_rederivation_refuses_rehashed_substituted_caller_safe_metadata() {
     });
 
     assert_eq!(
-        load_error(
-            fixture.root.path(),
-            &local_context(PackageIntent::InitialActivation),
-        ),
+        load_error(fixture.root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
 
 #[test]
 fn package_rederivation_refuses_a_rehashed_substituted_event_inventory() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     let path = fixture.root.path().join("inventories/events.json");
     let substituted = br#"{"deliveries":[{"canary":"not-compiled"}]}"#;
     fs::write(&path, substituted).expect("event inventory substitution writes");
@@ -722,18 +643,15 @@ fn package_rederivation_refuses_a_rehashed_substituted_event_inventory() {
     });
 
     assert_eq!(
-        load_error(
-            fixture.root.path(),
-            &local_context(PackageIntent::InitialActivation),
-        ),
+        load_error(fixture.root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
 
 #[test]
 fn local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tampering() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let context = local_context(PackageIntent::InitialActivation);
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let context = local_context();
     let verified =
         load_package(fixture.root.path(), &context).expect("local unsigned package verifies");
     assert_eq!(verified.manifest().package_id, "neutral-registry");
@@ -754,7 +672,7 @@ fn local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tamper
     let original_manifest_projection_bytes =
         fs::read(&manifest_projection_path).expect("Manifest projection reads");
     let original_manifest_projection_entry = read_envelope(fixture.root.path())
-        .signed
+        .manifest
         .files
         .iter()
         .find(|entry| entry.role == PackageFileRole::LossyManifestProjection)
@@ -833,9 +751,9 @@ fn local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tamper
 
 #[test]
 fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
-    let context = local_context(PackageIntent::InitialActivation);
+    let context = local_context();
 
-    let ddl = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let ddl = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(ddl.root.path(), |manifest| {
         manifest.migration_plan.statements[0]
             .sql
@@ -846,8 +764,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::MigrationPlan
     );
 
-    let checksum =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let checksum = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(checksum.root.path(), |manifest| {
         manifest.files[0].sha256 = fingerprint(9);
     });
@@ -856,8 +773,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::Integrity
     );
 
-    let duplicate =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let duplicate = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(duplicate.root.path(), |manifest| {
         manifest.files.insert(0, manifest.files[0].clone());
     });
@@ -866,8 +782,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::Closure
     );
 
-    let traversal =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let traversal = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(traversal.root.path(), |manifest| {
         manifest.files[0].path = "../outside".to_owned();
     });
@@ -876,8 +791,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::UnsafePath
     );
 
-    let absolute =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let absolute = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(absolute.root.path(), |manifest| {
         manifest.files[0].path = "/absolute".to_owned();
     });
@@ -886,8 +800,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::UnsafePath
     );
 
-    let noncanonical_path =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let noncanonical_path = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(noncanonical_path.root.path(), |manifest| {
         manifest.files[0].path = "source//registry.yaml".to_owned();
     });
@@ -896,8 +809,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::UnsafePath
     );
 
-    let nonregular =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let nonregular = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     let path = first_generated_path(nonregular.root.path());
     fs::remove_file(&path).expect("listed file removes");
     fs::create_dir(&path).expect("non-regular replacement creates");
@@ -906,8 +818,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
         PackageError::Envelope
     );
 
-    let noncanonical =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let noncanonical = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     let path = noncanonical.root.path().join("package.json");
     let mut bytes = fs::read(&path).expect("manifest reads");
     bytes.push(b'\n');
@@ -921,20 +832,14 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
 
 #[test]
 fn successor_migration_plan_rederivation_rejects_tampered_closure() {
-    let first = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let prior_revision = read_envelope(first.root.path()).signed.package_revision;
-    let context = local_context(PackageIntent::Activation {
-        active_revision: &prior_revision,
-        active_sequence: 1,
-    });
+    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let prior_revision = first.digest();
+    let context = local_context();
     let build_successor = || {
         PackageFixture::build(
-            "local",
-            2,
             Some(&prior_revision),
             fingerprint(1),
             PlanChoice::SecondTable,
-            None,
         )
     };
 
@@ -948,7 +853,7 @@ fn successor_migration_plan_rederivation_rejects_tampered_closure() {
             .migration_plan
             .prior_baseline
             .as_ref()
-            .map(|baseline| baseline.package_revision.as_str()),
+            .map(|baseline| baseline.package_digest.as_str()),
         Some(prior_revision.as_str())
     );
 
@@ -968,7 +873,7 @@ fn successor_migration_plan_rederivation_rejects_tampered_closure() {
             .prior_baseline
             .as_mut()
             .expect("successor carries prior baseline")
-            .package_revision = fingerprint(9);
+            .package_digest = fingerprint(9);
     });
     assert_eq!(
         load_error(forged_baseline.root.path(), &context),
@@ -1009,291 +914,49 @@ fn successor_migration_plan_rederivation_rejects_tampered_closure() {
 fn package_refuses_symlinks_and_production_writable_permissions() {
     use std::os::unix::fs::{symlink, PermissionsExt};
 
-    let local = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let local = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     let artifact = first_generated_path(local.root.path());
     let target = local.root.path().join("ordinary-target");
     fs::write(&target, fs::read(&artifact).expect("artifact reads")).expect("target writes");
     fs::remove_file(&artifact).expect("artifact removes");
     symlink(&target, &artifact).expect("test symlink creates");
-    let context = local_context(PackageIntent::InitialActivation);
+    let context = local_context();
     assert_eq!(
         load_error(local.root.path(), &context),
         PackageError::UnsafePath
     );
 
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
-    let production = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
+    let production = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     fs::set_permissions(production.root.path(), fs::Permissions::from_mode(0o777))
         .expect("test permissions change");
-    let context = production.context(PackageIntent::InitialActivation);
+    let context = production.context();
     assert_eq!(
         load_error(production.root.path(), &context),
         PackageError::Permissions
     );
-
-    let anchor_permissions = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    fs::set_permissions(
-        anchor_permissions
-            .anchor
-            .as_deref()
-            .expect("production fixture has anchor"),
-        fs::Permissions::from_mode(0o666),
-    )
-    .expect("test anchor permissions change");
-    assert_eq!(
-        load_error(
-            anchor_permissions.root.path(),
-            &anchor_permissions.context(PackageIntent::InitialActivation)
-        ),
-        PackageError::Permissions
-    );
 }
 
 #[test]
-fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prior() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let wrong_environment = PackageLoadContext {
-        environment: "production",
-        ..local_context(PackageIntent::InitialActivation)
-    };
-    assert_eq!(
-        load_error(fixture.root.path(), &wrong_environment),
-        PackageError::BindingMismatch(PackageBindingField::Environment)
-    );
-    let wrong_instance = PackageLoadContext {
-        instance_id: "another-instance",
-        ..local_context(PackageIntent::InitialActivation)
-    };
-    assert_eq!(
-        load_error(fixture.root.path(), &wrong_instance),
-        PackageError::BindingMismatch(PackageBindingField::InstanceId)
-    );
-    let wrong_database = PackageLoadContext {
-        database_id: "another-database",
-        ..local_context(PackageIntent::InitialActivation)
-    };
-    assert_eq!(
-        load_error(fixture.root.path(), &wrong_database),
-        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
-    );
-
-    let sequence =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    rewrite_unsigned(sequence.root.path(), |manifest| {
-        manifest.sequence = 2;
-    });
-    assert_eq!(
-        load_error(
-            sequence.root.path(),
-            &local_context(PackageIntent::InitialActivation)
-        ),
-        PackageError::Binding
-    );
-
-    let successor = PackageFixture::build(
-        "local",
-        2,
-        Some("expected-prior"),
-        fingerprint(1),
-        PlanChoice::Schema,
-        None,
-    );
-    let wrong_prior = local_context(PackageIntent::Activation {
-        active_revision: "other-prior",
-        active_sequence: 1,
-    });
-    assert_eq!(
-        load_error(successor.root.path(), &wrong_prior),
-        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
-    );
-    let stale = local_context(PackageIntent::Activation {
-        active_revision: "expected-prior",
-        active_sequence: 2,
-    });
-    assert_eq!(
-        load_error(successor.root.path(), &stale),
-        PackageError::BindingMismatch(PackageBindingField::ActiveSequence)
-    );
-}
-
-#[test]
-fn activation_names_the_active_package_itself_and_nothing_else() {
-    let active = PackageFixture::build(
-        "local",
-        2,
-        Some("expected-prior"),
-        fingerprint(1),
-        PlanChoice::Schema,
-        None,
-    );
-    let revision = read_envelope(active.root.path()).signed.package_revision;
-    let itself = local_context(PackageIntent::Activation {
-        active_revision: &revision,
-        active_sequence: 2,
-    });
-    assert_eq!(
-        load_error(active.root.path(), &itself),
-        PackageError::AlreadyActive
-    );
-
-    // The same sequence under another revision is a different package, and a
-    // matching revision under another sequence is not the active package
-    // either: both still refuse.
-    let same_sequence = local_context(PackageIntent::Activation {
-        active_revision: "expected-prior",
-        active_sequence: 2,
-    });
-    assert_eq!(
-        load_error(active.root.path(), &same_sequence),
-        PackageError::BindingMismatch(PackageBindingField::ActiveSequence)
-    );
-    let stale_sequence = local_context(PackageIntent::Activation {
-        active_revision: &revision,
-        active_sequence: 1,
-    });
-    assert_eq!(
-        load_error(active.root.path(), &stale_sequence),
-        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
-    );
-
-    // Another deployment's copy of the active package is a binding mismatch
-    // first, never an already-active outcome.
-    let other_database = PackageLoadContext {
-        database_id: "another-database",
-        ..itself
-    };
-    assert_eq!(
-        load_error(active.root.path(), &other_database),
-        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
-    );
-}
-
-#[test]
-fn activation_refuses_an_older_package_as_a_rollback() {
-    let older = PackageFixture::build(
-        "local",
-        2,
-        Some("expected-prior"),
-        fingerprint(1),
-        PlanChoice::Schema,
-        None,
-    );
-    let newer_active = local_context(PackageIntent::Activation {
-        active_revision: "expected-prior",
-        active_sequence: 3,
-    });
-    assert_eq!(
-        load_error(older.root.path(), &newer_active),
-        PackageError::OlderThanActive
-    );
-
-    // The deployment binding is checked first, so another deployment's older
-    // package is still refused as a binding mismatch.
-    let other_database = PackageLoadContext {
-        database_id: "another-database",
-        ..newer_active
-    };
-    assert_eq!(
-        load_error(older.root.path(), &other_database),
-        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
-    );
-}
-
-#[test]
-fn predecessor_package_binds_to_exact_active_database_identity() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(fixture.root.path()).signed.package_revision;
-    let predecessor = load_predecessor_package(
-        fixture.root.path(),
-        &local_predecessor_context(&revision, 1),
-    )
-    .expect("active predecessor package verifies");
+fn predecessor_package_reports_the_digest_the_database_ledger_is_compared_with() {
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let revision = fixture.digest();
+    let predecessor = load_predecessor_package(fixture.root.path(), &local_context())
+        .expect("active predecessor package verifies");
 
     assert_eq!(predecessor.package_id(), "neutral-registry");
-    assert_eq!(predecessor.package_revision(), revision);
+    assert_eq!(predecessor.package_digest(), revision);
     assert_eq!(predecessor.schema_fingerprint(), fingerprint(1));
-    assert_eq!(predecessor.sequence(), 1);
-    assert_eq!(predecessor.migration_baseline().package_revision, revision);
+    assert_eq!(predecessor.migration_baseline().package_digest, revision);
     assert_eq!(
         predecessor.migration_baseline().registry_id,
         "neutral-registry"
-    );
-
-    let wrong_revision = PredecessorPackageContext {
-        expected_package_revision:
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ..local_predecessor_context(&revision, 1)
-    };
-    assert_eq!(
-        predecessor_load_error(fixture.root.path(), &wrong_revision),
-        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
-    );
-
-    let wrong_sequence = PredecessorPackageContext {
-        expected_sequence: 2,
-        ..local_predecessor_context(&revision, 1)
-    };
-    assert_eq!(
-        predecessor_load_error(fixture.root.path(), &wrong_sequence),
-        PackageError::BindingMismatch(PackageBindingField::ActiveSequence)
-    );
-
-    let wrong_database = PredecessorPackageContext {
-        database_id: "another-database",
-        ..local_predecessor_context(&revision, 1)
-    };
-    assert_eq!(
-        predecessor_load_error(fixture.root.path(), &wrong_database),
-        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
     );
 }
 
 #[test]
 fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
-    let signed = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    let signed_revision = read_envelope(signed.root.path()).signed.package_revision;
-    load_predecessor_package(
-        signed.root.path(),
-        &signed.predecessor_context(&signed_revision, 1),
-    )
-    .expect("signed predecessor verifies");
-    rewrite_envelope(signed.root.path(), |envelope| {
-        let byte_length = envelope.signatures[0].signature_hex.len() / 2;
-        envelope.signatures[0].signature_hex = "00".repeat(byte_length);
-    });
-    assert_eq!(
-        predecessor_load_error(
-            signed.root.path(),
-            &signed.predecessor_context(&signed_revision, 1),
-        ),
-        PackageError::Signature
-    );
-
-    let altered = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(altered.root.path()).signed.package_revision;
-    let context = local_predecessor_context(&revision, 1);
+    let altered = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let context = local_context();
     let model_path = governed_model_path(altered.root.path());
     let original = fs::read(&model_path).expect("governed model reads");
 
@@ -1306,8 +969,8 @@ fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
     fs::write(&model_path, original).expect("governed model restores");
     refresh_shared_package_envelope(altered.root.path());
 
-    let forged = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let active_revision = read_envelope(forged.root.path()).signed.package_revision;
+    let forged = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let active_revision = forged.digest();
     let model_path = governed_model_path(forged.root.path());
     let forged_bytes = fs::read(&model_path)
         .expect("governed model reads")
@@ -1324,142 +987,27 @@ fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
         entry.size = forged_bytes.len() as u64;
         entry.sha256 = format!("sha256:{}", hex(&Sha256::digest(&forged_bytes)));
     });
+    // A consistently rehashed forgery of the governed model is refused: the
+    // running compiler does not derive it from the packaged sources, so it is
+    // never mistaken for the active package the caller compares it with.
+    assert_ne!(forged.digest(), active_revision);
     assert_eq!(
-        predecessor_load_error(
-            forged.root.path(),
-            &local_predecessor_context(&active_revision, 1),
-        ),
-        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
+        predecessor_load_error(forged.root.path(), &context),
+        PackageError::Derivation
     );
 }
 
 #[test]
-fn predecessor_built_before_the_shared_envelope_verifies_from_its_signed_manifest() {
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
-    let fixture = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    let revision = read_envelope(fixture.root.path()).signed.package_revision;
-    strip_shared_package_envelope(fixture.root.path());
-
-    let predecessor = load_predecessor_package(
-        fixture.root.path(),
-        &fixture.predecessor_context(&revision, 1),
-    )
-    .expect("a signed predecessor without SHA256SUMS verifies");
-    assert_eq!(predecessor.package_revision(), revision);
-    assert_eq!(predecessor.schema_fingerprint(), fingerprint(1));
-
-    #[cfg(feature = "tooling")]
-    {
-        let (baseline, _registry) = registry_breg::package::load_predecessor_rehearsal_baseline(
-            fixture.root.path(),
-            &fixture.predecessor_context(&revision, 1),
-        )
-        .expect("a signed predecessor without SHA256SUMS is a rehearsal baseline");
-        assert_eq!(baseline.package_revision(), revision);
-    }
-}
-
-#[test]
-fn predecessor_without_the_shared_envelope_keeps_every_signed_manifest_check() {
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
-    let forged = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    let forged_revision = read_envelope(forged.root.path()).signed.package_revision;
-    rewrite_envelope(forged.root.path(), |envelope| {
-        let byte_length = envelope.signatures[0].signature_hex.len() / 2;
-        envelope.signatures[0].signature_hex = "00".repeat(byte_length);
-    });
-    strip_shared_package_envelope(forged.root.path());
-    assert_eq!(
-        predecessor_load_error(
-            forged.root.path(),
-            &forged.predecessor_context(&forged_revision, 1),
-        ),
-        PackageError::Signature
-    );
-
-    let tampered =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(tampered.root.path()).signed.package_revision;
-    strip_shared_package_envelope(tampered.root.path());
-    fs::write(
-        governed_model_path(tampered.root.path()),
-        b"tampered governed model",
-    )
-    .expect("governed model tamper writes");
-    assert_eq!(
-        predecessor_load_error(
-            tampered.root.path(),
-            &local_predecessor_context(&revision, 1)
-        ),
-        PackageError::Integrity
-    );
-
-    let extra = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(extra.root.path()).signed.package_revision;
-    strip_shared_package_envelope(extra.root.path());
-    fs::write(extra.root.path().join("unsigned.txt"), b"not signed").expect("extra file writes");
-    assert_eq!(
-        predecessor_load_error(extra.root.path(), &local_predecessor_context(&revision, 1)),
-        PackageError::Closure
-    );
-
-    let stray_revision =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(stray_revision.root.path())
-        .signed
-        .package_revision;
-    strip_shared_package_envelope(stray_revision.root.path());
-    fs::write(stray_revision.root.path().join(REVISION_FILE), "v1\n")
-        .expect("stray revision file writes");
-    assert_eq!(
-        predecessor_load_error(
-            stray_revision.root.path(),
-            &local_predecessor_context(&revision, 1)
-        ),
-        PackageError::Closure
-    );
-
-    let rebound = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(rebound.root.path()).signed.package_revision;
-    strip_shared_package_envelope(rebound.root.path());
-    let wrong_database = PredecessorPackageContext {
-        database_id: "another-database",
-        ..local_predecessor_context(&revision, 1)
-    };
-    assert_eq!(
-        predecessor_load_error(rebound.root.path(), &wrong_database),
-        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
-    );
-}
-
-#[test]
-fn package_without_the_shared_envelope_is_refused_outside_predecessor_reads() {
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let revision = read_envelope(fixture.root.path()).signed.package_revision;
+fn package_without_the_shared_envelope_is_refused_by_every_reader() {
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     strip_shared_package_envelope(fixture.root.path());
 
     assert_eq!(
-        load_error(
-            fixture.root.path(),
-            &local_context(PackageIntent::Startup {
-                active_revision: &revision,
-                active_sequence: 1,
-            }),
-        ),
+        load_error(fixture.root.path(), &local_context()),
+        PackageError::Envelope
+    );
+    assert_eq!(
+        predecessor_load_error(fixture.root.path(), &local_context()),
         PackageError::Envelope
     );
     assert_eq!(
@@ -1471,43 +1019,22 @@ fn package_without_the_shared_envelope_is_refused_outside_predecessor_reads() {
 }
 
 #[test]
-fn predecessor_verification_does_not_authorize_runtime_or_weaken_successor() {
+fn predecessor_verification_does_not_weaken_successor_plan_checks() {
     let legacy_revision = "legacy-compiler-source-revision";
     let legacy = legacy_compiler_fixture(legacy_revision);
-    let active_revision = read_envelope(legacy.root.path()).signed.package_revision;
-    load_predecessor_package(
-        legacy.root.path(),
-        &local_predecessor_context(&active_revision, 1),
-    )
-    .expect("legacy active predecessor verifies for planning");
-
-    let startup_context = PackageLoadContext {
-        compiler_source_revision: SOURCE_REVISION,
-        ..local_context(PackageIntent::Startup {
-            active_revision: &active_revision,
-            active_sequence: 1,
-        })
-    };
-    assert_eq!(
-        load_error(legacy.root.path(), &startup_context),
-        PackageError::BindingMismatch(PackageBindingField::CompilerSourceRevision)
-    );
+    let active_revision = legacy.digest();
+    load_predecessor_package(legacy.root.path(), &local_context())
+        .expect("legacy active predecessor verifies for planning");
 
     let successor = PackageFixture::build(
-        "local",
-        2,
         Some(&active_revision),
         fingerprint(2),
         PlanChoice::SecondTable,
-        None,
     );
     rewrite_unsigned(successor.root.path(), |manifest| {
         manifest.migration_plan.changes.clear();
     });
-    let activation_context = local_context(PackageIntent::Activation {
-        active_revision: &active_revision,
-        active_sequence: 1,
-    });
+    let activation_context = local_context();
     assert_eq!(
         load_error(successor.root.path(), &activation_context),
         PackageError::MigrationPlan
@@ -1530,20 +1057,14 @@ fn query_shape_rewrite_with_additive_field_requires_reviewed_migration() {
     let baseline_module =
         parse_module_yaml(&baseline_module_bytes).expect("baseline module parses");
     let baseline = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
-        project_bytes: project_bytes("local", 1, &module_digest(&baseline_module)),
+        project_bytes: project_bytes(&module_digest(&baseline_module)),
         module_bytes: baseline_module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     }))
     .expect("baseline package prepares");
-    let active_revision = baseline.package_revision().to_owned();
+    let active_revision = baseline.package_digest().unwrap().to_owned();
 
     let successor_module_bytes = temporal_policy_module_bytes_with(
         true,
@@ -1552,7 +1073,7 @@ fn query_shape_rewrite_with_additive_field_requires_reviewed_migration() {
     );
     let successor_module =
         parse_module_yaml(&successor_module_bytes).expect("successor module parses");
-    let successor_project_bytes = project_bytes("local", 2, &module_digest(&successor_module));
+    let successor_project_bytes = project_bytes(&module_digest(&successor_module));
     let successor_registry = compile_project(
         &parse_project_yaml(&successor_project_bytes).expect("successor project parses"),
         std::slice::from_ref(&successor_module),
@@ -1567,18 +1088,12 @@ fn query_shape_rewrite_with_additive_field_requires_reviewed_migration() {
     }));
     assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
     let refused = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 2,
         prior_revision: Some(&active_revision),
         schema_fingerprint: fingerprint(2),
         project_bytes: successor_project_bytes,
         module_bytes: successor_module_bytes,
         migration_plan: PackageMigrationPlanInput::Successor {
             prior_registry: Box::new(baseline.registry().clone()),
-        },
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
         },
     }));
 
@@ -1596,17 +1111,13 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     let (mut migration, migration_task) = database.connect_migration().await;
 
     let first = publish_temporal_policy_package(
-        1,
         None,
         fingerprint(1),
         temporal_policy_module_bytes(false),
         PackageMigrationPlanInput::InitialCompiledDdl,
     );
-    let provisional_first = load_package(
-        first.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial temporal policy package verifies before fingerprinting");
+    let provisional_first = load_package(first.path(), &local_context())
+        .expect("initial temporal policy package verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
@@ -1630,11 +1141,8 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     rewrite_unsigned(first.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&first_fingerprint);
     });
-    let verified_first = load_package(
-        first.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial temporal policy package reloads with exact fingerprint");
+    let verified_first = load_package(first.path(), &local_context())
+        .expect("initial temporal policy package reloads with exact fingerprint");
     let active_first = apply_package(
         &database,
         &verified_first,
@@ -1647,7 +1155,6 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     restore_legacy_migration_ledger_metadata_constraints(&database).await;
 
     let add_snapshot = publish_temporal_policy_package(
-        2,
         Some(&active_first.package_revision),
         active_first.schema_fingerprint.clone(),
         temporal_policy_module_bytes(true),
@@ -1655,10 +1162,7 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
             prior_registry: Box::new(verified_first.registry().clone()),
         },
     );
-    let add_context = local_context(PackageIntent::Activation {
-        active_revision: &active_first.package_revision,
-        active_sequence: 1,
-    });
+    let add_context = local_context();
     let verified_add =
         load_package(add_snapshot.path(), &add_context).expect("snapshot grant successor verifies");
     assert!(verified_add.manifest().migration_plan.statements.is_empty());
@@ -1675,7 +1179,6 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     .expect("metadata-only snapshot grant applies");
 
     let remove_snapshot = publish_temporal_policy_package(
-        3,
         Some(&active_add.package_revision),
         active_add.schema_fingerprint.clone(),
         temporal_policy_module_bytes(false),
@@ -1683,10 +1186,7 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
             prior_registry: Box::new(verified_add.registry().clone()),
         },
     );
-    let remove_context = local_context(PackageIntent::Activation {
-        active_revision: &active_add.package_revision,
-        active_sequence: 2,
-    });
+    let remove_context = local_context();
     let verified_remove = load_package(remove_snapshot.path(), &remove_context)
         .expect("snapshot revocation successor verifies");
     assert!(verified_remove
@@ -1729,17 +1229,13 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     let hidden_note_field =
         r#",{"id":"review-note","type":"string","maxLength":120,"classification":"internal"}"#;
     let first = publish_temporal_policy_package(
-        1,
         None,
         fingerprint(1),
         temporal_policy_module_bytes_with(true, hidden_note_field, ""),
         PackageMigrationPlanInput::InitialCompiledDdl,
     );
-    let provisional_first = load_package(
-        first.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial package verifies before fingerprinting");
+    let provisional_first = load_package(first.path(), &local_context())
+        .expect("initial package verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
@@ -1763,11 +1259,8 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     rewrite_unsigned(first.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&first_fingerprint);
     });
-    let verified_first = load_package(
-        first.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial package reloads with exact fingerprint");
+    let verified_first = load_package(first.path(), &local_context())
+        .expect("initial package reloads with exact fingerprint");
     let active_first = apply_package(
         &database,
         &verified_first,
@@ -1788,7 +1281,7 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
             .into_bytes();
     let successor_module =
         parse_module_yaml(&successor_module_bytes).expect("successor module parses");
-    let successor_project_bytes = project_bytes("local", 2, &module_digest(&successor_module));
+    let successor_project_bytes = project_bytes(&module_digest(&successor_module));
     let successor_registry = compile_project(
         &parse_project_yaml(&successor_project_bytes).expect("successor project parses"),
         std::slice::from_ref(&successor_module),
@@ -1812,7 +1305,6 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
         &active_first.schema_fingerprint,
     );
     let successor = publish_temporal_policy_package(
-        2,
         Some(&active_first.package_revision),
         active_first.schema_fingerprint.clone(),
         successor_module_bytes,
@@ -1822,10 +1314,7 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
             migrations: vec![review],
         },
     );
-    let successor_context = local_context(PackageIntent::Activation {
-        active_revision: &active_first.package_revision,
-        active_sequence: 1,
-    });
+    let successor_context = local_context();
     let verified_successor = load_package(successor.path(), &successor_context)
         .expect("reviewed metadata-only successor verifies");
     assert!(verified_successor
@@ -1862,37 +1351,25 @@ fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
     let baseline_module =
         parse_module_yaml(&baseline_module_bytes).expect("baseline module parses");
     let baseline = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
-        project_bytes: project_bytes("local", 1, &module_digest(&baseline_module)),
+        project_bytes: project_bytes(&module_digest(&baseline_module)),
         module_bytes: baseline_module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     }))
     .expect("baseline package prepares");
-    let active_revision = baseline.package_revision().to_owned();
+    let active_revision = baseline.package_digest().unwrap().to_owned();
 
     let successor_module_bytes = temporal_policy_module_bytes(successor_snapshot);
     let successor_module =
         parse_module_yaml(&successor_module_bytes).expect("successor module parses");
     let successor = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 2,
         prior_revision: Some(&active_revision),
         schema_fingerprint: fingerprint(2),
-        project_bytes: project_bytes("local", 2, &module_digest(&successor_module)),
+        project_bytes: project_bytes(&module_digest(&successor_module)),
         module_bytes: successor_module_bytes,
         migration_plan: PackageMigrationPlanInput::Successor {
             prior_registry: Box::new(baseline.registry().clone()),
-        },
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
         },
     }))
     .expect("snapshot policy delta prepares without reviewed migration");
@@ -1919,40 +1396,23 @@ fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
 
     let root = TempRoot::create();
     successor
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("successor package publishes");
-    load_package(
-        root.path(),
-        &local_context(PackageIntent::Activation {
-            active_revision: &active_revision,
-            active_sequence: 1,
-        }),
-    )
-    .expect("policy-only successor strict-loads");
+    load_package(root.path(), &local_context()).expect("policy-only successor strict-loads");
 }
 
 #[test]
 fn predecessor_package_derives_legacy_temporal_value_kind_from_signed_fields() {
-    let legacy = PackageFixture::build(
-        "local",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::TemporalSchema,
-        None,
-    );
+    let legacy = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
     rewrite_legacy_temporal_metadata(legacy.root.path(), true, |temporal| {
         temporal
             .as_object_mut()
             .expect("temporal binding is an object")
             .remove("valueKind");
     });
-    let active_revision = read_envelope(legacy.root.path()).signed.package_revision;
-    let predecessor = load_predecessor_package(
-        legacy.root.path(),
-        &local_predecessor_context(&active_revision, 1),
-    )
-    .expect("legacy temporal predecessor verifies for planning");
+    let active_revision = legacy.digest();
+    let predecessor = load_predecessor_package(legacy.root.path(), &local_context())
+        .expect("legacy temporal predecessor verifies for planning");
     let temporal = predecessor
         .migration_baseline()
         .queries
@@ -1968,18 +1428,12 @@ fn predecessor_package_derives_legacy_temporal_value_kind_from_signed_fields() {
     let successor_module = module_bytes(PlanChoice::TemporalSchema);
     let successor_module = parse_module_yaml(&successor_module).expect("successor module parses");
     let successor = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 2,
         prior_revision: Some(&active_revision),
         schema_fingerprint: fingerprint(2),
-        project_bytes: project_bytes("local", 2, &module_digest(&successor_module)),
+        project_bytes: project_bytes(&module_digest(&successor_module)),
         module_bytes: module_bytes(PlanChoice::TemporalSchema),
         migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
             prior_baseline: Box::new(predecessor.migration_baseline().clone()),
-        },
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
         },
     }))
     .expect("normalized predecessor baseline prepares a successor package");
@@ -1990,27 +1444,14 @@ fn predecessor_package_derives_legacy_temporal_value_kind_from_signed_fields() {
         .iter()
         .all(|change| change.code != CompiledRegistryChangeCode::EntityTemporalChanged));
     assert_eq!(
-        load_error(
-            legacy.root.path(),
-            &local_context(PackageIntent::Startup {
-                active_revision: &active_revision,
-                active_sequence: 1,
-            }),
-        ),
+        load_error(legacy.root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
 
 #[test]
 fn predecessor_package_rejects_legacy_temporal_value_kind_mismatch() {
-    let legacy = PackageFixture::build(
-        "local",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::TemporalSchema,
-        None,
-    );
+    let legacy = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
     rewrite_legacy_temporal_metadata(legacy.root.path(), true, |temporal| {
         let temporal = temporal
             .as_object_mut()
@@ -2018,132 +1459,32 @@ fn predecessor_package_rejects_legacy_temporal_value_kind_mismatch() {
         temporal.remove("valueKind");
         temporal.insert("endField".to_owned(), Value::String("person".to_owned()));
     });
-    let active_revision = read_envelope(legacy.root.path()).signed.package_revision;
     assert_eq!(
-        predecessor_load_error(
-            legacy.root.path(),
-            &local_predecessor_context(&active_revision, 1),
-        ),
+        predecessor_load_error(legacy.root.path(), &local_context(),),
         PackageError::Derivation
     );
 }
 
 #[test]
-fn production_package_requires_exact_trust_anchor_threshold_and_signature() {
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
-    let fixture = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    let context = fixture.context(PackageIntent::InitialActivation);
-    load_package(fixture.root.path(), &context).expect("production-shaped signed package verifies");
-
-    let missing_anchor = PackageLoadContext {
-        trust_anchor: None,
-        ..fixture.context(PackageIntent::InitialActivation)
-    };
-    assert_eq!(
-        load_error(fixture.root.path(), &missing_anchor),
-        PackageError::Signature
-    );
-
-    rewrite_envelope(fixture.root.path(), |envelope| {
-        let byte_length = envelope.signatures[0].signature_hex.len() / 2;
-        envelope.signatures[0].signature_hex = "00".repeat(byte_length);
-    });
-    assert_eq!(
-        load_error(fixture.root.path(), &context),
-        PackageError::Signature
-    );
-
-    let insufficient = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    rewrite_envelope(insufficient.root.path(), |envelope| {
-        envelope.signatures.clear();
-    });
-    assert_eq!(
-        load_error(
-            insufficient.root.path(),
-            &insufficient.context(PackageIntent::InitialActivation)
-        ),
-        PackageError::Signature
-    );
-
-    let duplicate = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    rewrite_envelope(duplicate.root.path(), |envelope| {
-        envelope.signatures.push(envelope.signatures[0].clone());
-    });
-    assert_eq!(
-        load_error(
-            duplicate.root.path(),
-            &duplicate.context(PackageIntent::InitialActivation)
-        ),
-        PackageError::Signature
-    );
-
-    let untrusted = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    rewrite_envelope(untrusted.root.path(), |envelope| {
-        envelope.signatures[0].key_id = "untrusted-key".to_owned();
-    });
-    assert_eq!(
-        load_error(
-            untrusted.root.path(),
-            &untrusted.context(PackageIntent::InitialActivation)
-        ),
-        PackageError::Signature
-    );
-
-    let local_runtime = PackageLoadContext {
-        environment: "local",
-        ..untrusted.context(PackageIntent::InitialActivation)
-    };
-    assert_eq!(
-        load_error(untrusted.root.path(), &local_runtime),
-        PackageError::BindingMismatch(PackageBindingField::Environment)
-    );
+fn production_package_loads_without_signatures_or_a_trust_anchor() {
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let loaded = load_package(fixture.root.path(), &fixture.context())
+        .expect("an unsigned package verifies under production strictness");
+    assert_eq!(loaded.package_digest(), fixture.digest());
 }
 
 #[test]
 fn package_file_count_and_size_are_bounded_before_payload_reads() {
-    let oversized =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let oversized = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(oversized.root.path(), |manifest| {
         manifest.files[0].size = 16 * 1024 * 1024 + 1;
     });
     assert_eq!(
-        load_error(
-            oversized.root.path(),
-            &local_context(PackageIntent::InitialActivation)
-        ),
+        load_error(oversized.root.path(), &local_context()),
         PackageError::Closure
     );
 
-    let excessive_count =
-        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let excessive_count = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     rewrite_unsigned(excessive_count.root.path(), |manifest| {
         let template = manifest.files[0].clone();
         while manifest.files.len() <= 1_024 {
@@ -2156,10 +1497,7 @@ fn package_file_count_and_size_are_bounded_before_payload_reads() {
             .sort_by(|left, right| left.path.cmp(&right.path));
     });
     assert_eq!(
-        load_error(
-            excessive_count.root.path(),
-            &local_context(PackageIntent::InitialActivation)
-        ),
+        load_error(excessive_count.root.path(), &local_context()),
         PackageError::Integrity
     );
 }
@@ -2168,7 +1506,7 @@ fn package_file_count_and_size_are_bounded_before_payload_reads() {
 fn package_apply_and_startup_errors_are_closed_and_value_free() {
     let rendered = format!(
         "{:?} {:?} {:?}",
-        PackageError::Signature,
+        PackageError::Binding,
         MigrationError::ApplyFailed,
         StartupError::DatabaseUnready
     );
@@ -2187,15 +1525,13 @@ fn package_apply_and_startup_errors_are_closed_and_value_free() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_migration_role_is_refused_before_initial_control_plane_or_ddl() {
     let database = TestDatabase::create(1).await;
-    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let package = load_package(
-        fixture.root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial package verifies before role enforcement");
+    let fixture = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let package = load_package(fixture.root.path(), &local_context())
+        .expect("initial package verifies before role enforcement");
     let refused = apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.runtime_config,
         &package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
         ApplyPrecondition::InitialActivation,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
@@ -2224,20 +1560,10 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs prerequisite");
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-        .expect("production-shaped signing key generates");
-    let fixture = PackageFixture::build(
-        "production",
-        1,
-        None,
-        fingerprint(7),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
-    assert_eq!(read_envelope(fixture.root.path()).signatures.len(), 1);
-    let initial_context = fixture.context(PackageIntent::InitialActivation);
+    let fixture = PackageFixture::build(None, fingerprint(7), PlanChoice::Schema);
+    let initial_context = fixture.context();
     let package = load_package(fixture.root.path(), &initial_context)
-        .expect("signed production-shaped package verifies before catalog apply");
+        .expect("production-shaped package verifies before catalog apply");
     let refused = apply_package(
         &database,
         &package,
@@ -2249,14 +1575,11 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
     assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
     let state = registry_state_snapshot(&database.admin).await;
     assert_eq!(state.7, "failed");
-    assert_eq!(
-        state.8.as_deref(),
-        Some(package.manifest().package_revision.as_str())
-    );
+    assert_eq!(state.8.as_deref(), Some(package.package_digest()));
     let ledger = migration_ledger_snapshot(&database.admin).await;
     assert_eq!(ledger.len(), 1);
     assert_eq!(ledger[0].0, None);
-    assert_eq!(ledger[0].1, package.manifest().package_revision);
+    assert_eq!(ledger[0].1, package.package_digest());
     assert_eq!(ledger[0].4, "failed");
 
     let pool = database
@@ -2264,13 +1587,11 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
         .build_pool()
         .expect("runtime pool builds");
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let startup_context = fixture.context(PackageIntent::Startup {
-        active_revision: &package.manifest().package_revision,
-        active_sequence: 1,
-    });
+    let startup_context = fixture.context();
     let startup = prepare_startup(
         fixture.root.path(),
         &startup_context,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -2291,12 +1612,9 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .await
         .expect("administrator installs prerequisite");
     let (mut migration, migration_task) = database.connect_migration().await;
-    let first = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
-    let first_for_install = load_package(
-        first.root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial package verifies before database installation");
+    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
+    let first_for_install = load_package(first.root.path(), &local_context())
+        .expect("initial package verifies before database installation");
     let initial_fingerprint_transaction = migration
         .transaction()
         .await
@@ -2323,50 +1641,13 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     rewrite_unsigned(first.root.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&schema);
     });
-    let first_for_state = load_package(
-        first.root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial package reloads after finalized schema fingerprint");
-    let first_manifest = first_for_state.manifest().clone();
-    let successor_before_initialization = PackageFixture::build(
-        "local",
-        2,
-        Some(&first_manifest.package_revision),
-        schema.clone(),
-        PlanChoice::Schema,
-        None,
-    );
-    let successor_before_initialization_context = local_context(PackageIntent::Activation {
-        active_revision: &first_manifest.package_revision,
-        active_sequence: 1,
-    });
-    let verified_successor_before_initialization = load_package(
-        successor_before_initialization.root.path(),
-        &successor_before_initialization_context,
-    )
-    .expect("successor package verifies for activation before database initialization");
-    assert_eq!(
-        verified_successor_before_initialization
-            .manifest()
-            .schema_fingerprint,
-        schema
-    );
-    let refused_successor_initialization = apply_package(
-        &database,
-        &verified_successor_before_initialization,
-        ApplyPrecondition::InitialActivation,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-    )
-    .await;
-    assert_eq!(
-        refused_successor_initialization.err(),
-        Some(MigrationError::PackageBinding)
-    );
+    let first_for_state = load_package(first.root.path(), &local_context())
+        .expect("initial package reloads after finalized schema fingerprint");
+    let first_digest = first_for_state.package_digest().to_owned();
     let wrong_migration_role = apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.runtime_config,
         &first_for_state,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
         ApplyPrecondition::InitialActivation,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
@@ -2402,13 +1683,11 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .build_pool()
         .expect("runtime pool builds");
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let first_startup = local_context(PackageIntent::Startup {
-        active_revision: &first_manifest.package_revision,
-        active_sequence: 1,
-    });
+    let first_startup = local_context();
     prepare_startup(
         first.root.path(),
         &first_startup,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -2416,10 +1695,19 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     .await
     .expect("matching package produces the listener gate");
     drop(runtime);
-    for (column, original) in [
-        ("package_id", initial.package_id.as_str()),
-        ("instance_id", initial.instance_id.as_str()),
-        ("database_id", initial.database_id.as_str()),
+    // The recorded instance and environment are the database's own, so only
+    // the registry and the database id bind a startup to this database.
+    for (column, original, expected) in [
+        (
+            "package_id",
+            initial.package_id.as_str(),
+            StartupError::DatabaseUnready,
+        ),
+        (
+            "database_id",
+            initial.database_id.as_str(),
+            StartupError::DatabaseIdentityMismatch,
+        ),
     ] {
         database
             .admin
@@ -2438,6 +1726,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         let refused = prepare_startup(
             first.root.path(),
             &first_startup,
+            DATABASE,
             &mut runtime,
             &database.migration_role,
             &database.runtime_role,
@@ -2445,7 +1734,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .await;
         assert_eq!(
             refused.err(),
-            Some(StartupError::DatabaseUnready),
+            Some(expected),
             "startup refuses durable {column} drift"
         );
         drop(runtime);
@@ -2461,14 +1750,14 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
             .expect("test restores durable identity");
     }
 
-    let tampered_startup =
-        PackageFixture::build("local", 1, None, schema.clone(), PlanChoice::Schema, None);
+    let tampered_startup = PackageFixture::build(None, schema.clone(), PlanChoice::Schema);
     let tampered_artifact = first_generated_path(tampered_startup.root.path());
     fs::write(tampered_artifact, b"pre-listener tamper").expect("startup artifact tamper writes");
     let mut runtime = pool.get_for_test().await.expect("runtime reconnects");
     let no_listener_gate = prepare_startup(
         tampered_startup.root.path(),
         &first_startup,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -2480,18 +1769,9 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     ));
     drop(runtime);
 
-    let second = PackageFixture::build(
-        "local",
-        2,
-        Some(&first_manifest.package_revision),
-        schema.clone(),
-        PlanChoice::SecondTable,
-        None,
-    );
-    let activation_context = local_context(PackageIntent::Activation {
-        active_revision: &first_manifest.package_revision,
-        active_sequence: 1,
-    });
+    let second =
+        PackageFixture::build(Some(&first_digest), schema.clone(), PlanChoice::SecondTable);
+    let activation_context = local_context();
     let provisional_second = load_package(second.root.path(), &activation_context)
         .expect("successor package verifies before apply");
     let transaction = migration
@@ -2704,7 +1984,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     assert_eq!(interrupted_error, MigrationError::ApplyFailed);
     let diagnostic = format!("{interrupted_error:?} {interrupted_error}");
     for forbidden in [
-        verified_second.manifest().package_revision.as_str(),
+        verified_second.package_digest(),
         provisional_second_table.as_str(),
         "registry_data",
         "pg_terminate_backend",
@@ -2721,7 +2001,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     assert_eq!(interrupted_state.7, "applying");
     assert_eq!(
         interrupted_state.8.as_deref(),
-        Some(verified_second.manifest().package_revision.as_str())
+        Some(verified_second.package_digest())
     );
     assert_eq!(
         migration_ledger_snapshot(&database.admin)
@@ -2766,10 +2046,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     )
     .await
     .expect("exact rederived schema statement and activation succeed");
-    assert_eq!(
-        active.package_revision,
-        verified_second.manifest().package_revision
-    );
+    assert_eq!(active.package_revision, verified_second.package_digest());
     let activated_state = registry_state_snapshot(&database.admin).await;
     assert_eq!(activated_state.0, active.package_id);
     assert_eq!(activated_state.2, active.instance_id);
@@ -2777,7 +2054,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     let applied_ledger = migration_ledger_snapshot(&database.admin).await;
     assert_eq!(applied_ledger.len(), 2);
     assert_eq!(applied_ledger[0].0, None);
-    assert_eq!(applied_ledger[0].1, first_manifest.package_revision);
+    assert_eq!(applied_ledger[0].1, first_digest);
     assert_eq!(applied_ledger[0].2, 1);
     assert_eq!(applied_ledger[0].4, "applied");
     assert_eq!(
@@ -2813,13 +2090,11 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     );
 
     let mut runtime = pool.get_for_test().await.expect("runtime reconnects");
-    let second_startup = local_context(PackageIntent::Startup {
-        active_revision: &active.package_revision,
-        active_sequence: 2,
-    });
+    let second_startup = local_context();
     prepare_startup(
         second.root.path(),
         &second_startup,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -2845,37 +2120,26 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     let old_process = prepare_startup(
         first.root.path(),
         &first_startup,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
     )
     .await;
-    assert!(matches!(
-        old_process,
-        Err(StartupError::DatabaseUnready) | Err(StartupError::PackageRefused(_))
-    ));
+    assert_eq!(old_process.err(), Some(StartupError::ActivePackageMismatch));
     drop(runtime);
 
-    let wrong_schema = PackageFixture::build(
-        "local",
-        2,
-        Some(&first_manifest.package_revision),
-        fingerprint(7),
-        PlanChoice::SecondTable,
-        None,
-    );
-    let wrong_manifest = read_envelope(wrong_schema.root.path()).signed;
-    let wrong_startup = local_context(PackageIntent::Startup {
-        active_revision: &wrong_manifest.package_revision,
-        active_sequence: 2,
-    });
+    let wrong_schema =
+        PackageFixture::build(Some(&first_digest), fingerprint(7), PlanChoice::SecondTable);
+    let wrong_digest = wrong_schema.digest();
+    let wrong_startup = local_context();
     database
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
              SET active_package_revision = $1
              WHERE singleton",
-            &[&wrong_manifest.package_revision],
+            &[&wrong_digest],
         )
         .await
         .expect("test binds the active revision while leaving the real schema fingerprint intact");
@@ -2883,6 +2147,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     let refused = prepare_startup(
         wrong_schema.root.path(),
         &wrong_startup,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -2902,17 +2167,11 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .expect("test restores the active revision after schema mismatch proof");
 
     let third = PackageFixture::build(
-        "local",
-        3,
         Some(&active.package_revision),
         target_schema.clone(),
         PlanChoice::ThirdTable,
-        None,
     );
-    let third_context = local_context(PackageIntent::Activation {
-        active_revision: &active.package_revision,
-        active_sequence: 2,
-    });
+    let third_context = local_context();
     let provisional_third =
         load_package(third.root.path(), &third_context).expect("third package verifies");
     let (mut fingerprint_connection, fingerprint_task) = database.connect_migration().await;
@@ -2993,7 +2252,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     .await;
     assert_eq!(
         refused_noop_clear.err(),
-        Some(MigrationError::PackageBinding),
+        Some(MigrationError::AlreadyActive),
         "a no-op startup package cannot clear failed maintenance"
     );
     assert_eq!(
@@ -3002,12 +2261,9 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     );
 
     let wrong_recovery = PackageFixture::build(
-        "local",
-        4,
         Some(&active.package_revision),
         third_schema.clone(),
         PlanChoice::ThirdTable,
-        None,
     );
     let verified_wrong_recovery = load_package(wrong_recovery.root.path(), &third_context)
         .expect("different recovery target verifies as a package");
@@ -3036,7 +2292,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     assert_eq!(failed_target.get::<_, String>(0), "failed");
     assert_eq!(
         failed_target.get::<_, String>(1),
-        verified_third.manifest().package_revision
+        verified_third.package_digest()
     );
 
     let third_table = &verified_third.registry().entities()["third-record"].physical_table;
@@ -3058,10 +2314,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     )
     .await
     .expect("the exact failed package resumes after operator repair");
-    assert_eq!(
-        recovered.package_revision,
-        verified_third.manifest().package_revision
-    );
+    assert_eq!(recovered.package_revision, verified_third.package_digest());
     let recovered_status: String = database
         .admin
         .query_one(
@@ -3087,19 +2340,9 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let (mut migration, migration_task) = database.connect_migration().await;
     let destination_fixture = EventDestinationCompatibilityFixture::create();
 
-    let first = PackageFixture::build(
-        "local",
-        1,
-        None,
-        fingerprint(1),
-        PlanChoice::WebhookSchema,
-        None,
-    );
-    let provisional_first = load_package(
-        first.root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial webhook package verifies before fingerprinting");
+    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::WebhookSchema);
+    let provisional_first = load_package(first.root.path(), &local_context())
+        .expect("initial webhook package verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
@@ -3123,11 +2366,8 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     rewrite_unsigned(first.root.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&first_fingerprint);
     });
-    let verified_first = load_package(
-        first.root.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .expect("initial webhook package reloads with exact fingerprint");
+    let verified_first = load_package(first.root.path(), &local_context())
+        .expect("initial webhook package reloads with exact fingerprint");
     let active = apply_package(
         &database,
         &verified_first,
@@ -3232,17 +2472,11 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     .await;
 
     let second = PackageFixture::build(
-        "local",
-        2,
         Some(&active.package_revision),
         first_fingerprint,
         PlanChoice::WebhookSecondTable,
-        None,
     );
-    let activation_context = local_context(PackageIntent::Activation {
-        active_revision: &active.package_revision,
-        active_sequence: 1,
-    });
+    let activation_context = local_context();
     let provisional_second = load_package(second.root.path(), &activation_context)
         .expect("unrelated additive webhook successor verifies before fingerprinting");
     let transaction = migration
@@ -3500,25 +2734,10 @@ fn predecessor_plan_choice(plan: PlanChoice) -> PlanChoice {
     }
 }
 
-fn canonical_sequence_for_plan(plan: PlanChoice) -> u64 {
-    match plan {
-        PlanChoice::Schema => 1,
-        PlanChoice::SecondTable => 2,
-        PlanChoice::ThirdTable => 3,
-        PlanChoice::WebhookSchema => 1,
-        PlanChoice::WebhookSecondTable => 2,
-        PlanChoice::TemporalSchema => 1,
-    }
-}
-
-fn compile_fixture_registry(
-    environment: &str,
-    sequence: u64,
-    plan: PlanChoice,
-) -> registry_breg::CompiledRegistry {
+fn compile_fixture_registry(plan: PlanChoice) -> registry_breg::CompiledRegistry {
     let module_bytes = module_bytes(plan);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-    let project_bytes = project_bytes(environment, sequence, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let project = parse_project_yaml(&project_bytes).expect("fixture project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in production")
@@ -3526,137 +2745,44 @@ fn compile_fixture_registry(
 
 struct PackageFixture {
     root: TempRoot,
-    anchor: Option<PathBuf>,
 }
 
 impl PackageFixture {
-    fn build(
-        environment: &str,
-        sequence: u64,
-        prior_revision: Option<&str>,
-        schema_fingerprint: String,
-        plan: PlanChoice,
-        signing: Option<&PrivateJwk>,
-    ) -> Self {
+    fn build(prior_revision: Option<&str>, schema_fingerprint: String, plan: PlanChoice) -> Self {
         let root = TempRoot::create();
         let module_bytes = module_bytes(plan);
         let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
-        let project_bytes = project_bytes(environment, sequence, &module_digest(&module));
-        let (signature_policy, anchor) = if let Some(signing) = signing {
-            let key_id = signing.public().kid.expect("generated key has kid");
-            (
-                SignaturePolicy {
-                    threshold: 1,
-                    key_ids: vec![key_id.clone()],
-                },
-                Some((key_id, signing.public())),
-            )
-        } else {
-            (
-                SignaturePolicy {
-                    threshold: 0,
-                    key_ids: Vec::new(),
-                },
-                None,
-            )
-        };
-
+        let project_bytes = project_bytes(&module_digest(&module));
         let migration_plan = if prior_revision.is_none() {
             PackageMigrationPlanInput::InitialCompiledDdl
         } else {
-            let predecessor = predecessor_plan_choice(plan);
-            let prior_registry = compile_fixture_registry(
-                environment,
-                canonical_sequence_for_plan(predecessor),
-                predecessor,
-            );
+            let prior_registry = compile_fixture_registry(predecessor_plan_choice(plan));
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new(prior_registry),
             }
         };
         let prepared = prepare_package(build_request(BuildRequestParts {
-            environment,
-            sequence,
             prior_revision,
             schema_fingerprint,
             project_bytes,
             module_bytes,
             migration_plan,
-            signature_policy,
         }))
         .expect("fixture package prepares");
-        let signatures = signing
-            .map(|key| {
-                let signature =
-                    sign(prepared.canonical_signed_bytes(), key).expect("test package signs");
-                vec![PackageSignature {
-                    key_id: key.public().kid.expect("generated key has kid"),
-                    signature_hex: hex(&signature),
-                }]
-            })
-            .unwrap_or_default();
         prepared
-            .publish_to_directory(root.path(), signatures)
+            .publish_to_directory(root.path())
             .expect("fixture package publishes");
-
-        let anchor_path = anchor.map(|(key_id, public)| {
-            let path = root.path().with_extension("trust.json");
-            write_json(
-                &path,
-                &PackageTrustAnchor {
-                    api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-                    environment: environment.to_owned(),
-                    instance_id: INSTANCE.to_owned(),
-                    database_id: DATABASE.to_owned(),
-                    threshold: 1,
-                    keys: vec![TrustAnchorKey {
-                        key_id,
-                        jwk: serde_json::to_value(public).expect("public JWK serializes"),
-                    }],
-                },
-            );
-            path
-        });
-        Self {
-            root,
-            anchor: anchor_path,
-        }
+        Self { root }
     }
 
-    fn context<'a>(&'a self, intent: PackageIntent<'a>) -> PackageLoadContext<'a> {
+    fn context(&self) -> PackageLoadContext<'static> {
         PackageLoadContext {
-            environment: "production",
-            instance_id: INSTANCE,
-            database_id: DATABASE,
             database_initialization_environment: "production",
-            compiler_source_revision: SOURCE_REVISION,
-            trust_anchor: self.anchor.as_deref(),
-            intent,
         }
     }
 
-    fn predecessor_context<'a>(
-        &'a self,
-        expected_package_revision: &'a str,
-        expected_sequence: u64,
-    ) -> PredecessorPackageContext<'a> {
-        PredecessorPackageContext {
-            environment: "production",
-            instance_id: INSTANCE,
-            database_id: DATABASE,
-            database_initialization_environment: "production",
-            trust_anchor: self.anchor.as_deref(),
-            expected_package_revision,
-            expected_sequence,
-        }
-    }
-}
-
-impl Drop for PackageFixture {
-    fn drop(&mut self) {
-        if let Some(anchor) = &self.anchor {
-            let _ = fs::remove_file(anchor);
-        }
+    fn digest(&self) -> String {
+        package_digest_of(self.root.path())
     }
 }
 
@@ -3697,31 +2823,22 @@ impl Drop for TempRoot {
     }
 }
 
-fn project_bytes(environment: &str, sequence: u64, module_digest: &str) -> Vec<u8> {
+fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
-fn project_bytes_without_manifest(
-    environment: &str,
-    sequence: u64,
-    module_digest: &str,
-) -> Vec<u8> {
+fn project_bytes_without_manifest(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
-fn project_bytes_with_source_revision(
-    environment: &str,
-    sequence: u64,
-    module_digest: &str,
-    source_revision: &str,
-) -> Vec<u8> {
-    String::from_utf8(project_bytes(environment, sequence, module_digest))
+fn project_bytes_with_source_revision(module_digest: &str, source_revision: &str) -> Vec<u8> {
+    String::from_utf8(project_bytes(module_digest))
         .expect("fixture project is UTF-8")
         .replace(SOURCE_REVISION, source_revision)
         .into_bytes()
@@ -3760,7 +2877,7 @@ fn metadata_only_review_source(
         canonicalize_json(&serde_json::to_value(descriptor).expect("descriptor serializes"))
             .expect("descriptor canonicalizes");
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: prior_revision.to_owned(),
+        prior_package_digest: prior_revision.to_owned(),
         prior_schema_fingerprint: prior_schema_fingerprint.to_owned(),
         plan_sha256: format!("sha256:{}", hex(&Sha256::digest(&descriptor_bytes))),
         sql_sha256: Vec::new(),
@@ -3810,7 +2927,6 @@ fn temporal_policy_module_bytes_with(
 }
 
 fn publish_temporal_policy_package(
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: String,
     module_bytes: Vec<u8>,
@@ -3819,21 +2935,15 @@ fn publish_temporal_policy_package(
     let root = TempRoot::create();
     let module = parse_module_yaml(&module_bytes).expect("temporal policy module parses");
     let prepared = prepare_package(build_request(BuildRequestParts {
-        environment: "local",
-        sequence,
         prior_revision,
         schema_fingerprint,
-        project_bytes: project_bytes("local", sequence, &module_digest(&module)),
+        project_bytes: project_bytes(&module_digest(&module)),
         module_bytes,
         migration_plan,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     }))
     .expect("temporal policy package prepares");
     prepared
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("temporal policy package publishes");
     root
 }
@@ -3886,17 +2996,11 @@ fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {
         }],
     );
     let mut request = build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
-        project_bytes: project_bytes("local", 1, &digest),
+        project_bytes: project_bytes(&digest),
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     });
     request.modules[0].assets = vec![PackageSourceFile {
         path: "sql/summary.sql".to_owned(),
@@ -3906,26 +3010,18 @@ fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {
 }
 
 struct BuildRequestParts<'a> {
-    environment: &'a str,
-    sequence: u64,
     prior_revision: Option<&'a str>,
     schema_fingerprint: String,
     project_bytes: Vec<u8>,
     module_bytes: Vec<u8>,
     migration_plan: PackageMigrationPlanInput,
-    signature_policy: SignaturePolicy,
 }
 
 fn build_request(parts: BuildRequestParts<'_>) -> PackageBuildRequest {
     PackageBuildRequest {
-        environment: parts.environment.to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence: parts.sequence,
-        prior_revision: parts.prior_revision.map(str::to_owned),
+        from_package_digest: parts.prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: parts.schema_fingerprint,
-        signature_policy: parts.signature_policy,
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: parts.project_bytes,
@@ -3953,53 +3049,35 @@ fn legacy_compiler_fixture(source_revision: &str) -> PackageFixture {
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
     let project_bytes =
-        project_bytes_with_source_revision("local", 1, &module_digest(&module), source_revision);
+        project_bytes_with_source_revision(&module_digest(&module), source_revision);
     let mut request = build_request(BuildRequestParts {
-        environment: "local",
-        sequence: 1,
         prior_revision: None,
         schema_fingerprint: fingerprint(1),
         project_bytes,
         module_bytes,
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
     });
     request.compiler_source_revision = source_revision.to_owned();
     let prepared = prepare_package(request).expect("legacy compiler fixture prepares");
     prepared
-        .publish_to_directory(root.path(), Vec::new())
+        .publish_to_directory(root.path())
         .expect("legacy compiler fixture publishes");
-    PackageFixture { root, anchor: None }
+    PackageFixture { root }
 }
 
-fn local_context(intent: PackageIntent<'_>) -> PackageLoadContext<'_> {
+fn local_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
-        environment: "local",
-        instance_id: INSTANCE,
-        database_id: DATABASE,
         database_initialization_environment: "local",
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        intent,
     }
 }
 
-fn local_predecessor_context(
-    expected_package_revision: &str,
-    expected_sequence: u64,
-) -> PredecessorPackageContext<'_> {
-    PredecessorPackageContext {
-        environment: "local",
-        instance_id: INSTANCE,
-        database_id: DATABASE,
-        database_initialization_environment: "local",
-        trust_anchor: None,
-        expected_package_revision,
-        expected_sequence,
-    }
+/// The package identity the database ledger records: the digest of the
+/// package's sum file.
+fn package_digest_of(root: &Path) -> String {
+    registry_breg::package::verify_shared_package(root)
+        .expect("fixture package envelope verifies")
+        .digest()
+        .to_owned()
 }
 
 async fn restore_legacy_migration_ledger_metadata_constraints(database: &TestDatabase) {
@@ -4049,6 +3127,7 @@ async fn apply_package(
     apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         timeouts,
@@ -4068,6 +3147,7 @@ async fn apply_package_with_event_destination_compatibility(
         ApplyVerifiedPackageRequest::new(
             &database.migration_config,
             package,
+            ActivationDeployment::new("local", INSTANCE, DATABASE),
             precondition,
             ApplyRoles::new(&database.migration_role, &database.runtime_role),
             timeouts,
@@ -4207,7 +3287,6 @@ struct EventDestinationCompatibilityFixture {
     _root: TempRoot,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
 }
 
 impl EventDestinationCompatibilityFixture {
@@ -4218,8 +3297,6 @@ impl EventDestinationCompatibilityFixture {
         let package_root = root.path().join("package");
         fs::create_dir(&secret_root).expect("destination compatibility secrets create");
         fs::create_dir(&package_root).expect("destination compatibility package root creates");
-        let trust_anchor = root.path().join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("destination compatibility trust file writes");
         let key_path = secret_root.join("webhook-key");
         fs::write(&key_path, [0x51_u8; 32]).expect("destination compatibility key writes");
         #[cfg(unix)]
@@ -4232,7 +3309,6 @@ impl EventDestinationCompatibilityFixture {
             _root: root,
             secret_root,
             package_root,
-            trust_anchor,
         }
     }
 
@@ -4273,10 +3349,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {SOURCE_REVISION}
-  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -4326,7 +3398,6 @@ operationalTimeouts:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
         );
         parse_runtime_config(&raw)
             .expect("upgrade compatibility runtime parses")
@@ -4533,7 +3604,7 @@ fn write_signed_files<const N: usize>(root: &Path, files: [(&str, Vec<u8>); N]) 
     for (relative, bytes) in files {
         fs::write(root.join(relative), &bytes).expect("signed file writes");
         let entry = envelope
-            .signed
+            .manifest
             .files
             .iter_mut()
             .find(|entry| entry.path == relative)
@@ -4541,26 +3612,22 @@ fn write_signed_files<const N: usize>(root: &Path, files: [(&str, Vec<u8>); N]) 
         entry.size = bytes.len() as u64;
         entry.sha256 = format!("sha256:{}", hex(&Sha256::digest(&bytes)));
     }
-    envelope.signed.package_revision.clear();
-    envelope.signed.package_revision =
-        derive_package_revision(&envelope.signed).expect("mutated revision derives");
-    envelope.signatures.clear();
     write_json(&root.join("package.json"), &envelope);
     refresh_shared_package_envelope(root);
 }
 
 fn rewrite_unsigned(root: &Path, mutate: impl FnOnce(&mut PackageManifest)) {
     let mut envelope = read_envelope(root);
-    mutate(&mut envelope.signed);
+    mutate(&mut envelope.manifest);
     let migration_plan_bytes = canonicalize_json(
-        &serde_json::to_value(&envelope.signed.migration_plan).expect("value serializes"),
+        &serde_json::to_value(&envelope.manifest.migration_plan).expect("value serializes"),
     )
     .expect("value canonicalizes");
     let migration_plan_path = root.join("database/migration-plan.json");
     if migration_plan_path.is_file() {
         fs::write(&migration_plan_path, &migration_plan_bytes).expect("migration plan file writes");
         if let Some(entry) = envelope
-            .signed
+            .manifest
             .files
             .iter_mut()
             .find(|entry| entry.path == "database/migration-plan.json")
@@ -4569,10 +3636,6 @@ fn rewrite_unsigned(root: &Path, mutate: impl FnOnce(&mut PackageManifest)) {
             entry.sha256 = format!("sha256:{}", hex(&Sha256::digest(&migration_plan_bytes)));
         }
     }
-    envelope.signed.package_revision.clear();
-    envelope.signed.package_revision =
-        derive_package_revision(&envelope.signed).expect("mutated revision derives");
-    envelope.signatures.clear();
     write_json(&root.join("package.json"), &envelope);
     refresh_shared_package_envelope(root);
 }
@@ -4639,7 +3702,7 @@ fn first_generated_path(root: &Path) -> PathBuf {
     let envelope = read_envelope(root);
     root.join(
         &envelope
-            .signed
+            .manifest
             .files
             .iter()
             .find(|entry| entry.role == PackageFileRole::GeneratedOpenapi)
@@ -4652,7 +3715,7 @@ fn manifest_projection_path(root: &Path) -> PathBuf {
     let envelope = read_envelope(root);
     root.join(
         &envelope
-            .signed
+            .manifest
             .files
             .iter()
             .find(|entry| entry.role == PackageFileRole::LossyManifestProjection)
@@ -4665,7 +3728,7 @@ fn governed_model_path(root: &Path) -> PathBuf {
     let envelope = read_envelope(root);
     root.join(
         &envelope
-            .signed
+            .manifest
             .files
             .iter()
             .find(|entry| entry.role == PackageFileRole::GovernedModel)
@@ -4678,7 +3741,7 @@ fn manifest_file_path(root: &Path, role: PackageFileRole) -> PathBuf {
     let envelope = read_envelope(root);
     root.join(
         &envelope
-            .signed
+            .manifest
             .files
             .iter()
             .find(|entry| entry.role == role)
@@ -4693,7 +3756,7 @@ fn load_error(root: &Path, context: &PackageLoadContext<'_>) -> PackageError {
         .expect("package is refused")
 }
 
-fn predecessor_load_error(root: &Path, context: &PredecessorPackageContext<'_>) -> PackageError {
+fn predecessor_load_error(root: &Path, context: &PackageLoadContext<'_>) -> PackageError {
     load_predecessor_package(root, context)
         .err()
         .expect("predecessor package is refused")

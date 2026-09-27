@@ -680,18 +680,13 @@ def validate_fixture(errors: list[str]) -> None:
     package = as_mapping(document.get("package"), "asset fixture.package", errors)
     exact_keys(
         package,
-        {"environment", "instanceId", "sequence", "sourceRevision"},
+        {"sourceRevision"},
         "asset fixture.package",
         errors,
     )
     expected_package = {
-        "environment": "acceptance",
-        "instanceId": "asset-site-placement-acceptance",
-        "sequence": 1,
         "sourceRevision": "asset-site-placement-acceptance-0.1.0",
     }
-    if type(package.get("sequence")) is not int:
-        errors.append("asset fixture.package.sequence: expected integer")
     if package != expected_package:
         errors.append("asset fixture.package: must equal the committed acceptance package identity")
     entities = as_list(document.get("entities"), "asset fixture.entities", errors)

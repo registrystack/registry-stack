@@ -3,7 +3,7 @@
 //!
 //! Threat: a reviewed migration artifact could otherwise smuggle a second
 //! statement, session or role mutation, cross-schema access, unbounded DML, or
-//! evidence for a different package into a signed package. This module is the
+//! evidence for a different package into a package. This module is the
 //! single validator used while constructing and rederiving package closure.
 
 #[cfg(feature = "tooling")]
@@ -23,8 +23,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "tooling")]
 use thiserror::Error;
-#[cfg(feature = "tooling")]
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 #[cfg(feature = "tooling")]
 use crate::model::CompiledEntity;
@@ -58,8 +56,6 @@ const MAX_STATEMENT_TIMEOUT_MS: u64 = 3_600_000;
 const MAX_CHUNK_SIZE: u32 = crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as u32;
 #[cfg(feature = "tooling")]
 const MAX_TOTAL_ROWS: u64 = 100_000_000;
-#[cfg(feature = "tooling")]
-const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewedMigrationFile {
@@ -244,7 +240,7 @@ pub struct ReviewedMigrationAssertionDescriptor {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MigrationRehearsalReceipt {
-    pub prior_revision: String,
+    pub prior_package_digest: String,
     pub prior_schema_fingerprint: String,
     pub plan_sha256: String,
     pub sql_sha256: Vec<ArtifactDigestBinding>,
@@ -291,8 +287,9 @@ pub struct RehearsalProofs {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ExternalBackupBinding {
     pub database_id: String,
-    pub prior_revision: String,
+    pub prior_package_digest: String,
     pub prior_schema_fingerprint: String,
+    pub backup_file: String,
     pub sha256: String,
     pub byte_length: u64,
     pub created_at: String,
@@ -320,7 +317,6 @@ pub struct ValidatedReviewedMigration {
     pub pre_assertions: Vec<ValidatedReviewedMigrationAssertion>,
     pub post_assertions: Vec<ValidatedReviewedMigrationAssertion>,
     pub rehearsal_receipt: MigrationRehearsalReceipt,
-    pub backup_binding: Option<ExternalBackupBinding>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -340,10 +336,9 @@ pub struct ValidatedReviewedMigrationAssertion {
 #[cfg(feature = "tooling")]
 #[derive(Clone, Debug)]
 pub(crate) struct ReviewedPlanBindings<'a> {
-    pub prior_revision: &'a str,
+    pub prior_package_digest: &'a str,
     pub prior_schema_fingerprint: &'a str,
     pub final_schema_fingerprint: &'a str,
-    pub database_id: &'a str,
     pub changes: &'a [CompiledRegistryChange],
     pub prior_entities: &'a BTreeMap<String, CompiledEntity>,
     pub candidate_entities: &'a BTreeMap<String, CompiledEntity>,
@@ -364,7 +359,6 @@ pub enum ReviewedArtifactKind {
     StepSql,
     AssertionSql,
     RehearsalReceipt,
-    BackupBinding,
     Fixture,
 }
 
@@ -414,9 +408,13 @@ pub(crate) fn prepare_reviewed_migration_plan(
             return Err(ReviewedMigrationError::Closure);
         }
         for file in &source.files {
-            if files
-                .insert(file.path.clone(), file.bytes.clone())
-                .is_some()
+            // Only reviewed artifacts in the package layout travel with a
+            // review. A backup binding describes one database's backup, so it
+            // is an apply input and never a package file.
+            if reviewed_artifact_kind(&file.path).is_none()
+                || files
+                    .insert(file.path.clone(), file.bytes.clone())
+                    .is_some()
             {
                 return Err(ReviewedMigrationError::Closure);
             }
@@ -575,19 +573,11 @@ pub(crate) fn validate_reviewed_migration_plan(
             },
         )?;
 
-        let backup_binding = match &descriptor.backup_binding_path {
-            Some(path) => {
-                referenced_paths.insert(path.clone());
-                let bytes = files.get(path).ok_or(ReviewedMigrationError::Evidence)?;
-                let binding: ExternalBackupBinding =
-                    parse_canonical(bytes).map_err(|_| ReviewedMigrationError::Evidence)?;
-                validate_backup(&binding, bindings)?;
-                Some(binding)
-            }
-            None => None,
-        };
+        // A destructive migration names the backup binding apply requires;
+        // the binding itself describes one database's backup, so it is an
+        // apply input and never a package file.
         if descriptor.change_class == CompiledRegistryChangeClass::DestructiveOrIrreversible
-            && backup_binding.is_none()
+            && descriptor.backup_binding_path.is_none()
         {
             return Err(ReviewedMigrationError::Evidence);
         }
@@ -599,7 +589,6 @@ pub(crate) fn validate_reviewed_migration_plan(
             pre_assertions,
             post_assertions,
             rehearsal_receipt: receipt,
-            backup_binding,
         });
     }
     if claimed != non_additive.keys().cloned().collect()
@@ -771,11 +760,6 @@ pub fn reviewed_artifact_kind(path: &str) -> Option<ReviewedArtifactKind> {
             if valid_id(module) && valid_id(migration) =>
         {
             Some(ReviewedArtifactKind::RehearsalReceipt)
-        }
-        ["modules", module, "migrations", migration, "backup.json"]
-            if valid_id(module) && valid_id(migration) =>
-        {
-            Some(ReviewedArtifactKind::BackupBinding)
         }
         ["modules", module, "migrations", migration, "fixtures", file]
             if valid_id(module)
@@ -1153,7 +1137,7 @@ fn validate_receipt(
         })
         .collect::<Vec<_>>();
     let metadata_only = steps.is_empty() && covers_are_metadata_only(&descriptor.covers);
-    if receipt.prior_revision != bindings.prior_revision
+    if receipt.prior_package_digest != bindings.prior_package_digest
         || receipt.prior_schema_fingerprint != bindings.prior_schema_fingerprint
         || receipt.final_schema_fingerprint != bindings.final_schema_fingerprint
         || receipt.plan_sha256 != digest(descriptor_bytes)
@@ -1254,25 +1238,6 @@ fn validate_fixture_jsonl(bytes: &[u8]) -> Result<u64, ReviewedMigrationError> {
             .ok_or(ReviewedMigrationError::Evidence)?;
     }
     Ok(count)
-}
-
-#[cfg(feature = "tooling")]
-fn validate_backup(
-    backup: &ExternalBackupBinding,
-    bindings: &ReviewedPlanBindings<'_>,
-) -> Result<(), ReviewedMigrationError> {
-    if backup.database_id != bindings.database_id
-        || backup.prior_revision != bindings.prior_revision
-        || backup.prior_schema_fingerprint != bindings.prior_schema_fingerprint
-        || !valid_digest(&backup.sha256)
-        || backup.byte_length == 0
-        || backup.max_age_seconds == 0
-        || backup.max_age_seconds > MAX_BACKUP_AGE_SECONDS
-        || OffsetDateTime::parse(&backup.created_at, &Rfc3339).is_err()
-    {
-        return Err(ReviewedMigrationError::Evidence);
-    }
-    Ok(())
 }
 
 #[cfg(feature = "tooling")]

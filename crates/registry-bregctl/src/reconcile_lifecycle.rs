@@ -15,9 +15,10 @@ use registry_breg::migration_reconcile::{
     reconcile_failed_migration, ReconcileError, ReconcileReport, ReconcileRequest,
     ReconcileTimeouts,
 };
-use registry_breg::package::{load_package, PackageError, PackageIntent, PackageLoadContext};
-use registry_breg::postgres::ExpectedRegistryIdentity;
+use registry_breg::package::{load_package, PackageError};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+
+use crate::active_registry::{recorded_active_identity, ActiveRegistryError};
 use serde::Serialize;
 
 /// The recorded operator reference is a keyed hash in the audit journal, so
@@ -33,6 +34,7 @@ pub(crate) enum ReconcileLifecycleError {
     OperatorReference,
     RuntimeConfig(RuntimeConfigError),
     ActivePackage(PackageError),
+    ActiveRegistry(ActiveRegistryError),
     TargetPackage(PackageError),
     DatabaseConfiguration,
     TimeoutConfiguration,
@@ -84,26 +86,15 @@ pub(crate) fn run(
     let active = config
         .load_active_package()
         .map_err(ReconcileLifecycleError::ActivePackage)?;
-    let current = active_identity(&active)?;
-    let target = load_package(
-        request.package,
-        &PackageLoadContext {
-            environment: config.identity().environment(),
-            instance_id: config.identity().instance_id(),
-            database_id: config.identity().database_id(),
-            database_initialization_environment: config
-                .identity()
-                .database_initialization_environment(),
-            compiler_source_revision: config.package().compiler_source_revision(),
-            trust_anchor: config.package_trust_anchor(),
-            intent: PackageIntent::Activation {
-                active_revision: &current.package_revision,
-                active_sequence: u64::try_from(current.package_sequence)
-                    .map_err(|_| ReconcileLifecycleError::TargetPackage(PackageError::Binding))?,
-            },
-        },
-    )
-    .map_err(ReconcileLifecycleError::TargetPackage)?;
+    let target = load_package(request.package, &config.package_load_context())
+        .map_err(ReconcileLifecycleError::TargetPackage)?;
+    // The active package is never its own successor, so naming it as the
+    // target is refused before any database secret is resolved.
+    if target.package_digest() == active.package_digest() {
+        return Err(ReconcileLifecycleError::TargetPackage(
+            PackageError::Binding,
+        ));
+    }
 
     let connection = config
         .migration_database_connection_config()
@@ -120,6 +111,8 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| ReconcileLifecycleError::Runtime)?;
+    let current = recorded_active_identity(&runtime, &config, &connection, &active)
+        .map_err(ReconcileLifecycleError::ActiveRegistry)?;
     let audit = runtime
         .block_on(RegistryAudit::open_companion(&config))
         .map_err(|_| ReconcileLifecycleError::Audit)?;
@@ -156,22 +149,6 @@ fn outcome_report(report: ReconcileReport) -> ReconcileLifecycleOutcome {
         reviewed_plan_closed: report.reviewed_plan_closed,
         durable_step_progress: report.durable_step_progress,
     }
-}
-
-fn active_identity(
-    package: &registry_breg::package::VerifiedPackage,
-) -> Result<ExpectedRegistryIdentity, ReconcileLifecycleError> {
-    let manifest = package.manifest();
-    Ok(ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: i64::try_from(manifest.sequence)
-            .map_err(|_| ReconcileLifecycleError::ActivePackage(PackageError::Binding))?,
-    })
 }
 
 fn validate_operator_reference(reference: &str) -> Result<(), ReconcileLifecycleError> {

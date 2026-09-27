@@ -1147,28 +1147,16 @@ fn switching_the_consent_issuer_changes_the_action_contract() {
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 fn package_request(
     value: &Value,
-    sequence: u64,
-    prior_revision: Option<&str>,
+    from_package_digest: Option<&str>,
     migration_plan: registry_breg::package::PackageMigrationPlanInput,
 ) -> registry_breg::package::PackageBuildRequest {
-    use registry_breg::package::{PackageBuildRequest, PackageSourceFile, SignaturePolicy};
+    use registry_breg::package::{PackageBuildRequest, PackageSourceFile};
     let mut value = value.clone();
-    value["package"] = json!({
-        "environment": "local", "instanceId": "consent-instance",
-        "sequence": sequence, "sourceRevision": "consent-source"
-    });
+    value["package"] = json!({ "sourceRevision": "consent-source" });
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: "consent-instance".to_owned(),
-        database_id: "consent-database".to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: from_package_digest.map(str::to_owned),
         compiler_source_revision: "consent-source".to_owned(),
         schema_fingerprint: format!("sha256:{}", "4".repeat(64)),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: vec![],
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: serde_json::to_vec(&value).unwrap(),
@@ -1183,18 +1171,17 @@ fn package_request(
     }
 }
 
-/// A signed predecessor keeps its recipients, so a successor that only maps a
+/// A predecessor package keeps its recipients, so a successor that only maps a
 /// new client derives a metadata-only plan from it rather than an empty one.
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
-fn a_signed_predecessor_carries_its_recipients_into_a_metadata_only_successor() {
+fn a_predecessor_package_carries_its_recipients_into_a_metadata_only_successor() {
     use registry_breg::package::{
         load_predecessor_package, prepare_package, CompiledRegistryChangeCode,
-        CompiledRegistryMigrationBaseline, PackageMigrationPlanInput, PredecessorPackageContext,
+        CompiledRegistryMigrationBaseline, PackageLoadContext, PackageMigrationPlanInput,
     };
     let prepared = prepare_package(package_request(
         &source(),
-        1,
         None,
         PackageMigrationPlanInput::InitialCompiledDdl,
     ))
@@ -1202,18 +1189,12 @@ fn a_signed_predecessor_carries_its_recipients_into_a_metadata_only_successor() 
     let directory = tempfile::tempdir().unwrap();
     // The package writer refuses symlinked ancestors such as macOS /var.
     let root = directory.path().canonicalize().unwrap().join("package");
-    prepared.publish_to_directory(&root, vec![]).unwrap();
-    let revision = prepared.package_revision().to_owned();
+    prepared.publish_to_directory(&root).unwrap();
+    let revision = prepared.package_digest().unwrap().to_owned();
     let predecessor = load_predecessor_package(
         &root,
-        &PredecessorPackageContext {
-            environment: "local",
-            instance_id: "consent-instance",
-            database_id: "consent-database",
+        &PackageLoadContext {
             database_initialization_environment: "local",
-            trust_anchor: None,
-            expected_package_revision: &revision,
-            expected_sequence: 1,
         },
     )
     .unwrap();
@@ -1228,7 +1209,6 @@ fn a_signed_predecessor_carries_its_recipients_into_a_metadata_only_successor() 
     mapped["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
     let successor = prepare_package(package_request(
         &mapped,
-        2,
         Some(&revision),
         PackageMigrationPlanInput::SuccessorFromBaseline {
             prior_baseline: Box::new(baseline.clone()),

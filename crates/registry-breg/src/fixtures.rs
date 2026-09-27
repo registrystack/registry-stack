@@ -42,7 +42,7 @@ use crate::model::{
 };
 use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, HttpMethod};
 #[cfg(any(test, feature = "postgres-test"))]
-use crate::package::{canonical_signed_bytes as package_canonical_signed_bytes, VerifiedPackage};
+use crate::package::VerifiedPackage;
 use crate::package::{
     PackageCompileProfile, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
     MAX_RHAI_PLANNER_SOURCE_BYTES,
@@ -57,7 +57,7 @@ use crate::runtime_config::RuntimeConfig;
 use crate::startup::PreparedServer;
 
 const JOURNEY_API_VERSION: &str = "registry.registrystack.org/breg-journeys/v1";
-const RECEIPT_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-receipt/v1";
+const RECEIPT_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-receipt/v2";
 const RECEIPT_KIND: &str = "SchemaTestReceipt";
 const MAX_JOURNEY_FILE_BYTES: usize = 1024 * 1024;
 const MAX_JOURNEYS: usize = 128;
@@ -3282,9 +3282,8 @@ async fn database_execution_facts(
     let row = client
         .query_one(
             "SELECT current_database(), current_setting('server_version_num'),
-                    package_id, environment, instance_id, database_id,
-                    active_package_revision, package_sequence,
-                    schema_fingerprint, maintenance_status
+                    package_id, active_package_revision, schema_fingerprint,
+                    maintenance_status
                FROM registry_internal.registry_state
               WHERE singleton",
             &[],
@@ -3295,22 +3294,16 @@ async fn database_execution_facts(
         .get::<_, String>(1)
         .parse::<u32>()
         .map_err(|_| FixtureError::ExecutionRefused)?;
-    let sequence =
-        u64::try_from(row.get::<_, i64>(7)).map_err(|_| FixtureError::CandidateBindingRefused)?;
     let postgres_major =
         u16::try_from(version / 10_000).map_err(|_| FixtureError::CandidateBindingRefused)?;
     Ok(SchemaTestExecutionFacts::from_database_snapshot(
         DatabaseExecutionSnapshot {
             current_database: row.get(0),
             package_id: row.get(2),
-            environment: row.get(3),
-            instance_id: row.get(4),
-            database_id: row.get(5),
-            package_revision: row.get(6),
-            sequence,
-            schema_fingerprint: row.get(8),
+            package_digest: row.get(3),
+            schema_fingerprint: row.get(4),
             postgres_major,
-            maintenance_status: row.get(9),
+            maintenance_status: row.get(5),
         },
     ))
 }
@@ -5131,11 +5124,7 @@ pub struct SchemaTestSources<'a> {
 struct SchemaTestExecutionFacts {
     current_database: String,
     package_id: String,
-    environment: String,
-    instance_id: String,
-    package_revision: String,
-    database_id: String,
-    sequence: u64,
+    package_digest: String,
     schema_fingerprint: String,
     postgres_major: u16,
     maintenance_status: String,
@@ -5146,11 +5135,7 @@ impl SchemaTestExecutionFacts {
         Self {
             current_database: snapshot.current_database,
             package_id: snapshot.package_id,
-            environment: snapshot.environment,
-            instance_id: snapshot.instance_id,
-            package_revision: snapshot.package_revision,
-            database_id: snapshot.database_id,
-            sequence: snapshot.sequence,
+            package_digest: snapshot.package_digest,
             schema_fingerprint: snapshot.schema_fingerprint,
             postgres_major: snapshot.postgres_major,
             maintenance_status: snapshot.maintenance_status,
@@ -5161,11 +5146,7 @@ impl SchemaTestExecutionFacts {
 struct DatabaseExecutionSnapshot {
     current_database: String,
     package_id: String,
-    environment: String,
-    instance_id: String,
-    database_id: String,
-    package_revision: String,
-    sequence: u64,
+    package_digest: String,
     schema_fingerprint: String,
     postgres_major: u16,
     maintenance_status: String,
@@ -5178,15 +5159,9 @@ pub struct ValidatedSchemaTestCandidate {
     registry_revision: String,
     project_source_revision: String,
     compiler_source_revision: String,
-    environment: String,
-    instance_id: String,
-    database_id: String,
-    sequence: u64,
-    prior_package_revision: Option<String>,
-    target_package_revision: String,
+    prior_package_digest: Option<String>,
     source_closure_sha256: String,
     migration_plan_sha256: String,
-    signing_input_sha256: String,
     postgres_major: u16,
     target_managed_schema_fingerprint: String,
 }
@@ -5195,7 +5170,6 @@ impl fmt::Debug for ValidatedSchemaTestCandidate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ValidatedSchemaTestCandidate")
-            .field("sequence", &self.sequence)
             .field("postgres_major", &self.postgres_major)
             .finish_non_exhaustive()
     }
@@ -5209,16 +5183,10 @@ pub struct SchemaTestReceipt {
     registry_revision: String,
     project_source_revision: String,
     compiler_source_revision: String,
-    environment: String,
-    instance_id: String,
-    database_id: String,
-    sequence: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    prior_package_revision: Option<String>,
-    candidate_package_revision: String,
+    prior_package_digest: Option<String>,
     source_closure_sha256: String,
     migration_plan_sha256: String,
-    signing_input_sha256: String,
     postgres_major: u16,
     target_managed_schema_fingerprint: String,
     successful_journey_ids: Vec<String>,
@@ -5229,7 +5197,6 @@ impl fmt::Debug for SchemaTestReceipt {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SchemaTestReceipt")
-            .field("sequence", &self.sequence)
             .field("postgres_major", &self.postgres_major)
             .field("journey_count", &self.successful_journey_ids.len())
             .finish_non_exhaustive()
@@ -5283,6 +5250,15 @@ fn revalidate_schema_test_receipt(
     Ok(receipt)
 }
 
+/// The source closure digest a schema-test receipt must carry for this
+/// candidate, so tooling can name a stale closure instead of a generic
+/// refusal.
+pub fn schema_test_source_closure_sha256(
+    package: &PreparedPackage,
+) -> Result<String, FixtureError> {
+    source_closure_sha256_from_package(package)
+}
+
 /// Validate a non-authorizing schema-test receipt against the exact unsigned
 /// candidate package and reviewed journey suite. Every authoritative field is
 /// rederived from package bytes. `postgresMajor` remains execution metadata,
@@ -5330,15 +5306,9 @@ fn receipt_for_candidate(
         registry_revision: candidate.registry_revision.clone(),
         project_source_revision: candidate.project_source_revision.clone(),
         compiler_source_revision: candidate.compiler_source_revision.to_owned(),
-        environment: candidate.environment.to_owned(),
-        instance_id: candidate.instance_id.clone(),
-        database_id: candidate.database_id.clone(),
-        sequence: candidate.sequence,
-        prior_package_revision: candidate.prior_package_revision.clone(),
-        candidate_package_revision: candidate.target_package_revision.clone(),
+        prior_package_digest: candidate.prior_package_digest.clone(),
         source_closure_sha256: candidate.source_closure_sha256.clone(),
         migration_plan_sha256: candidate.migration_plan_sha256.clone(),
-        signing_input_sha256: candidate.signing_input_sha256.clone(),
         postgres_major: candidate.postgres_major,
         target_managed_schema_fingerprint: candidate.target_managed_schema_fingerprint.clone(),
         successful_journey_ids: sorted_journey_ids(suite),
@@ -5363,11 +5333,7 @@ fn validate_schema_test_candidate(
         || sources.migration_plan.bytes.is_empty()
         || sources.migration_plan.bytes.len() > MAX_SOURCE_BYTES
         || execution.package_id != manifest.package_id
-        || execution.environment != manifest.environment
-        || execution.instance_id != manifest.instance_id
-        || execution.package_revision != manifest.package_revision
-        || execution.database_id != manifest.database_id
-        || execution.sequence != manifest.sequence
+        || execution.package_digest != package.package_digest()
         || execution.schema_fingerprint != manifest.schema_fingerprint
         || execution.maintenance_status != "ready"
         || execution.current_database.is_empty()
@@ -5449,12 +5415,8 @@ fn validate_schema_test_candidate(
     let project_identity = compiled
         .package()
         .ok_or(FixtureError::CandidateBindingRefused)?;
-    if project_identity.environment != manifest.environment
-        || project_identity.instance_id != manifest.instance_id
-        || project_identity.sequence != manifest.sequence
-        || manifest.migration_plan.from_revision != manifest.prior_revision
-        || manifest.migration_plan.reviewed_descriptors.is_empty()
-            != package.reviewed_migration_plan().is_none()
+    if manifest.migration_plan.reviewed_descriptors.is_empty()
+        != package.reviewed_migration_plan().is_none()
     {
         return Err(FixtureError::CandidateBindingRefused);
     }
@@ -5482,18 +5444,9 @@ fn validate_schema_test_candidate(
         registry_revision: compiled.revision().to_owned(),
         project_source_revision: project_identity.source_revision.clone(),
         compiler_source_revision: manifest.compiler.source_revision.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        sequence: manifest.sequence,
-        prior_package_revision: manifest.prior_revision.clone(),
-        target_package_revision: manifest.package_revision.clone(),
-        source_closure_sha256: source_closure_sha256(sources, suite),
+        prior_package_digest: manifest.migration_plan.from_package_digest.clone(),
+        source_closure_sha256: source_closure_sha256(manifest, sources, suite),
         migration_plan_sha256: sha256(sources.migration_plan.bytes),
-        signing_input_sha256: sha256(
-            &package_canonical_signed_bytes(manifest)
-                .map_err(|_| FixtureError::CandidateBindingRefused)?,
-        ),
         postgres_major: execution.postgres_major,
         target_managed_schema_fingerprint: execution.schema_fingerprint.clone(),
     })
@@ -5505,12 +5458,11 @@ fn validate_prepared_schema_test_candidate(
     suite: &ValidatedFixtureJourneys,
 ) -> Result<(ValidatedSchemaTestCandidate, CompiledRegistry), FixtureError> {
     let manifest = package.manifest();
+    let package_digest = package
+        .package_digest()
+        .map_err(|_| FixtureError::CandidateBindingRefused)?;
     if execution.package_id != manifest.package_id
-        || execution.environment != manifest.environment
-        || execution.instance_id != manifest.instance_id
-        || execution.package_revision != manifest.package_revision
-        || execution.database_id != manifest.database_id
-        || execution.sequence != manifest.sequence
+        || execution.package_digest != package_digest
         || execution.schema_fingerprint != manifest.schema_fingerprint
         || execution.maintenance_status != "ready"
         || execution.current_database.is_empty()
@@ -5587,10 +5539,6 @@ fn derive_prepared_schema_test_candidate(
     if compiled != *package.registry()
         || compiled.revision() != suite.registry_revision
         || compiled.registry_id() != manifest.package_id
-        || project_identity.environment != manifest.environment
-        || project_identity.instance_id != manifest.instance_id
-        || project_identity.sequence != manifest.sequence
-        || manifest.migration_plan.from_revision != manifest.prior_revision
     {
         return Err(FixtureError::CandidateBindingRefused);
     }
@@ -5625,15 +5573,9 @@ fn derive_prepared_schema_test_candidate(
             registry_revision: compiled.revision().to_owned(),
             project_source_revision: project_identity.source_revision.clone(),
             compiler_source_revision: manifest.compiler.source_revision.clone(),
-            environment: manifest.environment.clone(),
-            instance_id: manifest.instance_id.clone(),
-            database_id: manifest.database_id.clone(),
-            sequence: manifest.sequence,
-            prior_package_revision: manifest.prior_revision.clone(),
-            target_package_revision: manifest.package_revision.clone(),
+            prior_package_digest: manifest.migration_plan.from_package_digest.clone(),
             source_closure_sha256: source_closure_sha256_from_package(package)?,
             migration_plan_sha256: sha256(migration_plan_bytes),
-            signing_input_sha256: sha256(package.canonical_signed_bytes()),
             postgres_major,
             target_managed_schema_fingerprint: manifest.schema_fingerprint.clone(),
         },
@@ -5975,6 +5917,7 @@ fn manifest_file_matches(
 
 #[cfg(any(test, feature = "postgres-test"))]
 fn source_closure_sha256(
+    manifest: &crate::package::PackageManifest,
     sources: &SchemaTestSources<'_>,
     suite: &ValidatedFixtureJourneys,
 ) -> String {
@@ -6002,6 +5945,7 @@ fn source_closure_sha256(
         FIXTURE_JOURNEYS_PATH.as_bytes(),
         &suite.file_bytes,
     );
+    digest_reviewed_migration_files(&mut digest, manifest);
     encoded_sha256(digest.finalize().as_slice())
 }
 
@@ -6042,18 +5986,44 @@ fn source_closure_sha256_from_package(package: &PreparedPackage) -> Result<Strin
         .get(FIXTURE_JOURNEYS_PATH)
         .ok_or(FixtureError::CandidateBindingRefused)?;
     digest_part(&mut digest, FIXTURE_JOURNEYS_PATH.as_bytes(), journeys);
+    digest_reviewed_migration_files(&mut digest, manifest);
     Ok(encoded_sha256(digest.finalize().as_slice()))
+}
+
+/// Reviewed migration files are review input the package carries beside its
+/// sources, so the closure binds each one by its path and its manifest
+/// digest. A receipt therefore goes stale when a reviewed descriptor, its SQL,
+/// or its rehearsal evidence changes, even though the compiled model does not.
+fn digest_reviewed_migration_files(
+    digest: &mut Sha256,
+    manifest: &crate::package::PackageManifest,
+) {
+    for file in manifest.files.iter().filter(|file| {
+        matches!(
+            file.role,
+            PackageFileRole::ReviewedMigrationDescriptor
+                | PackageFileRole::ReviewedMigrationStepSql
+                | PackageFileRole::ReviewedMigrationAssertionSql
+                | PackageFileRole::MigrationRehearsalReceipt
+                | PackageFileRole::MigrationRehearsalFixture
+        )
+    }) {
+        digest_part(digest, file.path.as_bytes(), file.sha256.as_bytes());
+    }
 }
 
 fn candidate_binding_sha256(candidate: &ValidatedSchemaTestCandidate) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"breg-schema-test-candidate-binding-v1\0");
+    digest.update(b"breg-schema-test-candidate-binding-v2\0");
     for value in [
         candidate.registry_revision.as_bytes(),
-        candidate.target_package_revision.as_bytes(),
+        candidate
+            .prior_package_digest
+            .as_deref()
+            .unwrap_or("")
+            .as_bytes(),
         candidate.source_closure_sha256.as_bytes(),
         candidate.migration_plan_sha256.as_bytes(),
-        candidate.signing_input_sha256.as_bytes(),
         candidate.target_managed_schema_fingerprint.as_bytes(),
     ] {
         digest.update((value.len() as u64).to_be_bytes());
@@ -6141,8 +6111,7 @@ mod tests {
     use crate::compiler::module_digest;
     use crate::package::{
         load_package, prepare_package, prepare_package_with_project_assets, PackageBuildRequest,
-        PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-        PackageSourceFile, SignaturePolicy,
+        PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
 
     #[test]
@@ -6450,7 +6419,6 @@ mod tests {
     const MODULE_SOURCE: &[u8] = include_bytes!("../tests/fixtures/fixture-tooling/module.yaml");
     const JOURNEY_SOURCE: &[u8] = include_bytes!("../tests/fixtures/fixture-tooling/journeys.yaml");
     const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
-    const DATABASE_ID: &str = "fixture-database";
     const DIGEST_A: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST_B: &str =
@@ -6612,8 +6580,8 @@ journeys:
     }
 
     #[test]
-    fn schema_test_receipt_binds_the_exact_signing_policy_without_granting_authority() {
-        let prepared = production_prepared_package("fixture-signer-one");
+    fn schema_test_receipt_binds_the_exact_project_source_without_granting_authority() {
+        let prepared = production_prepared_package("fixture-project-source");
         let suite = validate_fixture_journeys(JOURNEY_SOURCE, prepared.registry())
             .expect("Production journey suite validates");
         let (candidate, _) = derive_prepared_schema_test_candidate(&prepared, &suite, 16)
@@ -6624,9 +6592,9 @@ journeys:
         validate_schema_test_receipt_for_package(&bytes, &prepared, &suite)
             .expect("exact unsigned candidate revalidates its receipt");
 
-        let changed_policy = production_prepared_package("fixture-signer-two");
+        let changed_source = production_prepared_package("fixture-project-source-two");
         assert_eq!(
-            validate_schema_test_receipt_for_package(&bytes, &changed_policy, &suite),
+            validate_schema_test_receipt_for_package(&bytes, &changed_source, &suite),
             Err(FixtureError::ReceiptBindingRefused)
         );
     }
@@ -6639,11 +6607,6 @@ journeys:
             std::fs::read(root.join("registry.yaml")).expect("planner project reads"),
         )
         .expect("planner project is UTF-8")
-        .replace("environment: acceptance", "environment: local")
-        .replace(
-            "instanceId: person-name-change-rhai-acceptance",
-            "instanceId: fixture-instance",
-        )
         .replace(
             "sourceRevision: person-name-change-rhai-acceptance-0.1.0",
             "sourceRevision: fixture-project-source",
@@ -6653,17 +6616,9 @@ journeys:
             .expect("planner script reads");
         let prepared = prepare_package_with_project_assets(
             PackageBuildRequest {
-                environment: "local".to_owned(),
-                instance_id: "fixture-instance".to_owned(),
-                database_id: DATABASE_ID.to_owned(),
-                sequence: 1,
-                prior_revision: None,
+                from_package_digest: None,
                 compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
                 schema_fingerprint: DIGEST_A.to_owned(),
-                signature_policy: SignaturePolicy {
-                    threshold: 0,
-                    key_ids: Vec::new(),
-                },
                 project: PackageSourceFile {
                     path: "source/registry.yaml".to_owned(),
                     bytes: project.clone(),
@@ -6696,18 +6651,12 @@ journeys:
             .expect("temporary root canonicalizes")
             .join("package");
         prepared
-            .publish_to_directory(&package_root, Vec::new())
+            .publish_to_directory(&package_root)
             .expect("planner package publishes");
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                environment: "local",
-                instance_id: "fixture-instance",
-                database_id: DATABASE_ID,
                 database_initialization_environment: "local",
-                compiler_source_revision: COMPILER_SOURCE_REVISION,
-                trust_anchor: None,
-                intent: PackageIntent::InitialActivation,
             },
         )
         .expect("planner package verifies");
@@ -6760,8 +6709,6 @@ journeys:
         )
         .unwrap();
         let identity = source.package.as_mut().unwrap();
-        identity.environment = "local".into();
-        identity.instance_id = "fixture-instance".into();
         identity.source_revision = "fixture-project-source".into();
         let project = serde_json::to_vec(&source).unwrap();
         let assets = source
@@ -6784,17 +6731,9 @@ journeys:
         let journeys = std::fs::read(root.join("tests/journeys.yaml")).unwrap();
         let prepared = prepare_package_with_project_assets(
             PackageBuildRequest {
-                environment: "local".into(),
-                instance_id: "fixture-instance".into(),
-                database_id: DATABASE_ID.into(),
-                sequence: 1,
-                prior_revision: None,
+                from_package_digest: None,
                 compiler_source_revision: COMPILER_SOURCE_REVISION.into(),
                 schema_fingerprint: DIGEST_A.into(),
-                signature_policy: SignaturePolicy {
-                    threshold: 0,
-                    key_ids: Vec::new(),
-                },
                 project: PackageSourceFile {
                     path: "source/registry.yaml".into(),
                     bytes: project.clone(),
@@ -6816,19 +6755,11 @@ journeys:
         let migration_plan = prepared.file_bytes()["database/migration-plan.json"].clone();
         let temp = tempfile::tempdir().unwrap();
         let package_root = temp.path().canonicalize().unwrap().join("package");
-        prepared
-            .publish_to_directory(&package_root, Vec::new())
-            .unwrap();
+        prepared.publish_to_directory(&package_root).unwrap();
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                environment: "local",
-                instance_id: "fixture-instance",
-                database_id: DATABASE_ID,
                 database_initialization_environment: "local",
-                compiler_source_revision: COMPILER_SOURCE_REVISION,
-                trust_anchor: None,
-                intent: PackageIntent::InitialActivation,
             },
         )
         .unwrap();
@@ -6888,11 +6819,6 @@ journeys:
             std::fs::read(root.join("registry.yaml")).expect("planner project reads"),
         )
         .expect("planner project is UTF-8")
-        .replace("environment: acceptance", "environment: local")
-        .replace(
-            "instanceId: person-name-change-rhai-acceptance",
-            "instanceId: fixture-instance",
-        )
         .replace(
             "sourceRevision: person-name-change-rhai-acceptance-0.1.0",
             "sourceRevision: fixture-project-source",
@@ -6926,17 +6852,9 @@ journeys:
         }]);
         let project = serde_json::to_vec(&project_value).expect("shell project serializes");
         let prepared = prepare_package(PackageBuildRequest {
-            environment: "local".to_owned(),
-            instance_id: "fixture-instance".to_owned(),
-            database_id: DATABASE_ID.to_owned(),
-            sequence: 1,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
             schema_fingerprint: DIGEST_A.to_owned(),
-            signature_policy: SignaturePolicy {
-                threshold: 0,
-                key_ids: Vec::new(),
-            },
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
                 bytes: project,
@@ -7040,16 +6958,10 @@ journeys:
             ("registryRevision", json!(DIGEST_B)),
             ("projectSourceRevision", json!("another-source")),
             ("compilerSourceRevision", json!("another-compiler")),
-            ("candidatePackageRevision", json!(DIGEST_B)),
             ("sourceClosureSha256", json!(DIGEST_B)),
             ("migrationPlanSha256", json!(DIGEST_B)),
-            ("signingInputSha256", json!(DIGEST_B)),
             ("targetManagedSchemaFingerprint", json!(DIGEST_B)),
-            ("environment", json!("staging")),
-            ("instanceId", json!("another-instance")),
-            ("databaseId", json!("another-database")),
-            ("sequence", json!(2)),
-            ("priorPackageRevision", json!(DIGEST_B)),
+            ("priorPackageDigest", json!(DIGEST_B)),
             ("postgresMajor", json!(19)),
             ("successfulJourneyIds", json!(["another-journey"])),
             ("journeyFileSha256", json!(DIGEST_B)),
@@ -7192,15 +7104,15 @@ journeys:
                 ..execution.clone()
             },
             SchemaTestExecutionFacts {
-                package_revision: DIGEST_B.to_owned(),
+                package_id: "other-registry".to_owned(),
                 ..execution.clone()
             },
             SchemaTestExecutionFacts {
-                environment: "staging".to_owned(),
+                package_digest: DIGEST_B.to_owned(),
                 ..execution.clone()
             },
             SchemaTestExecutionFacts {
-                sequence: 2,
+                maintenance_status: "maintenance".to_owned(),
                 ..execution.clone()
             },
         ] {
@@ -7220,9 +7132,8 @@ journeys:
             ("sourceClosureSha256", json!(DIGEST_B)),
             ("journeyFileSha256", json!(DIGEST_B)),
             ("targetManagedSchemaFingerprint", json!(DIGEST_B)),
-            ("environment", json!("staging")),
-            ("sequence", json!(2)),
-            ("priorPackageRevision", json!(DIGEST_B)),
+            ("registryRevision", json!(DIGEST_B)),
+            ("priorPackageDigest", json!(DIGEST_B)),
             ("postgresMajor", json!(17)),
             ("projectSourceRevision", json!("substituted")),
             ("compilerSourceRevision", json!("substituted")),
@@ -7234,6 +7145,25 @@ journeys:
             assert_eq!(
                 revalidate_schema_test_receipt(&changed, candidate, suite),
                 Err(FixtureError::ReceiptBindingRefused)
+            );
+        }
+        // A receipt is environment neutral: a deployment or signing binding
+        // is not part of its shape.
+        for (field, value) in [
+            ("environment", json!("staging")),
+            ("instanceId", json!("fixture-instance")),
+            ("databaseId", json!("fixture-database")),
+            ("sequence", json!(1)),
+            ("candidatePackageRevision", json!(DIGEST_B)),
+            ("signingInputSha256", json!(DIGEST_B)),
+        ] {
+            let mut receipt: Value = serde_json::from_slice(bytes).expect("receipt JSON parses");
+            receipt[field] = value;
+            let changed = canonicalize_json(&receipt).expect("changed receipt canonicalizes");
+            assert_eq!(
+                revalidate_schema_test_receipt(&changed, candidate, suite),
+                Err(FixtureError::ReceiptShapeRefused),
+                "{field}"
             );
         }
     }
@@ -7429,17 +7359,9 @@ journeys:
             .replace("MODULE_DIGEST", &module_digest(&module))
             .into_bytes();
         let prepared = prepare_package(PackageBuildRequest {
-            environment: "local".to_owned(),
-            instance_id: "fixture-instance".to_owned(),
-            database_id: DATABASE_ID.to_owned(),
-            sequence: 1,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
             schema_fingerprint: schema_fingerprint.to_owned(),
-            signature_policy: SignaturePolicy {
-                threshold: 0,
-                key_ids: Vec::new(),
-            },
             project: PackageSourceFile {
                 path: "sources/project.yaml".to_owned(),
                 bytes: project.clone(),
@@ -7469,18 +7391,12 @@ journeys:
             .expect("temporary root canonicalizes")
             .join("package");
         prepared
-            .publish_to_directory(&package_root, Vec::new())
+            .publish_to_directory(&package_root)
             .expect("local package publishes");
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                environment: "local",
-                instance_id: "fixture-instance",
-                database_id: DATABASE_ID,
                 database_initialization_environment: "local",
-                compiler_source_revision: COMPILER_SOURCE_REVISION,
-                trust_anchor: None,
-                intent: PackageIntent::InitialActivation,
             },
         )
         .expect("fixture package rederives and verifies");
@@ -7493,25 +7409,20 @@ journeys:
         }
     }
 
-    fn production_prepared_package(key_id: &str) -> PreparedPackage {
+    fn production_prepared_package(source_revision: &str) -> PreparedPackage {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
         let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
             .expect("project fixture is UTF-8")
             .replace("MODULE_DIGEST", &module_digest(&module))
-            .replace("environment: local", "environment: production")
+            .replace(
+                "sourceRevision: fixture-project-source",
+                &format!("sourceRevision: {source_revision}"),
+            )
             .into_bytes();
         prepare_package(PackageBuildRequest {
-            environment: "production".to_owned(),
-            instance_id: "fixture-instance".to_owned(),
-            database_id: DATABASE_ID.to_owned(),
-            sequence: 1,
-            prior_revision: None,
-            compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
+            from_package_digest: None,
+            compiler_source_revision: source_revision.to_owned(),
             schema_fingerprint: DIGEST_A.to_owned(),
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.to_owned()],
-            },
             project: PackageSourceFile {
                 path: "sources/project.yaml".to_owned(),
                 bytes: project,
@@ -7539,11 +7450,7 @@ journeys:
         SchemaTestExecutionFacts::from_database_snapshot(DatabaseExecutionSnapshot {
             current_database: "fixture_test_database".to_owned(),
             package_id: package.manifest().package_id.clone(),
-            environment: package.manifest().environment.clone(),
-            instance_id: package.manifest().instance_id.clone(),
-            database_id: package.manifest().database_id.clone(),
-            package_revision: package.manifest().package_revision.clone(),
-            sequence: package.manifest().sequence,
+            package_digest: package.package_digest().to_owned(),
             schema_fingerprint: schema_fingerprint.to_owned(),
             postgres_major,
             maintenance_status: "ready".to_owned(),

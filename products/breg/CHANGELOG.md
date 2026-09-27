@@ -9,6 +9,62 @@
   two projects that differ only in their package identity compile to the same
   one.
 
+- BREAKING: a package is environment neutral and unsigned. One package built
+  by `bregctl package` is the unit an operator promotes through every
+  environment, and its identity is its package digest, the SHA-256 of its
+  `SHA256SUMS`.
+  - A project's `package.environment`, `package.instanceId`, and
+    `package.sequence` are refused with `package.environment.removed`,
+    `package.instance_id.removed`, and `package.sequence.removed`. Move the
+    environment and the instance id to the runtime file's `identity`, and
+    delete the sequence: a package names its predecessor through
+    `migrationPlan.fromPackageDigest`. `package.sourceRevision` stays.
+  - The manifest is `package/v2`. It no longer carries `packageRevision`,
+    `environment`, `instanceId`, `databaseId`, `sequence`, `priorRevision`,
+    `signaturePolicy`, or signatures, and `migrationPlan.fromRevision` is
+    `fromPackageDigest`. A `package/v1` package is refused; rebuild it with
+    `bregctl package`.
+  - Trust anchors, package signatures, and the signing input are gone. A
+    runtime file's `package.trustAnchorPath`, `package.activeRevision`,
+    `package.activeSequence`, and `package.compilerSourceRevision` are refused
+    with `runtime_config.package_key_removed`, naming what to do instead.
+    `package.root` and `package.expectedDigest` stay.
+  - A runtime file's `identity.instanceId` follows the grammar the project's
+    `package.instanceId` had, a lowercase letter then at most 63 lowercase
+    letters, digits, `-`, or `_`, and is refused otherwise with
+    `runtime_config.invalid_instance_id`. `identity.environment` must equal
+    `identity.databaseInitializationEnvironment`, or the file is refused with
+    `runtime_config.environment_identity_conflict`.
+  - A package without `SHA256SUMS`, built by an earlier `bregctl`, is no
+    longer read as a predecessor through its signature. Rebuild it with this
+    `bregctl`.
+  - `bregctl package` and `bregctl test` drop `--database-id`,
+    `--signature-threshold`, `--signature-key-id`, and `--signatures`, and
+    `--baseline-runtime-config` is `--baseline-package DIR`, the predecessor
+    package directory. Each retired flag exits 2 and names its replacement.
+    `bregctl package` writes the package with its sum file and prints the
+    package digest.
+  - The schema-test receipt is `breg-schema-test-receipt/v2`. It drops the
+    environment, instance id, database id, sequence, candidate revision, and
+    signing input digest, and names the predecessor by `priorPackageDigest`.
+    Its source closure also binds each reviewed migration file by path and
+    digest, so a changed descriptor, statement, or rehearsal file makes the
+    receipt stale. `bregctl test` no longer compares the runtime identity
+    with the candidate.
+  - A reviewed migration file outside the package layout, such as a backup
+    binding, is refused when the package is built. The backup binding is an
+    apply input only (`bregctl apply --backup`).
+  - Reports name packages by `packageDigest` instead of a package revision,
+    including `bregctl dev status`. `bregctl dev` keeps no package sequence,
+    writes no trust anchor or active-package keys, and takes its event source
+    from the runtime `identity.instanceId`.
+  - The database records the active package digest. An initial apply accepts
+    a package that names a predecessor. Applying a package that does not
+    follow the active one is refused as `apply.package.refused`, which also
+    covers a package older than the active one. An empty migration plan is
+    refused before database authority, and `migration reconcile` refuses the
+    active package as its target before database authority.
+
 ## v0.35.0 - 2026-09-28
 
 - Upgrade a registry whose active package the previous `bregctl` release

@@ -108,6 +108,7 @@ impl WebhookOperatorService {
             .map_err(|_| WebhookOperatorError::Unavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
+            config.identity().database_id(),
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),
