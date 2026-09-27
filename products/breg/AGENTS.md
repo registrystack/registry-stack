@@ -125,7 +125,7 @@ TLS-only PostGIS container for the checkout and prints the exports both scripts
 read:
 
 ```sh
-eval "$(products/breg/scripts/local-postgres-tls.sh)"
+exports=$(products/breg/scripts/local-postgres-tls.sh) && eval "$exports"
 products/breg/scripts/test-postgres-tls.sh
 products/breg/scripts/test-adopter-workflow.sh
 products/breg/scripts/local-postgres-tls.sh --stop

@@ -5,7 +5,7 @@ set -euo pipefail
 # the way the breg-contracts CI job configures its service, and prints the
 # export lines the TLS proof and the adopter workflow read:
 #
-#   eval "$(products/breg/scripts/local-postgres-tls.sh)"
+#   exports=$(products/breg/scripts/local-postgres-tls.sh) && eval "$exports"
 #   products/breg/scripts/test-postgres-tls.sh
 #   products/breg/scripts/test-adopter-workflow.sh
 #
@@ -18,14 +18,19 @@ image='postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d5710
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
 checkout_name=$(basename -- "$repo_root" | tr -c 'A-Za-z0-9_.-\n' '-')
-container="breg-pg-tls-${checkout_name}"
+checkout_hash=$(printf '%s' "$repo_root" | openssl dgst -sha256 -r | cut -c1-8)
+container="breg-pg-tls-${checkout_name}-${checkout_hash}"
 tls_dir="$repo_root/target/breg-postgres-tls"
 
 case "${1:-}" in
   "") ;;
   --stop)
-    docker rm -f "$container" >/dev/null 2>&1 || true
-    printf '%s\n' "Removed $container." >&2
+    if [[ -n "$(docker ps -aq --filter "name=^${container}$")" ]]; then
+      docker rm -f "$container" >/dev/null
+      printf '%s\n' "Removed $container." >&2
+    else
+      printf '%s\n' "$container is not running." >&2
+    fi
     exit 0
     ;;
   *)
@@ -41,8 +46,11 @@ for tool in docker openssl pg_isready psql; do
   fi
 done
 
-if [[ -z "$(docker ps -q --filter "name=^${container}$")" ]]; then
-  docker rm -f "$container" >/dev/null 2>&1 || true
+running_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null || true)
+if [[ -z "$(docker ps -q --filter "name=^${container}$")" || "$running_image" != "$image" ]]; then
+  if [[ -n "$running_image" ]]; then
+    docker rm -f "$container" >/dev/null
+  fi
   printf '%s\n' "Starting $container." >&2
   docker run -d --name "$container" \
     -e POSTGRES_DB=breg -e POSTGRES_PASSWORD=breg_test -e POSTGRES_USER=breg \
@@ -80,11 +88,9 @@ BREG_TEST_TLS_SETUP_ONLY=1 \
   "$script_dir/test-postgres-tls.sh" >&2
 
 printf '%s\n' "$container accepts TLS connections only, on localhost:${port}." >&2
-cat <<EXPORTS
-export BREG_TEST_DATABASE_URL='$database_url'
-export BREG_TEST_TLS_DATABASE_URL='$database_url'
-export BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL='$mismatch_url'
-export BREG_TEST_TLS_DATABASE_HOST='localhost'
-export BREG_TEST_TLS_POSTGRES_CONTAINER_ID='$container_id'
-export BREG_TEST_TLS_CA_PEM_PATH='$ca_pem'
-EXPORTS
+printf 'export BREG_TEST_DATABASE_URL=%q\n' "$database_url"
+printf 'export BREG_TEST_TLS_DATABASE_URL=%q\n' "$database_url"
+printf 'export BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=%q\n' "$mismatch_url"
+printf 'export BREG_TEST_TLS_DATABASE_HOST=%q\n' localhost
+printf 'export BREG_TEST_TLS_POSTGRES_CONTAINER_ID=%q\n' "$container_id"
+printf 'export BREG_TEST_TLS_CA_PEM_PATH=%q\n' "$ca_pem"
