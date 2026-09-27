@@ -1,0 +1,289 @@
+---
+title: Back up, restore, and drill recovery
+description: Back up the databases, audit files, and key material of Base Registry Engine, Registry Casework, and Evidence, restore each one, and prove the restore in a disaster-recovery drill.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-27"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this runbook when you operate Base Registry Engine (BReg), Registry Casework, and Evidence
+together and need a recovery plan that covers all three. Each product restores differently:
+BReg restores a database and then proves it is the one instance serving the registry, Casework
+restores a database and then catches up from the BReg sources it reads, and Evidence holds no
+database at all. The procedures below link each product's own guide for the details and state
+what a restore does not bring back.
+
+## Know what a database backup leaves out
+
+A PostgreSQL backup holds rows. It does not hold the audit files, the secrets, or the key
+material each runtime reads at startup, and several of those cannot be recreated once lost. Back
+up these alongside every database backup, on the same schedule:
+
+### Base Registry Engine state
+
+- The PostgreSQL database, with `pg_dump` before every activation, as
+  [Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database)
+  describes.
+- The signed package directory, its trust anchor, the runtime file, and the secret files it
+  references. A restore needs the package the backup was taken under.
+- The field-encryption key when the project encrypts a field: the Transit key, or the local
+  data-key file. The database holds only a wrapped key or an identifier, so losing the custodian's
+  key loses every sealed value, in every backup.
+- The audit hash key named by `audit.hashKeyRef`. A restore under another key writes pseudonyms
+  that no longer match the ones already in the archive.
+- The attachment bucket, when `attachmentStorage` binds an S3-compatible backend. The database
+  holds references; the bucket holds the bytes, so back it up at the same point.
+
+### Registry Casework state
+
+- The PostgreSQL database, with `pg_dump` before every `casework migrate`.
+- The installed package directory, the runtime file, and its secret files: the audit key
+  (`audit.hashKeyRef`), the task-authority signing key (`taskAuthority.signingKeyRef`), the
+  database URLs, and each source's client credentials.
+
+### Evidence state
+
+- The governed bundle, the runtime file, and the public JWK files.
+- The Transit signing key, which Transit keeps. Escrow it through your Transit backup; a local
+  JWK signer is for local assurance only.
+- The audit master and subject-binding secrets, including every previous audit master whose
+  pseudonyms must stay recomputable.
+
+### Audit files
+
+No database backup holds a product's audit files. Ship them to append-only storage as the
+retention guides describe, so the archive, not the host, is the audit record:
+[BReg](../../breg-retention/#keep-the-audit-journal),
+[Casework](../../casework-retention/#keep-the-audit-file), and
+[Evidence](../../evidence-audit/#ship-audit-to-append-only-storage). A restore never replaces
+the live audit directory.
+
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, module docs and
+    FieldEncryptionProvider::LocalFile; crates/registry-breg/src/attachment_storage.rs, module docs;
+    crates/registry-casework/src/config.rs, TaskAuthorityConfig;
+    crates/registry-casework/src/task_grants.rs, TaskAuthority::load();
+    products/evidence/OPERATOR-CONTRACT.md, Secrets and keys and Audit key rotation;
+    docs/site/src/content/docs/operate/breg-retention.mdx, "Database backups do not contain these
+    streams". */}
+
+## Restore Base Registry Engine
+
+Stop every `breg` process that serves the registry before you restore. How you restore then
+depends on how the copy was taken, because BReg tells a logical copy from its original but cannot
+tell a physical one.
+
+### After a logical restore
+
+A copy restored from `pg_dump` carries the instance claim of the database it was dumped from, so
+it refuses to serve: `breg` exits with `the Registry database is not the instance its claim names`,
+`bregctl doctor` reports `startup.instance_claim.mismatch`, and `GET /ready` answers `503`. Follow
+[Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database) through
+`verify` and `instance-claim status`, then retire the original for good and adopt the copy:
+
+```sh
+bregctl --format json instance-claim adopt \
+  --runtime-config /etc/breg/runtime.yaml \
+  --acknowledge-original-retired
+```
+
+Pass `--acknowledge-original-retired` only once no client can reach the original. Two databases
+serving one registry both accept writes, and nothing can merge their histories afterwards. Adopting
+supersedes every import authority the copy held open, so open again the ones you still need.
+
+### After a physical restore
+
+A base backup, a point-in-time recovery, a volume snapshot, or a promoted replica keeps the
+original's identity, so it serves without an adopt and nothing refuses it. Two things are then your
+job before it serves. Keep the original stopped or fenced from clients. And close the import
+authorities that come back open: an authority you closed after the backup point is open again in
+the copy, and would admit an import you already ended. List them, then close each one that should
+not be open:
+
+```sh
+bregctl --format json import-authority list --runtime-config /etc/breg/runtime.yaml
+bregctl --format json import-authority close \
+  --runtime-config /etc/breg/runtime.yaml \
+  --authority-id <authority-id> \
+  --operator-reference <change-record> \
+  --reason "closed after physical restore"
+```
+
+There is no command that closes every open authority at once; that is tracked in
+[registry-stack issue #1635](https://github.com/registrystack/registry-stack/issues/1635).
+
+{/* Evidence: crates/registry-breg/src/instance_claim.rs, module docs (physical copies are not
+    detected), check(), adopt_in(); crates/registry-breg/src/startup.rs, verify_instance_claim()
+    and the InstanceClaimMismatch message; crates/registry-bregctl/src/doctor.rs,
+    startup.instance_claim.mismatch; crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand,
+    ImportAuthorityCloseArgs, InstanceClaimAdoptArgs;
+    products/breg/SECURITY-REVIEW-NOTES.md, "Instance claim" (reopened authorities after a
+    physical restore are an accepted residual). */}
+
+### Repeat what the backup undid
+
+A restore rewinds every row to the backup point, including the ones you erased or delivered since.
+Once the copy serves, work through these:
+
+- **Erasures.** Erasure does not reach backups, so a restore brings back erased history and
+  expired Evidence uses. Repeat each `history erase` request you ran after the backup point, and
+  run `bregctl evidence-retention erase-expired --runtime-config /etc/breg/runtime.yaml --before
+  <now>` so Evidence assertions past their 24-hour window are erased again. See
+  [What cannot be undone](../../breg-retention/#what-cannot-be-undone).
+- **Webhooks.** Deliveries still pending at the backup point are sent again once the copy serves,
+  under the same `Idempotency-Key` they carried the first time, so a receiver that deduplicates by
+  that key accepts each one once. Delivered events are not recalled. Inspect what is pending with
+  `bregctl webhook list`; see [Inspect and replay deliveries](../../breg-webhooks/#inspect-and-replay-deliveries).
+- **Reviews the authority lost.** When a review environment such as Casework is restored from an
+  older backup, BReg reports `result-unknown-to-authority` for each review it submitted after that
+  backup. Recover each with
+  [`bregctl review-recovery resubmit` or `close`](../../breg/#resubmit-or-close-a-review-the-authority-lost).
+
+{/* Evidence: docs/site/src/content/docs/operate/breg-retention.mdx, "Erasure does not reach
+    backups"; crates/registry-breg/src/action_evidence_client.rs,
+    ACTION_EVIDENCE_RETENTION_SECONDS; crates/registry-bregctl/src/lib.rs, EvidenceRetentionEraseArgs;
+    crates/registry-platform-hooks/src/delivery/service.rs, delivery_idempotency_key() (derived
+    from the event, delivery, generation, payload digest, and destination binding digest);
+    crates/registry-breg/src/review_recovery.rs, module docs. */}
+
+## Restore Registry Casework
+
+Casework is not the system of record for source-backed work: the BReg source is. A restored
+Casework database therefore catches up with BReg on its own, while the coordination state it
+alone holds returns to the backup point. Restore the latest dump into a database provisioned as
+[Provision PostgreSQL](../../casework/#provision-postgresql) describes, keep the package and the
+audit key the backup was taken under, and start the runtime. Its schema must match the binary;
+see [Migrate and serve](../../casework/#migrate-and-serve).
+
+What comes back and what does not:
+
+- **Source-backed work items are replayed from BReg.** Each source's reconciliation pass
+  rediscovers every submitted change request and re-reads every work item the database holds as
+  active, so a request applied or cancelled after the backup point settles, and a request
+  submitted after it appears as fresh work.
+- **Everything Casework alone records is at the backup point.** Claims, private drafts, attempts,
+  item history, clocks, directory changes, absences, task grants, and every unified review
+  (requests, tasks, decisions, and results) are as the backup left them. Later work on them is lost.
+- **The audit file is not rewound.** The live audit file and its shipped archive still hold the
+  entries for the work the restore lost. Keep them; never restore an older audit file over them.
+
+Reconcile the gap before staff resume work:
+
+1. **Read the audit archive for the lost window.** Entries between the backup time and the
+   restore time record each lost operation: its event, outcome, and item revision, with the work
+   item, team, queue, and principal as keyed pseudonyms and no payload values. No command turns a
+   pseudonym back into a work item or a person, so use the archive to count and order what was
+   lost, ask the staff who worked in that window to redo their claims, decisions, and directory
+   changes from the restored state, and check the redone work against those counts. Record the backup time and the restore time in the
+   change record.
+2. **Settle attempts the restore left pending.** A pending attempt whose lease has expired may or
+   may not have reached BReg. Check the change request in BReg, then
+   [mark it uncertain](../../casework-retention/#mark-a-stranded-pending-attempt-uncertain) and
+   [settle it](../../casework-retention/#settle-an-uncertain-source-attempt) as applied or not
+   applied.
+3. **Check restored review tasks against BReg before anyone decides them.** A review decided after
+   the backup point comes back open in Casework while BReg may already hold its result. No command
+   reconciles the two, so read the BReg request's `data.request.review` projection first. Reviews
+   BReg submitted after the backup point are unknown to the restored Casework; recover them from
+   the BReg side as [Repeat what the backup undid](#repeat-what-the-backup-undid) describes.
+
+A database restored under a different package can refuse to start because the package would
+strand pinned work; see
+[Refuse a package that strands pinned work](../../casework/#refuse-a-package-that-strands-pinned-work).
+
+{/* Evidence: crates/registry-casework/src/service.rs, reconcile_source_pass()
+    (discover_active, enqueue_local_active_page, synchronize_source_pending);
+    crates/registry-casework-breg/src/lib.rs, discover_active() (bregState eq 'submitted') and
+    occurrence_state(); crates/registry-casework/migrations/0015_unified_reviews.sql and
+    0017_audit_writer.sql (no audit state in the database);
+    crates/registry-casework/src/audit.rs, published_audit_record() (pseudonymized fields);
+    crates/registry-casework/src/runtime.rs, serve_from_path() and check_pinned_work();
+    crates/registry-caseworkctl/src/lib.rs, AttemptCommand. */}
+
+### Hand over the Casework audit key
+
+The Casework audit key only pseudonymizes identifiers. Entries are not chained or signed, so a
+rotation has no chain to bridge and nothing to re-sign. Its pseudonyms carry no key version,
+though, so entries written under the old key and the new one look alike in one file. Hand the
+key over this way:
+
+1. Write the new key into a fresh owner-only secret file, as
+   [Keep the audit file](../../casework-retention/#keep-the-audit-file) shows, and point
+   `audit.hashKeyRef` at it.
+2. Give `audit.path` a fresh file name in the same change, so the file boundary is the key
+   boundary. The writer no longer manages the old path, so ship its active file and every sealed
+   file once the runtime has stopped.
+3. Restart the runtime and run `caseworkctl doctor --runtime-config
+   /etc/registry-casework/runtime.yaml`. Record the rotation time, both file names, and who holds
+   each key in the change record.
+4. Keep the old key under the same controls for as long as you may need to recompute pseudonyms in
+   the entries written under it.
+
+Continuity is a property of the archive, not of the files: prove it by showing that the shipped
+files cover the old path through its last sealed and final active file, the new path from its
+first entry, and no gap in time between the two.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, module docs ("Entries are not
+    chained"); crates/registry-platform-audit/src/lib.rs, KEYED_HASH_PREFIX (no version) and
+    MIN_AUDIT_SECRET_BYTES; crates/registry-caseworkctl/src/project.rs, doctor() resolves
+    audit.hashKeyRef. */}
+
+## Restore Evidence
+
+Evidence keeps no application database, so a restore is a redeploy. Install the same release,
+bundle, runtime file, public JWK files, and secrets, then check them before serving:
+
+```sh
+evidence check --runtime-config /etc/evidence/runtime.yaml --require-runtime-dependencies
+```
+
+Rate limits and caches start empty. Restore audit history into your archive, never into the live
+audit directory. When `evidence-oid4vci` delivers credentials, start it after Evidence is ready:
+its offers live in memory, so a restart invalidates every outstanding offer and wallets must ask
+for a fresh one. See
+[Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
+
+{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "no application database" and the audit
+    restore rule; crates/registry-evidence/src/main.rs, check subcommand;
+    crates/registry-evidence-oid4vci/src/store.rs, module docs. */}
+
+## Run a disaster-recovery drill
+
+A drill proves the backups restore, the key material is recoverable, and your team can do it within
+the recovery time you promise. Run it at least before going live and after every change to the
+backup tooling.
+
+:::danger[Isolate the drill from production]
+An adopted BReg copy delivers the webhooks pending in its backup, a restored Casework reads and acts
+on the sources it names, and Evidence reads the sources in its bundle. Before starting anything,
+point every event destination, Casework source, Evidence source, and OpenID Connect client in the
+drill's runtime files at non-production systems, and keep the drill network unable to reach
+production.
+:::
+
+1. Restore the latest BReg and Casework backups onto drill hosts, and redeploy Evidence, using only
+   what your backup store and secret escrow hold. A secret you have to fetch from a production host
+   is a gap in the backup set.
+2. Run `bregctl verify` and `bregctl instance-claim status`, and confirm the status reports that
+   the claim names another database, then adopt the copy. Passing `--acknowledge-original-retired`
+   is sound here only because the drill network cannot reach production or its clients.
+3. Run `bregctl doctor`, `caseworkctl doctor`, and `evidence check
+   --require-runtime-dependencies`, start the runtimes, and wait for `GET /ready` on each.
+4. Read a known record through BReg, a known work item through Casework, and a synthetic assertion
+   through Evidence. Read one encrypted field, when the project encrypts one, to prove the
+   field-encryption key restored.
+5. Open the shipped audit archive for the period before the backup, and confirm every file is
+   there and ends with a complete entry.
+6. Record the backup time, the restore time, the measured recovery time, and every step that
+   failed, and destroy the drill hosts and their copies of the secrets.
+
+## Next
+
+- [Upgrade and retire a deployment](../upgrade-and-retire/)
+- [Change an active registry](../../breg-changes/)
+- [Retention and persistent state](../../retention-and-persistent-state/)
+- [Rotate credentials, keys, certificates, and trust](../rotate-credentials-and-trust/)

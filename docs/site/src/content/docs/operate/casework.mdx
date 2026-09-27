@@ -762,12 +762,10 @@ name with the rule it broke. Directory
 readiness requires a team serving every queue the package declares, and a gap is reported as an
 instruction to complete the queue assignments as an Administrator. Reconciliation health refuses a
 source whose last five or more passes failed, naming the source, the count, the last failure's
-class, and when a pass last succeeded. The audit check verifies the sealed audit files, and the
-active file too when no runtime holds its lock, so run it with the runtime stopped to prove a key
-against the whole chain; it refuses a chain the configured key does not verify. A run that reaches
-the end prints a report naming each check, the digest of the package `package.root` holds
-(`packageDigest`), each source it contacted with its
-reconciliation health, and the audit records and files it verified.
+class, and when a pass last succeeded. The audit check does not read or verify the entries already
+written: they are not chained or signed, so the archive you ship them to is their record. A run
+that reaches the end prints a report naming each check, the digest of the package `package.root`
+holds (`packageDigest`), and each source it contacted with its reconciliation health.
 
 `doctor` answers whether the deployment is ready to do work. It does not summarize an individual
 review. Inspect the Casework request, task, context, result, and result-feed resources for review

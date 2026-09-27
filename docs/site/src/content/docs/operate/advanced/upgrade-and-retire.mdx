@@ -1,0 +1,173 @@
+---
+title: Upgrade and retire a deployment
+description: Upgrade Base Registry Engine, Registry Casework, Evidence, and their clients to a new release in a safe order, and retire a deployment without losing the records it must leave behind.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-27"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this runbook when you move a deployment of Base Registry Engine (BReg), Registry Casework, and
+Evidence to a new release, or take it out of service. Each product's own guide carries its upgrade
+command; this page gives the order across products, the version rule that order enforces, and
+what each product must leave behind when it is retired.
+
+## Run one release everywhere
+
+Every Registry Stack artifact of a release shares one version: the runtimes, their adopter tooling,
+and the Rust, Node.js, and Python clients. Run the same release on every side. There is no
+supported version-skew window, between two runtimes or between a client and a runtime, and a
+rolling upgrade that mixes releases is not supported:
+
+- **Casework and BReg are checked.** Casework compares BReg's `Registry-Engine-Version` header with
+  its own release on every contract read and refuses any other release; see
+  [Upgrade Casework and BReg in lock-step](../../casework/#upgrade-casework-and-breg-in-lock-step).
+- **Adopter tooling is checked.** `evidencectl` refuses an `evidence` or `bregctl` binary of
+  another version.
+- **Clients are not checked, and break silently.** Clients send no version, and runtimes accept any
+  caller. The clients decode responses strictly, so a member one release adds can fail an older
+  client's decoding, and a member one release requires can be missing from an older runtime's
+  answer. Upgrade each client to the same release as the runtime it calls.
+- **BReg activation is not rolling.** Once `bregctl apply` activates a successor, every `breg`
+  process still running the previous package fails readiness until it restarts onto the successor.
+  Plan the restart as part of the activation, not after it.
+
+A release promises a forward state path from its immediate predecessor only, starting at
+`v0.33.0`; skip no release without that release's notes certifying the direct path, and expect no
+reverse path. See [Compatibility direction](../../../reference/api-stability/#compatibility-direction).
+
+{/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
+    crates/registry-casework-breg/src/lib.rs, same_release() and PeerVersionMismatch;
+    crates/registry-evidencectl/src/evidence_binary.rs and source_add.rs, check_public_bregctl();
+    crates/registry-breg-client/src/response.rs, deny_unknown_fields;
+    docs/site/src/content/docs/operate/breg-changes.mdx, "Activate the successor";
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR. */}
+
+## Upgrade in this order
+
+BReg goes first, because Casework and Evidence both read it. Casework follows because it refuses
+a BReg of another release. Evidence and its wallet-facing front end come last. Rehearse the whole
+sequence on a restored copy first, as
+[Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
+
+1. **Back up both databases.** Take the BReg `pg_dump` and the Casework `pg_dump`, and copy both
+   products' packages and runtime files. These backups are the only way back; see
+   [Roll back](#roll-back).
+2. **Stop `evidence-oid4vci`**, when it runs. Its outstanding offers end here; see
+   [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
+3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
+   instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
+4. **Upgrade BReg.** Build the successor package with the new `bregctl`, `apply` it, update the
+   runtime file, run `bregctl verify`, and restart every `breg` process on the new binary; see
+   [Activate the successor](../../breg-changes/#activate-the-successor). Casework reports each
+   BReg source as unavailable from here until step 5 finishes. Upgrading a package built by the
+   previous release is tracked in
+   [registry-stack issue #1633](https://github.com/registrystack/registry-stack/issues/1633).
+5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
+   `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see
+   [Migrate and serve](../../casework/#migrate-and-serve).
+6. **Upgrade Evidence.** Package a fresh candidate with the new `evidencectl package`, run
+   `evidence check --require-runtime-dependencies` with the new binary, start it, and verify a fresh synthetic
+   assertion. Then start the new `evidence-oid4vci`.
+7. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
+   Stack client at the same release before it calls the upgraded runtimes.
+
+{/* Evidence: docs/site/src/content/docs/operate/casework.mdx, "Upgrade Casework and BReg in
+    lock-step" (BReg first, readiness fails in between);
+    docs/site/src/content/docs/configure/evidence-oid4vci.mdx, "Operational limits" (stop the
+    adapter, restart Evidence, start the adapter);
+    docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
+    update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
+    release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
+
+## Roll back
+
+No product migrates backwards. A Casework binary refuses a database whose schema is newer than it
+supports, and a BReg package applies forward only. Evidence refuses a runtime file carrying keys
+its release does not know. To return to the previous release:
+
+- **BReg.** Undo a model change by rolling forward to a successor that reverts it. When the data
+  itself must go back, restore the pre-activation backup; see
+  [Roll back by rolling forward](../../breg-changes/#roll-back-by-rolling-forward).
+- **Casework.** Restore the pre-migrate backup and run the previous binary and package; see
+  [Restore Registry Casework](../back-up-and-restore/#restore-registry-casework) for what that
+  restore loses.
+- **Evidence.** Restart the previous binary with the previous bundle and runtime file.
+
+Because the release rule holds in both directions, rolling back one product means rolling back
+every product that must match it: Casework refuses a BReg that went back without it.
+
+{/* Evidence: crates/registry-casework/src/store.rs, refuse_newer_schema();
+    crates/registry-bregctl/src/lib.rs, apply.package.older_than_active;
+    crates/registry-evidence/src/config.rs, deny_unknown_fields on the runtime file. */}
+
+## Retire a deployment
+
+Retire the products in the reverse of the upgrade order, so nothing still running depends on what
+you have removed. Retiring a product leaves records behind: signatures others still verify,
+decisions others may challenge, and audit entries your retention policy holds. None of the products
+has a decommission command, so the steps below are yours.
+
+### Retire Evidence
+
+1. Stop `evidence-oid4vci`, then stop routing requests to Evidence.
+2. Keep the published public keys available. An assertion Evidence issued stays valid for up to
+   `maximumAssertionValiditySeconds` (at most one year), and the JWKS is served only by the running
+   process, so publish the key set elsewhere or give it to each relying party, and keep it until
+   that period and the verifier clock skew have passed since the last issuance.
+3. Ship the final audit files after the process stops, and keep every audit master whose
+   pseudonyms an investigation may still need; see
+   [Rotate the audit master](../../evidence-audit/#rotate-the-audit-master).
+4. Retire the signing key in Transit only after step 2's period ends; see
+   [Retire the old version](../../../tutorials/rotate-evidence-signing-keys/#retire-the-old-version).
+5. Retire or rebind the Evidence provider in every BReg project whose governed actions call it,
+   since an action that resolves against a retired provider fails.
+
+### Retire Casework
+
+1. Stop staff access. Settle every pending and uncertain attempt, as
+   [Settle an uncertain source attempt](../../casework-retention/#settle-an-uncertain-source-attempt)
+   describes, so no change is left half-applied at a source.
+2. Finish or close the reviews Casework hosts for BReg. A review left open makes BReg wait for a
+   result that never comes; close it from BReg with
+   [`bregctl review-recovery close`](../../breg/#resubmit-or-close-a-review-the-authority-lost).
+3. Casework has no export command. Keep a final `pg_dump` for as long as your policy holds its
+   decisions and accountability records, or erase source-backed payload copies first with
+   [`caseworkctl retention erase`](../../casework-retention/#erase-source-backed-payload-copies).
+4. Stop the runtime, ship the final audit file, its sealed files, and the `caseworkctl` companion
+   file, then revoke Casework's client credentials at each BReg source's identity provider.
+
+### Retire Base Registry Engine
+
+1. Stop every consumer, then close the import authorities still open with
+   `bregctl import-authority close`.
+2. Export what must outlive the registry. `bregctl data export` exports one entity through one
+   access profile, checkpointed; a final `pg_dump` is the only complete copy. See
+   [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint).
+3. Erase what your policy does not let you keep, before that final backup: see
+   [Erase retained history](../../breg-retention/#erase-retained-history) and
+   [Erase expired Evidence uses](../../breg-retention/#erase-expired-evidence-uses).
+4. Stop `breg`. Pending webhook deliveries stop with it and are not sent; check
+   `bregctl webhook list` first if receivers must see them.
+5. Ship the final audit files and the `bregctl` companion file.
+6. Keep the field-encryption key for as long as you keep any backup that holds sealed values, and
+   the audit hash key for as long as you keep the audit archive. Destroy each only when the last
+   record that needs it is gone.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, maximumAssertionValiditySeconds bounds;
+    docs/site/src/content/docs/reference/api-stability.mdx, JWKS served by the process;
+    products/evidence/OPERATOR-CONTRACT.md, predecessor key retention and audit master retention;
+    crates/registry-caseworkctl/src/lib.rs, no export command, RetentionCommand, AttemptCommand;
+    crates/registry-bregctl/src/lib.rs, DataCommand::Export, ImportAuthorityCommand,
+    WebhookCommand; crates/registry-breg/src/field_encryption.rs, module docs. */}
+
+## Next
+
+- [Back up, restore, and drill recovery](../back-up-and-restore/)
+- [Change an active registry](../../breg-changes/)
+- [Security support window](../../../security/support-window/)
+- [API stability and versioning](../../../reference/api-stability/)
