@@ -81,6 +81,43 @@ class ReleaseSelectionTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("no forward state path", stderr.getvalue())
 
+    def test_fetch_only_needs_no_binaries_under_test(self) -> None:
+        args = MODULE.parse_args(["--fetch-only", "--platform", "linux-amd64",
+                                  "--work-dir", "/work"])
+        self.assertTrue(args.fetch_only)
+        self.assertIsNone(args.to_bin_dir)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            MODULE.parse_args(["--platform", "linux-amd64", "--work-dir", "/work"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            MODULE.parse_args(["--fetch-only", "--from-bin-dir", "/bin", "--platform",
+                               "linux-amd64", "--work-dir", "/work"])
+
+    def test_fetch_only_authenticates_the_release_and_starts_nothing(self) -> None:
+        def fetch(tag, platform, download, bin_dir, binaries):
+            bin_dir.mkdir(mode=0o700)
+            for binary in binaries:
+                script = bin_dir / binary
+                script.write_text(f"#!/bin/sh\necho '{binary} 0.33.0'\n", encoding="utf-8")
+                script.chmod(0o755)
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                contextlib.redirect_stdout(io.StringIO()), \
+                unittest.mock.patch.object(MODULE, "fetch_release", side_effect=fetch) as fetched, \
+                unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("started")), \
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.34.0"):
+            work = Path(temporary) / "work"
+            report = Path(temporary) / "report.json"
+            status = MODULE.main(["--fetch-only", "--from-tag", "v0.33.0", "--platform",
+                                  "linux-amd64", "--product", "breg", "--work-dir", str(work),
+                                  "--report", str(report)])
+            self.assertEqual(status, 0)
+            self.assertEqual(fetched.call_args.args[4], ("breg", "bregctl"))
+            self.assertTrue((work / "from-bin" / "bregctl").is_file())
+            document = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(document["fromProvenance"], "cosign and SHA256SUMS verified")
+        self.assertEqual(document["fromBinDir"], str(work.resolve() / "from-bin"))
+        self.assertNotIn("breg", document)
+
 
 class AssetAuthenticationTest(unittest.TestCase):
     def test_names_one_asset_per_rehearsed_binary(self) -> None:

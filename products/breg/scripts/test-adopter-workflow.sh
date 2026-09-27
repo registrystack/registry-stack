@@ -15,6 +15,26 @@ adopter_migration_role=""
 adopter_runtime_role=""
 adopter_author_role=""
 adopter_databases=()
+# --from-release packages and applies the first package with the previous
+# release's verified bregctl and breg, then tests, packages, and applies its
+# successor with the binaries built from this source.
+from_release=0
+audit_file=1
+case "${1:-}" in
+  "") ;;
+  --from-release)
+    from_release=1
+    shift
+    ;;
+  *)
+    printf '%s\n' 'usage: test-adopter-workflow.sh [--from-release]' >&2
+    exit 2
+    ;;
+esac
+if [[ "$#" -ne 0 ]]; then
+  printf '%s\n' 'usage: test-adopter-workflow.sh [--from-release]' >&2
+  exit 2
+fi
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -313,7 +333,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
-  path: $temporary_root/audit/audit.jsonl
+$(if [[ "$audit_file" == 1 ]]; then printf '  path: %s\n' "$temporary_root/audit/audit.jsonl"; fi)
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300
@@ -537,6 +557,46 @@ for binary in "$bregctl" "$breg"; do
     exit 2
   fi
 done
+current_bregctl=$bregctl
+current_breg=$breg
+breg_config_flag=--runtime-config
+if [[ "$from_release" == 1 ]]; then
+  require_command gh
+  require_command cosign
+  case "$(uname -s) $(uname -m)" in
+    "Linux x86_64") release_platform=linux-amd64 ;;
+    "Darwin arm64") release_platform=macos-arm64 ;;
+    *)
+      printf '%s\n' 'no previous-release asset matches this host for --from-release.' >&2
+      exit 2
+      ;;
+  esac
+  # rehearse-upgrade.py downloads the previous release and verifies its cosign
+  # bundle and SHA256SUMS before installing bregctl and breg.
+  python3 "$repository_root/release/scripts/rehearse-upgrade.py" --fetch-only \
+    --product breg --platform "$release_platform" \
+    --work-dir "$temporary_root/previous-release" \
+    --report "$temporary_root/previous-release.json" >/dev/null
+  from_tag=$(json_field "$temporary_root/previous-release.json" from)
+  previous_bin_dir=$(json_field "$temporary_root/previous-release.json" fromBinDir)
+  bregctl="$previous_bin_dir/bregctl"
+  breg="$previous_bin_dir/breg"
+  # The first package is authored the way the previous release accepted it.
+  if ! git -C "$repository_root" rev-parse --verify --quiet "refs/tags/$from_tag^{commit}" >/dev/null; then
+    git -C "$repository_root" fetch --quiet --no-tags --depth=1 origin "refs/tags/$from_tag:refs/tags/$from_tag"
+  fi
+  mkdir "$temporary_root/previous-fixture"
+  git -C "$repository_root" archive "$from_tag" products/breg/acceptance/asset-site-placement |
+    tar -x -C "$temporary_root/previous-fixture"
+  fixture="$temporary_root/previous-fixture/products/breg/acceptance/asset-site-placement"
+  if "$bregctl" audit --help >/dev/null 2>&1; then
+    audit_file=0
+  fi
+  if ! "$breg" --help | grep -q -- '--runtime-config'; then
+    breg_config_flag=--config
+  fi
+  printf 'first package from %s bregctl and breg; successor from this source\n' "$from_tag"
+fi
 export SSL_CERT_FILE="$adopter_tls_ca_pem_path"
 
 server_hash_before=$(sha256_file "$breg")
@@ -645,15 +705,17 @@ for operation in ("create", "get", "list"):
         raise SystemExit("inspection events must remain operator-only in the fixture")
 PY
 
-(
-  cd "$temporary_root"
-  mkdir ./generated
-  for selector in openapi schemas manifest metadata sql; do
-    "$bregctl" generate "$selector" "$fixture" --output "./$selector"
-    cp -R "./$selector/." ./generated
-  done
-)
-python3 "$script_dir/compare-generated-tree.py" "$baseline" "$temporary_root/generated"
+if [[ "$from_release" == 0 ]]; then
+  (
+    cd "$temporary_root"
+    mkdir ./generated
+    for selector in openapi schemas manifest metadata sql; do
+      "$bregctl" generate "$selector" "$fixture" --output "./$selector"
+      cp -R "./$selector/." ./generated
+    done
+  )
+  python3 "$script_dir/compare-generated-tree.py" "$baseline" "$temporary_root/generated"
+fi
 
 run_json "$temporary_root/schema-test-v1.json" test "$fixture" \
   --runtime-config "$temporary_root/runtime-test-v1.yaml" \
@@ -720,7 +782,7 @@ render_runtime_config "$temporary_root/runtime-server-v1.yaml" "$temporary_root/
   "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
   "secret:file/production-migration-url" "$listener" \
   "asset-site-placement-acceptance-0.1.0"
-BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v1.yaml" >"$temporary_root/server-v1.log" 2>&1 &
+BREG_LOG=error "$breg" "$breg_config_flag" "$temporary_root/runtime-server-v1.yaml" >"$temporary_root/server-v1.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
 
@@ -756,6 +818,15 @@ if not any(item.get("domainData", {}).get("assetCode") == "ASSET-PUBLIC-001" for
     raise SystemExit("authorized public data read did not include the created record")
 PY
 
+if [[ "$from_release" == 1 ]]; then
+  bregctl=$current_bregctl
+  breg=$current_breg
+  audit_file=1
+  render_runtime_config "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/build-v1/package" \
+    "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
+    "secret:file/production-migration-url" "127.0.0.1:0" \
+    "asset-site-placement-acceptance-0.1.0"
+fi
 cp -R "$fixture" "$temporary_root/project-v2"
 python3 - "$temporary_root/project-v2/registry.yaml" <<'PY'
 import sys
@@ -834,21 +905,22 @@ run_json "$temporary_root/package-v2-published.json" package "$temporary_root/pr
 assert_json_ok "$temporary_root/package-v2-published.json" package
 package_revision_v2=$(json_field "$temporary_root/package-v2-published.json" packageRevision)
 
-render_runtime_config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 1000 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "asset-site-placement-acceptance-0.1.0"
-asset_table=$(python3 - "$temporary_root/build-v1/package/inventories/physical-names.json" <<'PY'
+if [[ "$from_release" == 0 ]]; then
+  render_runtime_config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" "$temporary_root/build-v1/package" \
+    "$package_revision_v1" 1 1000 "secret:file/production-runtime-url" \
+    "secret:file/production-migration-url" "127.0.0.1:0" \
+    "asset-site-placement-acceptance-0.1.0"
+  asset_table=$(python3 - "$temporary_root/build-v1/package/inventories/physical-names.json" <<'PY'
 import json
 import sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 print(document["entities"]["asset-item"]["table"])
 PY
-)
-psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -q \
-  -c "BEGIN; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS SHARE MODE; SELECT pg_sleep(120);" >/dev/null &
-lock_pid=$!
-python3 - "$adopter_admin_url" "$adopter_production_database" "$asset_table" "$temporary_root/lock-backend-pid" <<'PY'
+  )
+  psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -q \
+    -c "BEGIN; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS SHARE MODE; SELECT pg_sleep(120);" >/dev/null &
+  lock_pid=$!
+  python3 - "$adopter_admin_url" "$adopter_production_database" "$asset_table" "$temporary_root/lock-backend-pid" <<'PY'
 import subprocess
 import sys
 import time
@@ -875,26 +947,26 @@ while time.time() < deadline:
     time.sleep(0.25)
 raise SystemExit("table lock was not acquired")
 PY
-# Measure a lock-timeout refusal for the metadata-only review fixture below.
-# The contender cannot mutate the table: the held AccessShareLock excludes it.
-lock_probe_started=$SECONDS
-if psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -q \
-  -c "BEGIN; SET LOCAL lock_timeout = '1000ms'; SET LOCAL statement_timeout = '60s'; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS EXCLUSIVE MODE; ROLLBACK;" \
-  >"$temporary_root/lock-probe.stdout" 2>"$temporary_root/lock-probe.stderr"; then
-  printf '%s\n' 'lock-timeout probe unexpectedly acquired the blocked table.' >&2
-  exit 1
-fi
-if [[ "$(<"$temporary_root/lock-probe.stderr")" != *55P03* ]] || (( SECONDS - lock_probe_started > 10 )); then
-  printf '%s\n' 'lock-timeout probe did not produce the expected bounded PostgreSQL refusal.' >&2
-  exit 1
-fi
-if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
-  printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
-  exit 1
-fi
-assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.failed
-wait_ready_status "${server_url}ready" 503
-python3 - "$adopter_admin_url" "$adopter_production_database" "$package_revision_v2" <<'PY'
+  # Measure a lock-timeout refusal for the metadata-only review fixture below.
+  # The contender cannot mutate the table: the held AccessShareLock excludes it.
+  lock_probe_started=$SECONDS
+  if psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -q \
+    -c "BEGIN; SET LOCAL lock_timeout = '1000ms'; SET LOCAL statement_timeout = '60s'; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS EXCLUSIVE MODE; ROLLBACK;" \
+    >"$temporary_root/lock-probe.stdout" 2>"$temporary_root/lock-probe.stderr"; then
+    printf '%s\n' 'lock-timeout probe unexpectedly acquired the blocked table.' >&2
+    exit 1
+  fi
+  if [[ "$(<"$temporary_root/lock-probe.stderr")" != *55P03* ]] || (( SECONDS - lock_probe_started > 10 )); then
+    printf '%s\n' 'lock-timeout probe did not produce the expected bounded PostgreSQL refusal.' >&2
+    exit 1
+  fi
+  if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
+    printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
+    exit 1
+  fi
+  assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.failed
+  wait_ready_status "${server_url}ready" 503
+  python3 - "$adopter_admin_url" "$adopter_production_database" "$package_revision_v2" <<'PY'
 import subprocess
 import sys
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -916,20 +988,27 @@ ledger = subprocess.check_output([
 if ledger != "failed":
     raise SystemExit(f"unexpected migration ledger outcome: {ledger}")
 PY
-lock_backend_pid=$(<"$temporary_root/lock-backend-pid")
-if [[ ! "$lock_backend_pid" =~ ^[0-9]+$ ]] \
-  || [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($lock_backend_pid)")" != "t" ]]; then
-  printf '%s\n' 'external migration blocker could not be released exactly.' >&2
-  exit 1
+  lock_backend_pid=$(<"$temporary_root/lock-backend-pid")
+  if [[ ! "$lock_backend_pid" =~ ^[0-9]+$ ]] \
+    || [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($lock_backend_pid)")" != "t" ]]; then
+    printf '%s\n' 'external migration blocker could not be released exactly.' >&2
+    exit 1
+  fi
+  wait "$lock_pid" >/dev/null 2>&1 || true
+  lock_pid=""
 fi
-wait "$lock_pid" >/dev/null 2>&1 || true
-lock_pid=""
 
 render_runtime_config "$temporary_root/runtime-operator-v2-activation.yaml" "$temporary_root/build-v1/package" \
   "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
   "secret:file/production-migration-url" "127.0.0.1:0" \
   "asset-site-placement-acceptance-0.1.0"
-run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v2-activation.yaml" --package "$temporary_root/build-v2/package"
+successor_apply_args=()
+if [[ "$from_release" == 1 ]] && "$previous_bin_dir/bregctl" audit --help >/dev/null 2>&1; then
+  # The previous release kept audit rows in database tables the current catalog
+  # retires; the synthetic workflow has no audit trail worth archiving.
+  successor_apply_args+=(--acknowledge-retired-audit-discard)
+fi
+run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v2-activation.yaml" --package "$temporary_root/build-v2/package" "${successor_apply_args[@]}"
 assert_json_ok "$temporary_root/apply-v2.json" apply
 
 kill "$breg_pid" >/dev/null 2>&1 || true
@@ -939,6 +1018,17 @@ render_runtime_config "$temporary_root/runtime-server-v2.yaml" "$temporary_root/
   "$package_revision_v2" 2 60000 "secret:file/production-runtime-url" \
   "secret:file/production-migration-url" "$listener" \
   "asset-site-placement-acceptance-0.1.0"
+if [[ "$from_release" == 1 ]]; then
+  # A registry the previous release activated records no instance claim, and
+  # the runtime refuses to serve it until the operator adopts it once after
+  # its first apply on this release.
+  run_json "$temporary_root/instance-claim-v2.json" instance-claim status --runtime-config "$temporary_root/runtime-server-v2.yaml"
+  if [[ "$(json_field "$temporary_root/instance-claim-v2.json" status.claim)" == None ]]; then
+    run_json "$temporary_root/instance-claim-adopt-v2.json" instance-claim adopt \
+      --runtime-config "$temporary_root/runtime-server-v2.yaml" --acknowledge-original-retired
+    assert_json_ok "$temporary_root/instance-claim-adopt-v2.json" "instance-claim adopt"
+  fi
+fi
 BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v2.yaml" >"$temporary_root/server-v2.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
@@ -956,6 +1046,12 @@ if not matching:
 if any("placementReviewNote" in item.get("domainData", {}) for item in matching):
     raise SystemExit("restricted successor field was disclosed")
 PY
+if [[ "$from_release" == 1 ]]; then
+  run_json "$temporary_root/verify-v2.json" verify --runtime-config "$temporary_root/runtime-server-v2.yaml"
+  assert_json_ok "$temporary_root/verify-v2.json" verify
+  printf 'Base Registry Engine adopter workflow from %s passed\n' "$from_tag"
+  exit 0
+fi
 
 # Add an optional field AND disclose it to one profile on the existing database.
 # This is a reviewed successor, not an automatic additive upgrade.
