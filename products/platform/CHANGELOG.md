@@ -6,8 +6,9 @@
   `AuditRequest` that owes its `response`. A response the handle writes, or
   one appended under the same schema and correlation, answers it; a handle
   dropped unanswered, by an early return, a panic, or a canceled future,
-  writes the product's `unfinished` record as the response, so no request
-  entry stays unpaired. A file destination flushes that line on the runtime,
+  writes the product's `unfinished` record as the response, so a request
+  entry stays unpaired only when the process stops while a write is in
+  flight. A file destination flushes that line on the runtime,
   or when the last reference to the writer is dropped at shutdown.
 
 - Refuse to reopen an audit file ending in an incomplete JSONL entry, preserving

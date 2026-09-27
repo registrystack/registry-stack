@@ -314,10 +314,16 @@ entry. The file destination acknowledges an append after fsync; `stdout` flushes
 provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
 entry blocks disclosure. A request that ends before its outcome is known, because it failed, timed
 out, or its caller went away, or an operator command that exits early, still answers its request
-entry. A runtime read or mutation answers with a response whose `phase` is `unfinished`, carrying
-only the operation and request it answers; an operator command answers with a `terminal` response
-whose `outcome` is `unfinished`. Only a crash, or a destination that already stopped accepting
-entries, can leave a request entry without a response.
+entry. A runtime read or mutation answers with a `response` entry whose record `phase` is
+`unfinished`, carrying only the operation and request it answers; an operator command answers with a
+`terminal` response whose `outcome` is `unfinished`. An operator command also answers `unfinished`
+when it is refused, or when it stops with nothing to do, such as a `history rebaseline` with no
+history to rebaseline, so an `unfinished` outcome does not always mean the outcome was unknown.
+
+This pairing is a property of a running process, and a request may be answered more than once, so
+read every response under a correlation. A process that crashes, is killed, exits, or shuts its
+runtime down while a write is in flight, or a destination that already stopped accepting entries,
+can leave a request entry without a response.
 
 Operator commands follow the same rule. `evidence-retention erase-expired` records the cutoff it
 was given in its request entry and the number of assertions it erased in its response.
@@ -329,9 +335,12 @@ gone, so restore the audit destination and reconcile the erased request against 
 event delivery's attempt is recorded inside the transaction that leases it, before its request
 leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
 `worker_interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
-outcome is recorded only once the delivery's state has committed; an operator replay is recorded as a request before the reset and a response once it commits or is
-refused, or `replay_unfinished` when its commit failed and whether the reset committed cannot be
-read back; read the delivery's state before replaying it again.
+outcome is recorded only once the delivery's state has committed. When that commit fails, the
+attempt stays open until lease-expiry recovery answers it `worker_interrupted`, so a process that
+stops first leaves the attempt without a response. An operator replay is recorded as a request
+before the reset and a response once it commits or is refused, or `replay_unfinished` when its
+commit failed and whether the reset committed cannot be read back; read the delivery's state before
+replaying it again.
 
 A crash or a killed process can also tear the file's final line itself, leaving it without its
 closing newline. The writer refuses to open a destination in that state, so the next start of the

@@ -101,7 +101,8 @@ exits 101):
   both failing closed; a refusal before any render is one `response` entry.
   A call that ends before its outcome is written, such as a disconnected
   caller, writes an `unfinished` response, so every `request` entry is
-  paired. Each line is the envelope `{schema, eventId, time, phase,
+  paired while the process runs; a process that stops while a write is in
+  flight can leave one unpaired. Each line is the envelope `{schema, eventId, time, phase,
   correlation, record}` with schema `render.registrystack.org/audit/v1`;
   `correlation` is a random id the server draws for every call, and the
   caller's `Idempotency-Key` is echoed only as the record's `correlationId`,
