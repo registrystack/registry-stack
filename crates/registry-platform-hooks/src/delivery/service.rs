@@ -678,14 +678,21 @@ impl<S: DeliverySeams> DeliveryService<S> {
             // lease's own fate. A lease that did commit sends nothing from
             // here and is answered when it expires; one that rolled back, or
             // one whose fate cannot be read, is answered now, since a second
-            // interrupted answer is harmless and none is not.
+            // interrupted answer is harmless and none is not. A lease of
+            // unknown fate may still be held, so its answer claims no
+            // database state.
             let lease_committed = self.transition_committed(&started, Some(lease_token)).await;
             self.record_resolved(committed).await;
-            if lease_committed != Some(true) {
+            let disposition = match lease_committed {
+                Some(true) => None,
+                Some(false) => Some(DeliveryAuditDisposition::RetryPending),
+                None => Some(DeliveryAuditDisposition::Unknown),
+            };
+            if let Some(disposition) = disposition {
                 let interrupted = PendingAudit {
                     phase: DeliveryAuditPhase::Terminal,
                     outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                    disposition: DeliveryAuditDisposition::RetryPending,
+                    disposition,
                     ..started
                 };
                 // A refused entry has already stopped the product's writer,
@@ -3956,9 +3963,9 @@ mod tests {
             recorded.contains(&(
                 DeliveryAuditPhase::Terminal,
                 DeliveryAuditOutcome::WorkerInterrupted,
-                DeliveryAuditDisposition::RetryPending,
+                DeliveryAuditDisposition::Unknown,
             )),
-            "the attempt of unknown fate is answered: {recorded:?}"
+            "the attempt of unknown fate is answered without claiming a retry: {recorded:?}"
         );
         assert_eq!(recorded.len(), 3, "{recorded:?}");
     }
