@@ -3,9 +3,10 @@
 //
 // The journey script starts a background fence in its own process group and
 // records `<group> <output file>` in a state file. This helper then waits for
-// the fence's ready URL, or stops the group the state file names:
+// the fence's ready URL to answer with success, or stops the group the state
+// file names:
 //
-//   background.mjs ready <url> <state file>   wait until the URL answers
+//   background.mjs ready <url> <state file>   wait until the URL answers 2xx
 //   background.mjs stop <state file>          stop the group, show its output
 //
 // A fence whose group ends before its URL answers, or that does not answer
@@ -61,15 +62,18 @@ async function ready(url, stateFile) {
   const { group } = await readState(stateFile);
   const deadline = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
-    try {
-      await fetch(url, { signal: AbortSignal.timeout(2000) });
-      return 0;
-    } catch {
-      // Not answering yet: the command may still be starting.
-    }
+    // The group is checked first, so a service that already held the port
+    // cannot answer for a command that has ended.
     if (!groupAlive(group)) {
       console.error(`the command ended before ${url} answered`);
       return 1;
+    }
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+      await response.body?.cancel();
+      if (response.ok && groupAlive(group)) return 0;
+    } catch {
+      // Not answering yet: the command may still be starting.
     }
     if (Date.now() > deadline) {
       console.error(`${url} did not answer within ${READY_TIMEOUT_MS / 1000} seconds`);
