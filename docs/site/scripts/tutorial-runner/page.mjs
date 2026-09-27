@@ -17,6 +17,11 @@
 // stands at that point of the journey; bare, part of the output of the
 // nearest sh fence above it.
 //
+// Output the reader compares against what they see, such as a compiler's
+// report, is shown whole with test-expect, not trimmed to an excerpt: when a
+// product rewords that output, the change that rewords it updates the page.
+// An excerpt is for output the page deliberately shows only part of.
+//
 // A block titled with a file path and marked test-file is the whole file the
 // page asks the reader to create or replace in their editor; marked
 // test-append, it is what the page asks the reader to add to the end of it.
