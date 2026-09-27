@@ -449,7 +449,6 @@ mod package_closure {
     use registry_breg::package::{
         inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
         PackageError, PackageMigrationPlanInput, PackageSourceFile, PreparedPackage,
-        SignaturePolicy,
     };
 
     /// Build and prepare the wasm admission project as a package carrying
@@ -458,25 +457,12 @@ mod package_closure {
     /// an oversized build fails here exactly as a real package build would.
     fn build_wasm_package(bytes: Vec<u8>) -> Result<PreparedPackage, PackageError> {
         let mut project = wasm_project();
-        project["package"] = json!({
-            "environment": "local",
-            "instanceId": "wasm-admission",
-            "sequence": 1,
-            "sourceRevision": "wasm-admission-1"
-        });
+        project["package"] = json!({"sourceRevision": "wasm-admission-1"});
         let project_bytes = serde_json::to_vec(&project).unwrap();
         let request = PackageBuildRequest {
-            environment: "local".to_owned(),
-            instance_id: "wasm-admission".to_owned(),
-            database_id: "wasm-admission".to_owned(),
-            sequence: 1,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: "wasm-admission-1".to_owned(),
             schema_fingerprint: sha256(&project_bytes),
-            signature_policy: SignaturePolicy {
-                threshold: 0,
-                key_ids: vec![],
-            },
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
                 bytes: project_bytes,
@@ -521,7 +507,7 @@ mod package_closure {
         let base = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
         let published = base.path().join("published");
         package
-            .publish_to_directory(&published, vec![])
+            .publish_to_directory(&published)
             .expect("the wasm handler package publishes");
         let inspected = inspect_package_integrity(&published)
             .expect("the wasm handler package verifies through rederivation");

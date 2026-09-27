@@ -1073,12 +1073,12 @@ fn inspect_data_package(package: &Path) -> Result<InspectedDataPackage, DataLife
         parse_json_strict(&manifest_bytes).map_err(|_| DataLifecycleError::PackageManifest)?,
     )
     .map_err(|_| DataLifecycleError::PackageManifest)?;
-    if envelope.signed.package_revision != inspected.package_revision() {
+    if envelope.manifest.schema_fingerprint != inspected.schema_fingerprint() {
         return Err(DataLifecycleError::PackageManifest);
     }
     Ok(InspectedDataPackage {
-        package_revision: envelope.signed.package_revision,
-        schema_fingerprint: envelope.signed.schema_fingerprint,
+        package_revision: inspected.package_digest().to_owned(),
+        schema_fingerprint: envelope.manifest.schema_fingerprint,
         registry: inspected.registry().clone(),
     })
 }

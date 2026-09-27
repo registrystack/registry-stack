@@ -25,9 +25,9 @@ use registry_breg::field_encryption::{
     FieldEncryptionError, FieldEncryptionProvider, FieldEncryptionService,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
-    VerifiedPackage, FIXTURE_JOURNEYS_PATH,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, VerifiedPackage,
+    FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -73,9 +73,6 @@ registry:
   version: 1.0.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: field-encryption-instance
-  sequence: 1
   sourceRevision: field-encryption-source
 manifestProjection:
   accessProfile: operator
@@ -229,7 +226,6 @@ const JOURNEY_SOURCE: &str = r#"journeys:
 struct EncryptedFixture {
     _root: TempDir,
     package_root: PathBuf,
-    anchor: PathBuf,
     revision: String,
     package: VerifiedPackage,
 }
@@ -242,17 +238,9 @@ fn project_source(module_digest_value: &str) -> Vec<u8> {
 
 fn encrypted_fixture(schema_fingerprint: &str, project: &[u8]) -> EncryptedFixture {
     let prepared = prepare_package(PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE_ID.to_owned(),
-        database_id: DATABASE_ID.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "sources/project.yaml".to_owned(),
             bytes: project.to_vec(),
@@ -276,28 +264,20 @@ fn encrypted_fixture(schema_fingerprint: &str, project: &[u8]) -> EncryptedFixtu
         .canonicalize()
         .expect("temporary package root canonicalizes");
     let package_root = directory.join("package");
-    let revision = prepared.package_revision().to_owned();
+    let revision = prepared.package_digest().unwrap().to_owned();
     prepared
-        .publish_to_directory(&package_root, Vec::new())
+        .publish_to_directory(&package_root)
         .expect("local encrypted package publishes");
-    let anchor = directory.join("trust-anchor.json");
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            environment: "local",
-            instance_id: INSTANCE_ID,
-            database_id: DATABASE_ID,
             database_initialization_environment: "local",
-            compiler_source_revision: COMPILER_SOURCE_REVISION,
-            trust_anchor: None,
-            intent: PackageIntent::InitialActivation,
         },
     )
     .expect("local encrypted package closure rederives into VerifiedPackage");
     EncryptedFixture {
         _root: root,
         package_root,
-        anchor,
         revision,
         package,
     }
@@ -340,10 +320,10 @@ async fn boot_encrypted_database() -> BootedDatabase {
         &registry,
         RegistryStateTestIdentity {
             package_id: &manifest.package_id,
-            environment: &manifest.environment,
-            instance_id: &manifest.instance_id,
-            database_id: &manifest.database_id,
-            package_revision: &manifest.package_revision,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: fixture.package.package_digest(),
             package_sequence: 1,
         },
     )
@@ -415,10 +395,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {COMPILER_SOURCE_REVISION}
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://auth.example.test
@@ -459,8 +435,6 @@ operationalTimeouts:
             booted.database.migration_role.as_str(),
             booted.database.runtime_role.as_str(),
             booted.fixture.package_root.display(),
-            booted.fixture.anchor.display(),
-            booted.fixture.revision,
         ),
     )
     .expect("strict fixture runtime configuration writes");

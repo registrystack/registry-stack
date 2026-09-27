@@ -12,9 +12,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: public-organizations-starter
-  sequence: 1
   sourceRevision: public-organizations-core-0.1.0
 manifestProjection:
   accessProfile: reader

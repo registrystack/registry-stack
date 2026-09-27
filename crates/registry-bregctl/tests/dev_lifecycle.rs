@@ -472,7 +472,7 @@ seed:
     assert!(std::net::TcpStream::connect(receiver_address).is_err());
     assert_eq!(events(), recovered, "stopped inbox remains inspectable");
     let restarted = session.start();
-    assert_eq!(restarted["packageRevision"], first["packageRevision"]);
+    assert_eq!(restarted["packageDigest"], first["packageDigest"]);
     let retained: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     for field in ["owner", "containerId", "webhookPort", "seeded"] {
         assert_eq!(retained[field], state[field]);
@@ -726,7 +726,7 @@ seed:
         );
     }
     let again = session.start();
-    assert_eq!(again["packageRevision"], first["packageRevision"]);
+    assert_eq!(again["packageDigest"], first["packageDigest"]);
     let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     assert_eq!(state["containerId"], failed_state["containerId"]);
     // Records live in a named volume derived from the ownership identifier,
@@ -960,7 +960,7 @@ seed:
     lost_checkpoint["seeded"] = json!([]);
     write(&state_file, &serde_json::to_vec(&lost_checkpoint).unwrap());
     let started = session.start();
-    assert_eq!(started["packageRevision"], first["packageRevision"]);
+    assert_eq!(started["packageDigest"], first["packageDigest"]);
     runtime.block_on(async {
         let token = fs::read_to_string(project.join(".breg/dev/secrets/operator-token")).unwrap();
         let client = reqwest::Client::builder()
@@ -1189,7 +1189,7 @@ seed:
     let restarted = session.start();
     assert_eq!(restarted["status"], "ready");
     assert_eq!(restarted["packageSequence"], 2);
-    assert_ne!(restarted["packageRevision"], first["packageRevision"]);
+    assert_ne!(restarted["packageDigest"], first["packageDigest"]);
 
     let token = fs::read_to_string(project.join(".breg/dev/secrets/source-reader-token")).unwrap();
     let payload = token.split('.').nth(1).expect("issued JWT payload");

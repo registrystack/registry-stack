@@ -16,9 +16,10 @@ use registry_breg::field_encryption_backfill::{
     FieldEncryptionBackfillTimeouts,
 };
 use registry_breg::migration::{
-    apply_verified_package, confirm_active_package, AppliedFieldEncryptionKeySource,
-    ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
-    DestructiveBackupEvidence, MigrationError, ReviewedMigrationFaultPoint,
+    apply_verified_package, bind_active_package, read_recorded_registry_state,
+    ActivationDeployment, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
+    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    RecordedRegistryState, ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -35,8 +36,8 @@ use registry_breg::migration_reconcile::{
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
     CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageBuildRequest,
-    PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, PreparedPackage, SignaturePolicy, VerifiedPackage,
+    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    PreparedPackage, VerifiedPackage,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
@@ -53,6 +54,7 @@ use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
+const ENVIRONMENT: &str = "local";
 const INSTANCE: &str = "migration-instance";
 const DATABASE: &str = "migration-database";
 const SOURCE_REVISION: &str = "migration-source-revision";
@@ -80,7 +82,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .await
         .expect("administrator installs the required extension");
 
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let initial_fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &initial_fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
@@ -88,7 +90,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .expect("initial package activates through the library coordinator");
     seed_backfill_rows(&database, &base, 5).await;
 
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let required_fingerprint = required_target_fingerprint(&database, &required).await;
     let backfill = backfill_source(BackfillSourceRequest {
         id: "rank-required",
@@ -101,7 +103,6 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         rehearsed_rows: 5,
     });
     let required_package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -141,7 +142,6 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         rehearsed_rows: 5,
     });
     let wrong_package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -198,32 +198,21 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         "an applied reviewed migration and its step checkpoints are immutable"
     );
 
-    let removed = compile_variant(Variant::LegacyRemoved, 3);
+    let removed = compile_variant(Variant::LegacyRemoved);
     let destructive_fingerprint = destructive_target_fingerprint(&database, &removed).await;
     let backup_bytes = synthetic_backup_sql(&required, &required_active, &database.runtime_role, 5);
     let backup_digest = digest(&backup_bytes);
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("current time formats");
-    let binding = ExternalBackupBinding {
-        database_id: DATABASE.to_owned(),
-        prior_revision: required_active.package_revision.clone(),
-        prior_schema_fingerprint: required_active.schema_fingerprint.clone(),
-        sha256: backup_digest,
-        byte_length: backup_bytes.len() as u64,
-        created_at: now,
-        max_age_seconds: 3_600,
-    };
     let reviewed_destructive_source = destructive_recovery_source(
         "remove-legacy",
         &required_active,
         &required,
         &removed,
         &destructive_fingerprint,
-        binding.clone(),
     );
     let destructive_package = prepare_and_load_reviewed(
-        3,
         &required_active,
         &required,
         Variant::LegacyRemoved,
@@ -256,6 +245,17 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .backup_binding_path
         .as_deref()
         .expect("destructive binding path exists");
+    let binding = ExternalBackupBinding {
+        database_id: DATABASE.to_owned(),
+        prior_package_digest: required_active.package_revision.clone(),
+        prior_schema_fingerprint: required_active.schema_fingerprint.clone(),
+        backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
+        sha256: backup_digest,
+        byte_length: backup_bytes.len() as u64,
+        created_at: now,
+        max_age_seconds: 3_600,
+    };
+    let binding_file = write_backup_binding(backup_root.path(), "binding.json", &binding);
 
     let missing = apply(
         &database,
@@ -270,7 +270,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
 
     let wrong_target_evidence = [DestructiveBackupEvidence::new(
         "modules/core/migrations/wrong-target/backup.json",
-        &backup_path,
+        &binding_file,
     )];
     let wrong_target = apply_with_evidence(
         &database,
@@ -284,7 +284,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
 
     fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o644))
         .expect("test opens backup permissions");
-    let loose_evidence = [DestructiveBackupEvidence::new(binding_path, &backup_path)];
+    let loose_evidence = [DestructiveBackupEvidence::new(binding_path, &binding_file)];
     let loose = apply_with_evidence(
         &database,
         &destructive_package,
@@ -299,7 +299,18 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
 
     let symlink_path = backup_root.path().join("backup-link");
     std::os::unix::fs::symlink(&backup_path, &symlink_path).expect("test symlink creates");
-    let symlink_evidence = [DestructiveBackupEvidence::new(binding_path, &symlink_path)];
+    let symlink_binding = write_backup_binding(
+        backup_root.path(),
+        "symlink-binding.json",
+        &ExternalBackupBinding {
+            backup_file: symlink_path.to_str().expect("UTF-8 link path").to_owned(),
+            ..binding.clone()
+        },
+    );
+    let symlink_evidence = [DestructiveBackupEvidence::new(
+        binding_path,
+        &symlink_binding,
+    )];
     let symlink = apply_with_evidence(
         &database,
         &destructive_package,
@@ -310,118 +321,67 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_value_free(symlink.err(), MigrationError::BackupEvidence);
     assert_ready_target(&database, &required_active).await;
 
-    let digest_source = destructive_source(
-        "remove-legacy-wrong-digest",
-        &required_active,
-        &required,
-        &removed,
-        &destructive_fingerprint,
-        ExternalBackupBinding {
-            sha256: digest(b"different-backup"),
-            ..binding.clone()
-        },
-    );
-    let digest_package = prepare_and_load_reviewed(
-        3,
-        &required_active,
-        &required,
-        Variant::LegacyRemoved,
-        &destructive_fingerprint,
-        digest_source,
-    );
-    let digest_binding_path = digest_package
-        .reviewed_migration_plan()
-        .expect("digest plan validates")
-        .migrations()[0]
-        .descriptor
-        .backup_binding_path
-        .as_deref()
-        .expect("digest binding path exists");
-    let digest_evidence = [DestructiveBackupEvidence::new(
-        digest_binding_path,
-        &backup_path,
-    )];
-    let wrong_digest = apply_with_evidence(
-        &database,
-        &digest_package,
-        &required_active,
-        &digest_evidence,
-    )
-    .await;
-    assert_value_free(wrong_digest.err(), MigrationError::BackupEvidence);
-    assert_ready_target(&database, &required_active).await;
-
-    let stale_source = destructive_source(
-        "remove-legacy-stale",
-        &required_active,
-        &required,
-        &removed,
-        &destructive_fingerprint,
-        ExternalBackupBinding {
-            created_at: "2020-01-01T00:00:00Z".to_owned(),
-            max_age_seconds: 60,
-            ..binding.clone()
-        },
-    );
-    let stale_package = prepare_and_load_reviewed(
-        3,
-        &required_active,
-        &required,
-        Variant::LegacyRemoved,
-        &destructive_fingerprint,
-        stale_source,
-    );
-    let stale_binding_path = stale_package
-        .reviewed_migration_plan()
-        .expect("stale package remains structurally valid")
-        .migrations()[0]
-        .descriptor
-        .backup_binding_path
-        .as_deref()
-        .expect("stale binding path exists");
-    let stale_evidence = [DestructiveBackupEvidence::new(
-        stale_binding_path,
-        &backup_path,
-    )];
-    let stale =
-        apply_with_evidence(&database, &stale_package, &required_active, &stale_evidence).await;
-    assert_value_free(stale.err(), MigrationError::BackupEvidence);
-    assert_ready_target(&database, &required_active).await;
-
-    let wrong_database_package = prepare_and_load_reviewed_for_database(
-        3,
-        &required_active,
-        &required,
-        Variant::LegacyRemoved,
-        &destructive_fingerprint,
-        destructive_source(
-            "remove-legacy-wrong-database",
-            &ExpectedRegistryIdentity {
-                database_id: "other-database".to_owned(),
-                ..required_active.clone()
+    // A binding describes one database's backup, so every refusal below is of
+    // the binding an operator supplies, never of the package.
+    for (name, refused) in [
+        (
+            "wrong-digest.json",
+            ExternalBackupBinding {
+                sha256: digest(b"different-backup"),
+                ..binding.clone()
             },
-            &required,
-            &removed,
-            &destructive_fingerprint,
+        ),
+        (
+            "stale.json",
+            ExternalBackupBinding {
+                created_at: "2020-01-01T00:00:00Z".to_owned(),
+                max_age_seconds: 60,
+                ..binding.clone()
+            },
+        ),
+        (
+            "other-database.json",
             ExternalBackupBinding {
                 database_id: "other-database".to_owned(),
                 ..binding.clone()
             },
         ),
-        "other-database",
-    );
-    let wrong_database = apply(
-        &database,
-        &wrong_database_package,
-        ApplyPrecondition::Successor {
-            current: &required_active,
-        },
+        (
+            "other-package.json",
+            ExternalBackupBinding {
+                prior_package_digest: active.package_revision.clone(),
+                ..binding.clone()
+            },
+        ),
+    ] {
+        let refused_file = write_backup_binding(backup_root.path(), name, &refused);
+        let evidence = [DestructiveBackupEvidence::new(binding_path, &refused_file)];
+        let outcome =
+            apply_with_evidence(&database, &destructive_package, &required_active, &evidence).await;
+        assert_value_free(outcome.err(), MigrationError::BackupEvidence);
+        assert_ready_target(&database, &required_active).await;
+    }
+
+    // The runtime identity names the database; a package names none.
+    let wrong_database = apply_verified_package(
+        request_for_deployment(
+            &database,
+            &destructive_package,
+            ApplyPrecondition::Successor {
+                current: &required_active,
+            },
+            ActivationDeployment::new(ENVIRONMENT, INSTANCE, "other-database"),
+        )
+        .with_destructive_backup_evidence(&[DestructiveBackupEvidence::new(
+            binding_path,
+            &binding_file,
+        )]),
     )
     .await;
-    assert_value_free(wrong_database.err(), MigrationError::PackageBinding);
+    assert_value_free(wrong_database.err(), MigrationError::DatabaseMismatch);
     assert_ready_target(&database, &required_active).await;
 
-    let valid_evidence = [DestructiveBackupEvidence::new(binding_path, &backup_path)];
+    let valid_evidence = [DestructiveBackupEvidence::new(binding_path, &binding_file)];
     let destructive_fault = apply_with_evidence(
         &database,
         &destructive_package,
@@ -465,7 +425,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         },
     )
     .await;
-    assert_value_free(active_noop.err(), MigrationError::PackageBinding);
+    assert_value_free(active_noop.err(), MigrationError::AlreadyActive);
     assert_non_ready_target(&database, &required_active, &destructive_package, "failed").await;
 
     let substituted_source = destructive_source(
@@ -474,10 +434,8 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         &required,
         &removed,
         &destructive_fingerprint,
-        binding.clone(),
     );
     let substituted_package = prepare_and_load_reviewed(
-        3,
         &required_active,
         &required,
         Variant::LegacyRemoved,
@@ -494,7 +452,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .expect("substituted binding path exists");
     let substituted_evidence = [DestructiveBackupEvidence::new(
         substituted_binding_path,
-        &backup_path,
+        &binding_file,
     )];
     let substituted = apply_with_evidence(
         &database,
@@ -531,64 +489,73 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     refused_step_reports_its_sqlstate().await;
 }
 
-/// Re-presenting the active package is a no-op only when the database, read
-/// under the exclusive apply lock, records that exact package identity as
-/// active and ready. A different package at the same sequence, a package not
-/// verified for startup, and a registry in maintenance all refuse, and the
-/// confirmation writes nothing.
+/// Applying the active package again is refused as already active before
+/// maintenance begins, and writes nothing. What the database records, read
+/// under the exclusive apply lock, binds a package only when it names the
+/// runtime identity's database and the exact active package digest, and
+/// reports a registry held in maintenance as not ready.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_confirms_only_the_exact_active_ready_package() {
+async fn real_postgres_refuses_the_active_package_again_and_binds_only_the_recorded_package() {
     let ActivePackageFixture {
         database,
         root,
         initial,
         active,
-        startup,
     } = ActivePackageFixture::activate().await;
 
     let before = durable_snapshot(&database).await;
-    let confirmed = confirm(&database, &startup)
+    assert_value_free(
+        apply(
+            &database,
+            &initial,
+            ApplyPrecondition::Successor { current: &active },
+        )
         .await
-        .expect("the exact active ready package is confirmed");
-    assert_eq!(confirmed, active);
+        .err(),
+        MigrationError::AlreadyActive,
+    );
     assert_eq!(durable_snapshot(&database).await, before);
 
-    // Only a package verified against the active revision for startup can be
-    // confirmed; the activation-verified copy of the same bytes cannot.
-    assert_value_free(
-        confirm(&database, &initial).await.err(),
-        MigrationError::PackageBinding,
+    let recorded = recorded_state(&database, &initial)
+        .await
+        .expect("the recorded state reads")
+        .expect("an activated database records its state");
+    assert_eq!(
+        recorded,
+        RecordedRegistryState {
+            identity: active.clone(),
+            ready: true,
+        }
     );
+    bind_active_package(&recorded.identity, initial.package_digest(), deployment())
+        .expect("the recorded active package binds");
+    assert_eq!(durable_snapshot(&database).await, before);
 
-    // Another package at the active sequence is not the active package.
+    // Another package of the same registry is not the active package.
     let other_root = root.path().join("other-package");
     let other = prepare_package(build_request(
         Variant::Base,
-        1,
         None,
-        &digest(b"another schema at the active sequence"),
+        &digest(b"another schema of the same registry"),
         PackageMigrationPlanInput::InitialCompiledDdl,
-        DATABASE,
     ))
     .expect("another package prepares");
-    let other_revision = other.package_revision().to_owned();
     other
-        .publish_to_directory(&other_root, Vec::new())
+        .publish_to_directory(&other_root)
         .expect("another package publishes");
-    let other = load_package(
-        &other_root,
-        &local_context(
-            DATABASE,
-            PackageIntent::Startup {
-                active_revision: &other_revision,
-                active_sequence: 1,
-            },
-        ),
-    )
-    .expect("another package loads for its own startup");
+    let other = load_package(&other_root, &local_context()).expect("another package loads");
     assert_value_free(
-        confirm(&database, &other).await.err(),
+        bind_active_package(&recorded.identity, other.package_digest(), deployment()).err(),
         MigrationError::ActivePackageMismatch,
+    );
+    assert_value_free(
+        bind_active_package(
+            &recorded.identity,
+            initial.package_digest(),
+            ActivationDeployment::new(ENVIRONMENT, INSTANCE, "other-database"),
+        )
+        .err(),
+        MigrationError::DatabaseMismatch,
     );
 
     // A registry held in maintenance is not ready, even for its own active
@@ -599,15 +566,16 @@ async fn real_postgres_confirms_only_the_exact_active_ready_package() {
             "UPDATE registry_internal.registry_state
              SET maintenance_status = 'failed', maintenance_target_revision = $1
              WHERE singleton",
-            &[&other_revision],
+            &[&other.package_digest()],
         )
         .await
         .expect("administrator pins a failed maintenance target");
     let before = durable_snapshot(&database).await;
-    assert_value_free(
-        confirm(&database, &startup).await.err(),
-        MigrationError::ActivePackageMismatch,
-    );
+    let held = recorded_state(&database, &initial)
+        .await
+        .expect("the recorded state reads")
+        .expect("a held database records its state");
+    assert!(!held.ready, "a failed maintenance target is not ready");
     assert_eq!(durable_snapshot(&database).await, before);
     database.cleanup().await;
 }
@@ -626,7 +594,7 @@ async fn real_postgres_initial_apply_refuses_retired_audit_rows_without_acknowle
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
 
@@ -672,7 +640,7 @@ async fn real_postgres_initial_apply_drops_retired_audit_rows_with_acknowledgeme
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
 
@@ -713,8 +681,8 @@ async fn real_postgres_initial_apply_drops_retired_audit_rows_with_acknowledgeme
 /// An unreachable database or an apply lock another session holds, before
 /// maintenance begins, changes nothing, so it is reported as the database
 /// being unavailable and never as a failed migration that needs
-/// reconciliation. This holds for an activation and for the already-active
-/// confirmation alike.
+/// reconciliation. This holds for an activation and for reading the
+/// recorded registry state alike.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged() {
     let ActivePackageFixture {
@@ -722,7 +690,6 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
         root: _root,
         initial,
         active: _,
-        startup,
     } = ActivePackageFixture::activate().await;
     let before = durable_snapshot(&database).await;
 
@@ -732,6 +699,7 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
         apply_verified_package(ApplyVerifiedPackageRequest::new(
             &unreachable,
             &initial,
+            deployment(),
             ApplyPrecondition::InitialActivation,
             ApplyRoles::new(&database.migration_role, &database.runtime_role),
             ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
@@ -742,7 +710,9 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
         MigrationError::DatabaseUnavailable,
     );
     assert_value_free(
-        confirm_with(&unreachable, &database, &startup).await.err(),
+        recorded_state_with(&unreachable, &database, &initial)
+            .await
+            .err(),
         MigrationError::DatabaseUnavailable,
     );
 
@@ -760,7 +730,7 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
         MigrationError::DatabaseUnavailable,
     );
     assert_value_free(
-        confirm(&database, &startup).await.err(),
+        recorded_state(&database, &initial).await.err(),
         MigrationError::DatabaseUnavailable,
     );
     holder
@@ -777,23 +747,22 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
 }
 
 /// A provisioned database that was never activated holds no registry state.
-/// Presenting its initial package as the configured active package, which is
-/// what an initial apply without `--initial` does, is refused as an active
-/// package the database does not run. It is never reported as a database
+/// Reading it, which is what an apply without `--initial` does first, reports
+/// no recorded state and creates none. It is never reported as a database
 /// that is unavailable, because retrying cannot create the missing state.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_refuses_a_never_activated_database_as_an_active_package_mismatch() {
+async fn real_postgres_reads_no_recorded_state_from_a_never_activated_database() {
     let PublishedInitialPackage {
         database,
         root: _root,
-        package_root,
         initial,
     } = PublishedInitialPackage::publish().await;
-    let startup = load_for_startup(&package_root, &initial.manifest().package_revision);
 
-    assert_value_free(
-        confirm(&database, &startup).await.err(),
-        MigrationError::ActivePackageMismatch,
+    assert_eq!(
+        recorded_state(&database, &initial)
+            .await
+            .expect("a never-activated database reads"),
+        None
     );
 
     let (migration, task) = database.connect_migration().await;
@@ -810,14 +779,12 @@ async fn real_postgres_refuses_a_never_activated_database_as_an_active_package_m
     database.cleanup().await;
 }
 
-/// One registry whose initial package is active, with that package loaded
-/// both for its activation and, as the configured active package, for startup.
+/// One registry whose initial package is active.
 struct ActivePackageFixture {
     database: TestDatabase,
     root: tempfile::TempDir,
     initial: VerifiedPackage,
     active: ExpectedRegistryIdentity,
-    startup: VerifiedPackage,
 }
 
 impl ActivePackageFixture {
@@ -825,19 +792,16 @@ impl ActivePackageFixture {
         let PublishedInitialPackage {
             database,
             root,
-            package_root,
             initial,
         } = PublishedInitialPackage::publish().await;
         let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
             .await
             .expect("initial package activates");
-        let startup = load_for_startup(&package_root, &active.package_revision);
         Self {
             database,
             root,
             initial,
             active,
-            startup,
         }
     }
 }
@@ -847,7 +811,6 @@ impl ActivePackageFixture {
 struct PublishedInitialPackage {
     database: TestDatabase,
     root: tempfile::TempDir,
-    package_root: std::path::PathBuf,
     initial: VerifiedPackage,
 }
 
@@ -859,7 +822,7 @@ impl PublishedInitialPackage {
             .batch_execute("CREATE EXTENSION btree_gist")
             .await
             .expect("administrator installs extension");
-        let base = compile_variant(Variant::Base, 1);
+        let base = compile_variant(Variant::Base);
         let fingerprint = initial_fingerprint(&database, &base).await;
         let root = tempfile::Builder::new()
             .prefix("registry-active-package-")
@@ -872,59 +835,38 @@ impl PublishedInitialPackage {
         let package_root = root.path().join("package");
         prepare_package(build_request(
             Variant::Base,
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
-            DATABASE,
         ))
         .expect("initial package prepares")
-        .publish_to_directory(&package_root, Vec::new())
+        .publish_to_directory(&package_root)
         .expect("initial package publishes");
-        let initial = load_package(
-            &package_root,
-            &local_context(DATABASE, PackageIntent::InitialActivation),
-        )
-        .expect("initial package loads for activation");
+        let initial = load_package(&package_root, &local_context())
+            .expect("initial package loads for activation");
         Self {
             database,
             root,
-            package_root,
             initial,
         }
     }
 }
 
-/// Loads a published package as the configured active package at sequence one.
-fn load_for_startup(package_root: &std::path::Path, active_revision: &str) -> VerifiedPackage {
-    load_package(
-        package_root,
-        &local_context(
-            DATABASE,
-            PackageIntent::Startup {
-                active_revision,
-                active_sequence: 1,
-            },
-        ),
-    )
-    .expect("the configured active package loads for startup")
-}
-
-async fn confirm(
+async fn recorded_state(
     database: &TestDatabase,
     package: &VerifiedPackage,
-) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
-    confirm_with(&database.migration_config, database, package).await
+) -> registry_breg::migration::Result<Option<RecordedRegistryState>> {
+    recorded_state_with(&database.migration_config, database, package).await
 }
 
-async fn confirm_with(
+async fn recorded_state_with(
     config: &registry_breg::postgres::ConnectionConfig,
     database: &TestDatabase,
     package: &VerifiedPackage,
-) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
-    confirm_active_package(
+) -> registry_breg::migration::Result<Option<RecordedRegistryState>> {
+    read_recorded_registry_state(
         config,
-        package,
+        &package.manifest().package_id,
         &database.migration_role,
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
@@ -956,17 +898,16 @@ async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refu
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("refusal scenario initial package activates");
     seed_backfill_rows(&database, &base, 5).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -1022,17 +963,16 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("reconciliation scenario initial package activates");
     seed_backfill_rows(&database, &base, 5).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -1150,7 +1090,7 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
         .expect("the missing activation transition completes");
     assert_eq!(completed.outcome, ReconcileOutcome::Completable);
     assert!(completed.executed);
-    let target = target_identity(&package);
+    let target = target_identity(&package, 2);
     assert_ready_target(&database, &target).await;
     assert_eq!(
         ledger_snapshot(&database)
@@ -1175,17 +1115,16 @@ async fn reconciliation_reverts_a_target_that_reached_no_durable_step() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("revert scenario initial package activates");
     seed_backfill_rows(&database, &base, 5).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let abandoned = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -1228,14 +1167,13 @@ async fn reconciliation_reverts_a_target_that_reached_no_durable_step() {
         ledger_snapshot(&database)
             .await
             .iter()
-            .find(|entry| entry.0 == abandoned.manifest().package_revision)
+            .find(|entry| entry.0 == abandoned.package_digest())
             .map(|entry| entry.2.clone()),
         Some("failed".to_owned())
     );
     assert_reconcile_audit_is_minimized(&database, "reverted").await;
 
     let successor = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -1272,17 +1210,16 @@ async fn reconciliation_assessment_writes_nothing() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("assessment scenario initial package activates");
     seed_backfill_rows(&database, &base, 5).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -1330,7 +1267,7 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
         .await
         .expect("administrator installs the required extension");
 
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let initial_fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &initial_fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
@@ -1338,7 +1275,7 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
         .expect("added required field scenario activates its initial package");
     seed_backfill_rows(&database, &base, 5).await;
 
-    let candidate = compile_variant(Variant::BatchAddedRequired, 2);
+    let candidate = compile_variant(Variant::BatchAddedRequired);
     let change_set =
         compiled_registry_change_set(&base, &candidate, &active.package_revision).changes;
     assert!(
@@ -1359,7 +1296,6 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
         5,
     );
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::BatchAddedRequired,
@@ -1399,11 +1335,11 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
         .await
         .expect("administrator installs the required extension");
 
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let base_fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &base_fingerprint);
-    let active = target_identity(&initial);
-    let candidate = compile_variant(Variant::RankRequired, 2);
+    let active = target_identity(&initial, 1);
+    let candidate = compile_variant(Variant::RankRequired);
     // A package's fingerprint is the fresh-install fingerprint of its registry,
     // and activation holds the migrated catalog to it.
     let target_fingerprint = initial_fingerprint(&database, &candidate).await;
@@ -1586,10 +1522,10 @@ async fn real_postgres_rehearsal_refuses_a_predecessor_it_cannot_install() {
         .await
         .expect("administrator revokes the data schema privilege");
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let initial = prepare_and_load_initial(&base, fingerprint);
-    let active = target_identity(&initial);
-    let candidate = compile_variant(Variant::RankRequired, 2);
+    let active = target_identity(&initial, 1);
+    let candidate = compile_variant(Variant::RankRequired);
     let prepared = prepare_reviewed_candidate(
         &active,
         &base,
@@ -1628,14 +1564,13 @@ async fn real_postgres_rehearsal_runs_compiler_ddl_around_the_reviewed_steps() {
         .await
         .expect("administrator installs the required extension");
 
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let base_fingerprint = initial_fingerprint(&database, &base).await;
-    let active = target_identity(&prepare_and_load_initial(&base, &base_fingerprint));
-    let candidate = compile_variant(Variant::BatchAddedRequired, 2);
+    let active = target_identity(&prepare_and_load_initial(&base, &base_fingerprint), 1);
+    let candidate = compile_variant(Variant::BatchAddedRequired);
     let target_fingerprint = initial_fingerprint(&database, &candidate).await;
     let prepared = prepare_package(build_request(
         Variant::BatchAddedRequired,
-        2,
         Some(&active.package_revision),
         &target_fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
@@ -1650,7 +1585,6 @@ async fn real_postgres_rehearsal_runs_compiler_ddl_around_the_reviewed_steps() {
                 0,
             )],
         },
-        DATABASE,
     ))
     .expect("reviewed candidate prepares");
     assert!(
@@ -1682,7 +1616,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
         .await
         .expect("administrator installs the required extension");
 
-    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let prior = compile_variant(Variant::EncryptedBase);
     let initial_fingerprint = initial_fingerprint(&database, &prior).await;
     let initial =
         prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
@@ -1694,7 +1628,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
         .collect::<Vec<_>>();
     seed_flip_rows(&database, &prior, &secrets, true).await;
 
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let statements = flip_compiler_statements(
         &active,
         &prior,
@@ -1713,7 +1647,6 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
         rehearsed_rows: 5,
     });
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &prior,
         Variant::EncryptedFlipOn,
@@ -1738,7 +1671,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
                 .reviewed_migration_plan()
                 .expect("the successor carries its reviewed plan"),
             predecessor_baseline: Some(&predecessor_baseline),
-            target_package_revision: &package.manifest().package_revision,
+            target_package_revision: package.package_digest(),
         },
     )
     .await
@@ -1794,7 +1727,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
                      SELECT 1 FROM registry_internal.registry_field_encryption_flips
                       WHERE boundary_package_revision = $1
                  )",
-            &[&package.manifest().package_revision],
+            &[&package.package_digest()],
         )
         .await
         .expect("refused successor leaves no durable migration state");
@@ -1862,7 +1795,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
         .await
         .expect("administrator installs the required extension");
 
-    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let prior = compile_variant(Variant::EncryptedBase);
     let initial_fingerprint = initial_fingerprint(&database, &prior).await;
     let initial =
         prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
@@ -1874,7 +1807,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
         .collect::<Vec<_>>();
     seed_flip_rows(&database, &prior, &secrets, false).await;
 
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let statements = flip_compiler_statements(
         &active,
         &prior,
@@ -1893,7 +1826,6 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
         rehearsed_rows: 5,
     });
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &prior,
         Variant::EncryptedFlipOn,
@@ -2015,7 +1947,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         .await
         .expect("administrator installs the required extension");
 
-    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let prior = compile_variant(Variant::EncryptedBase);
     let initial_fingerprint = initial_fingerprint(&database, &prior).await;
     let initial =
         prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
@@ -2031,7 +1963,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
     secrets[512] = "DUP-CANARY".to_owned();
     seed_flip_rows(&database, &prior, &secrets, false).await;
 
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let statements = flip_compiler_statements(
         &active,
         &prior,
@@ -2050,7 +1982,6 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         rehearsed_rows: secrets.len() as u64,
     });
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &prior,
         Variant::EncryptedFlipOn,
@@ -2075,7 +2006,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
                 .reviewed_migration_plan()
                 .expect("the successor carries its reviewed plan"),
             predecessor_baseline: Some(&predecessor_baseline),
-            target_package_revision: &package.manifest().package_revision,
+            target_package_revision: package.package_digest(),
         },
     )
     .await
@@ -2169,7 +2100,7 @@ async fn real_postgres_field_encryption_flip_fails_closed_when_plaintext_returns
         .await
         .expect("administrator installs the required extension");
 
-    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let prior = compile_variant(Variant::EncryptedBase);
     let initial_fingerprint = initial_fingerprint(&database, &prior).await;
     let initial =
         prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
@@ -2181,7 +2112,7 @@ async fn real_postgres_field_encryption_flip_fails_closed_when_plaintext_returns
         .collect::<Vec<_>>();
     seed_flip_rows(&database, &prior, &secrets, false).await;
 
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let statements = flip_compiler_statements(
         &active,
         &prior,
@@ -2200,7 +2131,6 @@ async fn real_postgres_field_encryption_flip_fails_closed_when_plaintext_returns
         rehearsed_rows: 5,
     });
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &prior,
         Variant::EncryptedFlipOn,
@@ -2312,14 +2242,14 @@ async fn false_assertion_refusals_are_closed() {
             .batch_execute("CREATE EXTENSION btree_gist")
             .await
             .expect("administrator installs extension");
-        let base = compile_variant(Variant::Base, 1);
+        let base = compile_variant(Variant::Base);
         let fingerprint = initial_fingerprint(&database, &base).await;
         let initial = prepare_and_load_initial(&base, &fingerprint);
         let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
             .await
             .expect("assertion scenario initial package activates");
         seed_backfill_rows(&database, &base, 1).await;
-        let required = compile_variant(Variant::RankRequired, 2);
+        let required = compile_variant(Variant::RankRequired);
         let target_fingerprint = required_target_fingerprint(&database, &required).await;
         let source = backfill_source(BackfillSourceRequest {
             id: match pre {
@@ -2335,7 +2265,6 @@ async fn false_assertion_refusals_are_closed() {
             rehearsed_rows: 1,
         });
         let package = prepare_and_load_reviewed(
-            2,
             &active,
             &base,
             Variant::RankRequired,
@@ -2367,14 +2296,14 @@ async fn row_count_mismatch_is_closed() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("row mismatch initial package activates");
     seed_backfill_rows(&database, &base, 2).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let source = backfill_source(BackfillSourceRequest {
         id: "row-count-mismatch",
@@ -2387,7 +2316,6 @@ async fn row_count_mismatch_is_closed() {
         rehearsed_rows: 2,
     });
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -2429,14 +2357,14 @@ async fn lock_timeout_is_bounded() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("timeout scenario initial package activates");
     seed_backfill_rows(&database, &base, 1).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let source = backfill_source(BackfillSourceRequest {
         id: "lock-timeout",
@@ -2449,7 +2377,6 @@ async fn lock_timeout_is_bounded() {
         rehearsed_rows: 1,
     });
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -2490,14 +2417,14 @@ async fn refused_step_reports_its_sqlstate() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &fingerprint);
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("refused-step scenario initial package activates");
     seed_backfill_rows(&database, &base, 1).await;
-    let required = compile_variant(Variant::RankRequired, 2);
+    let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
     let entity = &required.entities()["asset"];
     let canary = "apply-statement-canary";
@@ -2519,7 +2446,6 @@ async fn refused_step_reports_its_sqlstate() {
         true,
     );
     let package = prepare_and_load_reviewed(
-        2,
         &active,
         &base,
         Variant::RankRequired,
@@ -2551,18 +2477,18 @@ async fn refused_step_reports_its_sqlstate() {
     database.cleanup().await;
 }
 
-fn compile_variant(variant: Variant, sequence: u64) -> CompiledRegistry {
+fn compile_variant(variant: Variant) -> CompiledRegistry {
     let module_bytes = module_bytes(variant);
     let module = parse_module_yaml(&module_bytes).expect("test module parses");
-    let project_bytes = project_bytes(sequence, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let project = parse_project_yaml(&project_bytes).expect("test project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("test Registry compiles")
 }
 
-fn project_bytes(sequence: u64, digest: &str) -> Vec<u8> {
+fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"publicService":{{"id":"migration-registry-service","title":"Migration Registry"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"publicService":{{"id":"migration-registry-service","title":"Migration Registry"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -2622,52 +2548,25 @@ fn prepare_and_load_initial_variant(
 ) -> VerifiedPackage {
     let prepared = prepare_package(build_request(
         variant,
-        1,
         None,
         fingerprint,
         PackageMigrationPlanInput::InitialCompiledDdl,
-        DATABASE,
     ))
     .expect("initial package prepares");
-    let loaded = publish_and_load(
-        prepared,
-        local_context(DATABASE, PackageIntent::InitialActivation),
-    );
+    let loaded = publish_and_load(prepared, local_context());
     assert_eq!(loaded.registry(), registry);
     loaded
 }
 
 fn prepare_and_load_reviewed(
-    sequence: u64,
     current: &ExpectedRegistryIdentity,
     prior: &CompiledRegistry,
     variant: Variant,
     fingerprint: &str,
     source: ReviewedMigrationSource,
-) -> VerifiedPackage {
-    prepare_and_load_reviewed_for_database(
-        sequence,
-        current,
-        prior,
-        variant,
-        fingerprint,
-        source,
-        DATABASE,
-    )
-}
-
-fn prepare_and_load_reviewed_for_database(
-    sequence: u64,
-    current: &ExpectedRegistryIdentity,
-    prior: &CompiledRegistry,
-    variant: Variant,
-    fingerprint: &str,
-    source: ReviewedMigrationSource,
-    database_id: &str,
 ) -> VerifiedPackage {
     let prepared = prepare_package(build_request(
         variant,
-        sequence,
         Some(&current.package_revision),
         fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
@@ -2675,47 +2574,26 @@ fn prepare_and_load_reviewed_for_database(
             prior_schema_fingerprint: current.schema_fingerprint.clone(),
             migrations: vec![source],
         },
-        database_id,
     ))
     .expect("reviewed package prepares");
-    publish_and_load(
-        prepared,
-        local_context(
-            database_id,
-            PackageIntent::Activation {
-                active_revision: &current.package_revision,
-                active_sequence: u64::try_from(current.package_sequence)
-                    .expect("active sequence is positive"),
-            },
-        ),
-    )
+    publish_and_load(prepared, local_context())
 }
 
 fn build_request(
     variant: Variant,
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
-    database_id: &str,
 ) -> PackageBuildRequest {
     let module_bytes = module_bytes(variant);
     let module = parse_module_yaml(&module_bytes).expect("package module parses");
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: database_id.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
-            bytes: project_bytes(sequence, &module_digest(&module)),
+            bytes: project_bytes(&module_digest(&module)),
         },
         modules: vec![PackageModuleSource {
             id: "core".to_owned(),
@@ -2745,20 +2623,14 @@ fn publish_and_load(
         .expect("package temporary directory creates");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("package publishes");
     load_package(&package, &context).expect("published package loads with activation intent")
 }
 
-fn local_context<'a>(database_id: &'a str, intent: PackageIntent<'a>) -> PackageLoadContext<'a> {
+fn local_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
-        environment: "local",
-        instance_id: INSTANCE,
-        database_id,
         database_initialization_environment: "local",
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        intent,
     }
 }
 
@@ -2890,7 +2762,7 @@ fn backfill_source_with_steps(
             .collect(),
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
-        backup: None,
+        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-rank".to_owned(),
             affected_rows: rehearsed_rows,
@@ -2974,7 +2846,7 @@ fn added_required_source(
         steps: vec![(update_path, update_sql)],
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
-        backup: None,
+        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-batch".to_owned(),
             affected_rows: rehearsed_rows,
@@ -3104,7 +2976,7 @@ fn encrypted_flip_source(request: FlipSourceRequest<'_>) -> ReviewedMigrationSou
         steps: vec![(drop_path, drop_sql)],
         pre: (pre_path, assertion_sql.clone()),
         post: (post_path, assertion_sql),
-        backup: None,
+        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "seal-secret".to_owned(),
             affected_rows: rehearsed_rows,
@@ -3137,7 +3009,6 @@ fn flip_compiler_statements(
         rehearsed_rows: 5,
     });
     let probe = prepare_and_load_reviewed(
-        2,
         current,
         prior,
         Variant::EncryptedFlipOn,
@@ -3570,17 +3441,8 @@ fn destructive_source(
     prior: &CompiledRegistry,
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
-    backup: ExternalBackupBinding,
 ) -> ReviewedMigrationSource {
-    destructive_source_with_recovery_fault(
-        id,
-        current,
-        prior,
-        candidate,
-        final_fingerprint,
-        backup,
-        false,
-    )
+    destructive_source_with_recovery_fault(id, current, prior, candidate, final_fingerprint, false)
 }
 
 fn destructive_recovery_source(
@@ -3589,17 +3451,8 @@ fn destructive_recovery_source(
     prior: &CompiledRegistry,
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
-    backup: ExternalBackupBinding,
 ) -> ReviewedMigrationSource {
-    destructive_source_with_recovery_fault(
-        id,
-        current,
-        prior,
-        candidate,
-        final_fingerprint,
-        backup,
-        true,
-    )
+    destructive_source_with_recovery_fault(id, current, prior, candidate, final_fingerprint, true)
 }
 
 fn destructive_source_with_recovery_fault(
@@ -3608,7 +3461,6 @@ fn destructive_source_with_recovery_fault(
     prior: &CompiledRegistry,
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
-    backup: ExternalBackupBinding,
     recovery_fault: bool,
 ) -> ReviewedMigrationSource {
     let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
@@ -3690,7 +3542,7 @@ fn destructive_source_with_recovery_fault(
         steps: step_files,
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        backup: Some(backup),
+        destructive_resume: true,
         row_assertions: Vec::new(),
     })
 }
@@ -3702,7 +3554,7 @@ struct ReviewedSourceRequest<'a> {
     steps: Vec<(String, String)>,
     pre: (String, String),
     post: (String, String),
-    backup: Option<ExternalBackupBinding>,
+    destructive_resume: bool,
     row_assertions: Vec<RehearsalRowAssertion>,
 }
 
@@ -3714,7 +3566,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         steps,
         pre,
         post,
-        backup,
+        destructive_resume,
         row_assertions,
     } = request;
     let descriptor_path = format!("modules/core/migrations/{}/descriptor.json", descriptor.id);
@@ -3725,7 +3577,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
     );
     let fixture_bytes = b"{\"fixture\":\"representative\"}\n".to_vec();
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: current.package_revision.clone(),
+        prior_package_digest: current.package_revision.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: steps
@@ -3763,7 +3615,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
                         | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
                 )
             }),
-            destructive_resume: backup.is_some(),
+            destructive_resume,
         },
     };
     let mut files = steps
@@ -3791,12 +3643,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
             bytes: fixture_bytes,
         },
     ]);
-    if let (Some(path), Some(binding)) = (&descriptor.backup_binding_path, backup) {
-        files.push(ReviewedMigrationFile {
-            path: path.clone(),
-            bytes: canonical(&binding),
-        });
-    }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -3816,7 +3662,6 @@ fn prepare_reviewed_candidate(
 ) -> PreparedPackage {
     prepare_package(build_request(
         Variant::RankRequired,
-        2,
         Some(&current.package_revision),
         fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
@@ -3824,7 +3669,6 @@ fn prepare_reviewed_candidate(
             prior_schema_fingerprint: current.schema_fingerprint.clone(),
             migrations: vec![source],
         },
-        DATABASE,
     ))
     .expect("reviewed candidate prepares")
 }
@@ -3975,7 +3819,7 @@ async fn destructive_target_fingerprint(
 ) -> String {
     let entity = &candidate.entities()["asset"];
     let table = quote(&entity.physical_table);
-    let prior = compile_variant(Variant::RankRequired, 2);
+    let prior = compile_variant(Variant::RankRequired);
     let legacy = quote(&prior.entities()["asset"].fields["legacy"].physical_name);
     let (mut migration, task) = database.connect_migration().await;
     let transaction = migration
@@ -4236,6 +4080,45 @@ fn synthetic_backup_sql(
     sql.into_bytes()
 }
 
+/// Writes one backup binding file, as an operator supplies it to `bregctl
+/// apply --backup`, and returns its path.
+fn write_backup_binding(
+    directory: &std::path::Path,
+    name: &str,
+    binding: &ExternalBackupBinding,
+) -> std::path::PathBuf {
+    let path = directory.join(name);
+    fs::write(&path, canonical(binding)).expect("backup binding writes");
+    path
+}
+
+/// Writes an owner-only synthetic backup of the active registry beside its
+/// fresh binding, and returns the binding file.
+fn write_synthetic_backup(
+    directory: &std::path::Path,
+    current: &ExpectedRegistryIdentity,
+    bytes: &[u8],
+) -> std::path::PathBuf {
+    let backup_path = directory.join("pattern.backup");
+    fs::write(&backup_path, bytes).expect("synthetic backup writes");
+    fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))
+        .expect("synthetic backup permissions close");
+    write_backup_binding(
+        directory,
+        "pattern-binding.json",
+        &ExternalBackupBinding {
+            database_id: DATABASE.to_owned(),
+            prior_package_digest: current.package_revision.clone(),
+            prior_schema_fingerprint: current.schema_fingerprint.clone(),
+            backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
+            sha256: digest(bytes),
+            byte_length: bytes.len() as u64,
+            created_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            max_age_seconds: 3600,
+        },
+    )
+}
+
 async fn restore_synthetic_backup(
     database: &TestDatabase,
     binding: &ExternalBackupBinding,
@@ -4322,9 +4205,23 @@ fn request<'a>(
     package: &'a VerifiedPackage,
     precondition: ApplyPrecondition<'a>,
 ) -> ApplyVerifiedPackageRequest<'a> {
+    request_for_deployment(database, package, precondition, deployment())
+}
+
+fn deployment() -> ActivationDeployment<'static> {
+    ActivationDeployment::new(ENVIRONMENT, INSTANCE, DATABASE)
+}
+
+fn request_for_deployment<'a>(
+    database: &'a TestDatabase,
+    package: &'a VerifiedPackage,
+    precondition: ApplyPrecondition<'a>,
+    deployment: ActivationDeployment<'a>,
+) -> ApplyVerifiedPackageRequest<'a> {
     ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        deployment,
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
@@ -4356,7 +4253,7 @@ async fn step_snapshot(
             "SELECT outcome, checkpoint_record_id, affected_rows
              FROM registry_internal.registry_migration_steps
              WHERE target_package_revision = $1 AND step_id = $2",
-            &[&package.manifest().package_revision, &step_id],
+            &[&package.package_digest(), &step_id],
         )
         .await
         .expect("step state reads");
@@ -4398,7 +4295,7 @@ async fn assert_non_ready_target(
     assert_eq!(row.get::<_, String>(1), expected_status);
     assert_eq!(
         row.get::<_, Option<String>>(2).as_deref(),
-        Some(target.manifest().package_revision.as_str())
+        Some(target.package_digest())
     );
 }
 
@@ -4540,16 +4437,18 @@ async fn reconcile(
     .await
 }
 
-fn target_identity(package: &VerifiedPackage) -> ExpectedRegistryIdentity {
+/// The identity one package activates to as the database's
+/// `package_sequence`-th package in this test's deployment.
+fn target_identity(package: &VerifiedPackage, package_sequence: i64) -> ExpectedRegistryIdentity {
     let manifest = package.manifest();
     ExpectedRegistryIdentity {
         package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
+        environment: ENVIRONMENT.to_owned(),
+        instance_id: INSTANCE.to_owned(),
+        database_id: DATABASE.to_owned(),
+        package_revision: package.package_digest().to_owned(),
         schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: i64::try_from(manifest.sequence).expect("test sequence is bounded"),
+        package_sequence,
     }
 }
 
@@ -4655,11 +4554,11 @@ fn quote(value: &str) -> String {
 async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_recovery() {
     use registry_breg::generated_ddl::field_pattern_constraint_name;
     let database = TestDatabase::create(1).await;
-    let base = compile_variant(Variant::Base, 1);
-    let added = compile_variant(Variant::PatternAdded, 2);
-    let tightened = compile_variant(Variant::PatternTightened, 3);
-    let loosened = compile_variant(Variant::PatternLoosened, 4);
-    let removed = compile_variant(Variant::Base, 5);
+    let base = compile_variant(Variant::Base);
+    let added = compile_variant(Variant::PatternAdded);
+    let tightened = compile_variant(Variant::PatternTightened);
+    let loosened = compile_variant(Variant::PatternLoosened);
+    let removed = compile_variant(Variant::Base);
     let base_fp = initial_fingerprint(&database, &base).await;
     let added_fp = initial_fingerprint(&database, &added).await;
     let tightened_fp = initial_fingerprint(&database, &tightened).await;
@@ -4671,7 +4570,7 @@ async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_re
 
     // This is the installer used by pre-sign schema-test. A native syntax error
     // must fail before any fixture value exists to exercise its CHECK.
-    let invalid = compile_variant(Variant::PatternInvalid, 1);
+    let invalid = compile_variant(Variant::PatternInvalid);
     let (mut migration, task) = database.connect_migration().await;
     let transaction = migration.transaction().await.unwrap();
     let error = install_compiled_schema(&transaction, &invalid, &database.runtime_role).await;
@@ -4698,25 +4597,14 @@ async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_re
         .unwrap();
     let prepared = prepare_package(build_request(
         Variant::PatternAdded,
-        2,
         Some(&active.package_revision),
         &added_fp,
         PackageMigrationPlanInput::Successor {
             prior_registry: Box::new(base.clone()),
         },
-        DATABASE,
     ))
     .unwrap();
-    let addition = publish_and_load(
-        prepared,
-        local_context(
-            DATABASE,
-            PackageIntent::Activation {
-                active_revision: &active.package_revision,
-                active_sequence: 1,
-            },
-        ),
-    );
+    let addition = publish_and_load(prepared, local_context());
     assert_value_free(
         apply(
             &database,
@@ -4762,28 +4650,16 @@ async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_re
             active.package_revision
         )
         .into_bytes();
-        let backup = ExternalBackupBinding {
-            database_id: DATABASE.to_owned(),
-            prior_revision: active.package_revision.clone(),
-            prior_schema_fingerprint: active.schema_fingerprint.clone(),
-            sha256: digest(&backup_bytes),
-            byte_length: backup_bytes.len() as u64,
-            created_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
-            max_age_seconds: 3600,
-        };
-        let source = pattern_reviewed_source(&id, &active, &prior, &candidate, &target_fp, backup);
-        let package =
-            prepare_and_load_reviewed(sequence, &active, &prior, variant, &target_fp, source);
+        let source = pattern_reviewed_source(&id, &active, &prior, &candidate, &target_fp);
+        let package = prepare_and_load_reviewed(&active, &prior, variant, &target_fp, source);
         let directory = tempfile::tempdir().unwrap();
-        let backup_path = directory.path().join("pattern.backup");
-        fs::write(&backup_path, backup_bytes).unwrap();
-        fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let binding_file = write_synthetic_backup(directory.path(), &active, &backup_bytes);
         let binding = package.reviewed_migration_plan().unwrap().migrations()[0]
             .descriptor
             .backup_binding_path
             .as_deref()
             .unwrap();
-        let evidence = [DestructiveBackupEvidence::new(binding, &backup_path)];
+        let evidence = [DestructiveBackupEvidence::new(binding, &binding_file)];
         if sequence == 3 {
             assert_value_free(
                 apply_with_evidence(&database, &package, &active, &evidence)
@@ -4898,7 +4774,6 @@ fn pattern_reviewed_source(
     prior: &CompiledRegistry,
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
-    backup: ExternalBackupBinding,
 ) -> ReviewedMigrationSource {
     use registry_breg::generated_ddl::field_pattern_constraint_name;
     let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
@@ -4983,7 +4858,7 @@ fn pattern_reviewed_source(
         steps: vec![(step_path, sql)],
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        backup: Some(backup),
+        destructive_resume: true,
         row_assertions: Vec::new(),
     })
 }
@@ -4991,7 +4866,7 @@ fn pattern_reviewed_source(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_patterns_quote_apostrophes_and_backslashes_independent_of_session_settings() {
     let database = TestDatabase::create(1).await;
-    let registry = compile_variant(Variant::PatternQuoted, 1);
+    let registry = compile_variant(Variant::PatternQuoted);
     let (mut migration, task) = database.connect_migration().await;
     let transaction = migration.transaction().await.unwrap();
     transaction
@@ -5033,23 +4908,18 @@ async fn native_patterns_quote_apostrophes_and_backslashes_independent_of_sessio
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_patterns_invalid_initial_activation_fails_closed_in_maintenance() {
     let database = TestDatabase::create(1).await;
-    let base = compile_variant(Variant::Base, 1);
+    let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
     // The local unsigned test policy permits exercising the activation defense
     // independently of the production pre-sign schema-test refusal.
     let prepared = prepare_package(build_request(
         Variant::PatternInvalid,
-        1,
         None,
         &fingerprint,
         PackageMigrationPlanInput::InitialCompiledDdl,
-        DATABASE,
     ))
     .unwrap();
-    let invalid = publish_and_load(
-        prepared,
-        local_context(DATABASE, PackageIntent::InitialActivation),
-    );
+    let invalid = publish_and_load(prepared, local_context());
     assert_value_free(
         apply(&database, &invalid, ApplyPrecondition::InitialActivation)
             .await
@@ -5063,7 +4933,7 @@ async fn native_patterns_invalid_initial_activation_fails_closed_in_maintenance(
     assert_eq!(row.get::<_, String>(0), "failed");
     assert_eq!(
         row.get::<_, Option<String>>(1).as_deref(),
-        Some(invalid.manifest().package_revision.as_str())
+        Some(invalid.package_digest())
     );
     let tables: i64 = database
         .admin
@@ -5090,49 +4960,33 @@ async fn native_patterns_invalid_successors_report_the_field_for_additive_and_re
         } else {
             Variant::Base
         };
-        let prior = compile_variant(variant, 1);
+        let prior = compile_variant(variant);
         let fingerprint = initial_fingerprint(&database, &prior).await;
         let prepared = prepare_package(build_request(
             variant,
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
-            DATABASE,
         ))
         .unwrap();
-        let initial = publish_and_load(
-            prepared,
-            local_context(DATABASE, PackageIntent::InitialActivation),
-        );
+        let initial = publish_and_load(prepared, local_context());
         let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
             .await
             .unwrap();
-        let invalid = compile_variant(Variant::PatternInvalid, 2);
+        let invalid = compile_variant(Variant::PatternInvalid);
         // An unsigned test package supplies a synthetic fingerprint to reach
         // activation independently of the pre-sign native syntax refusal.
         let target_fingerprint = format!("sha256:{}", "f".repeat(64));
         let (package, error) = if reviewed {
             let bytes = b"-- Synthetic pre-activation pattern backup\n";
-            let backup = ExternalBackupBinding {
-                database_id: DATABASE.to_owned(),
-                prior_revision: active.package_revision.clone(),
-                prior_schema_fingerprint: active.schema_fingerprint.clone(),
-                sha256: digest(bytes),
-                byte_length: bytes.len() as u64,
-                created_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
-                max_age_seconds: 3600,
-            };
             let source = pattern_reviewed_source(
                 "invalid-pattern",
                 &active,
                 &prior,
                 &invalid,
                 &target_fingerprint,
-                backup,
             );
             let package = prepare_and_load_reviewed(
-                2,
                 &active,
                 &prior,
                 Variant::PatternInvalid,
@@ -5140,9 +4994,7 @@ async fn native_patterns_invalid_successors_report_the_field_for_additive_and_re
                 source,
             );
             let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("pattern.backup");
-            fs::write(&path, bytes).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            let path = write_synthetic_backup(directory.path(), &active, bytes);
             let binding = package.reviewed_migration_plan().unwrap().migrations()[0]
                 .descriptor
                 .backup_binding_path
@@ -5160,25 +5012,14 @@ async fn native_patterns_invalid_successors_report_the_field_for_additive_and_re
         } else {
             let prepared = prepare_package(build_request(
                 Variant::PatternInvalid,
-                2,
                 Some(&active.package_revision),
                 &target_fingerprint,
                 PackageMigrationPlanInput::Successor {
                     prior_registry: Box::new(prior.clone()),
                 },
-                DATABASE,
             ))
             .unwrap();
-            let package = publish_and_load(
-                prepared,
-                local_context(
-                    DATABASE,
-                    PackageIntent::Activation {
-                        active_revision: &active.package_revision,
-                        active_sequence: 1,
-                    },
-                ),
-            );
+            let package = publish_and_load(prepared, local_context());
             let error = apply(
                 &database,
                 &package,

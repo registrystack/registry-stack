@@ -12,9 +12,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: professional-licences-starter
-  sequence: 1
   sourceRevision: professional-licences-core-0.1.0
 manifestProjection:
   accessProfile: editor

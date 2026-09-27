@@ -729,6 +729,7 @@ impl ImportAuthorityOperatorService {
             .map_err(|_| ImportAuthorityError::Unavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
+            config.identity().database_id(),
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),

@@ -65,21 +65,16 @@ async fn ordinary_profile_removal_tolerates_missing_predecessor_policy() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     let baseline_bytes = change_request_policy_module(false, false);
-    let baseline = compile_profile_module(&baseline_bytes, 1);
+    let baseline = compile_profile_module(&baseline_bytes);
     let baseline_fingerprint = fresh_fingerprint(&baseline).await;
     let database = TestDatabase::create(1).await;
     let first = publish_temporal_policy_package(
-        1,
         None,
         baseline_fingerprint,
         baseline_bytes,
         PackageMigrationPlanInput::InitialCompiledDdl,
     );
-    let predecessor = load_package(
-        first.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .unwrap();
+    let predecessor = load_package(first.path(), &local_context()).unwrap();
     let active = apply_package(
         &database,
         &predecessor,
@@ -91,7 +86,7 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     .unwrap();
 
     let candidate_bytes = change_request_policy_module(true, true);
-    let candidate = compile_profile_module(&candidate_bytes, 2);
+    let candidate = compile_profile_module(&candidate_bytes);
     let candidate_fingerprint = fresh_fingerprint(&candidate).await;
     let changes =
         compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_revision);
@@ -123,7 +118,6 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
         .expect("the optional field and additive request profile are compiler-applicable");
 
     let next = publish_temporal_policy_package(
-        2,
         Some(&active.package_revision),
         candidate_fingerprint.clone(),
         candidate_bytes,
@@ -131,14 +125,7 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
             prior_registry: Box::new(predecessor.registry().clone()),
         },
     );
-    let successor = load_package(
-        next.path(),
-        &local_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: 1,
-        }),
-    )
-    .unwrap();
+    let successor = load_package(next.path(), &local_context()).unwrap();
     let upgraded = apply_package(
         &database,
         &successor,
@@ -246,10 +233,10 @@ fn profile_module(auditor: Option<Value>) -> Vec<u8> {
     serde_json::to_vec(&module).unwrap()
 }
 
-fn compile_profile_module(bytes: &[u8], sequence: u64) -> registry_breg::model::CompiledRegistry {
+fn compile_profile_module(bytes: &[u8]) -> registry_breg::model::CompiledRegistry {
     let module = parse_module_yaml(bytes).unwrap();
     compile_project(
-        &parse_project_yaml(&project_bytes("local", sequence, &module_digest(&module))).unwrap(),
+        &parse_project_yaml(&project_bytes(&module_digest(&module))).unwrap(),
         &[module],
         CompileProfile::Production,
     )
@@ -280,21 +267,16 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
         "operations": ["create", "get", "list"],
         "writableFields": ["code", "note"], "readableFields": ["code", "note"]
     })));
-    let baseline = compile_profile_module(&baseline_bytes, 1);
+    let baseline = compile_profile_module(&baseline_bytes);
     let baseline_fingerprint = fresh_fingerprint(&baseline).await;
     let database = TestDatabase::create(1).await;
     let first = publish_temporal_policy_package(
-        1,
         None,
         baseline_fingerprint,
         baseline_bytes,
         PackageMigrationPlanInput::InitialCompiledDdl,
     );
-    let predecessor = load_package(
-        first.path(),
-        &local_context(PackageIntent::InitialActivation),
-    )
-    .unwrap();
+    let predecessor = load_package(first.path(), &local_context()).unwrap();
     let active = apply_package(
         &database,
         &predecessor,
@@ -307,13 +289,10 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
 
     let predecessor_baseline = if matches!(kind, ProfileSuccessor::MissingPredecessorPolicy) {
         Some(
-            load_predecessor_package(
-                first.path(),
-                &local_predecessor_context(&active.package_revision, 1),
-            )
-            .expect("signed predecessor loads through the baseline planning path")
-            .migration_baseline()
-            .clone(),
+            load_predecessor_package(first.path(), &local_context())
+                .expect("signed predecessor loads through the baseline planning path")
+                .migration_baseline()
+                .clone(),
         )
     } else {
         None
@@ -347,7 +326,7 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
     };
 
     let candidate_bytes = profile_module(auditor);
-    let candidate = compile_profile_module(&candidate_bytes, 2);
+    let candidate = compile_profile_module(&candidate_bytes);
     let candidate_fingerprint = fresh_fingerprint(&candidate).await;
     let changes =
         compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_revision);
@@ -379,20 +358,12 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
         }
     };
     let next = publish_temporal_policy_package(
-        2,
         Some(&active.package_revision),
         candidate_fingerprint.clone(),
         candidate_bytes,
         plan,
     );
-    let successor = load_package(
-        next.path(),
-        &local_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: 1,
-        }),
-    )
-    .unwrap();
+    let successor = load_package(next.path(), &local_context()).unwrap();
     if matches!(kind, ProfileSuccessor::UnmanagedDrift) {
         let table = &predecessor.registry().entities()["neutral-record"].physical_table;
         database

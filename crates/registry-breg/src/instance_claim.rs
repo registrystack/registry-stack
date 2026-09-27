@@ -311,6 +311,7 @@ mod operator {
             let startup = crate::startup::prepare_startup(
                 config.package().root(),
                 &config.package_load_context(),
+                config.identity().database_id(),
                 &mut client,
                 config.database().roles().migration(),
                 config.database().roles().runtime(),

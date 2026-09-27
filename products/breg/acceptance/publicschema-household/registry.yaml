@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: acceptance
-  instanceId: publicschema-household-acceptance
-  sequence: 1
   sourceRevision: publicschema-household-acceptance-0.1.0
 manifestProjection:
   accessProfile: household-operator

@@ -8,9 +8,6 @@
     "defaultLanguage": "en"
   },
   "package": {
-    "environment": "local",
-    "instanceId": "request-attachments-local",
-    "sequence": 1,
     "sourceRevision": "request-attachments-acceptance-0.1.0"
   },
   "entities": [

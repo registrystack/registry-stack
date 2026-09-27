@@ -247,7 +247,7 @@ mod ordering_tests {
 
     fn write_minimal_rehearsal_receipt(path: &Path) {
         let receipt = serde_json::json!({
-            "priorRevision": "rev-1",
+            "priorPackageDigest": "rev-1",
             "priorSchemaFingerprint": "fingerprint-1",
             "planSha256": "plan-digest",
             "sqlSha256": [],

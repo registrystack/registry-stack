@@ -101,9 +101,6 @@ pub struct RegistryIdentitySource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PackageIdentitySource {
-    pub environment: String,
-    pub instance_id: String,
-    pub sequence: u64,
     pub source_revision: String,
 }
 
@@ -3270,6 +3267,33 @@ pub fn parse_project_yaml(bytes: &[u8]) -> Result<RegistryProject, CompileFailur
 fn removed_project_field_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
     let project = value?.as_object()?;
     let mut diagnostics = Vec::new();
+    if let Some(package) = project.get("package").and_then(Value::as_object) {
+        for (key, code, message) in [
+            (
+                "environment",
+                "package.environment.removed",
+                "package.environment was removed; delete it and set the deployment environment in the runtime file's identity.environment",
+            ),
+            (
+                "instanceId",
+                "package.instance_id.removed",
+                "package.instanceId was removed; delete it and set the deployment instance in the runtime file's identity.instanceId",
+            ),
+            (
+                "sequence",
+                "package.sequence.removed",
+                "package.sequence was removed; delete it: a package names its predecessor through migrationPlan.fromPackageDigest and the database ledger orders activations",
+            ),
+        ] {
+            if package.contains_key(key) {
+                diagnostics.push(Diagnostic::error(
+                    code,
+                    format!("project.package.{key}"),
+                    message,
+                ));
+            }
+        }
+    }
     if let Some(projection) = project.get("manifestProjection").and_then(Value::as_object) {
         if projection.contains_key("dataset") {
             diagnostics.push(Diagnostic::error(

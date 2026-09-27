@@ -11,7 +11,7 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::package::{
     prepare_package, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
-    PackageSourceFile, PreparedPackage, SignaturePolicy,
+    PackageSourceFile, PreparedPackage,
 };
 use registry_breg::runtime_config::{parse_runtime_config, RuntimeConfig};
 use registry_breg::startup::{
@@ -30,9 +30,9 @@ journeys: []
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rehearsal_rolls_back_and_matches_committed_schema_test_preparation() {
-    let registry = compiled_registry(ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let registry = compiled_registry(SOURCE_REVISION);
     let database = TestDatabase::create(1).await;
-    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
 
     let fingerprint = rehearse_schema_fingerprint_with_connection_config_for_test(
         &config,
@@ -70,7 +70,7 @@ async fn rehearsal_rolls_back_and_matches_committed_schema_test_preparation() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rehearsal_and_schema_test_prepare_refuse_dirty_text_search_configuration() {
-    let registry = compiled_registry(ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let registry = compiled_registry(SOURCE_REVISION);
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -80,7 +80,7 @@ async fn rehearsal_and_schema_test_prepare_refuse_dirty_text_search_configuratio
         )
         .await
         .expect("test can create a dirty managed text search configuration");
-    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
 
     assert_eq!(
         rehearse_schema_fingerprint_with_connection_config_for_test(
@@ -127,9 +127,9 @@ async fn rehearsal_and_schema_test_prepare_refuse_dirty_text_search_configuratio
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rehearsal_refuses_migration_connection_using_the_runtime_role() {
-    let registry = compiled_registry(ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let registry = compiled_registry(SOURCE_REVISION);
     let database = TestDatabase::create(1).await;
-    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
 
     assert_eq!(
         rehearse_schema_fingerprint_with_connection_config_for_test(
@@ -150,9 +150,9 @@ async fn rehearsal_refuses_migration_connection_using_the_runtime_role() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn injected_rehearsal_seam_does_not_read_runtime_database_secret() {
-    let registry = compiled_registry(ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let registry = compiled_registry(SOURCE_REVISION);
     let database = TestDatabase::create(1).await;
-    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
 
     rehearse_schema_fingerprint_with_connection_config_for_test(
         &config,
@@ -166,11 +166,16 @@ async fn injected_rehearsal_seam_does_not_read_runtime_database_secret() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rehearsal_binding_is_refused_before_database_secret_resolution() {
-    let registry = compiled_registry(ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    // A rehearsal needs a production candidate. An authoring compile carries
+    // no package identity, so it is refused before any database secret.
+    let project = parse_project_json(&project_bytes(SOURCE_REVISION)).unwrap();
+    let mut authoring = project.clone();
+    authoring.package = None;
+    let registry = compile_project(&authoring, &[], CompileProfile::Authoring)
+        .expect("authoring project compiles");
     let config = runtime_config_with_roles(
-        "wrong-environment",
+        ENVIRONMENT,
         INSTANCE,
-        SOURCE_REVISION,
         "registry_migration",
         "registry_runtime",
     );
@@ -178,7 +183,7 @@ async fn rehearsal_binding_is_refused_before_database_secret_resolution() {
     assert_eq!(
         rehearse_schema_fingerprint(&config, &registry).await.err(),
         Some(StartupError::PackageRefused(PackageError::Binding)),
-        "identity binding is checked before missing database secrets can be resolved"
+        "the candidate binding is checked before missing database secrets can be resolved"
     );
 }
 
@@ -243,16 +248,10 @@ async fn managed_schemas_empty_by_restrict(database: &TestDatabase) -> bool {
     empty
 }
 
-fn runtime_config(
-    database: &TestDatabase,
-    environment: &str,
-    instance_id: &str,
-    source_revision: &str,
-) -> RuntimeConfig {
+fn runtime_config(database: &TestDatabase, environment: &str, instance_id: &str) -> RuntimeConfig {
     runtime_config_with_roles(
         environment,
         instance_id,
-        source_revision,
         database.migration_role.as_str(),
         database.runtime_role.as_str(),
     )
@@ -261,7 +260,6 @@ fn runtime_config(
 fn runtime_config_with_roles(
     environment: &str,
     instance_id: &str,
-    source_revision: &str,
     migration_role: &str,
     runtime_role: &str,
 ) -> RuntimeConfig {
@@ -290,10 +288,6 @@ database:
     runtime: {runtime_role}
 package:
   root: /tmp/breg-rehearsal-package
-  trustAnchorPath: /tmp/breg-rehearsal-trust-anchor.json
-  compilerSourceRevision: {source_revision}
-  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -335,25 +329,14 @@ operationalTimeouts:
 }
 
 fn prepared_package(schema_fingerprint: &str) -> PreparedPackage {
-    prepared_package_with_source(
-        schema_fingerprint,
-        project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION),
-    )
+    prepared_package_with_source(schema_fingerprint, project_bytes(SOURCE_REVISION))
 }
 
 fn prepared_package_with_source(schema_fingerprint: &str, project: Vec<u8>) -> PreparedPackage {
     prepare_package(PackageBuildRequest {
-        environment: ENVIRONMENT.to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 1,
-            key_ids: vec!["rehearsal-key".to_owned()],
-        },
         project: PackageSourceFile {
             path: "source/registry.json".to_owned(),
             bytes: project,
@@ -368,26 +351,19 @@ fn prepared_package_with_source(schema_fingerprint: &str, project: Vec<u8>) -> P
     .expect("prepared package builds around rehearsed fingerprint")
 }
 
-fn compiled_registry(
-    environment: &str,
-    instance_id: &str,
-    source_revision: &str,
-) -> CompiledRegistry {
-    let project = project_bytes(environment, instance_id, source_revision);
+fn compiled_registry(source_revision: &str) -> CompiledRegistry {
+    let project = project_bytes(source_revision);
     let parsed = parse_project_json(&project).expect("production project parses");
     compile_project(&parsed, &[], CompileProfile::Production).expect("production project compiles")
 }
 
-fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) -> Vec<u8> {
+fn project_bytes(source_revision: &str) -> Vec<u8> {
     let project = format!(
         r#"{{
   "apiVersion": "registry.registrystack.org/v1alpha1",
   "kind": "RegistryProject",
   "registry": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},
   "package": {{
-    "environment": "{environment}",
-    "instanceId": "{instance_id}",
-    "sequence": 1,
     "sourceRevision": "{source_revision}"
   }},
   "manifestProjection": {{
@@ -439,9 +415,8 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invalid_native_pattern_reports_authored_field_and_rolls_back_empty_schema_rehearsal() {
     let database = TestDatabase::create(1).await;
-    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
-    let mut project =
-        parse_project_json(&project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION)).unwrap();
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
+    let mut project = parse_project_json(&project_bytes(SOURCE_REVISION)).unwrap();
     project.entities[0].fields[0].pattern = Some("[private-expression-canary".to_owned());
     let registry = compile_project(&project, &[], CompileProfile::Production)
         .expect("offline authoring does not emulate PostgreSQL regex syntax");
@@ -469,9 +444,9 @@ async fn invalid_native_pattern_reports_authored_field_and_rolls_back_empty_sche
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_schema_test_installs_exactly_one_validated_native_pattern_constraint() {
     let database = TestDatabase::create(1).await;
-    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
     let mut project: serde_json::Value =
-        serde_json::from_slice(&project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION)).unwrap();
+        serde_json::from_slice(&project_bytes(SOURCE_REVISION)).unwrap();
     project["entities"][0]["fields"][0]["pattern"] = serde_json::json!("^[A-Z]+$");
     let project = serde_json::to_vec(&project).unwrap();
     let registry = compile_project(

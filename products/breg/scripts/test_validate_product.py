@@ -701,24 +701,24 @@ class BRegProductCatalogTests(unittest.TestCase):
             errors,
         )
 
-    def test_asset_fixture_package_identity_and_sequence_are_exact(self) -> None:
+    def test_asset_fixture_package_refuses_a_retired_identity_key(self) -> None:
         original = VALIDATOR.load_yaml
 
-        def load_with_implicit_sequence(path: Path):
+        def load_with_retired_sequence(path: Path):
             value = copy.deepcopy(original(path))
             if (
                 path.name == "registry.yaml"
                 and path.parent.name == "asset-site-placement"
             ):
-                value["package"]["sequence"] = True
+                value["package"]["sequence"] = 1
             return value
 
         errors: list[str] = []
         with mock.patch.object(
-            VALIDATOR, "load_yaml", side_effect=load_with_implicit_sequence
+            VALIDATOR, "load_yaml", side_effect=load_with_retired_sequence
         ):
             VALIDATOR.validate_fixture(errors)
-        self.assertIn("asset fixture.package.sequence: expected integer", errors)
+        self.assertIn("asset fixture.package: unknown keys sequence", errors)
 
     def test_package_layout_cannot_drop_a_required_entry(self) -> None:
         original = VALIDATOR.load_yaml

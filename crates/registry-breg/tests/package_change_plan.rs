@@ -14,8 +14,8 @@ use registry_breg::contract::{
 };
 #[cfg(feature = "tooling")]
 use registry_breg::migration_plan::{
-    ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
-    RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
+    ArtifactDigestBinding, ChunkCursorProtocol, MigrationRehearsalReceipt, RehearsalFixture,
+    RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
     ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
     ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
@@ -23,13 +23,12 @@ use registry_breg::migration_plan::{
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
 };
 #[cfg(feature = "tooling")]
 use registry_breg::package::{
-    derive_package_revision, inspect_package_integrity, prepare_package,
-    prepare_package_with_project_assets, PackageEnvelope, PackageError, PackageFileRole,
-    PreparedPackage, MAX_RHAI_PLANNER_SOURCE_BYTES,
+    inspect_package_integrity, prepare_package, prepare_package_with_project_assets,
+    PackageEnvelope, PackageError, PackageFileRole, PreparedPackage, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
@@ -85,11 +84,11 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         .expect("declared project planner packages");
     let second = prepare_package_with_project_assets(request.clone(), vec![asset.clone()])
         .expect("the same planner package rederives deterministically");
-    assert_eq!(first.package_revision(), second.package_revision());
     assert_eq!(
-        first.canonical_signed_bytes(),
-        second.canonical_signed_bytes()
+        first.package_digest().unwrap(),
+        second.package_digest().unwrap()
     );
+    assert_eq!(canonical(&first.envelope()), canonical(&second.envelope()));
     assert_eq!(
         first.manifest().sources.project_assets,
         ["source/project/planners/request.rhai"]
@@ -104,7 +103,7 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         planner_entry.role,
         PackageFileRole::SourceProjectPlannerScript
     );
-    assert!(!String::from_utf8_lossy(first.canonical_signed_bytes()).contains(RHAI_PLANNER_CANARY));
+    assert!(!String::from_utf8_lossy(&canonical(&first.envelope())).contains(RHAI_PLANNER_CANARY));
 
     let compiled_planner = first.registry().entities()["request"]
         .change_request
@@ -177,9 +176,7 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     let tampered_package = tamper_root.path().join("package");
-    first
-        .publish_to_directory(&tampered_package, Vec::new())
-        .unwrap();
+    first.publish_to_directory(&tampered_package).unwrap();
     fs::write(
         tampered_package.join("source/project/planners/request.rhai"),
         b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
@@ -198,20 +195,17 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .unwrap();
     let role_swapped_package = role_root.path().join("package");
-    first
-        .publish_to_directory(&role_swapped_package, Vec::new())
-        .unwrap();
+    first.publish_to_directory(&role_swapped_package).unwrap();
     let manifest_path = role_swapped_package.join("package.json");
     let mut envelope: PackageEnvelope =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     envelope
-        .signed
+        .manifest
         .files
         .iter_mut()
         .find(|entry| entry.path == "source/project/planners/request.rhai")
         .unwrap()
         .role = PackageFileRole::SourceModulePlannerScript;
-    envelope.signed.package_revision = derive_package_revision(&envelope.signed).unwrap();
     fs::write(&manifest_path, canonical(&envelope)).unwrap();
     refresh_shared_package_envelope(&role_swapped_package);
     assert_eq!(
@@ -298,8 +292,8 @@ fn geojson_binding_changes_are_classified_as_disclosure_even_for_get_only_profil
         (Some("location"), None),
         (Some("location"), Some("alternate")),
     ] {
-        let previous = compile_source(&geojson_source(1, previous_binding));
-        let candidate = compile_source(&geojson_source(2, candidate_binding));
+        let previous = compile_source(&geojson_source(previous_binding));
+        let candidate = compile_source(&geojson_source(candidate_binding));
         let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
         assert_change(
             &change_set,
@@ -318,12 +312,11 @@ fn geojson_binding_changes_are_classified_as_disclosure_even_for_get_only_profil
 #[cfg(feature = "tooling")]
 #[test]
 fn geojson_only_successor_uses_existing_metadata_review_without_dummy_sql() {
-    let previous = compile_source(&geojson_source(1, None));
-    let source = geojson_source(2, Some("location"));
+    let previous = compile_source(&geojson_source(None));
+    let source = geojson_source(Some("location"));
     let candidate = compile_source(&source);
     let migrations = vec![metadata_only_source_between(&previous, &candidate)];
     let package = prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         source.project_bytes,
         source.module_bytes,
@@ -339,7 +332,7 @@ fn geojson_only_successor_uses_existing_metadata_review_without_dummy_sql() {
 
 #[test]
 fn legacy_nonspatial_successor_baseline_roundtrips_without_new_keys() {
-    let compiled = compile_variant(Variant::Base, 1);
+    let compiled = compile_variant(Variant::Base);
     let baseline = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
         PRIOR_REVISION,
         &compiled,
@@ -362,8 +355,8 @@ fn legacy_nonspatial_successor_baseline_roundtrips_without_new_keys() {
 #[cfg(feature = "tooling")]
 #[test]
 fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive() {
-    let source_with_span = |sequence, span: serde_json::Value, add_field| {
-        let source = spatial_source(sequence, "location", true);
+    let source_with_span = |span: serde_json::Value, add_field| {
+        let source = spatial_source("location", true);
         let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
         let entity = &mut module["entities"][0];
         let bbox = &mut entity["accessProfiles"][0]["spatialQueries"]["bbox"];
@@ -378,12 +371,12 @@ fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive(
         let module_bytes = serde_json::to_vec(&module).unwrap();
         let module = parse_module_yaml(&module_bytes).unwrap();
         SourceFixture {
-            project_bytes: project_bytes(sequence, &module_digest(&module)),
+            project_bytes: project_bytes(&module_digest(&module)),
             module_bytes,
         }
     };
-    let previous = compile_source(&source_with_span(1, json!(1.0), false));
-    let equivalent = compile_source(&source_with_span(1, json!(1), false));
+    let previous = compile_source(&source_with_span(json!(1.0), false));
+    let equivalent = compile_source(&source_with_span(json!(1), false));
     assert!(
         compiled_registry_change_set(&previous, &equivalent, PRIOR_REVISION)
             .changes
@@ -401,9 +394,8 @@ fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive(
         "signed numeric normalization preserves equality"
     );
 
-    let source = source_with_span(2, json!(1.0), true);
+    let source = source_with_span(json!(1.0), true);
     let package = prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         source.project_bytes,
         source.module_bytes,
@@ -419,8 +411,8 @@ fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive(
 #[cfg(feature = "tooling")]
 #[test]
 fn reviewed_bbox_enablement_compiles_storage_without_author_written_sql() {
-    let previous = compile_source(&spatial_source(1, "location", false));
-    let source = spatial_source(2, "location", true);
+    let previous = compile_source(&spatial_source("location", false));
+    let source = spatial_source("location", true);
     let candidate = compile_source(&source);
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
@@ -451,11 +443,11 @@ fn reviewed_bbox_enablement_compiles_storage_without_author_written_sql() {
 #[cfg(feature = "tooling")]
 #[test]
 fn reviewed_bbox_removal_drops_candidates_and_policy_before_internal_projection() {
-    let previous = compile_source(&spatial_source(1, "location", true));
+    let previous = compile_source(&spatial_source("location", true));
     let logical_point_column = previous.entities()["asset"].fields["location"]
         .physical_name
         .clone();
-    let source = spatial_source(2, "location", false);
+    let source = spatial_source("location", false);
     let candidate = compile_source(&source);
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
@@ -486,8 +478,8 @@ fn reviewed_bbox_removal_drops_candidates_and_policy_before_internal_projection(
 #[cfg(feature = "tooling")]
 #[test]
 fn changing_primary_bbox_point_replaces_projection_without_replacing_source_fields() {
-    let previous = compile_source(&spatial_source(1, "location", true));
-    let source = spatial_source(2, "alternate", true);
+    let previous = compile_source(&spatial_source("location", true));
+    let source = spatial_source("alternate", true);
     let candidate = compile_source(&source);
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
@@ -514,15 +506,15 @@ fn changing_primary_bbox_point_replaces_projection_without_replacing_source_fiel
 #[cfg(feature = "tooling")]
 #[test]
 fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage() {
-    let previous = compile_source(&spatial_source(1, "location", true));
-    let source = spatial_source(2, "location", true);
+    let previous = compile_source(&spatial_source("location", true));
+    let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
     module["entities"][0]["accessProfiles"][0]["spatialQueries"]["bbox"]
         ["maximumLongitudeSpanDegrees"] = json!(0.25);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
     let source = SourceFixture {
-        project_bytes: project_bytes(2, &module_digest(&parsed_module)),
+        project_bytes: project_bytes(&module_digest(&parsed_module)),
         module_bytes,
     };
     let candidate = compile_source(&source);
@@ -548,8 +540,8 @@ fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage()
 #[cfg(feature = "tooling")]
 #[test]
 fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
-    let previous = compile_source(&spatial_source(1, "location", true));
-    let source = spatial_source(2, "location", true);
+    let previous = compile_source(&spatial_source("location", true));
+    let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
     module["entities"][0]["fields"]
         .as_array_mut()
@@ -562,7 +554,7 @@ fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
     let source = SourceFixture {
-        project_bytes: project_bytes(2, &module_digest(&parsed_module)),
+        project_bytes: project_bytes(&module_digest(&parsed_module)),
         module_bytes,
     };
     let candidate = compile_source(&source);
@@ -596,7 +588,6 @@ fn prepare_spatial_successor(
 ) -> PreparedPackage {
     let migrations = vec![metadata_only_source_between(&previous, candidate)];
     prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         source.project_bytes,
         source.module_bytes,
@@ -611,8 +602,8 @@ fn prepare_spatial_successor(
 
 #[test]
 fn new_optional_scalar_field_emits_only_closed_add_column() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::OptionalField, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::OptionalField);
 
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     assert_eq!(change_set.changes.len(), 1);
@@ -623,11 +614,11 @@ fn new_optional_scalar_field_emits_only_closed_add_column() {
     );
     let plan = change_set_to_applicable_migration_plan(&change_set)
         .expect("optional field change is applicable");
-    assert_eq!(plan.from_revision.as_deref(), Some(PRIOR_REVISION));
+    assert_eq!(plan.from_package_digest.as_deref(), Some(PRIOR_REVISION));
     assert_eq!(
         plan.prior_baseline
             .as_ref()
-            .map(|baseline| baseline.package_revision.as_str()),
+            .map(|baseline| baseline.package_digest.as_str()),
         Some(PRIOR_REVISION)
     );
     assert_eq!(plan.changes, change_set.changes);
@@ -661,8 +652,8 @@ fn new_optional_scalar_field_emits_only_closed_add_column() {
 
 #[test]
 fn new_entity_plan_uses_complete_candidate_ddl_in_dependency_order() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::NewEntity, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::NewEntity);
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     assert_change(
         &change_set,
@@ -695,8 +686,8 @@ fn new_entity_plan_uses_complete_candidate_ddl_in_dependency_order() {
 
 #[test]
 fn new_reference_constraint_and_index_are_supported_additive_statements() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::ReferenceConstraintIndex, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::ReferenceConstraintIndex);
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     assert_change(
         &change_set,
@@ -779,8 +770,8 @@ fn data_destructive_and_unsupported_changes_cannot_create_applicable_plans() {
             CompiledRegistryChangeCode::ReferenceTargetChanged,
         ),
     ] {
-        let previous = compile_variant(previous_variant, 1);
-        let candidate = compile_variant(candidate_variant, 2);
+        let previous = compile_variant(previous_variant);
+        let candidate = compile_variant(candidate_variant);
         let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
         assert_change(&change_set, class, code);
         assert_eq!(change_set.migration_plan, None);
@@ -978,8 +969,8 @@ fn string_minimum_lowering_is_additive_and_replaces_or_drops_the_length_check() 
 
 #[test]
 fn plaintext_to_encrypted_type_change_is_unsupported() {
-    let previous = compile_variant(Variant::PlaintextSecret, 1);
-    let candidate = compile_variant(Variant::EncryptedStructuredSecret, 2);
+    let previous = compile_variant(Variant::PlaintextSecret);
+    let candidate = compile_variant(Variant::EncryptedStructuredSecret);
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
 
     assert_eq!(change_set.changes.len(), 2);
@@ -1031,8 +1022,8 @@ fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
             CompiledRegistryChangeCode::FieldTemporalRoleChanged,
         ),
     ] {
-        let previous = compile_variant(previous_variant, 1);
-        let candidate = compile_variant(candidate_variant, 2);
+        let previous = compile_variant(previous_variant);
+        let candidate = compile_variant(candidate_variant);
         let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
         assert_change(
             &change_set,
@@ -1057,7 +1048,7 @@ fn complete_extension_surface_modules_are_order_independent() {
     let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "rowBoundaries": []}],"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"kind":"url","destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -1092,9 +1083,9 @@ fn complete_extension_surface_modules_are_order_independent() {
 
 #[test]
 fn equivalent_reordered_inputs_produce_stable_change_and_statement_inventory() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::ReferenceConstraintIndex, 2);
-    let reordered = compile_variant(Variant::ReferenceConstraintIndexReordered, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::ReferenceConstraintIndex);
+    let reordered = compile_variant(Variant::ReferenceConstraintIndexReordered);
     let first = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     let second = compiled_registry_change_set(&previous, &reordered, PRIOR_REVISION);
     let first_bytes =
@@ -1126,26 +1117,24 @@ fn equivalent_reordered_inputs_produce_stable_change_and_statement_inventory() {
 
 #[test]
 fn generated_successor_plan_passes_package_validation_with_prior_revision() {
-    let previous_source = source_for_variant(Variant::Base, 1);
+    let previous_source = source_for_variant(Variant::Base);
     let previous_package = registry_breg::package::prepare_package(build_request(
-        1,
         None,
         previous_source.project_bytes,
         previous_source.module_bytes,
         PackageMigrationPlanInput::InitialCompiledDdl,
     ))
     .expect("initial package prepares");
-    let prior_revision = previous_package.package_revision().to_owned();
+    let prior_revision = previous_package.package_digest().unwrap().to_owned();
 
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::ReferenceConstraintIndex, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::ReferenceConstraintIndex);
     let expected = compiled_registry_change_set(&previous, &candidate, &prior_revision);
     let expected_plan = change_set_to_applicable_migration_plan(&expected)
         .expect("candidate additive plan is applicable");
 
-    let candidate_source = source_for_variant(Variant::ReferenceConstraintIndex, 2);
+    let candidate_source = source_for_variant(Variant::ReferenceConstraintIndex);
     let successor = registry_breg::package::prepare_package(build_request(
-        2,
         Some(&prior_revision),
         candidate_source.project_bytes,
         candidate_source.module_bytes,
@@ -1155,7 +1144,11 @@ fn generated_successor_plan_passes_package_validation_with_prior_revision() {
     ))
     .expect("successor closed plan validates");
     assert_eq!(
-        successor.manifest().migration_plan.from_revision.as_deref(),
+        successor
+            .manifest()
+            .migration_plan
+            .from_package_digest
+            .as_deref(),
         Some(prior_revision.as_str())
     );
     assert_eq!(successor.manifest().migration_plan, expected_plan);
@@ -1164,28 +1157,24 @@ fn generated_successor_plan_passes_package_validation_with_prior_revision() {
 #[test]
 fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement() {
     let previous_source = derived_source_for_sql(
-        1,
         b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
     );
     let previous = compile_derived_source(&previous_source);
     let previous_package = registry_breg::package::prepare_package(derived_build_request(
         &previous_source,
-        1,
         None,
         None,
     ))
     .expect("initial derived package prepares");
 
     let candidate_source = derived_source_for_sql(
-        2,
         b"SELECT a.id AS id, (a.code) AS summary FROM registry_source.asset a",
     );
     let candidate = compile_derived_source(&candidate_source);
     let successor = registry_breg::package::prepare_package(derived_build_request(
         &candidate_source,
-        2,
         Some(&previous),
-        Some(previous_package.package_revision()),
+        Some(previous_package.package_digest().unwrap().as_str()),
     ))
     .expect("successor derived package prepares");
 
@@ -1195,8 +1184,8 @@ fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement(
     );
     assert_ne!(previous.revision(), candidate.revision());
     assert_ne!(
-        previous_package.package_revision(),
-        successor.package_revision()
+        previous_package.package_digest().unwrap(),
+        successor.package_digest().unwrap()
     );
     assert!(successor
         .file_bytes()
@@ -1206,8 +1195,11 @@ fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement(
             && entry.role == registry_breg::package::PackageFileRole::SourceModuleAsset
     }));
 
-    let change_set =
-        compiled_registry_change_set(&previous, &candidate, previous_package.package_revision());
+    let change_set = compiled_registry_change_set(
+        &previous,
+        &candidate,
+        &previous_package.package_digest().unwrap(),
+    );
     assert_change(
         &change_set,
         CompiledRegistryChangeClass::CompatibleAdditive,
@@ -1232,26 +1224,21 @@ fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement(
 #[test]
 fn oversized_derived_sql_asset_is_refused_before_compilation() {
     let mut source = derived_source_for_sql(
-        1,
         b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
     );
     source.sql = vec![b'x'; 256 * 1024 + 1];
     let module = parse_module_yaml(&source.module_bytes).expect("derived module parses");
-    source.project_bytes = project_bytes(
-        1,
-        &module_digest_with_assets(
-            &module,
-            &[ModuleAssetSource {
-                module: Some("core".to_owned()),
-                path: "sql/summary.sql".to_owned(),
-                bytes: source.sql.clone(),
-            }],
-        ),
-    );
+    source.project_bytes = project_bytes(&module_digest_with_assets(
+        &module,
+        &[ModuleAssetSource {
+            module: Some("core".to_owned()),
+            path: "sql/summary.sql".to_owned(),
+            bytes: source.sql.clone(),
+        }],
+    ));
 
     assert_eq!(
-        registry_breg::package::prepare_package(derived_build_request(&source, 1, None, None))
-            .err(),
+        registry_breg::package::prepare_package(derived_build_request(&source, None, None)).err(),
         Some(registry_breg::package::PackageError::Derivation)
     );
 }
@@ -1259,8 +1246,8 @@ fn oversized_derived_sql_asset_is_refused_before_compilation() {
 #[cfg(feature = "tooling")]
 #[test]
 fn metadata_only_policy_surface_can_apply_automatically_and_be_reviewed_without_dummy_sql() {
-    let previous = compile_variant(Variant::MetadataOnlyBase, 1);
-    let candidate = compile_variant(Variant::MetadataOnlyChanged, 2);
+    let previous = compile_variant(Variant::MetadataOnlyBase);
+    let candidate = compile_variant(Variant::MetadataOnlyChanged);
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     for code in [
         CompiledRegistryChangeCode::EntityRouteChanged,
@@ -1284,9 +1271,8 @@ fn metadata_only_policy_surface_can_apply_automatically_and_be_reviewed_without_
     assert!(automatic.statements.is_empty());
     assert!(automatic.reviewed_descriptors.is_empty());
 
-    let source = source_for_variant(Variant::MetadataOnlyChanged, 2);
+    let source = source_for_variant(Variant::MetadataOnlyChanged);
     let reviewed = prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         source.project_bytes,
         source.module_bytes,
@@ -1321,8 +1307,8 @@ fn metadata_only_policy_surface_can_apply_automatically_and_be_reviewed_without_
 #[cfg(feature = "tooling")]
 #[test]
 fn reference_target_change_can_be_reviewed_through_compiler_owned_fk_constraint() {
-    let previous = compile_variant(Variant::ReferenceTargetBase, 1);
-    let candidate = compile_variant(Variant::ReferenceTargetChanged, 2);
+    let previous = compile_variant(Variant::ReferenceTargetBase);
+    let candidate = compile_variant(Variant::ReferenceTargetChanged);
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     assert_change(
         &change_set,
@@ -1331,9 +1317,8 @@ fn reference_target_change_can_be_reviewed_through_compiler_owned_fk_constraint(
     );
     assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
 
-    let source = source_for_variant(Variant::ReferenceTargetChanged, 2);
+    let source = source_for_variant(Variant::ReferenceTargetChanged);
     let reviewed = prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         source.project_bytes,
         source.module_bytes,
@@ -1353,9 +1338,8 @@ fn reference_target_change_can_be_reviewed_through_compiler_owned_fk_constraint(
 #[cfg(feature = "tooling")]
 #[test]
 fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
-    let initial_source = source_for_variant(Variant::Base, 1);
+    let initial_source = source_for_variant(Variant::Base);
     let initial = prepare_package(build_request(
-        1,
         None,
         initial_source.project_bytes,
         initial_source.module_bytes,
@@ -1370,7 +1354,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
         serde_json::to_value(initial_summary).expect("initial summary serializes"),
         json!({
             "planKind": "initial",
-            "hasPriorRevision": false,
+            "hasPredecessor": false,
             "hasPriorBaseline": false,
             "changeCount": 0,
             "changeCounts": {
@@ -1385,14 +1369,13 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
         })
     );
 
-    let additive_source = source_for_variant(Variant::OptionalField, 2);
+    let additive_source = source_for_variant(Variant::OptionalField);
     let additive = prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         additive_source.project_bytes,
         additive_source.module_bytes,
         PackageMigrationPlanInput::Successor {
-            prior_registry: Box::new(compile_variant(Variant::Base, 1)),
+            prior_registry: Box::new(compile_variant(Variant::Base)),
         },
     ))
     .expect("additive package prepares");
@@ -1402,7 +1385,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
             .expect("additive summary serializes"),
         json!({
             "planKind": "compatible_additive",
-            "hasPriorRevision": true,
+            "hasPredecessor": true,
             "hasPriorBaseline": true,
             "changeCount": 1,
             "changeCounts": {
@@ -1422,7 +1405,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
     let second = inspect_prepared(&reviewed);
     let expected = json!({
         "planKind": "reviewed",
-        "hasPriorRevision": true,
+        "hasPredecessor": true,
         "hasPriorBaseline": true,
         "changeCount": 2,
         "changeCounts": {
@@ -1462,7 +1445,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
         serde_json::to_vec(second.migration_summary()).expect("second summary serializes");
     assert_eq!(first_bytes, second_bytes, "summary bytes are deterministic");
 
-    let candidate = compile_variant(Variant::RequiredAndOptionalFields, 2);
+    let candidate = compile_variant(Variant::RequiredAndOptionalFields);
     let entity = &candidate.entities()["asset"];
     let rendered = String::from_utf8(first_bytes).expect("summary JSON is UTF-8");
     let debug = format!("{:?}", first.migration_summary());
@@ -1495,9 +1478,8 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
 #[cfg(feature = "tooling")]
 #[test]
 fn tampered_package_never_returns_a_migration_summary_or_canary() {
-    let source = source_for_variant(Variant::Base, 1);
+    let source = source_for_variant(Variant::Base);
     let prepared = prepare_package(build_request(
-        1,
         None,
         source.project_bytes,
         source.module_bytes,
@@ -1514,7 +1496,7 @@ fn tampered_package_never_returns_a_migration_summary_or_canary() {
         .expect("temporary package parent creates");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("package publishes");
     let manifest = package.join("package.json");
     let mut bytes = fs::read(&manifest).expect("manifest reads");
@@ -1705,20 +1687,20 @@ struct DerivedSourceFixture {
     sql: Vec<u8>,
 }
 
-fn compile_variant(variant: Variant, sequence: u64) -> CompiledRegistry {
-    let source = source_for_variant(variant, sequence);
+fn compile_variant(variant: Variant) -> CompiledRegistry {
+    let source = source_for_variant(variant);
     let module = parse_module_yaml(&source.module_bytes).expect("fixture module parses");
     let project = parse_project_yaml(&source.project_bytes).expect("fixture project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture compiles in production")
 }
 
-fn source_for_variant(variant: Variant, sequence: u64) -> SourceFixture {
+fn source_for_variant(variant: Variant) -> SourceFixture {
     let module_bytes = module_bytes(variant);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses for digest");
     let digest = module_digest(&module);
     SourceFixture {
-        project_bytes: project_bytes(sequence, &digest),
+        project_bytes: project_bytes(&digest),
         module_bytes,
     }
 }
@@ -1729,7 +1711,7 @@ fn compile_source(source: &SourceFixture) -> CompiledRegistry {
     compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")
 }
 
-fn geojson_source(sequence: u64, binding: Option<&str>) -> SourceFixture {
+fn geojson_source(binding: Option<&str>) -> SourceFixture {
     let mut module: serde_json::Value =
         serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
     let entity = &mut module["entities"][0];
@@ -1749,14 +1731,14 @@ fn geojson_source(sequence: u64, binding: Option<&str>) -> SourceFixture {
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let module = parse_module_yaml(&module_bytes).expect("Point module parses");
     SourceFixture {
-        project_bytes: project_bytes(sequence, &module_digest(&module)),
+        project_bytes: project_bytes(&module_digest(&module)),
         module_bytes,
     }
 }
 
 #[cfg(feature = "tooling")]
-fn spatial_source(sequence: u64, binding: &str, bbox: bool) -> SourceFixture {
-    let source = geojson_source(sequence, Some(binding));
+fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
+    let source = geojson_source(Some(binding));
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
     let profile = &mut module["entities"][0]["accessProfiles"][0];
     profile["operations"] = json!(["get", "list"]);
@@ -1769,19 +1751,19 @@ fn spatial_source(sequence: u64, binding: &str, bbox: bool) -> SourceFixture {
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let module = parse_module_yaml(&module_bytes).unwrap();
     SourceFixture {
-        project_bytes: project_bytes(sequence, &module_digest(&module)),
+        project_bytes: project_bytes(&module_digest(&module)),
         module_bytes,
     }
 }
 
-fn project_bytes(sequence: u64, module_digest: &str) -> Vec<u8> {
+fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
-fn derived_source_for_sql(sequence: u64, sql: &[u8]) -> DerivedSourceFixture {
+fn derived_source_for_sql(sql: &[u8]) -> DerivedSourceFixture {
     let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "rowBoundaries": []}]}]}"#.to_vec();
     let module = parse_module_yaml(&module_bytes).expect("derived module parses");
     let digest = module_digest_with_assets(
@@ -1793,7 +1775,7 @@ fn derived_source_for_sql(sequence: u64, sql: &[u8]) -> DerivedSourceFixture {
         }],
     );
     DerivedSourceFixture {
-        project_bytes: project_bytes(sequence, &digest),
+        project_bytes: project_bytes(&digest),
         module_bytes,
         sql: sql.to_vec(),
     }
@@ -1817,12 +1799,10 @@ fn compile_derived_source(source: &DerivedSourceFixture) -> CompiledRegistry {
 
 fn derived_build_request(
     source: &DerivedSourceFixture,
-    sequence: u64,
     prior_registry: Option<&CompiledRegistry>,
     prior_revision: Option<&str>,
 ) -> PackageBuildRequest {
     let mut request = build_request(
-        sequence,
         prior_revision,
         source.project_bytes.clone(),
         source.module_bytes.clone(),
@@ -2099,25 +2079,16 @@ fn placement_entity() -> &'static str {
 }
 
 fn build_request(
-    sequence: u64,
     prior_revision: Option<&str>,
     project_bytes: Vec<u8>,
     module_bytes: Vec<u8>,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint:
             "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: project_bytes,
@@ -2143,7 +2114,7 @@ fn project_planner_build_request() -> PackageBuildRequest {
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{{"id":"planner-package","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},
-          "package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},
+          "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[{{
             "id":"target","primaryDataset":"planner-package","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
             "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
@@ -2171,18 +2142,10 @@ fn project_planner_build_request() -> PackageBuildRequest {
     )
     .into_bytes();
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint:
             "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: project,
@@ -2234,24 +2197,16 @@ fn module_planner_build_request() -> PackageBuildRequest {
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{{"id":"planner-package","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},
-          "package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},
+          "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
         }}"#
     )
     .into_bytes();
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint:
             "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: project,
@@ -2285,7 +2240,7 @@ fn plan(ctx) {
 
 #[cfg(feature = "tooling")]
 fn metadata_only_source(candidate: &CompiledRegistry) -> ReviewedMigrationSource {
-    let previous = compile_variant(Variant::MetadataOnlyBase, 1);
+    let previous = compile_variant(Variant::MetadataOnlyBase);
     metadata_only_source_between(&previous, candidate)
 }
 
@@ -2329,7 +2284,7 @@ fn metadata_only_source_between(
     };
     let descriptor_bytes = canonical(&descriptor);
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: PRIOR_REVISION.to_owned(),
+        prior_package_digest: PRIOR_REVISION.to_owned(),
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: Vec::new(),
@@ -2359,7 +2314,7 @@ fn metadata_only_source_between(
 
 #[cfg(feature = "tooling")]
 fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSource {
-    let previous = compile_variant(Variant::ReferenceTargetBase, 1);
+    let previous = compile_variant(Variant::ReferenceTargetBase);
     let change_set = compiled_registry_change_set(&previous, candidate, PRIOR_REVISION);
     let change = change_set
         .changes
@@ -2436,7 +2391,7 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
     };
     let descriptor_bytes = canonical(&descriptor);
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: PRIOR_REVISION.to_owned(),
+        prior_package_digest: PRIOR_REVISION.to_owned(),
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: vec![
@@ -2474,16 +2429,6 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
             destructive_resume: true,
         },
     };
-    let backup = ExternalBackupBinding {
-        database_id: DATABASE.to_owned(),
-        prior_revision: PRIOR_REVISION.to_owned(),
-        prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
-        sha256: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-            .to_owned(),
-        byte_length: 4096,
-        created_at: "2026-08-30T00:00:00Z".to_owned(),
-        max_age_seconds: 86_400,
-    };
     let mut files = vec![
         ReviewedMigrationFile {
             path: drop_path,
@@ -2506,10 +2451,6 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
             bytes: canonical(&receipt),
         },
         ReviewedMigrationFile {
-            path: descriptor.backup_binding_path.clone().expect("backup path"),
-            bytes: canonical(&backup),
-        },
-        ReviewedMigrationFile {
             path: fixture_path,
             bytes: fixture_bytes,
         },
@@ -2527,12 +2468,11 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
 
 #[cfg(feature = "tooling")]
 fn reviewed_package_with_canaries() -> PreparedPackage {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::RequiredAndOptionalFields, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredAndOptionalFields);
     let source = reviewed_source_with_canaries(&previous, &candidate);
-    let candidate_source = source_for_variant(Variant::RequiredAndOptionalFields, 2);
+    let candidate_source = source_for_variant(Variant::RequiredAndOptionalFields);
     prepare_package(build_request(
-        2,
         Some(PRIOR_REVISION),
         candidate_source.project_bytes,
         candidate_source.module_bytes,
@@ -2616,7 +2556,7 @@ fn reviewed_source_with_canaries(
     };
     let descriptor_bytes = canonical(&descriptor);
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: PRIOR_REVISION.to_owned(),
+        prior_package_digest: PRIOR_REVISION.to_owned(),
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: vec![ArtifactDigestBinding {
@@ -2699,7 +2639,7 @@ fn inspect_prepared(
         .expect("temporary package parent creates");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("package publishes");
     inspect_package_integrity(&package).expect("package inspects")
 }
@@ -2751,8 +2691,8 @@ fn digest(bytes: &[u8]) -> String {
 
 #[test]
 fn a_changed_registry_version_is_named_and_explained_in_the_change_set() {
-    let previous = compile_variant(Variant::Base, 1);
-    let mut source = source_for_variant(Variant::Base, 2);
+    let previous = compile_variant(Variant::Base);
+    let mut source = source_for_variant(Variant::Base);
     source.project_bytes = String::from_utf8(source.project_bytes)
         .expect("the fixture project is UTF-8")
         .replace(
@@ -2781,11 +2721,8 @@ fn a_changed_registry_version_is_named_and_explained_in_the_change_set() {
     );
     assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
 
-    let unchanged = compiled_registry_change_set(
-        &previous,
-        &compile_variant(Variant::Base, 2),
-        PRIOR_REVISION,
-    );
+    let unchanged =
+        compiled_registry_change_set(&previous, &compile_variant(Variant::Base), PRIOR_REVISION);
     assert!(
         !unchanged
             .changes
@@ -2797,78 +2734,6 @@ fn a_changed_registry_version_is_named_and_explained_in_the_change_set() {
         CompiledRegistryChangeCode::EntityAdded.explanation(),
         None,
         "a code that says everything in its name carries no extra sentence"
-    );
-}
-
-#[cfg(feature = "tooling")]
-#[test]
-fn disagreeing_environment_identity_keys_refuse_the_package_and_name_both_values() {
-    let source = source_for_variant(Variant::Base, 1);
-    let prepared = prepare_package(build_request(
-        1,
-        None,
-        source.project_bytes,
-        source.module_bytes,
-        PackageMigrationPlanInput::InitialCompiledDdl,
-    ))
-    .expect("initial package prepares");
-    let root = tempfile::Builder::new()
-        .prefix("registry-package-environment-keys-")
-        .tempdir_in(
-            std::env::temp_dir()
-                .canonicalize()
-                .expect("canonical temporary root"),
-        )
-        .expect("temporary package parent creates");
-    let package = root.path().join("package");
-    prepared
-        .publish_to_directory(&package, Vec::new())
-        .expect("package publishes");
-
-    let matching = registry_breg::package::PackageInspectionContext {
-        environment: "local",
-        instance_id: INSTANCE,
-        database_id: DATABASE,
-        database_initialization_environment: "local",
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        expected_package_revision: prepared.package_revision(),
-        expected_sequence: 1,
-    };
-    registry_breg::package::inspect_package_with_context(&package, &matching)
-        .expect("identical environment keys bind the package");
-
-    let disagreeing = registry_breg::package::PackageInspectionContext {
-        database_initialization_environment: "production",
-        ..matching
-    };
-    let error = registry_breg::package::inspect_package_with_context(&package, &disagreeing)
-        .err()
-        .expect("disagreeing environment keys cannot bind any package");
-    assert_eq!(
-        error,
-        registry_breg::package::PackageError::BindingMismatch(
-            registry_breg::package::PackageBindingField::DatabaseInitializationEnvironment
-        )
-    );
-
-    assert_eq!(
-        registry_breg::package::environment_identity_conflict("local", "local"),
-        None,
-        "identical values carry no conflict to report"
-    );
-    assert_eq!(
-        registry_breg::package::environment_identity_conflict("local", "production").as_deref(),
-        Some(
-            "`identity.environment` and `identity.databaseInitializationEnvironment` must be identical: `identity.environment` is `local`, `identity.databaseInitializationEnvironment` is `production`"
-        )
-    );
-    assert_eq!(
-        registry_breg::package::ENVIRONMENT_IDENTITY_KEYS,
-        [
-            "identity.environment",
-            "identity.databaseInitializationEnvironment"
-        ]
     );
 }
 
@@ -2886,7 +2751,6 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         compile_project(&project, &[], CompileProfile::Production).unwrap()
     };
     let previous = compile(&source);
-    source["package"]["sequence"] = serde_json::json!(2);
     source["entities"][0]["selectorProfiles"] =
         serde_json::json!([{"id":"by-code","fields":["code"]}]);
     source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
@@ -2903,7 +2767,6 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         .iter()
         .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
     // Changing an existing query projection does not become a grant addition.
-    source["package"]["sequence"] = serde_json::json!(3);
     source["accessProfiles"][1]["permissions"][0]["readableFields"] =
         serde_json::json!(["code", "status", "label"]);
     let widened = compile(&source);
@@ -2937,7 +2800,6 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         compile_project(&project, &[], CompileProfile::Production).unwrap()
     };
     let previous = compile(&source);
-    source["package"]["sequence"] = serde_json::json!(2);
     source["accessProfiles"][0]["permissions"][0]["readPaths"] =
         serde_json::json!([{"path":"children","readableFields":["code"]}]);
     let granted = compile(&source);
@@ -2967,7 +2829,6 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         .iter()
         .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
 
-    source["package"]["sequence"] = serde_json::json!(3);
     source["accessProfiles"][0]["permissions"][0]["readPaths"][0]["readableFields"] =
         serde_json::json!(["code", "label"]);
     let widened = compile(&source);

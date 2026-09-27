@@ -672,12 +672,12 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             assert compiled_authentication["scope"] == " ".join(source["scopes"])
         restarted = json.loads(command("bregctl", "dev", "start", registry, "--format", "json"))
         if late:
-            assert restarted["packageRevision"] != session["packageRevision"], "source needs a successor"
+            assert restarted["packageDigest"] != session["packageDigest"], "source needs a successor"
             assert history() == prior_history, "policy successor must preserve all revision history"
             for relative, content in {**prior_keys, **prior_registrations}.items():
                 assert (state_root / relative).read_bytes() == content
         else:
-            assert restarted["packageRevision"] == session["packageRevision"]
+            assert restarted["packageDigest"] == session["packageDigest"]
         assert pair == [Path(source[key]).read_bytes() for key in ["clientIdFile", "assertionKeyFile"]]
         status, after, _ = request("GET", record_url, token(restarted, "operator"))
         assert status == 200 and after["data"] == retained["data"], "setup must preserve complete record"

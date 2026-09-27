@@ -15,7 +15,6 @@ struct ReviewFixture {
     baseline: RuntimePackageFixture,
     project: TestProject,
     review: PathBuf,
-    key_id: String,
     prepared: PreparedPackage,
 }
 
@@ -24,10 +23,6 @@ impl ReviewFixture {
         let baseline = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
         let inspected =
             registry_breg::package::inspect_package_integrity(&baseline.package).unwrap();
-        let envelope: registry_breg::package::PackageEnvelope =
-            serde_json::from_slice(&fs::read(baseline.package.join("package.json")).unwrap())
-                .unwrap();
-        let key_id = envelope.signed.signature_policy.key_ids[0].clone();
         let mut module: Value = serde_json::from_slice(&package_module_bytes()).unwrap();
         module["entities"][0]["fields"]
             .as_array_mut()
@@ -39,10 +34,7 @@ impl ReviewFixture {
         module["entities"][0]["accessProfiles"][0]["filterableFields"] = json!(["label"]);
         let module_bytes = canonicalize_json(&module).unwrap();
         let module = parse_module_json(&module_bytes).unwrap();
-        let mut source: Value =
-            serde_json::from_slice(&package_project_bytes(&module_digest(&module))).unwrap();
-        source["package"]["sequence"] = json!(2);
-        let project_bytes = canonicalize_json(&source).unwrap();
+        let project_bytes = package_project_bytes(&module_digest(&module));
         let project = TestProject::from_registry_source(&project_bytes);
         fs::create_dir_all(project.path().join("modules/core")).unwrap();
         fs::write(
@@ -65,7 +57,7 @@ impl ReviewFixture {
         let changes = compiled_registry_change_set(
             inspected.registry(),
             &candidate,
-            inspected.package_revision(),
+            inspected.package_digest(),
         );
         let mut covers = changes
             .changes
@@ -91,7 +83,7 @@ impl ReviewFixture {
         let descriptor_bytes =
             canonicalize_json(&serde_json::to_value(descriptor).unwrap()).unwrap();
         let receipt = MigrationRehearsalReceipt {
-            prior_revision: inspected.package_revision().into(),
+            prior_package_digest: inspected.package_digest().into(),
             prior_schema_fingerprint: inspected.schema_fingerprint().into(),
             plan_sha256: sha256_prefixed(&descriptor_bytes),
             sql_sha256: vec![],
@@ -113,29 +105,15 @@ impl ReviewFixture {
         fs::write(review.join(BASE).join("rehearsal.json"), &receipt_bytes).unwrap();
         let predecessor = load_predecessor_package(
             &baseline.package,
-            &PredecessorPackageContext {
-                environment: "production",
-                instance_id: PACKAGE_INSTANCE,
-                database_id: PACKAGE_DATABASE,
+            &PackageLoadContext {
                 database_initialization_environment: "production",
-                trust_anchor: Some(&baseline.anchor),
-                expected_package_revision: inspected.package_revision(),
-                expected_sequence: 1,
             },
         )
         .unwrap();
         let prepared = prepare_package(PackageBuildRequest {
-            environment: "production".into(),
-            instance_id: PACKAGE_INSTANCE.into(),
-            database_id: PACKAGE_DATABASE.into(),
-            sequence: 2,
-            prior_revision: Some(inspected.package_revision().into()),
+            from_package_digest: Some(inspected.package_digest().into()),
             compiler_source_revision: PACKAGE_SOURCE_REVISION.into(),
             schema_fingerprint: FINGERPRINT.into(),
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.clone()],
-            },
             project: PackageSourceFile {
                 path: "source/registry.yaml".into(),
                 bytes: project_bytes,
@@ -171,7 +149,6 @@ impl ReviewFixture {
             baseline,
             project,
             review,
-            key_id,
             prepared,
         }
     }
@@ -194,14 +171,8 @@ impl ReviewFixture {
             "json",
             command,
             path(self.project.path()),
-            "--database-id",
-            PACKAGE_DATABASE,
-            "--baseline-runtime-config",
-            path(&self.baseline.runtime_config),
-            "--signature-threshold",
-            "1",
-            "--signature-key-id",
-            &self.key_id,
+            "--baseline-package",
+            path(&self.baseline.package),
             "--output",
             path(&output),
         ];
@@ -281,92 +252,28 @@ fn reviewed_successor_is_shared_by_test_and_package_without_placeholder_fingerpr
     );
     let package = fixture.run("package", true);
     assert!(package.status.success(), "{package:?}");
-    assert_eq!(json_stdout(&package)["state"], "awaiting_signatures");
     assert_eq!(
-        json_stdout(&package)["packageRevision"],
-        fixture.prepared.package_revision()
+        json_stdout(&package)["packageDigest"],
+        fixture.prepared.package_digest().unwrap()
     );
-    assert_eq!(
-        fs::read(fixture.project.path().join("build/signing-input.json")).unwrap(),
-        fixture.prepared.canonical_signed_bytes()
-    );
+    assert!(fixture
+        .project
+        .path()
+        .join("build/package/package.json")
+        .is_file());
 }
 
 impl ReviewFixture {
-    /// Sign and publish the sequence 2 successor, and return a runtime file
-    /// that names it as the active package.
+    /// Publish the successor, and return a runtime file that names it as the
+    /// active package.
     fn publish_successor_as_active(&self) -> PathBuf {
         let package = self.project.path().join("successor-package");
-        let signature = sign(
-            self.prepared.canonical_signed_bytes(),
-            &self.baseline.signing,
-        )
-        .expect("the successor package canonical bytes sign");
         self.prepared
-            .publish_to_directory(
-                &package,
-                vec![PackageSignature {
-                    key_id: self.key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
+            .publish_to_directory(&package)
             .expect("the successor package publishes");
         let runtime_parent = self.project.path().join("successor-runtime");
         fs::create_dir_all(&runtime_parent).expect("the successor runtime directory creates");
-        let runtime_config = write_runtime_config(
-            &runtime_parent,
-            &package,
-            &self.baseline.anchor,
-            self.prepared.package_revision(),
-            "127.0.0.1:1".parse().unwrap(),
-        );
-        let bound = fs::read_to_string(&runtime_config).expect("the runtime config reads");
-        fs::write(
-            &runtime_config,
-            bound.replace("activeSequence: 1", "activeSequence: 2"),
-        )
-        .expect("the runtime config binds the successor sequence");
-        runtime_config
-    }
-}
-
-#[test]
-fn apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure() {
-    let fixture = ReviewFixture::create();
-    let runtime_config = fixture.publish_successor_as_active();
-
-    let output = bregctl(&[
-        "--format",
-        "json",
-        "apply",
-        "--runtime-config",
-        path(&runtime_config),
-        "--package",
-        path(&fixture.baseline.package),
-    ]);
-
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stderr.is_empty());
-    let report = json_stdout(&output);
-    let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "apply.package.older_than_active");
-    assert_eq!(diagnostic["path"], "package");
-    let message = diagnostic["message"].as_str().expect("message is text");
-    assert!(
-        message.contains(
-            "https://docs.registrystack.org/operate/breg-changes/#roll-back-by-rolling-forward"
-        ),
-        "{message}"
-    );
-    assert_tool_diagnostic(diagnostic, "verified_package", "correct_package_build");
-    let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
-    for forbidden in [
-        path(&runtime_config),
-        path(&fixture.baseline.package),
-        fixture.prepared.package_revision(),
-        "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
-    ] {
-        assert!(!rendered.contains(forbidden), "{rendered}");
+        write_runtime_config(&runtime_parent, &package, "127.0.0.1:1".parse().unwrap())
     }
 }
 
@@ -374,41 +281,21 @@ fn apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure() {
 fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
     let baseline = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
     let inspected = registry_breg::package::inspect_package_integrity(&baseline.package).unwrap();
-    let envelope: registry_breg::package::PackageEnvelope =
-        serde_json::from_slice(&fs::read(baseline.package.join("package.json")).unwrap()).unwrap();
-    let key_id = envelope.signed.signature_policy.key_ids[0].clone();
     let module_bytes = package_module_bytes();
     let module = parse_module_json(&module_bytes).unwrap();
-    let mut source: Value =
-        serde_json::from_slice(&package_project_bytes(&module_digest(&module))).unwrap();
-    source["package"]["sequence"] = json!(2);
-    let project_bytes = canonicalize_json(&source).unwrap();
+    let project_bytes = package_project_bytes(&module_digest(&module));
     let project = TestProject::from_registry_source(&project_bytes);
     let predecessor = load_predecessor_package(
         &baseline.package,
-        &PredecessorPackageContext {
-            environment: "production",
-            instance_id: PACKAGE_INSTANCE,
-            database_id: PACKAGE_DATABASE,
+        &PackageLoadContext {
             database_initialization_environment: "production",
-            trust_anchor: Some(&baseline.anchor),
-            expected_package_revision: inspected.package_revision(),
-            expected_sequence: 1,
         },
     )
     .unwrap();
     let prepared = prepare_package(PackageBuildRequest {
-        environment: "production".into(),
-        instance_id: PACKAGE_INSTANCE.into(),
-        database_id: PACKAGE_DATABASE.into(),
-        sequence: 2,
-        prior_revision: Some(inspected.package_revision().into()),
+        from_package_digest: Some(inspected.package_digest().into()),
         compiler_source_revision: PACKAGE_SOURCE_REVISION.into(),
         schema_fingerprint: inspected.schema_fingerprint().into(),
-        signature_policy: SignaturePolicy {
-            threshold: 1,
-            key_ids: vec![key_id.clone()],
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".into(),
             bytes: project_bytes,
@@ -429,16 +316,8 @@ fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
     })
     .unwrap();
     let package = project.path().join("successor-package");
-    let signature = sign(prepared.canonical_signed_bytes(), &baseline.signing).unwrap();
-    prepared
-        .publish_to_directory(
-            &package,
-            vec![PackageSignature {
-                key_id,
-                signature_hex: hex(&signature),
-            }],
-        )
-        .unwrap();
+    prepared.publish_to_directory(&package).unwrap();
+    let package_digest = prepared.package_digest().unwrap();
 
     // The refusal precedes any connection, so the migration URL names a
     // closed port.
@@ -473,7 +352,7 @@ fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
     for forbidden in [
         path(&baseline.runtime_config),
         path(&package),
-        prepared.package_revision(),
+        package_digest.as_str(),
         "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
     ] {
         assert!(!rendered.contains(forbidden), "{rendered}");
@@ -542,12 +421,12 @@ fn reviewed_successor_changed_review_invalidates_the_schema_test_receipt() {
         diagnostic["code"],
         "package.test_receipt.candidate_mismatch"
     );
-    assert_eq!(diagnostic["path"], "testReceipt.candidatePackageRevision");
+    assert_eq!(diagnostic["path"], "testReceipt.sourceClosureSha256");
     assert!(
         diagnostic["message"]
             .as_str()
             .unwrap()
-            .contains("candidatePackageRevision"),
+            .contains("sourceClosureSha256"),
         "{diagnostic}"
     );
     assert!(!fixture.project.path().join("build").exists());
@@ -562,8 +441,6 @@ fn reviewed_successor_cli_requires_a_verified_baseline_argument() {
             ".",
             "--reviewed-migrations",
             "review",
-            "--database-id",
-            PACKAGE_DATABASE,
             "--runtime-config",
             "/unused.yaml",
             "--credentials",
@@ -576,11 +453,11 @@ fn reviewed_successor_cli_requires_a_verified_baseline_argument() {
         error.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
-    assert!(error.to_string().contains("--baseline-runtime-config"));
+    assert!(error.to_string().contains("--baseline-package"));
 }
 
 #[test]
-fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_validation() {
+fn reviewed_successor_refuses_a_baseline_from_another_registry_before_receipt_validation() {
     let fixture = ReviewFixture::create();
     let receipt = fixture.project.path().join("test-receipt.json");
     fs::write(
@@ -588,20 +465,18 @@ fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_valida
         schema_test_receipt_bytes(&fixture.prepared, &["package-record-list"]),
     )
     .unwrap();
-    let output = fixture.project.path().join("wrong-database-build");
+    let registry_file = fixture.project.path().join("registry.yaml");
+    let mut source: Value = serde_json::from_slice(&fs::read(&registry_file).unwrap()).unwrap();
+    source["registry"]["id"] = json!("another-registry");
+    fs::write(&registry_file, canonicalize_json(&source).unwrap()).unwrap();
+    let output = fixture.project.path().join("other-registry-build");
     let result = bregctl(&[
         "--format",
         "json",
         "package",
         path(fixture.project.path()),
-        "--database-id",
-        "other-database",
-        "--baseline-runtime-config",
-        path(&fixture.baseline.runtime_config),
-        "--signature-threshold",
-        "1",
-        "--signature-key-id",
-        &fixture.key_id,
+        "--baseline-package",
+        path(&fixture.baseline.package),
         "--reviewed-migrations",
         path(&fixture.review),
         "--schema-fingerprint",
@@ -613,9 +488,10 @@ fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_valida
     ]);
 
     assert!(!result.status.success());
+    let diagnostic = json_stdout(&result)["diagnostics"][0].clone();
     assert_eq!(
-        json_stdout(&result)["diagnostics"][0]["code"],
-        "package.baseline.identity"
+        diagnostic["code"], "package.baseline.identity",
+        "{diagnostic}"
     );
     assert!(!output.exists());
 }
@@ -623,7 +499,7 @@ fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_valida
 #[test]
 fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io() {
     for (field, code) in [
-        ("priorRevision", "migration.review.evidence_refused"),
+        ("priorPackageDigest", "migration.review.evidence_refused"),
         (
             "priorSchemaFingerprint",
             "migration.review.evidence_refused",
@@ -726,18 +602,14 @@ fn reviewed_successor_refuses_symlinks_and_oversized_artifacts() {
 fn successor_project(
     mutate_module: impl FnOnce(&mut Value),
     mutate_project: impl FnOnce(&mut Value),
-) -> (RuntimePackageFixture, TestProject, String) {
+) -> (RuntimePackageFixture, TestProject) {
     let baseline = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    let envelope: registry_breg::package::PackageEnvelope =
-        serde_json::from_slice(&fs::read(baseline.package.join("package.json")).unwrap()).unwrap();
-    let key_id = envelope.signed.signature_policy.key_ids[0].clone();
     let mut module: Value = serde_json::from_slice(&package_module_bytes()).unwrap();
     mutate_module(&mut module);
     let module_bytes = canonicalize_json(&module).unwrap();
     let parsed = parse_module_json(&module_bytes).unwrap();
     let mut source: Value =
         serde_json::from_slice(&package_project_bytes(&module_digest(&parsed))).unwrap();
-    source["package"]["sequence"] = json!(2);
     mutate_project(&mut source);
     let project_bytes = canonicalize_json(&source).unwrap();
     let project = TestProject::from_registry_source(&project_bytes);
@@ -753,27 +625,17 @@ fn successor_project(
         PACKAGE_FIXTURE_JOURNEYS,
     )
     .unwrap();
-    (baseline, project, key_id)
+    (baseline, project)
 }
 
-fn package_successor(
-    baseline: &RuntimePackageFixture,
-    project: &TestProject,
-    key_id: &str,
-) -> Output {
+fn package_successor(baseline: &RuntimePackageFixture, project: &TestProject) -> Output {
     bregctl(&[
         "--format",
         "json",
         "package",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
-        "--baseline-runtime-config",
-        path(&baseline.runtime_config),
-        "--signature-threshold",
-        "1",
-        "--signature-key-id",
-        key_id,
+        "--baseline-package",
+        path(&baseline.package),
         "--schema-fingerprint",
         FINGERPRINT,
         "--test-receipt",
@@ -785,7 +647,7 @@ fn package_successor(
 
 #[test]
 fn a_successor_needing_review_names_every_change_and_its_target() {
-    let (baseline, project, key_id) = successor_project(
+    let (baseline, project) = successor_project(
         |module| {
             module["entities"][0]["fields"]
                 .as_array_mut()
@@ -800,7 +662,7 @@ fn a_successor_needing_review_names_every_change_and_its_target() {
         },
         |_| {},
     );
-    let output = package_successor(&baseline, &project, &key_id);
+    let output = package_successor(&baseline, &project);
     assert!(!output.status.success(), "{output:?}");
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(diagnostic["code"], "migration.review.required");
@@ -813,9 +675,9 @@ fn a_successor_needing_review_names_every_change_and_its_target() {
 
 #[test]
 fn an_unsupported_successor_names_every_change_and_why_it_cannot_be_planned() {
-    let (baseline, project, key_id) =
+    let (baseline, project) =
         successor_project(|_| {}, |source| source["registry"]["version"] = json!("2"));
-    let output = package_successor(&baseline, &project, &key_id);
+    let output = package_successor(&baseline, &project);
     assert!(!output.status.success(), "{output:?}");
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(diagnostic["code"], "migration.change.unsupported");

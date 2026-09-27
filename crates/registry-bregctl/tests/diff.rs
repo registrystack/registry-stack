@@ -10,12 +10,8 @@ use registry_breg::contract::parse_module_json;
 use registry_breg::fixtures::validate_fixture_journeys;
 use registry_breg::package::{
     prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSignature, PackageSourceFile, PackageTrustAnchor, SignaturePolicy, TrustAnchorKey,
-    TRUST_ANCHOR_API_VERSION,
+    PackageSourceFile,
 };
-use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
-use serde::Serialize;
 use serde_json::Value;
 
 const INSTANCE: &str = "instance-under-test";
@@ -70,8 +66,8 @@ impl Drop for TestDirectory {
 #[test]
 fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
     let directory = TestDirectory::create();
-    let baseline = publish_package(&directory.path, "baseline", "local", "internal", None);
-    let widening = write_project(&directory.path, "widening", "local", "public");
+    let baseline = publish_package(&directory.path, "baseline", "internal");
+    let widening = write_project(&directory.path, "widening", "public");
 
     let first = run(&[
         "--format",
@@ -105,9 +101,8 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
         .any(|change| change["classification"] == "disclosure_widening"
             && change["change"]["code"] == "field_classification_changed"));
 
-    let public_baseline =
-        publish_package(&directory.path, "public-baseline", "local", "public", None);
-    let narrowing = write_project(&directory.path, "narrowing", "local", "internal");
+    let public_baseline = publish_package(&directory.path, "public-baseline", "public");
+    let narrowing = write_project(&directory.path, "narrowing", "internal");
     let reverse = run(&[
         "--format",
         "json",
@@ -134,7 +129,7 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
     assert!(String::from_utf8_lossy(&human.stdout)
         .contains("Classified the candidate against the baseline."));
 
-    let unsupported = write_project(&directory.path, "unsupported", "local", "internal");
+    let unsupported = write_project(&directory.path, "unsupported", "internal");
     let project_path = unsupported.join("registry.yaml");
     let source = fs::read_to_string(&project_path)
         .expect("unsupported candidate reads")
@@ -168,7 +163,7 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
 #[test]
 fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
     let directory = TestDirectory::create();
-    let baseline = publish_package(&directory.path, "baseline", "local", "internal", None);
+    let baseline = publish_package(&directory.path, "baseline", "internal");
     let module = String::from_utf8(module_bytes("internal"))
         .expect("module is UTF-8")
         .replacen(r#""id":"code""#, r#""id":"label""#, 1)
@@ -177,8 +172,7 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
             r#""readableFields":["label"]"#,
             1,
         );
-    let removal =
-        write_project_with_module(&directory.path, "removal", "local", module.into_bytes());
+    let removal = write_project_with_module(&directory.path, "removal", module.into_bytes());
 
     let output = run(&[
         "--format",
@@ -209,7 +203,7 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
     assert!(message.contains("not erasure"), "{message}");
     assert!(message.contains("bregctl history erase"), "{message}");
 
-    let unchanged = write_project(&directory.path, "unchanged", "local", "internal");
+    let unchanged = write_project(&directory.path, "unchanged", "internal");
     let quiet = run(&[
         "--format",
         "json",
@@ -229,8 +223,8 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
 #[test]
 fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negatives() {
     let directory = TestDirectory::create();
-    let baseline = publish_package(&directory.path, "baseline", "local", "internal", None);
-    let candidate = write_project(&directory.path, "candidate", "local", "public");
+    let baseline = publish_package(&directory.path, "baseline", "internal");
+    let candidate = write_project(&directory.path, "candidate", "public");
     let module_path = baseline.package.join("source/modules/core/module.yaml");
     fs::write(&module_path, VALUE_CANARY).expect("package closure is tampered");
 
@@ -272,7 +266,7 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
     {
         use std::os::unix::fs::{symlink, PermissionsExt};
 
-        let safe = publish_package(&directory.path, "safe", "local", "internal", None);
+        let safe = publish_package(&directory.path, "safe", "internal");
         fs::set_permissions(&safe.package, fs::Permissions::from_mode(0o777))
             .expect("unsafe permissions are installed");
         let unsafe_permissions = run(&[
@@ -319,28 +313,11 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
 }
 
 #[test]
-fn production_trust_is_verified_without_opening_runtime_dependencies() {
+fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     let directory = TestDirectory::create();
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-        .expect("production package signing key generates");
-    let baseline = publish_package(
-        &directory.path,
-        "production-baseline",
-        "production",
-        "internal",
-        Some(&signing),
-    );
-    let candidate = write_project(
-        &directory.path,
-        "production-candidate",
-        "production",
-        "public",
-    );
-    let runtime = write_runtime_config(
-        &directory.path,
-        &baseline,
-        baseline.anchor.as_ref().expect("anchor exists"),
-    );
+    let baseline = publish_package(&directory.path, "production-baseline", "internal");
+    let candidate = write_project(&directory.path, "production-candidate", "public");
+    let runtime = write_runtime_config(&directory.path, &baseline);
 
     let accepted = run(&[
         "--format",
@@ -355,55 +332,40 @@ fn production_trust_is_verified_without_opening_runtime_dependencies() {
     assert!(!String::from_utf8_lossy(&accepted.stdout).contains(VALUE_CANARY));
     assert_eq!(json_stdout(&accepted)["baselineAssurance"], "runtime_bound");
 
-    let wrong =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("wrong trust key generates");
-    let wrong_anchor = directory.path.join(format!("{VALUE_CANARY}.json"));
-    write_anchor(&wrong_anchor, &wrong);
-    let wrong_runtime = write_runtime_config(&directory.path, &baseline, &wrong_anchor);
+    // The runtime file's digest pin binds the baseline to the exact package
+    // the runtime serves; another package at package.root is refused.
+    let pinned_elsewhere = rewrite_runtime_config(
+        &directory.path,
+        &runtime,
+        "pinned-elsewhere",
+        &format!("  root: {}\n", baseline.package.display()),
+        &format!(
+            "  root: {}\n  expectedDigest: sha256:{}\n",
+            baseline.package.display(),
+            "0".repeat(64)
+        ),
+    );
     let refused = run(&[
         "--format",
         "json",
         "diff",
         path(&candidate),
         "--runtime-config",
-        path(&wrong_runtime),
+        path(&pinned_elsewhere),
     ]);
     assert_eq!(refused.status.code(), Some(1));
     assert!(refused.stderr.is_empty());
     assert!(!String::from_utf8_lossy(&refused.stdout).contains(VALUE_CANARY));
     assert_eq!(
         json_stdout(&refused)["diagnostics"][0]["code"],
-        "diff.baseline.signature_refused"
+        "diff.package.integrity_refused"
     );
-    assert_tool_diagnostic(
-        &json_stdout(&refused)["diagnostics"][0],
-        "baseline_package",
-        "verify_package_trust",
-    );
-
-    let wrong_revision_runtime = rewrite_runtime_config(
-        &directory.path,
-        &runtime,
-        "wrong-active-revision",
-        &format!("activeRevision: {}", baseline.revision),
-        &format!("activeRevision: {VALUE_CANARY}"),
-    );
-    assert_runtime_package_binding_refusal(&candidate, &wrong_revision_runtime);
-
-    let wrong_sequence_runtime = rewrite_runtime_config(
-        &directory.path,
-        &runtime,
-        &format!("wrong-active-sequence-{VALUE_CANARY}"),
-        "activeSequence: 1",
-        "activeSequence: 2",
-    );
-    assert_runtime_package_binding_refusal(&candidate, &wrong_sequence_runtime);
 }
 
 #[test]
 fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_codes() {
     let directory = TestDirectory::create();
-    let candidate = write_project(&directory.path, "candidate", "local", "internal");
+    let candidate = write_project(&directory.path, "candidate", "internal");
     let help = run(&["--help"]);
     assert!(help.status.success());
     assert!(help.stderr.is_empty());
@@ -509,39 +471,17 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
 
 struct PublishedPackage {
     package: PathBuf,
-    anchor: Option<PathBuf>,
-    revision: String,
 }
 
-fn publish_package(
-    parent: &Path,
-    name: &str,
-    environment: &str,
-    classification: &str,
-    signing: Option<&PrivateJwk>,
-) -> PublishedPackage {
+fn publish_package(parent: &Path, name: &str, classification: &str) -> PublishedPackage {
     let module_bytes = module_bytes(classification);
     let module = parse_module_json(&module_bytes).expect("package module parses");
-    let project_bytes = project_bytes(environment, &module_digest(&module));
-    let signature_policy = signing
-        .map(|key| SignaturePolicy {
-            threshold: 1,
-            key_ids: vec![key.public().kid.expect("generated key has an id")],
-        })
-        .unwrap_or(SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        });
+    let project_bytes = project_bytes(&module_digest(&module));
     let prepared = prepare_package(PackageBuildRequest {
-        environment: environment.to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint:
             "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        signature_policy,
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: project_bytes,
@@ -561,58 +501,33 @@ fn publish_package(
     .expect("package prepares");
     validate_fixture_journeys(FIXTURE_JOURNEYS, prepared.registry())
         .expect("diff fixture journeys resolve against the packaged registry");
-    let signatures = signing
-        .map(|key| {
-            vec![PackageSignature {
-                key_id: key.public().kid.expect("generated key has an id"),
-                signature_hex: hex(
-                    &sign(prepared.canonical_signed_bytes(), key).expect("package signs")
-                ),
-            }]
-        })
-        .unwrap_or_default();
     let package = parent.join(name);
-    let revision = prepared.package_revision().to_owned();
     prepared
-        .publish_to_directory(&package, signatures)
+        .publish_to_directory(&package)
         .expect("package publishes");
-    let anchor = signing.map(|key| {
-        let path = parent.join(format!("{name}-trust.json"));
-        write_anchor(&path, key);
-        path
-    });
-    PublishedPackage {
-        package,
-        anchor,
-        revision,
-    }
+    PublishedPackage { package }
 }
 
-fn write_project(parent: &Path, name: &str, environment: &str, classification: &str) -> PathBuf {
-    write_project_with_module(parent, name, environment, module_bytes(classification))
+fn write_project(parent: &Path, name: &str, classification: &str) -> PathBuf {
+    write_project_with_module(parent, name, module_bytes(classification))
 }
 
-fn write_project_with_module(
-    parent: &Path,
-    name: &str,
-    environment: &str,
-    module: Vec<u8>,
-) -> PathBuf {
+fn write_project_with_module(parent: &Path, name: &str, module: Vec<u8>) -> PathBuf {
     let root = parent.join(name);
     let parsed = parse_module_json(&module).expect("candidate module parses");
     fs::create_dir_all(root.join("modules/core")).expect("candidate directories create");
     fs::write(
         root.join("registry.yaml"),
-        project_bytes(environment, &module_digest(&parsed)),
+        project_bytes(&module_digest(&parsed)),
     )
     .expect("candidate project writes");
     fs::write(root.join("modules/core/module.yaml"), module).expect("candidate module writes");
     root
 }
 
-fn project_bytes(environment: &str, module_digest: &str) -> Vec<u8> {
+fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -624,31 +539,7 @@ fn module_bytes(classification: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-fn write_anchor(path: &Path, key: &PrivateJwk) {
-    let public = key.public();
-    write_canonical(
-        path,
-        &PackageTrustAnchor {
-            api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-            environment: "production".to_owned(),
-            instance_id: INSTANCE.to_owned(),
-            database_id: DATABASE.to_owned(),
-            threshold: 1,
-            keys: vec![TrustAnchorKey {
-                key_id: public.kid.clone().expect("generated key has an id"),
-                jwk: serde_json::to_value(public).expect("public key serializes"),
-            }],
-        },
-    );
-}
-
-fn write_canonical(path: &Path, value: &impl Serialize) {
-    let value = serde_json::to_value(value).expect("value serializes");
-    let bytes = canonicalize_json(&value).expect("value canonicalizes");
-    fs::write(path, bytes).expect("canonical file writes");
-}
-
-fn write_runtime_config(parent: &Path, package: &PublishedPackage, trust_anchor: &Path) -> PathBuf {
+fn write_runtime_config(parent: &Path, package: &PublishedPackage) -> PathBuf {
     let secret_root = parent.join("secrets");
     fs::create_dir_all(&secret_root).expect("secret root creates");
     let path = parent.join(format!(
@@ -689,10 +580,6 @@ database:
     runtime: registry_runtime
 package:
   root: {package_root}
-  trustAnchorPath: {trust_anchor}
-  compilerSourceRevision: {SOURCE_REVISION}
-  activeRevision: {revision}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://oidc-is-not-opened.invalid
@@ -730,8 +617,6 @@ operationalTimeouts:
 "#,
             secret_root = secret_root.display(),
             package_root = package.package.display(),
-            trust_anchor = trust_anchor.display(),
-            revision = package.revision,
         ),
     )
     .expect("runtime config writes");
@@ -753,31 +638,6 @@ fn rewrite_runtime_config(
     );
     fs::write(&target, original.replacen(from, to, 1)).expect("runtime config variant writes");
     target
-}
-
-fn assert_runtime_package_binding_refusal(candidate: &Path, runtime_config: &Path) {
-    let refused = run(&[
-        "--format",
-        "json",
-        "diff",
-        path(candidate),
-        "--runtime-config",
-        path(runtime_config),
-    ]);
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(refused.stderr.is_empty());
-    let rendered = String::from_utf8_lossy(&refused.stdout);
-    assert!(!rendered.contains(VALUE_CANARY));
-    assert!(!rendered.contains(path(runtime_config)));
-    assert_eq!(
-        json_stdout(&refused)["diagnostics"][0]["code"],
-        "diff.baseline.binding_refused"
-    );
-    assert_tool_diagnostic(
-        &json_stdout(&refused)["diagnostics"][0],
-        "baseline_package",
-        "verify_package_binding",
-    );
 }
 
 fn run(arguments: &[&str]) -> Output {
@@ -815,14 +675,4 @@ fn assert_tool_diagnostic(diagnostic: &Value, artifact: &str, suggested_action: 
 
 fn path(path: &Path) -> &str {
     path.to_str().expect("test path is UTF-8")
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut result = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        result.push(HEX[usize::from(byte >> 4)] as char);
-        result.push(HEX[usize::from(byte & 0x0f)] as char);
-    }
-    result
 }

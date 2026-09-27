@@ -10,14 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use registry_breg::compiler::{module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::package::{
-    prepare_package, PackageBindingField, PackageBuildRequest, PackageError, PackageFileRole,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, TRUST_ANCHOR_API_VERSION,
+    prepare_package, PackageBuildRequest, PackageError, PackageFileRole, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile,
 };
 use registry_breg::startup::{prepare, StartupError};
-use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm};
-use serde::Serialize;
+use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
 
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
@@ -78,10 +75,10 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
     };
 
     let other = StartupFixture::new();
-    let mut bound = PackageFixture::build(&other.root);
-    bound.revision = format!("sha256:{}", "0".repeat(64));
-    let mismatched = match prepare(&other.write_config(&bound)).await {
-        Ok(_) => panic!("package bound to another revision prepared"),
+    let legacy = PackageFixture::build(&other.root);
+    legacy.rewrite_as_retired_format();
+    let retired = match prepare(&other.write_config(&legacy)).await {
+        Ok(_) => panic!("package in the retired manifest format prepared"),
         Err(error) => error,
     };
 
@@ -90,12 +87,15 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
         StartupError::PackageEnvelopeRefused(SHARED_PACKAGE_TAMPER.to_owned())
     );
     assert_eq!(
-        mismatched,
-        StartupError::PackageRefused(PackageError::BindingMismatch(
-            PackageBindingField::ActiveRevision
-        ))
+        retired,
+        StartupError::PackageRefused(PackageError::LegacyFormat)
     );
-    assert_ne!(tampered, mismatched);
+    assert_eq!(
+        PackageError::LegacyFormat.to_string(),
+        "the package uses the retired package/v1 manifest format; rebuild it with `bregctl \
+package`"
+    );
+    assert_ne!(tampered, retired);
 }
 
 struct StartupFixture {
@@ -160,10 +160,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {SOURCE_REVISION}
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: http://127.0.0.1:9
@@ -198,8 +194,6 @@ operationalTimeouts:
 "#,
                 self.secret_root.display(),
                 package.root.display(),
-                package.anchor.display(),
-                package.revision
             ),
         )
         .expect("runtime config writes");
@@ -215,15 +209,11 @@ impl Drop for StartupFixture {
 
 struct PackageFixture {
     root: PathBuf,
-    anchor: PathBuf,
-    revision: String,
 }
 
 impl PackageFixture {
     fn build(parent: &Path) -> Self {
         let root = parent.join("package");
-        let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-            .expect("fixture signing key generates");
         let module_bytes = module_bytes();
         let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
         let project_bytes = project_bytes(&module_digest(&module));
@@ -234,19 +224,10 @@ impl PackageFixture {
             CompileProfile::Production,
         )
         .expect("fixture project compiles in production");
-        let key_id = signing.public().kid.expect("generated key has kid");
         let prepared = prepare_package(PackageBuildRequest {
-            environment: "production".to_owned(),
-            instance_id: INSTANCE.to_owned(),
-            database_id: DATABASE.to_owned(),
-            sequence: 1,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: SOURCE_REVISION.to_owned(),
             schema_fingerprint: fingerprint(1),
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.clone()],
-            },
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
                 bytes: project_bytes,
@@ -264,43 +245,39 @@ impl PackageFixture {
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
         })
         .expect("fixture package prepares");
-        let signature =
-            sign(prepared.canonical_signed_bytes(), &signing).expect("fixture package signs");
         prepared
-            .publish_to_directory(
-                &root,
-                vec![PackageSignature {
-                    key_id: key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
+            .publish_to_directory(&root)
             .expect("fixture package publishes");
-        let anchor = parent.join("trust-anchor.json");
-        write_json(
-            &anchor,
-            &PackageTrustAnchor {
-                api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-                environment: "production".to_owned(),
-                instance_id: INSTANCE.to_owned(),
-                database_id: DATABASE.to_owned(),
-                threshold: 1,
-                keys: vec![TrustAnchorKey {
-                    key_id,
-                    jwk: serde_json::to_value(signing.public()).expect("public JWK serializes"),
-                }],
-            },
+        Self { root }
+    }
+
+    /// Rewrite the published manifest under the retired package/v1 api
+    /// version and reseal the sum file, so only the manifest format differs.
+    fn rewrite_as_retired_format(&self) {
+        let manifest_path = self.root.join("package.json");
+        let manifest = fs::read_to_string(&manifest_path).expect("manifest reads");
+        let retired = manifest.replacen(
+            "registry.registrystack.org/package/v2",
+            "registry.registrystack.org/package/v1",
+            1,
         );
-        Self {
-            root,
-            anchor,
-            revision: prepared.package_revision().to_owned(),
-        }
+        assert_ne!(retired, manifest, "the manifest names its api version");
+        fs::remove_file(&manifest_path).expect("manifest removes");
+        fs::write(&manifest_path, retired).expect("retired manifest writes");
+        fs::remove_file(self.root.join(SUM_FILE)).expect("sum file removes");
+        write_sum_file(
+            &self.root,
+            None,
+            &PackageLimits::default(),
+            "bregctl package",
+        )
+        .expect("sum file reseals the retired manifest");
     }
 }
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"production","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -315,7 +292,7 @@ fn first_generated_path(root: &Path) -> PathBuf {
             .expect("manifest parses");
     root.join(
         &envelope
-            .signed
+            .manifest
             .files
             .iter()
             .find(|entry| entry.role == PackageFileRole::GeneratedOpenapi)
@@ -324,21 +301,6 @@ fn first_generated_path(root: &Path) -> PathBuf {
     )
 }
 
-fn write_json(path: &Path, value: &impl Serialize) {
-    let bytes = canonicalize_json(&serde_json::to_value(value).expect("value serializes"))
-        .expect("value canonicalizes");
-    fs::write(path, bytes).expect("fixture JSON writes");
-}
-
 fn fingerprint(byte: u8) -> String {
     format!("sha256:{}", format!("{byte:02x}").repeat(32))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut result = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut result, "{byte:02x}").expect("writing to String succeeds");
-    }
-    result
 }

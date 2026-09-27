@@ -26,7 +26,7 @@ use registry_breg::history_erasure::{
 };
 use registry_breg::history_schema::HistorySchemaDescriptor;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, MigrationError,
 };
 use registry_breg::migration_plan::{
@@ -38,9 +38,8 @@ use registry_breg::migration_plan::{
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
-    VerifiedPackage,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
     initialize_registry_state_for_catalog_test, install_compiled_schema,
@@ -62,7 +61,8 @@ const PACKAGE_ID: &str = "history-migration-registry";
 const INSTANCE_ID: &str = "history-migration-instance";
 const DATABASE_ID: &str = "history-migration-database";
 const SOURCE_REVISION: &str = "history-migration-source-revision";
-const BASE_PACKAGE_REVISION: &str = "history-migration-base-1";
+const BASE_PACKAGE_REVISION: &str =
+    "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const RECORD_REFERENCE: &str =
     "hmac-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const ACTOR_REFERENCE: &str =
@@ -90,7 +90,7 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs required extension");
-    let base = compile_registry(Variant::Base, 1);
+    let base = compile_registry(Variant::Base);
     let current = install_old_active_database(
         &database,
         &base,
@@ -101,7 +101,7 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
         }],
     )
     .await;
-    let candidate = compile_registry(Variant::StatusRestricted, 2);
+    let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
         HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_revision);
@@ -126,7 +126,7 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
         .await
         .expect("administrator reads migrated live row");
     assert_eq!(row.get::<_, i64>(0), 2);
-    assert_eq!(row.get::<_, String>(1), package.manifest().package_revision);
+    assert_eq!(row.get::<_, String>(1), package.package_digest());
     assert_eq!(row.get::<_, String>(2), "new");
 
     let revision = database
@@ -144,10 +144,7 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
         .expect("administrator reads internal migration revision");
     assert_eq!(revision.get::<_, i64>(0), 2);
     assert_eq!(revision.get::<_, Option<i64>>(1), Some(1));
-    assert_eq!(
-        revision.get::<_, String>(2),
-        package.manifest().package_revision
-    );
+    assert_eq!(revision.get::<_, String>(2), package.package_digest());
     assert_eq!(revision.get::<_, String>(3), "migration");
     assert_eq!(revision.get::<_, String>(4), MIGRATION_SYSTEM_ORIGIN);
     let migration_reference = revision.get::<_, String>(5);
@@ -243,7 +240,7 @@ async fn predecessor_baseline_mismatch_refuses_before_successor_update() {
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs required extension");
-    let base = compile_registry(Variant::Base, 1);
+    let base = compile_registry(Variant::Base);
     let current = install_old_active_database(
         &database,
         &base,
@@ -255,7 +252,7 @@ async fn predecessor_baseline_mismatch_refuses_before_successor_update() {
     )
     .await;
     overwrite_live_status(&database, &base, Uuid::from_u128(1), "drift").await;
-    let candidate = compile_registry(Variant::StatusRestricted, 2);
+    let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
         HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_revision);
@@ -275,7 +272,7 @@ async fn predecessor_baseline_refuses_revisions_from_unretained_package_descript
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs required extension");
-    let base = compile_registry(Variant::Base, 1);
+    let base = compile_registry(Variant::Base);
     let current = install_old_active_database(
         &database,
         &base,
@@ -287,7 +284,7 @@ async fn predecessor_baseline_refuses_revisions_from_unretained_package_descript
     )
     .await;
     overwrite_revision_package(&database, Uuid::from_u128(1), "history-migration-base-0").await;
-    let candidate = compile_registry(Variant::StatusRestricted, 2);
+    let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
         HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_revision);
@@ -308,7 +305,7 @@ async fn bounded_update_refuses_when_table_exceeds_declared_budget_before_data_c
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs required extension");
-    let base = compile_registry(Variant::Base, 1);
+    let base = compile_registry(Variant::Base);
     let current = install_old_active_database(
         &database,
         &base,
@@ -326,7 +323,7 @@ async fn bounded_update_refuses_when_table_exceeds_declared_budget_before_data_c
         ],
     )
     .await;
-    let candidate = compile_registry(Variant::StatusRestricted, 2);
+    let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
         HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_revision);
@@ -370,10 +367,7 @@ async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
     .await
     .expect("a recorded erasure after the baseline leaves the next package applicable");
     assert_eq!(upgraded.package_sequence, 3);
-    assert_eq!(
-        upgraded.package_revision,
-        successor.manifest().package_revision
-    );
+    assert_eq!(upgraded.package_revision, successor.package_digest());
     assert_eq!(
         commit_head(&database).await,
         (true, Some(1)),
@@ -504,7 +498,7 @@ async fn activate_reviewed_successor(
         .batch_execute("CREATE EXTENSION btree_gist")
         .await
         .expect("administrator installs required extension");
-    let base = compile_registry(Variant::Base, 1);
+    let base = compile_registry(Variant::Base);
     let current = install_old_active_database(
         database,
         &base,
@@ -515,7 +509,7 @@ async fn activate_reviewed_successor(
         }],
     )
     .await;
-    let candidate = compile_registry(Variant::StatusRestricted, 2);
+    let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
         HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_revision);
@@ -597,7 +591,6 @@ fn compiled_successor(
 ) -> VerifiedPackage {
     let package = prepare_package(build_request(
         Variant::Base,
-        3,
         Some(&current.package_revision),
         &current.schema_fingerprint,
         PackageMigrationPlanInput::Successor {
@@ -605,14 +598,7 @@ fn compiled_successor(
         },
     ))
     .expect("compiled successor prepares");
-    publish_and_load(
-        package,
-        PackageIntent::Activation {
-            active_revision: &current.package_revision,
-            active_sequence: u64::try_from(current.package_sequence)
-                .expect("active sequence is positive"),
-        },
-    )
+    publish_and_load(package)
 }
 
 async fn recorded_erasure_positions(database: &TestDatabase) -> Vec<i64> {
@@ -746,7 +732,6 @@ fn reviewed_package(
     let source = reviewed_update_source(current, prior, candidate, max_rows);
     let package = prepare_package(build_request(
         Variant::StatusRestricted,
-        2,
         Some(&current.package_revision),
         &current.schema_fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
@@ -756,14 +741,7 @@ fn reviewed_package(
         },
     ))
     .expect("reviewed package prepares");
-    publish_and_load(
-        package,
-        PackageIntent::Activation {
-            active_revision: &current.package_revision,
-            active_sequence: u64::try_from(current.package_sequence)
-                .expect("active sequence is positive"),
-        },
-    )
+    publish_and_load(package)
 }
 
 fn reviewed_update_source(
@@ -881,7 +859,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
     );
     let fixture_bytes = b"{\"fixture\":\"representative\"}\n".to_vec();
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: current.package_revision.clone(),
+        prior_package_digest: current.package_revision.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: steps
@@ -973,6 +951,7 @@ fn request<'a>(
     ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new("local", INSTANCE_ID, DATABASE_ID),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
@@ -1004,18 +983,18 @@ async fn initial_fingerprint(database: &TestDatabase, registry: &CompiledRegistr
     fingerprint
 }
 
-fn compile_registry(variant: Variant, sequence: u64) -> CompiledRegistry {
+fn compile_registry(variant: Variant) -> CompiledRegistry {
     let module_bytes = module_bytes(variant);
     let module = parse_module_json(&module_bytes).expect("test module parses");
-    let project_bytes = project_bytes(sequence, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let project = parse_project_yaml(&project_bytes).expect("test project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("test Registry compiles")
 }
 
-fn project_bytes(sequence: u64, digest: &str) -> Vec<u8> {
+fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://history-migration.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://history-migration.example.test","title":"History Migration Registry","publisher":{{"id":"history-migration-registry-authority","name":"History Migration Publisher"}}}},"publicService":{{"id":"history-migration-registry-service","title":"History Migration Registry"}},"datasets":[{{"id":"history-migration-registry","title":"History Migration Dataset","owner":"History Migration Publisher","status":"active"}}],"dataServices":[{{"id":"history-migration-registry-data-service","title":"History Migration Registry","endpointUrl":"https://history-migration.example.test","servesDatasets":["history-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://history-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://history-migration.example.test","title":"History Migration Registry","publisher":{{"id":"history-migration-registry-authority","name":"History Migration Publisher"}}}},"publicService":{{"id":"history-migration-registry-service","title":"History Migration Registry"}},"datasets":[{{"id":"history-migration-registry","title":"History Migration Dataset","owner":"History Migration Publisher","status":"active"}}],"dataServices":[{{"id":"history-migration-registry-data-service","title":"History Migration Registry","endpointUrl":"https://history-migration.example.test","servesDatasets":["history-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -1033,7 +1012,6 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
 
 fn build_request(
     variant: Variant,
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
@@ -1041,20 +1019,12 @@ fn build_request(
     let module_bytes = module_bytes(variant);
     let module = parse_module_json(&module_bytes).expect("package module parses");
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE_ID.to_owned(),
-        database_id: DATABASE_ID.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
-            bytes: project_bytes(sequence, &module_digest(&module)),
+            bytes: project_bytes(&module_digest(&module)),
         },
         modules: vec![PackageModuleSource {
             id: "core".to_owned(),
@@ -1070,10 +1040,7 @@ fn build_request(
     }
 }
 
-fn publish_and_load(
-    prepared: registry_breg::package::PreparedPackage,
-    intent: PackageIntent<'_>,
-) -> VerifiedPackage {
+fn publish_and_load(prepared: registry_breg::package::PreparedPackage) -> VerifiedPackage {
     let root = tempfile::Builder::new()
         .prefix("registry-history-migration-")
         .tempdir_in(
@@ -1084,21 +1051,15 @@ fn publish_and_load(
         .expect("package temporary directory creates");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("package publishes");
     load_package(
         &package,
         &PackageLoadContext {
-            environment: "local",
-            instance_id: INSTANCE_ID,
-            database_id: DATABASE_ID,
             database_initialization_environment: "local",
-            compiler_source_revision: SOURCE_REVISION,
-            trust_anchor: None,
-            intent,
         },
     )
-    .expect("published package loads with the requested lifecycle intent")
+    .expect("published package loads")
 }
 
 async fn overwrite_revision_package(

@@ -153,23 +153,18 @@ fn task_profile_scenarios_match_documented_admission_without_claiming_row_access
 
 #[cfg(feature = "runtime")]
 #[test]
-fn documented_runtime_config_parses_after_filling_the_package_revision_and_digest() {
+fn documented_runtime_config_parses_after_filling_the_package_digest() {
     let page = include_str!("../../../docs/site/src/content/docs/operate/breg.mdx");
     let mut source = fragment(
         page,
         "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1",
     );
-    // The operator substitutes the package revision and digest; retain every authored key,
-    // kind, token-verifier setting, and secret reference from the example.
-    assert_eq!(
-        source["package"]["activeRevision"],
-        "sha256:<package revision reported by package>"
-    );
+    // The operator substitutes the package digest; retain every authored key, kind,
+    // token-verifier setting, and secret reference from the example.
     assert_eq!(
         source["package"]["expectedDigest"],
         "sha256:<digest of the package SHA256SUMS file>"
     );
-    source["package"]["activeRevision"] = json!(format!("sha256:{}", "a".repeat(64)));
     source["package"]["expectedDigest"] = json!(format!("sha256:{}", "b".repeat(64)));
     registry_breg::runtime_config::parse_runtime_config_with_env(
         &serde_norway::to_string(&source).unwrap(),

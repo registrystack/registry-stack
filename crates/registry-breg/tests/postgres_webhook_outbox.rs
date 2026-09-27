@@ -1374,7 +1374,6 @@ struct DestinationFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
 }
 
 impl DestinationFixture {
@@ -1395,8 +1394,6 @@ impl DestinationFixture {
         let package_root = root.join("package");
         fs::create_dir(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         let key_path = secret_root.join(SECRET_REF_CANARY);
         fs::write(&key_path, SECRET_KEY_CANARY).expect("destination key writes");
         #[cfg(unix)]
@@ -1409,7 +1406,6 @@ impl DestinationFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
         }
     }
 
@@ -1449,10 +1445,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -1502,8 +1494,6 @@ operationalTimeouts:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
-            PACKAGE_REVISION,
         );
         parse_runtime_config(&raw)
             .expect("strict destination configuration parses")

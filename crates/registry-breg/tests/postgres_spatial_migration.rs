@@ -12,7 +12,7 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::migration_plan::{
@@ -24,9 +24,8 @@ use registry_breg::migration_plan::{
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
-    VerifiedPackage,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint,
@@ -63,10 +62,10 @@ const SITE_RECORD: &str = "00000000-0000-4000-8000-000000000101";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_safely() {
     let database = TestDatabase::create(2).await;
-    let base = compile_variant(Variant::NoBbox, 1);
+    let base = compile_variant(Variant::NoBbox);
     assert!(!base.ddl().requires_postgis);
     let base_fingerprint = initial_fingerprint(&database, &base).await;
-    let spatial = compile_variant(Variant::WithBbox, 2);
+    let spatial = compile_variant(Variant::WithBbox);
     assert!(spatial.ddl().requires_postgis);
     let fingerprint_bbox_role = provision_postgis_prerequisites(
         &database.admin,
@@ -81,13 +80,12 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     let initial_package = publish_and_load(
         prepare_package(build_request(
             Variant::NoBbox,
-            1,
             None,
             &base_fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ))
         .expect("initial non-GIS package prepares"),
-        local_context(PackageIntent::InitialActivation),
+        local_context(),
     );
     let active = apply(
         &database,
@@ -106,7 +104,6 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     let spatial_package = publish_and_load(
         prepare_package(build_request(
             Variant::WithBbox,
-            2,
             Some(&active.package_revision),
             &spatial_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
@@ -116,10 +113,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
             },
         ))
         .expect("reviewed bbox successor package prepares"),
-        local_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: 1,
-        }),
+        local_context(),
     );
     assert!(spatial_package
         .verified
@@ -185,33 +179,19 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     )
     .await;
 
-    let removed = compile_variant(Variant::WithBboxLegacyRemoved, 3);
+    let removed = compile_variant(Variant::WithBboxLegacyRemoved);
     let removed_fingerprint = destructive_target_fingerprint(&database, &spatial, &removed).await;
     let backup_bytes = synthetic_backup_sql(&spatial, &spatial_active, &database.runtime_role, 1);
     let backup_digest = digest(&backup_bytes);
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("current time formats");
-    let backup_binding = ExternalBackupBinding {
-        database_id: DATABASE.to_owned(),
-        prior_revision: spatial_active.package_revision.clone(),
-        prior_schema_fingerprint: spatial_active.schema_fingerprint.clone(),
-        sha256: backup_digest,
-        byte_length: backup_bytes.len() as u64,
-        created_at: now,
-        max_age_seconds: 3_600,
-    };
     let destructive_source = destructive_source_with_recovery_fault(
         &spatial_active,
         &spatial,
         &removed,
         &removed_fingerprint,
-        backup_binding.clone(),
     );
     let destructive_package = publish_and_load(
         prepare_package(build_request(
             Variant::WithBboxLegacyRemoved,
-            3,
             Some(&spatial_active.package_revision),
             &removed_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
@@ -221,10 +201,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
             },
         ))
         .expect("reviewed destructive spatial successor prepares"),
-        local_context(PackageIntent::Activation {
-            active_revision: &spatial_active.package_revision,
-            active_sequence: 2,
-        }),
+        local_context(),
     );
     let backup_root = tempfile::Builder::new()
         .prefix("registry-spatial-migration-backup-")
@@ -238,6 +215,21 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     fs::write(&backup_path, &backup_bytes).expect("backup evidence writes");
     fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))
         .expect("backup evidence permissions close");
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("current time formats");
+    let backup_binding = ExternalBackupBinding {
+        database_id: DATABASE.to_owned(),
+        prior_package_digest: spatial_active.package_revision.clone(),
+        prior_schema_fingerprint: spatial_active.schema_fingerprint.clone(),
+        backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
+        sha256: backup_digest,
+        byte_length: backup_bytes.len() as u64,
+        created_at: now,
+        max_age_seconds: 3_600,
+    };
+    let binding_file = backup_root.path().join("spatial-restore-binding.json");
+    fs::write(&binding_file, canonical(&backup_binding)).expect("backup binding writes");
     let binding_path = destructive_package
         .verified
         .reviewed_migration_plan()
@@ -247,7 +239,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         .backup_binding_path
         .as_deref()
         .expect("destructive backup binding path exists");
-    let backup_evidence = [DestructiveBackupEvidence::new(binding_path, &backup_path)];
+    let backup_evidence = [DestructiveBackupEvidence::new(binding_path, &binding_file)];
     let destructive_failure = apply_with_evidence(
         &database,
         &destructive_package.verified,
@@ -320,7 +312,7 @@ fn publish_and_load(
         .expect("package temporary directory creates");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("package publishes");
     let verified = load_package(&package, &context).expect("published package loads");
     PublishedPackage {
@@ -330,18 +322,18 @@ fn publish_and_load(
     }
 }
 
-fn compile_variant(variant: Variant, sequence: u64) -> CompiledRegistry {
+fn compile_variant(variant: Variant) -> CompiledRegistry {
     let module_bytes = module_bytes(variant);
     let module = parse_module_yaml(&module_bytes).expect("test module parses");
-    let project_bytes = project_bytes(sequence, &module_digest(&module));
+    let project_bytes = project_bytes(&module_digest(&module));
     let project = parse_project_yaml(&project_bytes).expect("test project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("test Registry compiles")
 }
 
-fn project_bytes(sequence: u64, digest: &str) -> Vec<u8> {
+fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"spatial-migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-migration.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://spatial-migration.example.test","title":"Spatial Migration Registry","publisher":{{"id":"spatial-migration-registry-authority","name":"Spatial Migration Publisher"}}}},"publicService":{{"id":"spatial-migration-registry-service","title":"Spatial Migration Registry"}},"datasets":[{{"id":"spatial-migration-registry","title":"Spatial Migration Dataset","owner":"Spatial Migration Publisher","status":"active"}}],"dataServices":[{{"id":"spatial-migration-registry-data-service","title":"Spatial Migration Registry","endpointUrl":"https://spatial-migration.example.test","servesDatasets":["spatial-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"spatial-migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://spatial-migration.example.test","title":"Spatial Migration Registry","publisher":{{"id":"spatial-migration-registry-authority","name":"Spatial Migration Publisher"}}}},"publicService":{{"id":"spatial-migration-registry-service","title":"Spatial Migration Registry"}},"datasets":[{{"id":"spatial-migration-registry","title":"Spatial Migration Dataset","owner":"Spatial Migration Publisher","status":"active"}}],"dataServices":[{{"id":"spatial-migration-registry-data-service","title":"Spatial Migration Registry","endpointUrl":"https://spatial-migration.example.test","servesDatasets":["spatial-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -365,7 +357,6 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
 
 fn build_request(
     variant: Variant,
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
@@ -373,20 +364,12 @@ fn build_request(
     let module_bytes = module_bytes(variant);
     let module = parse_module_yaml(&module_bytes).expect("package module parses");
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
-            bytes: project_bytes(sequence, &module_digest(&module)),
+            bytes: project_bytes(&module_digest(&module)),
         },
         modules: vec![PackageModuleSource {
             id: "core".to_owned(),
@@ -402,15 +385,9 @@ fn build_request(
     }
 }
 
-fn local_context<'a>(intent: PackageIntent<'a>) -> PackageLoadContext<'a> {
+fn local_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
-        environment: "local",
-        instance_id: INSTANCE,
-        database_id: DATABASE,
         database_initialization_environment: "local",
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        intent,
     }
 }
 
@@ -513,7 +490,7 @@ fn metadata_only_source_between(
     };
     let descriptor_bytes = canonical(&descriptor);
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: current.package_revision.clone(),
+        prior_package_digest: current.package_revision.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: Vec::new(),
@@ -546,7 +523,6 @@ fn destructive_source_with_recovery_fault(
     prior: &CompiledRegistry,
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
-    backup: ExternalBackupBinding,
 ) -> ReviewedMigrationSource {
     let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
         .changes
@@ -619,7 +595,7 @@ fn destructive_source_with_recovery_fault(
         ],
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        backup: Some(backup),
+        destructive_resume: true,
     })
 }
 
@@ -630,7 +606,7 @@ struct ReviewedSourceRequest<'a> {
     steps: Vec<(String, String)>,
     pre: (String, String),
     post: (String, String),
-    backup: Option<ExternalBackupBinding>,
+    destructive_resume: bool,
 }
 
 fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSource {
@@ -641,7 +617,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         steps,
         pre,
         post,
-        backup,
+        destructive_resume,
     } = request;
     let descriptor_path = format!("modules/core/migrations/{}/descriptor.json", descriptor.id);
     let descriptor_bytes = canonical(&descriptor);
@@ -651,7 +627,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
     );
     let fixture_bytes = b"{\"fixture\":\"representative\"}\n".to_vec();
     let receipt = MigrationRehearsalReceipt {
-        prior_revision: current.package_revision.clone(),
+        prior_package_digest: current.package_revision.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: steps
@@ -683,7 +659,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         proofs: RehearsalProofs {
             lock_timeout: true,
             chunk_resume: false,
-            destructive_resume: backup.is_some(),
+            destructive_resume,
         },
     };
     let mut files = steps
@@ -711,12 +687,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
             bytes: fixture_bytes,
         },
     ]);
-    if let (Some(path), Some(binding)) = (&descriptor.backup_binding_path, backup) {
-        files.push(ReviewedMigrationFile {
-            path: path.clone(),
-            bytes: canonical(&binding),
-        });
-    }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -946,10 +916,8 @@ async fn assert_spatial_startup_accepts_exact_identity(
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
     let startup = prepare_startup(
         &package.root,
-        &local_context(PackageIntent::Startup {
-            active_revision: &active.package_revision,
-            active_sequence: 2,
-        }),
+        &local_context(),
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -1227,10 +1195,8 @@ async fn assert_startup_refuses_bbox_bypassrls_drift(
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
     let refused = prepare_startup(
         &package.root,
-        &local_context(PackageIntent::Startup {
-            active_revision: &active.package_revision,
-            active_sequence: 2,
-        }),
+        &local_context(),
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -1272,10 +1238,8 @@ async fn assert_startup_refuses_runtime_bbox_membership_drift(
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
     let refused = prepare_startup(
         &package.root,
-        &local_context(PackageIntent::Startup {
-            active_revision: &active.package_revision,
-            active_sequence: 2,
-        }),
+        &local_context(),
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -1582,6 +1546,7 @@ fn request<'a>(
     ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
@@ -1649,7 +1614,7 @@ async fn assert_non_ready_target(
     assert_eq!(row.get::<_, String>(1), expected_status);
     assert_eq!(
         row.get::<_, Option<String>>(2).as_deref(),
-        Some(target.manifest().package_revision.as_str())
+        Some(target.package_digest())
     );
 }
 

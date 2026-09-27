@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: acceptance
-  instanceId: asset-site-placement-change-requests-acceptance
-  sequence: 1
   sourceRevision: asset-site-placement-change-requests-acceptance-0.1.0
 manifestProjection:
   accessProfile: asset-operator

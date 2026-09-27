@@ -29,10 +29,9 @@ use registry_breg::fixtures::{
     SchemaTestSources,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, PreparedPackage, SignaturePolicy, TrustAnchorKey, VerifiedPackage,
-    FIXTURE_JOURNEYS_PATH, TRUST_ANCHOR_API_VERSION,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, PreparedPackage,
+    VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -44,10 +43,8 @@ use registry_breg::startup::{
     prepare_schema_test_database_with_connection_configs_for_test,
     prepare_with_connection_config_for_test, PreparedServer,
 };
-use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk, MockIdp};
-use serde::Serialize;
 use serde_json::json;
 use tempfile::TempDir;
 use zeroize::Zeroizing;
@@ -117,10 +114,10 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
         &registry,
         RegistryStateTestIdentity {
             package_id: &package.package.manifest().package_id,
-            environment: &package.package.manifest().environment,
-            instance_id: &package.package.manifest().instance_id,
-            database_id: &package.package.manifest().database_id,
-            package_revision: &package.package.manifest().package_revision,
+            environment: "production",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: &package.revision,
             package_sequence: 1,
         },
     )
@@ -306,8 +303,9 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
     validate_schema_test_receipt_for_package(&first_bytes, &package.prepared, &suite)
         .expect("real PostgreSQL receipt revalidates against the exact unsigned package");
     assert!(first_value.get("registryRevision").is_some());
-    assert!(first_value.get("candidatePackageRevision").is_some());
-    assert!(first_value.get("signingInputSha256").is_some());
+    assert!(first_value.get("sourceClosureSha256").is_some());
+    assert!(first_value.get("candidatePackageRevision").is_none());
+    assert!(first_value.get("signingInputSha256").is_none());
     assert!(first_value.get("currentDatabase").is_none());
     assert!(first_value.get("executionBinding").is_none());
 
@@ -417,7 +415,9 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
     )
     .await
     .expect("substitution database prepares");
-    let other_package = package_fixture(&project_source, &schema_fingerprint);
+    let mut other_project_source = project_source.clone();
+    other_project_source.extend_from_slice(b"# substituted source bytes\n");
+    let other_package = package_fixture(&other_project_source, &schema_fingerprint);
     assert_eq!(
         execute_schema_test(
             substituted_database,
@@ -910,7 +910,6 @@ struct PackageFixture {
     _root: TempDir,
     directory: PathBuf,
     package_root: PathBuf,
-    anchor: PathBuf,
     revision: String,
     prepared: PreparedPackage,
     package: VerifiedPackage,
@@ -946,21 +945,10 @@ fn package_fixture_with_modules(
     journey_source: &[u8],
     modules: Vec<PackageModuleSource>,
 ) -> PackageFixture {
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("package signing key generates");
-    let key_id = signing.public().kid.expect("package signing key has an id");
     let prepared = prepare_package(PackageBuildRequest {
-        environment: "production".to_owned(),
-        instance_id: INSTANCE_ID.to_owned(),
-        database_id: DATABASE_ID.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 1,
-            key_ids: vec![key_id.clone()],
-        },
         project: PackageSourceFile {
             path: "sources/project.yaml".to_owned(),
             bytes: project.to_vec(),
@@ -984,43 +972,14 @@ fn package_fixture_with_modules(
         .canonicalize()
         .expect("temporary package root canonicalizes");
     let package_root = directory.join("package");
-    let revision = prepared.package_revision().to_owned();
-    let signature =
-        sign(prepared.canonical_signed_bytes(), &signing).expect("package canonical bytes sign");
+    let revision = prepared.package_digest().unwrap().to_owned();
     prepared
-        .publish_to_directory(
-            &package_root,
-            vec![PackageSignature {
-                key_id: key_id.clone(),
-                signature_hex: hex(&signature),
-            }],
-        )
+        .publish_to_directory(&package_root)
         .expect("Production package publishes");
-    let anchor = directory.join("trust-anchor.json");
-    write_json(
-        &anchor,
-        &PackageTrustAnchor {
-            api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-            environment: "production".to_owned(),
-            instance_id: INSTANCE_ID.to_owned(),
-            database_id: DATABASE_ID.to_owned(),
-            threshold: 1,
-            keys: vec![TrustAnchorKey {
-                key_id,
-                jwk: serde_json::to_value(signing.public()).expect("public JWK serializes"),
-            }],
-        },
-    );
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            environment: "production",
-            instance_id: INSTANCE_ID,
-            database_id: DATABASE_ID,
             database_initialization_environment: "production",
-            compiler_source_revision: COMPILER_SOURCE_REVISION,
-            trust_anchor: Some(&anchor),
-            intent: PackageIntent::InitialActivation,
         },
     )
     .expect("package closure rederives into VerifiedPackage");
@@ -1028,7 +987,6 @@ fn package_fixture_with_modules(
         _root: root,
         directory,
         package_root,
-        anchor,
         revision,
         prepared,
         package,
@@ -1039,17 +997,9 @@ fn package_fixture_with_modules(
 
 fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageFixture {
     let prepared = prepare_package(PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: QUICKSTART_INSTANCE_ID.to_owned(),
-        database_id: QUICKSTART_DATABASE_ID.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: QUICKSTART_COMPILER_SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "sources/project.yaml".to_owned(),
             bytes: project.to_vec(),
@@ -1081,21 +1031,14 @@ fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageF
         .canonicalize()
         .expect("temporary package root canonicalizes");
     let package_root = directory.join("package");
-    let revision = prepared.package_revision().to_owned();
+    let revision = prepared.package_digest().unwrap().to_owned();
     prepared
-        .publish_to_directory(&package_root, Vec::new())
+        .publish_to_directory(&package_root)
         .expect("local spatial package publishes");
-    let anchor = directory.join("trust-anchor.json");
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            environment: "local",
-            instance_id: QUICKSTART_INSTANCE_ID,
-            database_id: QUICKSTART_DATABASE_ID,
             database_initialization_environment: "local",
-            compiler_source_revision: QUICKSTART_COMPILER_SOURCE_REVISION,
-            trust_anchor: None,
-            intent: PackageIntent::InitialActivation,
         },
     )
     .expect("spatial package closure rederives into VerifiedPackage");
@@ -1103,7 +1046,6 @@ fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageF
         _root: root,
         directory,
         package_root,
-        anchor,
         revision,
         prepared,
         package,
@@ -1161,10 +1103,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {COMPILER_SOURCE_REVISION}
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: {}
@@ -1205,8 +1143,6 @@ operationalTimeouts:
                 database.migration_role.as_str(),
                 database.runtime_role.as_str(),
                 self.package_root.display(),
-                self.anchor.display(),
-                self.revision,
                 idp.issuer(),
             ),
         )
@@ -1280,10 +1216,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {QUICKSTART_COMPILER_SOURCE_REVISION}
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: {}
@@ -1324,8 +1256,6 @@ operationalTimeouts:
                 database.migration_role.as_str(),
                 database.runtime_role.as_str(),
                 self.package_root.display(),
-                self.anchor.display(),
-                self.revision,
                 idp.issuer(),
             ),
         )
@@ -1702,12 +1632,6 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn write_json(path: &Path, value: &impl Serialize) {
-    let bytes = canonicalize_json(&serde_json::to_value(value).expect("value serializes"))
-        .expect("value canonicalizes");
-    write_private(path, &bytes);
-}
-
 fn write_private(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).expect("private fixture file writes");
     set_private_permissions(path);
@@ -1719,22 +1643,11 @@ fn set_private_permissions(path: &Path) {
         .expect("private fixture permissions set");
 }
 
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
-        encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
-    }
-    encoded
-}
-
 fn compiled_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
     let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
     let project_source = String::from_utf8(PROJECT_TEMPLATE.to_vec())
         .expect("project fixture is UTF-8")
         .replace("MODULE_DIGEST", &module_digest(&module))
-        .replace("environment: local", "environment: production")
         .into_bytes();
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     let registry = compile_project(&project, &[module], CompileProfile::Production)
@@ -1752,8 +1665,8 @@ fn compiled_spatial_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
     let project_source = String::from_utf8(SPATIAL_PROJECT_SOURCE.to_vec())
         .expect("spatial project fixture is UTF-8")
         .replace(
-            "  environment: acceptance\n  instanceId: spatial-service-sites-acceptance\n  sequence: 1\n  sourceRevision: spatial-service-sites-acceptance-0.1.0\n",
-            "  environment: local\n  instanceId: generic_registry_local\n  sequence: 1\n  sourceRevision: quickstart-source\n",
+            "  sourceRevision: spatial-service-sites-acceptance-0.1.0\n",
+            "  sourceRevision: quickstart-source\n",
         )
         .replace(
             "    digest: \"sha256:f00b23dadbd5b3fe5bdd447f7b735381017c367bc177f43e5c429f85838e2725\"",
@@ -1793,8 +1706,6 @@ fn compiled_household_fixture(
         .package
         .as_mut()
         .expect("project declares package identity");
-    identity.environment = "production".to_owned();
-    identity.instance_id = INSTANCE_ID.to_owned();
     identity.source_revision = COMPILER_SOURCE_REVISION.to_owned();
     let request = project
         .entities

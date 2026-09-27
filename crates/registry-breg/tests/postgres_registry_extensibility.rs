@@ -551,8 +551,6 @@ fn event_destinations(
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600))
             .expect("key is private");
     }
-    let anchor = root.join("trust-anchor.json");
-    std::fs::write(&anchor, "{}").expect("unread anchor placeholder");
     let config = json!({
         "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1",
         "kind":"BRegRuntimeConfig",
@@ -564,7 +562,7 @@ fn event_destinations(
             "pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},
             "roles":{"migration":"registry_migration","runtime":"registry_runtime"}
         },
-        "package":{"root":root,"trustAnchorPath":anchor,"compilerSourceRevision":"fixture-1", "activeRevision":format!("sha256:{}", "a".repeat(64)),"activeSequence":1},
+        "package":{"root":root},
         "authentication":{
             "oidc":{
                 "issuer":"https://issuer.example", "audience":AUDIENCE, "allowedAlgorithm":"EdDSA", "accessTokenType":"JWT",

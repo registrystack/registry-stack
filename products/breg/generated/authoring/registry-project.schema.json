@@ -3694,25 +3694,11 @@
     "PackageIdentitySource": {
       "additionalProperties": false,
       "properties": {
-        "environment": {
-          "type": "string"
-        },
-        "instanceId": {
-          "type": "string"
-        },
-        "sequence": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
         "sourceRevision": {
           "type": "string"
         }
       },
       "required": [
-        "environment",
-        "instanceId",
-        "sequence",
         "sourceRevision"
       ],
       "type": "object"

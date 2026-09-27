@@ -20,13 +20,12 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, VerifiedPackage, TRUST_ANCHOR_API_VERSION,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
     initialize_registry_state_for_catalog_test, install_compiled_schema,
@@ -37,8 +36,7 @@ use registry_breg::startup::{
     check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
     prepare_with_connection_config_for_test, serve_until_shutdown, PreparedServer, StartupError,
 };
-use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
@@ -46,7 +44,6 @@ use registry_platform_oidc::{
 use registry_platform_testing::{
     fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, MockIdp,
 };
-use serde::Serialize;
 use serde_json::json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::oneshot;
@@ -78,10 +75,8 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
     let (migration, migration_task) = database.connect_migration().await;
 
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let provisional_context = provisional.context();
     let verified_provisional = load_package(&provisional.root, &provisional_context)
         .expect("provisional package loads enough to install schema");
     install_compiled_schema(
@@ -98,8 +93,8 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
             .expect("compiled schema fingerprints");
     drop(provisional);
 
-    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
-    let context = package.context(PackageIntent::InitialActivation);
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let context = package.context();
     let verified = load_package(&package.root, &context).expect("final package verifies");
     initialize_registry_state_for_catalog_test(
         &migration,
@@ -107,12 +102,11 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: &verified.manifest().environment,
-            instance_id: &verified.manifest().instance_id,
-            database_id: &verified.manifest().database_id,
-            package_revision: &verified.manifest().package_revision,
-            package_sequence: i64::try_from(verified.manifest().sequence)
-                .expect("fixture sequence fits"),
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
+            package_sequence: 1,
         },
     )
     .await
@@ -204,10 +198,8 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         .expect_err("migration connection is not accepted as runtime");
 
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let provisional_context = provisional.context();
     let verified_provisional = load_package(&provisional.root, &provisional_context)
         .expect("provisional package loads enough to install schema");
     install_compiled_schema(
@@ -224,8 +216,8 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
             .expect("compiled schema fingerprints");
     drop(provisional);
 
-    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
-    let context = package.context(PackageIntent::InitialActivation);
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let context = package.context();
     let verified = load_package(&package.root, &context).expect("final package verifies");
     initialize_registry_state_for_catalog_test(
         &migration,
@@ -233,12 +225,11 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: &verified.manifest().environment,
-            instance_id: &verified.manifest().instance_id,
-            database_id: &verified.manifest().database_id,
-            package_revision: &verified.manifest().package_revision,
-            package_sequence: i64::try_from(verified.manifest().sequence)
-                .expect("fixture sequence fits"),
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
+            package_sequence: 1,
         },
     )
     .await
@@ -369,19 +360,15 @@ async fn production_startup_refuses_local_file_field_encryption_custody() {
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
     let module_source = module_bytes_with_encrypted_field();
     let provisional = PackageFixture::build_version_with_module(
         &fixture.root,
         fingerprint(1),
-        &signing,
-        1,
         None,
         false,
         module_source.clone(),
     );
-    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let provisional_context = provisional.context();
     let verified_provisional = load_package(&provisional.root, &provisional_context)
         .expect("provisional encrypted package loads enough to install schema");
     install_compiled_schema(
@@ -401,13 +388,11 @@ async fn production_startup_refuses_local_file_field_encryption_custody() {
     let package = PackageFixture::build_version_with_module(
         &fixture.root,
         schema_fingerprint,
-        &signing,
-        1,
         None,
         false,
         module_source,
     );
-    let context = package.context(PackageIntent::InitialActivation);
+    let context = package.context();
     let verified = load_package(&package.root, &context).expect("final encrypted package verifies");
     initialize_registry_state_for_catalog_test(
         &migration,
@@ -415,12 +400,11 @@ async fn production_startup_refuses_local_file_field_encryption_custody() {
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: &verified.manifest().environment,
-            instance_id: &verified.manifest().instance_id,
-            database_id: &verified.manifest().database_id,
-            package_revision: &verified.manifest().package_revision,
-            package_sequence: i64::try_from(verified.manifest().sequence)
-                .expect("fixture sequence fits"),
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
+            package_sequence: 1,
         },
     )
     .await
@@ -483,10 +467,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         .expect_err("migration connection is not accepted as runtime");
 
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let provisional_context = provisional.context();
     let verified_provisional = load_package(&provisional.root, &provisional_context)
         .expect("provisional package loads enough to install schema");
     install_compiled_schema(
@@ -503,8 +485,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
             .expect("compiled schema fingerprints");
     drop(provisional);
 
-    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
-    let context = package.context(PackageIntent::InitialActivation);
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let context = package.context();
     let verified = load_package(&package.root, &context).expect("final package verifies");
     initialize_registry_state_for_catalog_test(
         &migration,
@@ -512,12 +494,11 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: &verified.manifest().environment,
-            instance_id: &verified.manifest().instance_id,
-            database_id: &verified.manifest().database_id,
-            package_revision: &verified.manifest().package_revision,
-            package_sequence: i64::try_from(verified.manifest().sequence)
-                .expect("fixture sequence fits"),
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
+            package_sequence: 1,
         },
     )
     .await
@@ -570,7 +551,7 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
             "UPDATE registry_internal.registry_state
              SET active_package_revision = $1
              WHERE singleton",
-            &[&verified.manifest().package_revision],
+            &[&verified.package_digest()],
         )
         .await
         .expect("test restores active package");
@@ -602,10 +583,8 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let provisional_context = provisional.context();
     let verified_provisional = load_package(&provisional.root, &provisional_context)
         .expect("provisional package loads enough to install schema");
     install_compiled_schema(
@@ -621,8 +600,8 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
             .await
             .expect("compiled schema fingerprints");
     drop(provisional);
-    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
-    let context = package.context(PackageIntent::InitialActivation);
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let context = package.context();
     let verified = load_package(&package.root, &context).expect("final package verifies");
     initialize_registry_state_for_catalog_test(
         &migration,
@@ -630,12 +609,11 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: &verified.manifest().environment,
-            instance_id: &verified.manifest().instance_id,
-            database_id: &verified.manifest().database_id,
-            package_revision: &verified.manifest().package_revision,
-            package_sequence: i64::try_from(verified.manifest().sequence)
-                .expect("fixture sequence fits"),
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
+            package_sequence: 1,
         },
     )
     .await
@@ -806,10 +784,8 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     }
     let (migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let provisional_context = provisional.context();
     let verified_provisional = load_package(&provisional.root, &provisional_context)
         .expect("provisional package loads enough to install schema");
     install_compiled_schema(
@@ -826,21 +802,21 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
             .expect("compiled schema fingerprints");
     drop(provisional);
 
-    let package = PackageFixture::build(&fixture.root, schema_fingerprint.clone(), &signing);
-    let context = package.context(PackageIntent::InitialActivation);
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint.clone());
+    let context = package.context();
     let verified = load_package(&package.root, &context).expect("final package verifies");
     let manifest = verified.manifest();
-    let package_sequence = i64::try_from(manifest.sequence).expect("fixture sequence fits");
+    let package_sequence = 1;
     initialize_registry_state_for_catalog_test(
         &migration,
         &database.runtime_role,
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &manifest.package_id,
-            environment: &manifest.environment,
-            instance_id: &manifest.instance_id,
-            database_id: &manifest.database_id,
-            package_revision: &manifest.package_revision,
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
             package_sequence,
         },
     )
@@ -865,10 +841,10 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     let claims = InstanceClaimService::new_for_test(
         ExpectedRegistryIdentity {
             package_id: manifest.package_id.clone(),
-            environment: manifest.environment.clone(),
-            instance_id: manifest.instance_id.clone(),
-            database_id: manifest.database_id.clone(),
-            package_revision: manifest.package_revision.clone(),
+            environment: "production".to_owned(),
+            instance_id: INSTANCE.to_owned(),
+            database_id: DATABASE.to_owned(),
+            package_revision: verified.package_digest().to_owned(),
             schema_fingerprint: manifest.schema_fingerprint.clone(),
             package_sequence,
         },
@@ -988,15 +964,10 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
 
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let verified_provisional = load_package(
-        &provisional.root,
-        &provisional.context(PackageIntent::InitialActivation),
-    )
-    .expect("provisional initial package verifies");
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let verified_provisional = load_package(&provisional.root, &provisional.context())
+        .expect("provisional initial package verifies");
     let transaction = migration
         .transaction()
         .await
@@ -1021,12 +992,9 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
         .expect("initial rehearsal rolls back");
     drop(provisional);
 
-    let initial_package = PackageFixture::build(&fixture.root, initial_fingerprint, &signing);
-    let verified_initial = load_package(
-        &initial_package.root,
-        &initial_package.context(PackageIntent::InitialActivation),
-    )
-    .expect("final initial package verifies");
+    let initial_package = PackageFixture::build(&fixture.root, initial_fingerprint);
+    let verified_initial = load_package(&initial_package.root, &initial_package.context())
+        .expect("final initial package verifies");
     let initial = apply_startup_package(
         &database,
         &verified_initial,
@@ -1034,19 +1002,11 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
     )
     .await;
 
-    let provisional_successor = PackageFixture::build_successor(
-        &fixture.root,
-        fingerprint(2),
-        &signing,
-        &initial.package_revision,
-    );
-    let activation_intent = PackageIntent::Activation {
-        active_revision: &initial.package_revision,
-        active_sequence: 1,
-    };
+    let provisional_successor =
+        PackageFixture::build_successor(&fixture.root, fingerprint(2), &initial.package_revision);
     let verified_provisional_successor = load_package(
         &provisional_successor.root,
-        &provisional_successor.context(activation_intent),
+        &provisional_successor.context(),
     )
     .expect("provisional successor verifies");
     let transaction = migration
@@ -1118,14 +1078,10 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
     let successor_package = PackageFixture::build_successor(
         &fixture.root,
         successor_fingerprint,
-        &signing,
         &initial.package_revision,
     );
-    let verified_successor = load_package(
-        &successor_package.root,
-        &successor_package.context(activation_intent),
-    )
-    .expect("final successor verifies");
+    let verified_successor = load_package(&successor_package.root, &successor_package.context())
+        .expect("final successor verifies");
     migration_task.abort();
 
     let record_id = uuid::Uuid::from_u128(1);
@@ -1284,10 +1240,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
             .await
             .expect("exact successor applies after prior work drains")
     };
-    assert_eq!(
-        active.package_revision,
-        verified_successor.manifest().package_revision
-    );
+    assert_eq!(active.package_revision, verified_successor.package_digest());
 
     let old_ready = http_get(old_address, "/ready", None)
         .await
@@ -1374,14 +1327,9 @@ async fn audit_and_oidc_failures_refuse_before_listener_bind() {
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
-    let signing =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
-    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
-    let verified_provisional = load_package(
-        &provisional.root,
-        &provisional.context(PackageIntent::InitialActivation),
-    )
-    .expect("provisional package loads");
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let verified_provisional =
+        load_package(&provisional.root, &provisional.context()).expect("provisional package loads");
     install_compiled_schema(
         &migration,
         verified_provisional.registry(),
@@ -1396,22 +1344,18 @@ async fn audit_and_oidc_failures_refuse_before_listener_bind() {
             .expect("compiled schema fingerprints");
     drop(provisional);
 
-    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
-    let verified = load_package(
-        &package.root,
-        &package.context(PackageIntent::InitialActivation),
-    )
-    .expect("final package verifies");
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let verified = load_package(&package.root, &package.context()).expect("final package verifies");
     initialize_registry_state_for_catalog_test(
         &migration,
         &database.runtime_role,
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: &verified.manifest().environment,
-            instance_id: &verified.manifest().instance_id,
-            database_id: &verified.manifest().database_id,
-            package_revision: &verified.manifest().package_revision,
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            package_revision: verified.package_digest(),
             package_sequence: 1,
         },
     )
@@ -1470,6 +1414,7 @@ async fn apply_startup_package_result(
     apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new("production", INSTANCE, DATABASE),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
@@ -1968,10 +1913,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {SOURCE_REVISION}
-  activeRevision: {}
-  activeSequence: {}
 authentication:
   oidc:
     issuer: {}
@@ -2008,9 +1949,6 @@ operationalTimeouts:
                 migration_role.as_str(),
                 runtime_role.as_str(),
                 package.root.display(),
-                package.anchor.display(),
-                package.revision,
-                package.sequence,
                 issuer
             ),
         )
@@ -2029,45 +1967,26 @@ impl Drop for StartupFixture {
 
 struct PackageFixture {
     root: PathBuf,
-    anchor: PathBuf,
-    revision: String,
-    sequence: u64,
 }
 
 impl PackageFixture {
-    fn build(parent: &Path, schema_fingerprint: String, signing: &PrivateJwk) -> Self {
-        Self::build_version(parent, schema_fingerprint, signing, 1, None, false)
+    fn build(parent: &Path, schema_fingerprint: String) -> Self {
+        Self::build_version(parent, schema_fingerprint, None, false)
     }
 
-    fn build_successor(
-        parent: &Path,
-        schema_fingerprint: String,
-        signing: &PrivateJwk,
-        prior_revision: &str,
-    ) -> Self {
-        Self::build_version(
-            parent,
-            schema_fingerprint,
-            signing,
-            2,
-            Some(prior_revision),
-            true,
-        )
+    fn build_successor(parent: &Path, schema_fingerprint: String, prior_revision: &str) -> Self {
+        Self::build_version(parent, schema_fingerprint, Some(prior_revision), true)
     }
 
     fn build_version(
         parent: &Path,
         schema_fingerprint: String,
-        signing: &PrivateJwk,
-        sequence: u64,
         prior_revision: Option<&str>,
         successor: bool,
     ) -> Self {
         Self::build_version_with_module(
             parent,
             schema_fingerprint,
-            signing,
-            sequence,
             prior_revision,
             successor,
             module_bytes(successor),
@@ -2077,8 +1996,6 @@ impl PackageFixture {
     fn build_version_with_module(
         parent: &Path,
         schema_fingerprint: String,
-        signing: &PrivateJwk,
-        sequence: u64,
         prior_revision: Option<&str>,
         successor: bool,
         module_source: Vec<u8>,
@@ -2086,13 +2003,12 @@ impl PackageFixture {
         let ordinal = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = parent.join(format!("package-{ordinal}"));
         let module = parse_module_yaml(&module_source).expect("fixture module parses");
-        let project_source = project_bytes(sequence, &module_digest(&module));
-        let key_id = signing.public().kid.expect("generated key has kid");
+        let project_source = project_bytes(&module_digest(&module));
         let migration_plan = if successor {
             let prior_module_bytes = module_bytes(false);
             let prior_module =
                 parse_module_yaml(&prior_module_bytes).expect("prior fixture module parses");
-            let prior_project_bytes = project_bytes(1, &module_digest(&prior_module));
+            let prior_project_bytes = project_bytes(&module_digest(&prior_module));
             let prior_project =
                 parse_project_yaml(&prior_project_bytes).expect("prior fixture project parses");
             let prior_registry =
@@ -2105,17 +2021,9 @@ impl PackageFixture {
             PackageMigrationPlanInput::InitialCompiledDdl
         };
         let prepared = prepare_package(PackageBuildRequest {
-            environment: "production".to_owned(),
-            instance_id: INSTANCE.to_owned(),
-            database_id: DATABASE.to_owned(),
-            sequence,
-            prior_revision: prior_revision.map(str::to_owned),
+            from_package_digest: prior_revision.map(str::to_owned),
             compiler_source_revision: SOURCE_REVISION.to_owned(),
             schema_fingerprint,
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.clone()],
-            },
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
                 bytes: project_source,
@@ -2133,56 +2041,22 @@ impl PackageFixture {
             migration_plan,
         })
         .expect("fixture package prepares");
-        let signature =
-            sign(prepared.canonical_signed_bytes(), signing).expect("fixture package signs");
         prepared
-            .publish_to_directory(
-                &root,
-                vec![PackageSignature {
-                    key_id: key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
+            .publish_to_directory(&root)
             .expect("fixture package publishes");
-        let anchor = parent.join(format!("trust-anchor-{ordinal}.json"));
-        write_json(
-            &anchor,
-            &PackageTrustAnchor {
-                api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-                environment: "production".to_owned(),
-                instance_id: INSTANCE.to_owned(),
-                database_id: DATABASE.to_owned(),
-                threshold: 1,
-                keys: vec![TrustAnchorKey {
-                    key_id,
-                    jwk: serde_json::to_value(signing.public()).expect("public JWK serializes"),
-                }],
-            },
-        );
-        Self {
-            root,
-            anchor,
-            revision: prepared.package_revision().to_owned(),
-            sequence,
-        }
+        Self { root }
     }
 
-    fn context<'a>(&'a self, intent: PackageIntent<'a>) -> PackageLoadContext<'a> {
+    fn context(&self) -> PackageLoadContext<'static> {
         PackageLoadContext {
-            environment: "production",
-            instance_id: INSTANCE,
-            database_id: DATABASE,
             database_initialization_environment: "production",
-            compiler_source_revision: SOURCE_REVISION,
-            trust_anchor: Some(&self.anchor),
-            intent,
         }
     }
 }
 
-fn project_bytes(sequence: u64, module_digest: &str) -> Vec<u8> {
+fn project_bytes(module_digest: &str) -> Vec<u8> {
     let project = format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"production","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     );
     parse_project_yaml(project.as_bytes()).expect("project fixture parses");
     project.into_bytes()
@@ -2208,23 +2082,8 @@ fn module_bytes_with_encrypted_field() -> Vec<u8> {
         .into_bytes()
 }
 
-fn write_json(path: &Path, value: &impl Serialize) {
-    let bytes = canonicalize_json(&serde_json::to_value(value).expect("value serializes"))
-        .expect("value canonicalizes");
-    fs::write(path, bytes).expect("fixture JSON writes");
-}
-
 fn fingerprint(byte: u8) -> String {
     format!("sha256:{}", format!("{byte:02x}").repeat(32))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut result = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut result, "{byte:02x}").expect("writing to String succeeds");
-    }
-    result
 }
 
 fn quote(value: &str) -> String {

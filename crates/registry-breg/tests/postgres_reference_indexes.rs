@@ -26,14 +26,14 @@ use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest,
 };
 use registry_breg::package::{
     compiled_registry_change_set_from_baseline, load_package, prepare_package,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
-    PackageBuildRequest, PackageIntent, PackageLoadContext, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, SignaturePolicy, VerifiedPackage,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
@@ -66,17 +66,16 @@ const RARE_SITE: &str = "00000000-0000-4000-8000-000000000999";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn activation_installs_reference_indexes_and_verification_refuses_their_absence() {
     let database = TestDatabase::create(2).await;
-    let registry = compile_registry(1);
+    let registry = compile_registry();
     let fingerprint = rehearsed_fingerprint(&database, &registry).await;
     let package = publish_and_load(
         prepare_package(build_request(
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ))
         .expect("initial package prepares"),
-        local_context(PackageIntent::InitialActivation),
+        local_context(),
     );
     let active = apply(
         &database,
@@ -148,7 +147,7 @@ async fn activation_installs_reference_indexes_and_verification_refuses_their_ab
         Err(PostgresKernelError::RegistryUnavailable)
     ));
     assert_eq!(
-        startup(&database, &package, &active, 1).await.err(),
+        startup(&database, &package).await.err(),
         Some(StartupError::DatabaseUnready),
         "startup refuses a catalog missing a compiled reference index"
     );
@@ -172,7 +171,7 @@ async fn activation_installs_reference_indexes_and_verification_refuses_their_ab
     .await
     .expect("recreating the exact compiled index restores the catalog");
     task.abort();
-    startup(&database, &package, &active, 1)
+    startup(&database, &package)
         .await
         .expect("startup accepts the restored catalog");
     database.cleanup().await;
@@ -181,17 +180,16 @@ async fn activation_installs_reference_indexes_and_verification_refuses_their_ab
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them() {
     let database = TestDatabase::create(2).await;
-    let registry = compile_registry(1);
+    let registry = compile_registry();
     let fingerprint = rehearsed_fingerprint(&database, &registry).await;
     let initial = publish_and_load(
         prepare_package(build_request(
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ))
         .expect("initial package prepares"),
-        local_context(PackageIntent::InitialActivation),
+        local_context(),
     );
     let mut active = apply(
         &database,
@@ -243,7 +241,7 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
             .indexes
             .retain(|member, _| !member.starts_with("reference:"));
     }
-    let successor_registry = compile_registry(2);
+    let successor_registry = compile_registry();
     let change_set = compiled_registry_change_set_from_baseline(
         &baseline,
         &successor_registry,
@@ -262,7 +260,6 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
     );
     let successor = publish_and_load(
         prepare_package(build_request(
-            2,
             Some(&active.package_revision),
             &fingerprint,
             PackageMigrationPlanInput::SuccessorFromBaseline {
@@ -270,10 +267,7 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
             },
         ))
         .expect("successor package prepares without reviewed SQL"),
-        local_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: 1,
-        }),
+        local_context(),
     );
     assert_eq!(
         successor
@@ -295,7 +289,7 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
     .expect("the successor activates on the index-free database");
     assert_eq!(upgraded.schema_fingerprint, fingerprint);
     assert!(index_definitions(&database).await.contains_key(&site_index));
-    startup(&database, &successor, &upgraded, 2)
+    startup(&database, &successor)
         .await
         .expect("startup accepts the upgraded catalog");
     database.cleanup().await;
@@ -309,16 +303,17 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
 async fn the_rehearsal_installs_a_predecessor_baseline_without_reference_indexes() {
     let database = TestDatabase::create(2).await;
     let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
-    let registry = compile_registry(1);
+    let registry = compile_registry();
     let fingerprint = rehearsed_fingerprint(&database, &registry).await;
     let initial = prepare_package(build_request(
-        1,
         None,
         &fingerprint,
         PackageMigrationPlanInput::InitialCompiledDdl,
     ))
     .expect("initial package prepares");
-    let prior_revision = initial.manifest().package_revision.clone();
+    let prior_revision = initial
+        .package_digest()
+        .expect("initial package digest derives");
 
     // The fingerprint an engine without reference indexes signed.
     let site_index = reference_index_name(&registry, "site");
@@ -359,7 +354,6 @@ async fn the_rehearsal_installs_a_predecessor_baseline_without_reference_indexes
             .retain(|member, _| !member.starts_with("reference:"));
     }
     let successor = prepare_package(build_request(
-        2,
         Some(&prior_revision),
         &fingerprint,
         PackageMigrationPlanInput::SuccessorFromBaseline {
@@ -394,17 +388,16 @@ async fn the_rehearsal_installs_a_predecessor_baseline_without_reference_indexes
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_selective_reference_filter_uses_the_reference_index() {
     let database = TestDatabase::create(2).await;
-    let registry = Arc::new(compile_registry(1));
+    let registry = Arc::new(compile_registry());
     let fingerprint = rehearsed_fingerprint(&database, &registry).await;
     let package = publish_and_load(
         prepare_package(build_request(
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ))
         .expect("initial package prepares"),
-        local_context(PackageIntent::InitialActivation),
+        local_context(),
     );
     let active = apply(
         &database,
@@ -485,7 +478,7 @@ fn publish_and_load(
         .expect("package temporary directory creates");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("package publishes");
     let verified = load_package(&package, &context).expect("published package loads");
     PublishedPackage {
@@ -495,10 +488,10 @@ fn publish_and_load(
     }
 }
 
-fn compile_registry(sequence: u64) -> CompiledRegistry {
+fn compile_registry() -> CompiledRegistry {
     let module = parse_module_yaml(MODULE).expect("test module parses");
-    let project = parse_project_yaml(&project_bytes(sequence, &module_digest(&module)))
-        .expect("test project parses");
+    let project =
+        parse_project_yaml(&project_bytes(&module_digest(&module))).expect("test project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("test Registry compiles")
 }
@@ -514,35 +507,26 @@ const MODULE: &[u8] = br#"{"id":"core","version":"1","entities":[
    "accessProfiles":[{"rowBoundaries":[],"id":"reader","principalClaim":"principal","operations":["get","list"],
      "readableFields":["site","owner","code"],"filterableFields":["site"]}]}]}"#;
 
-fn project_bytes(sequence: u64, digest: &str) -> Vec<u8> {
+fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"reference-index-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://reference-index.example.test","title":"Reference Index Registry","publisher":{{"id":"reference-index-registry-authority","name":"Reference Index Publisher"}}}},"publicService":{{"id":"reference-index-registry-service","title":"Reference Index Registry"}},"datasets":[{{"id":"reference-index-registry","title":"Reference Index Dataset","owner":"Reference Index Publisher","status":"active"}}],"dataServices":[{{"id":"reference-index-registry-data-service","title":"Reference Index Registry","endpointUrl":"https://reference-index.example.test","servesDatasets":["reference-index-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"reference-index-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://reference-index.example.test","title":"Reference Index Registry","publisher":{{"id":"reference-index-registry-authority","name":"Reference Index Publisher"}}}},"publicService":{{"id":"reference-index-registry-service","title":"Reference Index Registry"}},"datasets":[{{"id":"reference-index-registry","title":"Reference Index Dataset","owner":"Reference Index Publisher","status":"active"}}],"dataServices":[{{"id":"reference-index-registry-data-service","title":"Reference Index Registry","endpointUrl":"https://reference-index.example.test","servesDatasets":["reference-index-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn build_request(
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
     let module = parse_module_yaml(MODULE).expect("package module parses");
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
-            bytes: project_bytes(sequence, &module_digest(&module)),
+            bytes: project_bytes(&module_digest(&module)),
         },
         modules: vec![PackageModuleSource {
             id: "core".to_owned(),
@@ -558,15 +542,9 @@ fn build_request(
     }
 }
 
-fn local_context<'a>(intent: PackageIntent<'a>) -> PackageLoadContext<'a> {
+fn local_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
-        environment: "local",
-        instance_id: INSTANCE,
-        database_id: DATABASE,
         database_initialization_environment: "local",
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        intent,
     }
 }
 
@@ -602,6 +580,7 @@ async fn apply(
     apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
@@ -610,12 +589,7 @@ async fn apply(
     .await
 }
 
-async fn startup(
-    database: &TestDatabase,
-    package: &PublishedPackage,
-    active: &ExpectedRegistryIdentity,
-    sequence: u64,
-) -> Result<(), StartupError> {
+async fn startup(database: &TestDatabase, package: &PublishedPackage) -> Result<(), StartupError> {
     let pool = database
         .runtime_config
         .build_pool()
@@ -623,10 +597,8 @@ async fn startup(
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
     prepare_startup(
         &package.root,
-        &local_context(PackageIntent::Startup {
-            active_revision: &active.package_revision,
-            active_sequence: sequence,
-        }),
+        &local_context(),
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,

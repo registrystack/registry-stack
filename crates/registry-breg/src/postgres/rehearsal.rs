@@ -156,7 +156,9 @@ pub async fn rehearse_successor_migration(
 ) -> RehearsalResult<RehearsalOutcome> {
     let candidate = rehearsal.candidate;
     let manifest = candidate.manifest();
-    if manifest.prior_revision.is_none() || manifest.migration_plan.prior_baseline.is_none() {
+    if manifest.migration_plan.from_package_digest.is_none()
+        || manifest.migration_plan.prior_baseline.is_none()
+    {
         return Err(MigrationRehearsalError::NotSuccessor);
     }
     let plan = candidate

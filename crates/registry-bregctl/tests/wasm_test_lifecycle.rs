@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public pre-sign lifecycle regression for WASM action fixtures. The test
+//! Public pre-package lifecycle regression for WASM action fixtures. The test
 //! launches `bregctl test` as a child process so no in-process test can have
 //! populated the process-wide executor before the command starts.
 
@@ -26,7 +26,6 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 
 const INSTANCE_ID: &str = "wasm-schema-test-instance";
 const DATABASE_ID: &str = "wasm-schema-test-database";
-const SOURCE_REVISION: &str = "wasm-schema-test-source";
 const AUDIENCE: &str = "urn:breg:wasm-schema-test";
 const JOURNEY_ID: &str = "wasm-fixed-output";
 
@@ -90,8 +89,6 @@ fn run_schema_test(audit: FixtureAudit) -> (Output, Option<Value>) {
             "json",
             "test",
             path(&project.project_root),
-            "--database-id",
-            DATABASE_ID,
             "--runtime-config",
             path(&project.runtime_config),
             "--credentials",
@@ -179,19 +176,10 @@ impl ProjectFixture {
             .as_bytes(),
         );
 
-        let trust_anchor = root_path.join("trust-anchor.json");
-        fs::write(&trust_anchor, b"{}").expect("unused local trust anchor writes");
         let runtime_config = root_path.join("runtime.yaml");
         fs::write(
             &runtime_config,
-            runtime_source(
-                &secrets,
-                &empty_package,
-                &trust_anchor,
-                database,
-                idp,
-                audit,
-            ),
+            runtime_source(&secrets, &empty_package, database, idp, audit),
         )
         .expect("runtime configuration writes");
         set_private(&runtime_config);
@@ -237,9 +225,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: wasm-schema-test-instance
-  sequence: 1
   sourceRevision: wasm-schema-test-source
 manifestProjection:
   accessProfile: operator
@@ -314,7 +299,6 @@ journeys:
 fn runtime_source(
     root: &Path,
     package: &Path,
-    trust_anchor: &Path,
     database: &TestDatabase,
     idp: &MockIdp,
     audit: FixtureAudit,
@@ -350,10 +334,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {SOURCE_REVISION}
-  activeRevision: sha256:1111111111111111111111111111111111111111111111111111111111111111
-  activeSequence: 1
 authentication:
   oidc:
     issuer: {}
@@ -392,7 +372,6 @@ operationalTimeouts:
         database.migration_role.as_str(),
         database.runtime_role.as_str(),
         package.display(),
-        trust_anchor.display(),
         idp.issuer(),
     )
 }

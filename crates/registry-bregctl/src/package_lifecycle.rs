@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Deterministic package signing-input and publication orchestration.
+//! Deterministic package publication orchestration.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -11,36 +11,22 @@ use registry_breg::fixtures::{
     validate_fixture_journeys, validate_schema_test_receipt_for_package,
 };
 use registry_breg::package::{
-    PackageError, PackageSignature, PreparedPackage, FIXTURE_JOURNEYS_PATH,
+    PackageError, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 
-const SIGNING_INPUT_PATH: &str = "signing-input.json";
 const TEST_RECEIPT_PATH: &str = "schema-test-receipt.json";
 const PACKAGE_DIRECTORY: &str = "package";
-const MAX_SIGNATURE_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MAX_TEST_RECEIPT_BYTES: u64 = 64 * 1024;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PackageLifecycleState {
-    AwaitingSignatures,
-    Published,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PackageLifecycleOutcome {
-    pub state: PackageLifecycleState,
-    pub package_revision: String,
-    pub signing_input_sha256: String,
-    pub signing_input_bytes: usize,
-    pub signature_threshold: u16,
-    pub provided_signatures: usize,
+    pub package_digest: String,
+    pub registry_revision: String,
     pub package_files: usize,
-    pub package_digest: Option<String>,
     pub revision: Option<String>,
 }
 
@@ -54,7 +40,6 @@ pub(crate) struct ValidatedTestReceipt {
 pub(crate) enum PackageLifecycleError {
     Package(PackageError),
     Output,
-    SignatureDocument,
     TestReceiptMissing,
     /// The receipt file itself could not be taken in: path, permissions, size.
     TestReceiptRefused {
@@ -70,13 +55,7 @@ pub(crate) enum PackageLifecycleError {
         receipt: String,
         supplied: String,
     },
-    /// The receipt records a different deployment identity than the candidate.
-    TestReceiptIdentity {
-        field: &'static str,
-        receipt: String,
-        package: String,
-    },
-    /// The receipt records the same identity but a different candidate build.
+    /// The receipt records a different candidate build.
     TestReceiptCandidate {
         field: &'static str,
         receipt: String,
@@ -93,62 +72,31 @@ pub(crate) enum PackageLifecycleError {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TestReceiptFields {
-    environment: String,
-    instance_id: String,
-    database_id: String,
-    sequence: u64,
-    candidate_package_revision: String,
-    signing_input_sha256: String,
+    registry_revision: String,
+    project_source_revision: String,
+    #[serde(default)]
+    prior_package_digest: Option<String>,
     target_managed_schema_fingerprint: String,
     journey_file_sha256: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SignatureDocument {
-    signatures: Vec<PackageSignature>,
+    migration_plan_sha256: String,
+    source_closure_sha256: String,
 }
 
 pub(crate) fn run(
     prepared: PreparedPackage,
     test_receipt: ValidatedTestReceipt,
     build_directory: &Path,
-    signature_document: Option<&Path>,
     revision: Option<&str>,
 ) -> Result<PackageLifecycleOutcome, PackageLifecycleError> {
-    let signed_bytes = prepared.canonical_signed_bytes();
-    ensure_reviewer_evidence(build_directory, signed_bytes, &test_receipt.bytes)?;
-
-    let signatures = signature_document
-        .map(read_signatures)
-        .transpose()?
-        .unwrap_or_default();
-    let threshold = prepared.manifest().signature_policy.threshold;
-    let requires_external_signatures = prepared.manifest().environment != "local";
-    if requires_external_signatures && signature_document.is_none() {
-        return Ok(outcome(
-            &prepared,
-            PackageLifecycleState::AwaitingSignatures,
-            0,
-        ));
-    }
+    ensure_reviewer_evidence(build_directory, &test_receipt.bytes)?;
 
     let shared = prepared
-        .publish_to_directory_with_revision(
-            &build_directory.join(PACKAGE_DIRECTORY),
-            signatures.clone(),
-            revision,
-        )
+        .publish_to_directory_with_revision(&build_directory.join(PACKAGE_DIRECTORY), revision)
         .map_err(PackageLifecycleError::Package)?;
     Ok(PackageLifecycleOutcome {
-        state: PackageLifecycleState::Published,
-        package_revision: prepared.package_revision().to_owned(),
-        signing_input_sha256: sha256(signed_bytes),
-        signing_input_bytes: signed_bytes.len(),
-        signature_threshold: threshold,
-        provided_signatures: signatures.len(),
+        package_digest: shared.digest().to_owned(),
+        registry_revision: prepared.registry().revision().to_owned(),
         package_files: shared.files().count() + 1,
-        package_digest: Some(shared.digest().to_owned()),
         revision: shared.revision().map(str::to_owned),
     })
 }
@@ -203,44 +151,27 @@ fn explain_receipt_binding(
     let manifest = prepared.manifest();
     for (field, receipt, package) in [
         (
-            "environment",
-            fields.environment,
-            manifest.environment.clone(),
+            "registryRevision",
+            fields.registry_revision,
+            prepared.registry().revision().to_owned(),
         ),
         (
-            "instanceId",
-            fields.instance_id,
-            manifest.instance_id.clone(),
+            "projectSourceRevision",
+            fields.project_source_revision,
+            prepared
+                .registry()
+                .package()
+                .map(|identity| identity.source_revision.clone())
+                .unwrap_or_default(),
         ),
         (
-            "databaseId",
-            fields.database_id,
-            manifest.database_id.clone(),
-        ),
-        (
-            "sequence",
-            fields.sequence.to_string(),
-            manifest.sequence.to_string(),
-        ),
-    ] {
-        if receipt != package {
-            return PackageLifecycleError::TestReceiptIdentity {
-                field,
-                receipt,
-                package,
-            };
-        }
-    }
-    for (field, receipt, package) in [
-        (
-            "candidatePackageRevision",
-            fields.candidate_package_revision,
-            manifest.package_revision.clone(),
-        ),
-        (
-            "signingInputSha256",
-            fields.signing_input_sha256,
-            sha256(prepared.canonical_signed_bytes()),
+            "priorPackageDigest",
+            fields.prior_package_digest.unwrap_or_default(),
+            manifest
+                .migration_plan
+                .from_package_digest
+                .clone()
+                .unwrap_or_default(),
         ),
         (
             "journeyFileSha256",
@@ -248,9 +179,25 @@ fn explain_receipt_binding(
             suite.file_sha256().to_owned(),
         ),
         (
+            "migrationPlanSha256",
+            fields.migration_plan_sha256,
+            manifest
+                .files
+                .iter()
+                .find(|file| file.role == PackageFileRole::MigrationPlan)
+                .map(|file| file.sha256.clone())
+                .unwrap_or_default(),
+        ),
+        (
             "targetManagedSchemaFingerprint",
             fields.target_managed_schema_fingerprint,
             manifest.schema_fingerprint.clone(),
+        ),
+        (
+            "sourceClosureSha256",
+            fields.source_closure_sha256,
+            registry_breg::fixtures::schema_test_source_closure_sha256(prepared)
+                .unwrap_or_default(),
         ),
     ] {
         if receipt != package {
@@ -286,28 +233,8 @@ fn receipt_fields(bytes: &[u8]) -> Result<TestReceiptFields, PackageLifecycleErr
     })
 }
 
-fn outcome(
-    prepared: &registry_breg::package::PreparedPackage,
-    state: PackageLifecycleState,
-    provided_signatures: usize,
-) -> PackageLifecycleOutcome {
-    let signed_bytes = prepared.canonical_signed_bytes();
-    PackageLifecycleOutcome {
-        state,
-        package_revision: prepared.package_revision().to_owned(),
-        signing_input_sha256: sha256(signed_bytes),
-        signing_input_bytes: signed_bytes.len(),
-        signature_threshold: prepared.manifest().signature_policy.threshold,
-        provided_signatures,
-        package_files: prepared.file_bytes().len() + 1,
-        package_digest: None,
-        revision: None,
-    }
-}
-
 fn ensure_reviewer_evidence(
     build_directory: &Path,
-    expected_signing_input: &[u8],
     expected_test_receipt: &[u8],
 ) -> Result<(), PackageLifecycleError> {
     // Resolving once decides both outcomes: a build directory that is there
@@ -325,11 +252,6 @@ fn ensure_reviewer_evidence(
         // package check below use, so replacing a component of the build path
         // afterwards can neither substitute the evidence compared here nor hide
         // an already published package.
-        let existing_signing_input = read_bounded_entry(
-            &directory,
-            OsStr::new(SIGNING_INPUT_PATH),
-            MAX_SIGNATURE_DOCUMENT_BYTES,
-        )?;
         let existing_test_receipt = read_bounded_entry(
             &directory,
             OsStr::new(TEST_RECEIPT_PATH),
@@ -347,49 +269,16 @@ fn ensure_reviewer_evidence(
                 ),
             });
         }
-        if existing_signing_input != expected_signing_input
-            || directory
-                .entry_exists(OsStr::new(PACKAGE_DIRECTORY))
-                .map_err(|_| PackageLifecycleError::Output)?
+        if directory
+            .entry_exists(OsStr::new(PACKAGE_DIRECTORY))
+            .map_err(|_| PackageLifecycleError::Output)?
         {
             return Err(PackageLifecycleError::Output);
         }
         return Ok(());
     }
-    let files = BTreeMap::from([
-        (
-            SIGNING_INPUT_PATH.to_owned(),
-            expected_signing_input.to_vec(),
-        ),
-        (TEST_RECEIPT_PATH.to_owned(), expected_test_receipt.to_vec()),
-    ]);
+    let files = BTreeMap::from([(TEST_RECEIPT_PATH.to_owned(), expected_test_receipt.to_vec())]);
     super::write_source_files(build_directory, &files).map_err(|_| PackageLifecycleError::Output)
-}
-
-fn read_signatures(path: &Path) -> Result<Vec<PackageSignature>, PackageLifecycleError> {
-    let bytes = read_bounded_regular(path)?;
-    let value = parse_json_strict(&bytes).map_err(|_| PackageLifecycleError::SignatureDocument)?;
-    let document: SignatureDocument =
-        serde_json::from_value(value).map_err(|_| PackageLifecycleError::SignatureDocument)?;
-    if document.signatures.is_empty() || document.signatures.len() > 128 {
-        return Err(PackageLifecycleError::SignatureDocument);
-    }
-    Ok(document.signatures)
-}
-
-fn read_bounded_regular(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
-    read_bounded_regular_with_bound(path, MAX_SIGNATURE_DOCUMENT_BYTES)
-}
-
-fn read_bounded_regular_with_bound(
-    path: &Path,
-    bound: u64,
-) -> Result<Vec<u8>, PackageLifecycleError> {
-    if path.as_os_str().is_empty() || super::has_parent_component(path) {
-        return Err(PackageLifecycleError::Output);
-    }
-    let entry = SafeEntry::resolve(path).map_err(|_| PackageLifecycleError::Output)?;
-    read_bounded_entry(entry.parent(), entry.name(), bound)
 }
 
 /// Read a bounded regular file through a held directory descriptor, for callers
@@ -517,31 +406,9 @@ fn receipt_refused(message: &str) -> PackageLifecycleError {
     }
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut encoded = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn signature_document_is_closed_and_never_accepts_an_empty_approval_set() {
-        for refused in [
-            br#"{"signatures":[]}"#.as_slice(),
-            br#"{"signatures":[],"privateKey":"canary"}"#.as_slice(),
-            br#"[{"keyId":"operator","signatureHex":"00"}]"#.as_slice(),
-        ] {
-            let parsed = serde_json::from_slice::<SignatureDocument>(refused);
-            assert!(parsed.is_err() || parsed.is_ok_and(|document| document.signatures.is_empty()));
-        }
-    }
 
     /// Deterministic ancestor-swap regression for the schema-test receipt input
     /// this module owns.
@@ -555,20 +422,18 @@ mod tests {
             let tree = race_tree();
             let build = tree.named("build");
             std::fs::create_dir_all(build.join(PACKAGE_DIRECTORY)).unwrap();
-            std::fs::write(build.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
             std::fs::write(build.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
             // The tree the operator never named holds the same evidence without
             // a published package directory, which is what a check made by
             // pathname would read instead.
             let decoy = tree.outside("build");
             std::fs::create_dir_all(&decoy).unwrap();
-            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
             std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
 
             // Swap once the build directory is resolved, so only the held
             // descriptor still names the real tree.
             let guard = tree.arm();
-            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+            let refused = ensure_reviewer_evidence(&build, b"receipt")
                 .expect_err("an already published package directory is refused");
             drop(guard);
 
@@ -580,8 +445,7 @@ mod tests {
             let tree = race_tree();
             let build = tree.named("build");
             std::fs::create_dir_all(&build).unwrap();
-            std::fs::write(build.join(SIGNING_INPUT_PATH), b"other signing input").unwrap();
-            std::fs::write(build.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+            std::fs::write(build.join(TEST_RECEIPT_PATH), b"other receipt").unwrap();
             // The tree the operator never named holds evidence that matches
             // this run, which is what a comparison made by pathname would
             // accept instead of the mismatched evidence really on disk. It is
@@ -589,17 +453,19 @@ mod tests {
             // again would meet no symbolic link to refuse.
             let decoy = tree.outside("build");
             std::fs::create_dir_all(&decoy).unwrap();
-            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
             std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
 
             // Swap once the build directory is resolved and before its evidence
             // is read, which is where a racing process would land.
             let guard = tree.arm_directory_swap();
-            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+            let refused = ensure_reviewer_evidence(&build, b"receipt")
                 .expect_err("evidence from a directory the operator never named is refused");
             drop(guard);
 
-            assert!(matches!(refused, PackageLifecycleError::Output));
+            assert!(matches!(
+                refused,
+                PackageLifecycleError::TestReceiptEvidence { .. }
+            ));
         }
 
         #[test]
@@ -634,13 +500,9 @@ mod tests {
             let tree = race_tree();
             let build = tree.named("build");
 
-            ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+            ensure_reviewer_evidence(&build, b"receipt")
                 .expect("a build directory that is not there yet is the first run");
 
-            assert_eq!(
-                std::fs::read(build.join(SIGNING_INPUT_PATH)).unwrap(),
-                b"signing input"
-            );
             assert_eq!(
                 std::fs::read(build.join(TEST_RECEIPT_PATH)).unwrap(),
                 b"receipt"
@@ -658,11 +520,10 @@ mod tests {
             // it would accept this run instead of refusing the path.
             let decoy = tree.outside("build");
             std::fs::create_dir_all(&decoy).unwrap();
-            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
             std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
             symlink(&decoy, &build).unwrap();
 
-            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+            let refused = ensure_reviewer_evidence(&build, b"receipt")
                 .expect_err("a build directory reached through a symbolic link is refused");
 
             assert!(matches!(refused, PackageLifecycleError::Output));
