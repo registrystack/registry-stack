@@ -25,6 +25,14 @@
     A predecessor schema that cannot be installed is still refused with
     `migration.rehearsal.baseline_not_reproducible`, and the rehearsed
     migration must still reach the candidate fingerprint.
+  - The migration rehearsal installs the predecessor schema the successor
+    plan was computed from, so a successor of a package built before
+    compiler-owned reference indexes no longer fails its rehearsal with
+    `migration.rehearsal.compiler_statement_failed` on the index it adds.
+  - A registry activated by an earlier release records no instance claim, so
+    `breg` refuses to serve it after the first successor apply on this
+    release until the operator runs `bregctl instance-claim adopt
+    --acknowledge-original-retired` once against its runtime configuration.
 
 - Answer every audited request entry. A read, mutation, action, or request
   action that ends after its attempt without a terminal or refusal entry,
