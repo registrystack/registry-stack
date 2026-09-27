@@ -324,6 +324,9 @@ grant has no other write route. Its run is created only while the entity holds a
 authority for that profile: unexpired, opened under the active package revision, with remaining
 volume that covers the whole announced `itemCount`, and, when the authority pins input digests,
 listing this `inputDigest`. Otherwise the answer is `412 precondition.failed` and no run exists.
+`inputDigest` is the caller's label for its source, recorded with the run; the server never
+receives the source and does not recompute it, so a pinned digest does not prove which items the
+chunks carry.
 Every chunk of an import run rechecks the authority in its own transaction and counts its
 committed items against the authority's volume. Operators open and close authorities with
 `bregctl import-authority`; see

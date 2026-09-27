@@ -47,7 +47,10 @@ only path an import grant can write through. Creating an import run also
 requires the entity's open import authority for that profile. The authority
 must be unexpired, opened under the active package revision, hold remaining
 volume that covers the run's whole announced item count, and, when it pins
-input digests, list the run's input digest. Without one the run is refused
+input digests, list the run's input digest. The input digest is the label the
+caller announces for its source and the run records; the server never
+receives the source and does not recompute it, so a pinned digest names the
+expected file rather than proving what the chunks write. Without one the run is refused
 with `precondition.failed` and never exists; with one the run binds the
 authority's id. Every chunk rechecks the bound authority under a row lock in
 the chunk's own transaction and counts its committed items against the

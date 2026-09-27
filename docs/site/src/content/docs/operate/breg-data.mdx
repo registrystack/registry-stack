@@ -114,14 +114,18 @@ Change control refuses `create` and `batch` as direct writes on an entity it gov
 governed entity receives its initial or additional records through an `import` grant instead. An
 `import` grant is create only and is served only by the ingestion-run routes, so it never changes
 an existing record. It loads nothing on its own: an operator first opens an import authority, a
-window bounded by entity, profile, item volume, expiry, and optionally the exact input files, over
-the migration connection that no API caller holds. The authority is bound to the package revision
+window bounded by entity, profile, item volume, expiry, and optionally the input digests a run may
+announce, over the migration connection that no API caller holds. The authority is bound to the package revision
 active when it opened.
 
 Validate the file, then open the window with the digest the report names. `--expires-in` takes a
 whole number of minutes, hours, or days (`90m`, `12h`, `7d`), defaults to `7d`, and is at most
 `30d`; there is no extension, a longer load opens a second authority. `--input-sha256` may repeat
-up to 16 times; without it any input within the volume is admitted.
+up to 16 times; without it any input within the volume is admitted. An input digest is a label the
+client computes over the file it reads and announces with the run, recorded on the run and in its
+audit; the server never receives the file and does not recompute it. A pinned digest therefore
+names the file the operator expects to be loaded, not proof of what the chunks write: the item
+volume is the bound the server enforces.
 
 ```sh
 bregctl import-authority open \
@@ -154,14 +158,16 @@ records exactly as for a batch create; pause event destinations for the window i
 events is a concern.
 
 A run is created only when an open authority for its entity and profile has room for the whole
-input and, if digests are pinned, one of them is the input's digest. Otherwise `data import`
+input and, if digests are pinned, one of them is the digest the run announces. Otherwise `data import`
 reports `data.import.ingestion_run.import_authority_required` and no run exists. Every chunk
 rechecks the authority inside its own transaction and counts its items against the volume, so a
 close or expiry during a load stops the next chunk: the run is `blocked` with reason
 `importAuthorityClosed`, `data import` reports
 `data.import.ingestion_run.import_authority_closed`, and the chunks already committed stay. A
 blocked run is final. To load the rest, open a new authority and import only the uncommitted lines
-under a fresh checkpoint path; the run's `committedItems` says how many lines committed.
+under a fresh checkpoint path; the run's `committedItems` says how many lines committed. Import is
+create only, so re-running an import of lines that already committed, under a fresh checkpoint or
+a second authority with room, creates their records again.
 
 {/* Evidence: crates/registry-breg/src/import_authority.rs, MAX_IMPORT_AUTHORITY_WINDOW,
     MAX_PINNED_INPUT_DIGESTS, admit_run(), and admit_chunk();

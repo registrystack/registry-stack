@@ -105,7 +105,8 @@ accessProfiles:
 `import` is create only and is served only by the durable ingestion-run routes: it declares no
 item route and no raw batch route, so it can never change an existing record, and change control
 does not count it as a direct write. It loads nothing until an operator opens an import authority
-for the entity and profile, bounded by volume, expiry, and optionally the exact input files, as
+for the entity and profile, bounded by volume, expiry, and optionally the input digests a run may
+announce, as
 [move data in bulk](../../operate/breg-data/#load-a-governed-entity-through-an-import-window)
 describes. The profile needs an authenticated principal and the entity needs `batch` bounds;
 `import` is refused beside `batch` on the same entity, on a change-request or consent-record

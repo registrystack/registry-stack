@@ -505,7 +505,9 @@ relevant product pages on this site rather than duplicating release notes.
   without entity batch bounds (`import.batch_bounds.required`), without an
   authenticated principal (`import.principal.required`), and beside a `batch`
   grant on the same entity (`import.batch.redundant`). `bregctl data
-  validate` reports the source's `inputDigest` for pinning. The runtime
+  validate` reports the source's `inputDigest` for pinning; the digest is a
+  label the client announces with the run and the server records, never
+  recomputed over the written items. The runtime
   installs a new internal table and a run column on its next apply. See
   [load a governed entity through an import window](../operate/breg-data/#load-a-governed-entity-through-an-import-window).
 

@@ -804,8 +804,10 @@ struct ImportAuthorityOpenArgs {
     #[arg(long, value_name = "DURATION", default_value = "7d")]
     expires_in: String,
 
-    /// SHA-256 input digest a run must carry, as `bregctl data validate`
-    /// reports it. Repeat to pin several reviewed files; omit to admit any.
+    /// SHA-256 input digest a run must announce, as `bregctl data validate`
+    /// reports it. The client computes it and the run records it; the server
+    /// does not recompute it over the written items. Repeat to allow several;
+    /// omit to admit any.
     #[arg(long = "input-sha256", value_name = "SHA256")]
     input_sha256: Vec<String>,
 
@@ -2841,7 +2843,7 @@ fn import_authority_pairs(
         pairs.push(("closed at", closed_at.to_rfc3339()));
     }
     pairs.push((
-        "pinned input digests",
+        "announced input digests allowed",
         if authority.input_digests.is_empty() {
             "none (any input)".to_owned()
         } else {
@@ -3842,7 +3844,7 @@ fn data_lifecycle_failure(
         DataLifecycleError::IngestionRunPrecondition { through_import: true } => (
             format!("{prefix}.ingestion_run.import_authority_required"),
             "ingestionRun",
-            "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it pins other input digests; check bregctl import-authority list and open one that covers this input",
+            "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it lists other input digests than the one the run announces; check bregctl import-authority list and open one that covers this input",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::CorrectDataBinding,
         ),
