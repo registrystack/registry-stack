@@ -811,7 +811,17 @@ and the handling levels the answer was released under. None of them is a field v
 Read what is not there. The line records that an anonymous caller reached the
 `registered-business.read` operation, and that the contract scoped the answer to the properties
 `legalName` and `legalForm` under the `consultation` processing description. It does not record
-what the values were.
+what the values were. Count the audit lines that mention either value Relay released:
+
+```sh test-exit="1"
+grep -c -e 'Aurora Freight Cooperative' -e 'COOPERATIVE' var/audit.jsonl
+```
+
+```text test-expect
+0
+```
+
+`grep` exits with status 1 because no line matched.
 
 Read the phase too. `attempt` is written before Relay reads the source, so this line proves the
 request was accepted and scoped, not that it was answered. The matching `terminal` line carries
