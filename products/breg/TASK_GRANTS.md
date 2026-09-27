@@ -14,6 +14,9 @@ The authored access profile selects `actorKind: agent`, exact
 `sourceIssuer`. The token must match that profile, BREG's configured audience,
 and the compiled collection and operation bounds. A task token cannot fall back
 to a standing access profile. Ordinary profiles retain their own authority.
+A `taskGrant` is authored only in project `accessProfiles`; a module cannot
+contribute a task-grant profile, and the compiler refuses one with
+`access_profile.task_grant.module_forbidden`.
 
 An authored `permissions` entry is the Registry's governed ceiling for a
 profile. A delegated `taskGrant` is signed, short-lived authority for one task

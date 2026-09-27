@@ -132,3 +132,4 @@ traceability:
   - {id: BREG-SEC-129, state: enforced, negativeId: BREG-NEG-129, negativeTest: {path: crates/registry-breg/src/audit.rs, name: delegated_actor_is_recorded_as_a_keyed_pseudonym_with_its_kind}}
   - {id: BREG-SEC-130, state: enforced, negativeId: BREG-NEG-130, negativeTest: {path: crates/registry-breg/tests/postgres_task_grants.rs, name: standing_agent_audit_records_the_delegated_actor_by_pseudonym}}
   - {id: BREG-SEC-131, state: enforced, negativeId: BREG-NEG-131, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_an_immediate_action}}
+  - {id: BREG-SEC-132, state: enforced, negativeId: BREG-NEG-132, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: module_contributed_profiles_cannot_declare_a_task_grant}}
