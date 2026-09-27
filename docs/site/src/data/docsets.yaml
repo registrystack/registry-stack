@@ -32,6 +32,37 @@ docsets:
       registry-render:
         version: main source (unreleased)
         ref: HEAD
+  - id: v0.35.0
+    label: v0.35.0
+    path: /v/0.35.0/
+    status: archived
+    availability: candidate
+    source: registry-stack-v0.35.0
+    repo_docs_source: monorepo
+    published_at: 2026-09-28
+    description: Registry Stack v0.35.0 beta-47 candidate documentation set.
+    products:
+      registry-stack:
+        version: v0.35.0
+        ref: v0.35.0
+      registry-relay:
+        version: v0.35.0
+        ref: v0.35.0
+      registry-manifest:
+        version: v0.35.0
+        ref: v0.35.0
+      registry-evidence:
+        version: v0.35.0
+        ref: v0.35.0
+      registry-casework:
+        version: v0.35.0
+        ref: v0.35.0
+      registry-scheduling:
+        version: v0.35.0
+        ref: v0.35.0
+      registry-render:
+        version: v0.35.0
+        ref: v0.35.0
   - id: v0.34.0
     label: v0.34.0
     path: /v/0.34.0/
