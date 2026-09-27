@@ -111,8 +111,9 @@ const breg = productToolset({
   label: 'breg and bregctl',
   // A page whose sh fences match this runs the toolset, so its gate must
   // cover it (tutorial-runner/gate.mjs). A path such as .breg/dev or
-  // tutorial-work/breg names no command.
-  commands: /(^|[^\w./-])(bregctl|breg)([^\w./-]|$)/mu,
+  // tutorial-work/breg names no command, and neither does a value such as
+  // serviceKind=breg.
+  commands: /(^|[^\w./=-])(bregctl|breg)([^\w./-]|$)/mu,
   binaries: [
     ['breg', 'BREG_BIN'],
     ['bregctl', 'BREGCTL_BIN'],
@@ -129,7 +130,7 @@ const breg = productToolset({
 // so they no longer reconcile against a registry that is stopping.
 const casework = productToolset({
   label: 'casework, caseworkctl, breg, and bregctl',
-  commands: /(^|[^\w./-])(caseworkctl|casework)([^\w./-]|$)/mu,
+  commands: /(^|[^\w./=-])(caseworkctl|casework)([^\w./-]|$)/mu,
   includes: ['breg'],
   binaries: [
     ['casework', 'CASEWORK_BIN'],
@@ -151,7 +152,7 @@ const casework = productToolset({
 // development session to stop here.
 const relay = productToolset({
   label: 'relay and relayctl',
-  commands: /(^|[^\w./-])(relayctl|relay)([^\w./-]|$)/mu,
+  commands: /(^|[^\w./=-])(relayctl|relay)([^\w./-]|$)/mu,
   binaries: [
     ['relay', 'RELAY_BIN'],
     ['relayctl', 'RELAYCTL_BIN'],
@@ -159,6 +160,24 @@ const relay = productToolset({
   cargoArgs: ['-p', 'registry-relay-v2', '--features', 'tooling', '-p', 'registry-relayctl'],
   profileVariable: 'RELAY_TUTORIAL_CARGO_PROFILE',
   targetName: 'relay-tutorial-source',
+  sessions: [],
+});
+
+// Registry Discovery: discovery and discoveryctl. A page serves the index
+// from a background fence, which the runner stops itself, so there is no
+// local development session to stop here.
+const discovery = productToolset({
+  label: 'discovery and discoveryctl',
+  // Not the discovery-project directory or the products/discovery/ paths a
+  // page names.
+  commands: /(^|[^\w./=-])(discoveryctl|discovery)([^\w./-]|$)/mu,
+  binaries: [
+    ['discovery', 'DISCOVERY_BIN'],
+    ['discoveryctl', 'DISCOVERYCTL_BIN'],
+  ],
+  cargoArgs: ['-p', 'registry-discovery', '-p', 'registry-discoveryctl'],
+  profileVariable: 'DISCOVERY_TUTORIAL_CARGO_PROFILE',
+  targetName: 'discovery-tutorial-source',
   sessions: [],
 });
 
@@ -225,7 +244,7 @@ const evidenceProduct = productToolset({
   label: 'evidence, evidencectl, and evidence-oid4vci',
   // Not a path such as .evidence/dev, which a page may name; but a page that
   // runs Evidence's own checks from a checkout runs Evidence.
-  commands: /(^|[^\w./-])(evidencectl|evidence-oid4vci|evidence)([^\w./-]|$)|(^|\s)products\/evidence\/scripts\//mu,
+  commands: /(^|[^\w./=-])(evidencectl|evidence-oid4vci|evidence)([^\w./-]|$)|(^|\s)products\/evidence\/scripts\//mu,
   binaries: [
     ['evidence', 'EVIDENCE_BIN'],
     ['evidencectl', 'EVIDENCECTL_BIN'],
@@ -275,4 +294,4 @@ const none = {
   },
 };
 
-export const TOOLSETS = { breg, casework, evidence, relay, none };
+export const TOOLSETS = { breg, casework, discovery, evidence, relay, none };

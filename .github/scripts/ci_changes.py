@@ -182,11 +182,14 @@ DISCOVERY_PROVIDER_INPUTS = DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS + (
 )
 
 # The full reader journey is a Discovery product gate, not only a docs lint.
-# A tutorial-only edit must replay the same provider, operator, consumer, and
-# native-client handoff that the page promises.
+# Every input the Discovery tutorial gate replays: the page runner and the page
+# whose frontmatter it replays. The fixtures and helpers the page reads live
+# under products/discovery/, whose paths already seed the Discovery packages.
 DISCOVERY_TUTORIAL_INPUTS = (
-    "docs/site/scripts/check-discovery-tutorial.sh",
-    "docs/site/scripts/check-discovery-tutorial.test.mjs",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
     "docs/site/src/content/docs/tutorials/publish-and-consume-discovery-index.mdx",
 )
 
@@ -1208,7 +1211,7 @@ def classify(
         "discovery_contracts": complete
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
-        or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
+        or any(matches(path, *DISCOVERY_TUTORIAL_INPUTS) for path in paths),
         "relay_v2_contracts": registry_record_cross_product
         or bool(affected & RELAY_V2_PACKAGES)
         or any(matches(path, *RELAY_TUTORIAL_INPUTS) for path in paths),

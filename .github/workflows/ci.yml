@@ -574,7 +574,9 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: crates/registry-discovery-client-node/package-lock.json
+          cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
+            docs/site/package-lock.json
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -596,6 +598,29 @@ jobs:
 
       - name: Registry Discovery clean-checkout adopter tutorial
         run: products/discovery/scripts/test-adopter-tutorial.sh
+
+      - name: Install docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
+      - name: Test the tutorial runner
+        working-directory: docs/site
+        run: npm run test:tutorial:runner
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:discovery:dry-run
+
+      # The adopter tutorial step above built both binaries at the ci profile
+      # in the target directory the runner itself would build into.
+      - name: Execute the Registry Discovery tutorial from a copy of the checkout
+        env:
+          DISCOVERY_BIN: ${{ github.workspace }}/target/discovery-tutorial-source/ci/discovery
+          DISCOVERYCTL_BIN: ${{ github.workspace }}/target/discovery-tutorial-source/ci/discoveryctl
+        # The page serves on 127.0.0.1:38080 and 38090, which the adopter
+        # tutorial step above has released, so the replay runs on the ports a
+        # reader gets.
+        run: node docs/site/scripts/run-tutorial.mjs --gate discovery
 
   relay-v2-contracts:
     name: Relay V2 product contracts
