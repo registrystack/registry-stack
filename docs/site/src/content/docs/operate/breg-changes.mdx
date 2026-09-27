@@ -405,8 +405,8 @@ If the restored database is pinned in maintenance, run
 Every registry database holds an instance claim: the PostgreSQL system identifier and database
 object identifier of the database the registry serves from, recorded at the first apply. A restored
 copy carries the claim of the database it was dumped from, so `instance-claim status` reports
-`"matches": false`, `breg` refuses to start with `startup.instance_claim.mismatch`, and `GET /ready`
-answers `503`. The refusal exists because two databases serving one registry become divergent writers: each
+`"matches": false`, `bregctl doctor` refuses with `startup.instance_claim.mismatch`, `breg` exits
+logging that the database is not the instance its claim names, and `GET /ready` answers `503`. The refusal exists because two databases serving one registry become divergent writers: each
 accepts writes, admits imports under the authorities the backup held open, and delivers the same
 outbox work from the backup onward, and nothing can merge the two histories afterwards.
 
@@ -460,6 +460,12 @@ identifier and database object identifier, so it serves without an adopt: keepin
 stopped, or fenced from clients, while such a copy serves is your job. An adopt changes only the
 copy's claim, so an original that is still running keeps serving. Pass
 `--acknowledge-original-retired` only once no client can reach it.
+
+A physical copy also brings back every import authority that was open at its backup point, including
+any you closed afterwards. Before it serves, list them with `bregctl import-authority list` and close
+each one that should not be open with `bregctl import-authority close`, as
+[Back up, restore, and drill recovery](../advanced/back-up-and-restore/#after-a-physical-restore)
+shows.
 :::
 
 An upgrade with `pg_upgrade` moves the registry into a new cluster with a new system identifier,

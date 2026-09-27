@@ -609,6 +609,8 @@ export default defineConfig({
             { label: 'Rotate Evidence signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
+            { label: 'Back up and restore', slug: 'operate/advanced/back-up-and-restore' },
+            { label: 'Upgrade and retire', slug: 'operate/advanced/upgrade-and-retire' },
             { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Production hardening', slug: 'security/hardening-checklist' },
