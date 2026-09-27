@@ -171,7 +171,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     run(binaries["bregctl"], *export_arguments, "--output", unrelated_export,
         environment=environment)
     unrelated_manifest = json.loads((unrelated_export / "source-export.json").read_text())
-    assert unrelated_manifest["provenance"]["packageRevision"] != manifest["provenance"]["packageRevision"]
+    assert unrelated_manifest["provenance"]["registryRevision"] != manifest["provenance"]["registryRevision"]
     assert unrelated_manifest["provenance"]["behaviorRevision"] == source["behaviorRevision"]
     unrelated = json.loads(run(
         binaries["evidencectl"], "source", "diff", unrelated_export,
