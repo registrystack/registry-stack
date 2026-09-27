@@ -566,18 +566,25 @@ invariants:
       membership in the migration role, and superuser or BYPASSRLS
       attributes. A runtime role that owns or is a member of an owner of the
       schema or any scheduling_* relation or function, holds TRIGGER on a
-      scheduling_* relation, or holds CREATE on the schema, holds single mode. scheduling serve compares that recorded mode
-      with the one its credential holds.
+      scheduling_* relation, or holds CREATE on the schema, holds single
+      mode, and so does any runtime role other than the ledger owner while a
+      non-internal trigger is attached to a scheduling_* table, which no
+      Scheduling migration creates. scheduling serve compares that recorded
+      mode with the one its credential holds, and in split mode checks that
+      the runtime role still holds every grant apply issues.
     refusal: >-
       PostgreSQL refuses every runtime-role write to the ledger and the
       schema history with insufficient_privilege, while the service still
       starts and serves. Startup refuses a ledger that recorded split mode
       for a credential that can now write it, naming schedulingctl apply
-      --runtime-config FILE to reissue the grants. In configured split mode,
-      plan, apply, and startup refuse a runtime role whose ownership, TRIGGER
-      privilege, or schema CREATE privilege weakens the split, naming
-      REASSIGN OWNED BY then schedulingctl apply, or REVOKE TRIGGER or REVOKE
-      CREATE ON SCHEMA then a rerun of the refused command.
+      --runtime-config FILE to reissue the grants, and a split runtime role
+      missing a grant apply issues, naming the same command. In configured
+      split mode, plan, apply, and startup refuse a runtime role whose
+      ownership, TRIGGER privilege, or schema CREATE privilege weakens the
+      split, or an attached trigger on a scheduling_* table, naming REASSIGN
+      OWNED BY then schedulingctl apply, or REVOKE TRIGGER, REVOKE CREATE ON
+      SCHEMA (from the grantee it is held through, PUBLIC included), or DROP
+      TRIGGER then a rerun of the refused command.
     partialNote: >-
       In single role mode both credentials are one role that can write the
       ledger; plan, apply, and status report the mode and do not refuse it,

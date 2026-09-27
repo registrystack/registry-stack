@@ -449,33 +449,43 @@ membership in the migration role, or a superuser or BYPASSRLS attribute) and
 records `single` if any holds, with the runtime role's name. Startup refuses
 a ledger that recorded `split` for a credential that can now write it, a
 grant or membership added after the apply, naming `schedulingctl apply` to
-reissue the grants.
+reissue the grants, and a split runtime credential that no longer holds
+every grant apply issues it, naming the same command. Re-applying the active
+package is accepted when the runtime role or its mode differs from the
+recorded row, or when a split runtime role no longer holds every grant apply
+issues, so rotating the runtime role, moving to split mode, or restoring
+grants an ownership change took away is one more apply. The runtime keeps
+broad DML on the product tables it serves from, which SCHEDULING-DEC-10
+records with its reasoning: the ledger decides what a restart may serve, so
+it is the table the runtime must not rewrite.
 
 **A weakened split.** A runtime role that differs from the migration role
 can still write the ledger indirectly when it owns, or is a member of a role
 that owns, the Scheduling schema or any other `scheduling_*` table,
 sequence, view, or function, when it holds TRIGGER on a `scheduling_*`
-table or view, or when it holds CREATE on the Scheduling schema: a deferred constraint trigger on a table apply updates, for
-example, fires as the migration role at commit and can insert an activation
-row. The grants apply issues cannot take either away, so they are not
-drift. In configured split mode `plan` reports the effective mode as
-`single` with the refusal `schedulingctl.activation.split-role-weakened`,
-`apply` refuses it before any schema, publication, or ledger statement
-(and again after the grants on a first apply), and startup refuses it in
-place of the drift refusal. Each refusal names the runtime role and the
-statement that separates it, run as a database administrator. After
-`REASSIGN OWNED BY <owner> TO <migrator>` it names `schedulingctl apply
---runtime-config FILE`, because moving ownership takes the runtime role's
-grants on those objects with it and apply reissues them. After `REVOKE
-TRIGGER ON <table> FROM <runtime>` or `REVOKE CREATE ON SCHEMA <schema> FROM
-<runtime>`, which leave the grants in place, it names rerunning the command
-that refused, or `schedulingctl plan --runtime-config FILE` to confirm. Re-applying the active package is accepted when the
-runtime role or its mode differs from the recorded row, or when a split
-runtime role no longer holds every grant apply issues, so rotating the
-runtime role or moving to split mode is one more apply. The runtime keeps broad DML on the product tables it
-serves from, which SCHEDULING-DEC-10 records with its reasoning: the ledger
-decides what a restart may serve, so it is the table the runtime must not
-rewrite.
+table or view, or when it holds CREATE on the Scheduling schema: a deferred
+constraint trigger on a table apply updates, for example, fires as the
+migration role at commit and can insert an activation row. A trigger
+already attached to a `scheduling_*` table weakens the split the same way,
+since no Scheduling migration creates one and revoking the power that
+attached it leaves it in place. The grants apply issues cannot take any of
+these away, so they are not drift. In configured split mode `plan` reports
+the effective mode as `single` with the refusal
+`schedulingctl.activation.split-role-weakened`, `apply` refuses it before
+any schema, publication, or ledger statement (and again after the grants on
+a first apply), and startup refuses it in place of the drift refusal. Single
+role mode does not refuse them, since that runtime role holds the migration
+role's authority already. Each refusal names the statement that separates
+the roles, run as a database administrator. After `REASSIGN OWNED BY
+<owner> TO <migrator>` it names `schedulingctl apply --runtime-config FILE`,
+because moving ownership takes the runtime role's grants on those objects
+with it and apply reissues them. After `REVOKE TRIGGER ON <table> FROM
+<grantee>`, `REVOKE CREATE ON SCHEMA <schema> FROM <grantee>`, or `DROP
+TRIGGER <name> ON <schema>.<table>` for each attached trigger, which leave
+the grants in place, it names rerunning the command that refused, or
+`schedulingctl plan --runtime-config FILE` to confirm. The grantee is the
+one the runtime role holds the privilege through: itself, PUBLIC, or a role
+it is a member of.
 
 **Serialization and identity.** The whole activation (schema versions,
 scheduling-id adoption, policy publication, the ledger row, and the grants)
@@ -527,11 +537,15 @@ commands.
 (SCHEDULING-SEC-29),
 `split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves`,
 `a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants`,
-`a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned`,
+`a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned`
+(which also shows a trigger the owning runtime role attached still refused
+after the reassignment, and startup refusing the grants the reassignment
+took until apply reissues them),
 `a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_naming_revoke_create`,
 `a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_split_mode_naming_revoke_trigger`
 (which also shows the grants apply issues removing a TRIGGER default
-privilege),
+privilege, and a TRIGGER held through PUBLIC revoked from PUBLIC; the CREATE
+test shows the same for CREATE),
 `a_runtime_role_holding_the_migration_role_is_recorded_as_single`, and
 `rotating_the_runtime_role_reapplies_the_active_package`
 (SCHEDULING-SEC-30; the drift test also grants UPDATE on

@@ -991,16 +991,25 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
         "split"
     );
 
-    // The runtime role comes to own a table apply writes, where a deferred
-    // trigger would run as the migration role at commit.
+    // The runtime role comes to own a table apply writes and attaches a
+    // deferred trigger that would run as the migration role at commit.
+    let schema = deployment.schema.clone();
     deployment
         .admin
         .batch_execute(&format!(
-            "ALTER TABLE {}.scheduling_supply OWNER TO {runtime_role}",
-            deployment.schema
+            "ALTER TABLE {schema}.scheduling_supply OWNER TO {runtime_role}"
         ))
         .await
         .unwrap();
+    connect(&std::env::var(&deployment.runtime_secret).unwrap())
+        .await
+        .batch_execute(&format!(
+            "CREATE CONSTRAINT TRIGGER planted AFTER UPDATE ON {schema}.scheduling_supply \
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW \
+             EXECUTE FUNCTION suppress_redundant_updates_trigger()"
+        ))
+        .await
+        .expect("the owning runtime role attaches a trigger");
     let error = startup_refusal(&config).await;
     assert!(names_fix(&error, &fix, THEN_APPLY), "{error}");
 
@@ -1018,15 +1027,28 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
         "a weakened split was recorded"
     );
 
+    // Reassigning the table leaves the trigger the runtime role attached,
+    // and apply still refuses, naming it.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "REASSIGN OWNED BY {runtime_role} TO {migration_role}"
+        ))
+        .await
+        .unwrap();
+    let drop_trigger = format!("DROP TRIGGER planted ON {schema}.scheduling_supply");
+    let error = refusal(apply(&config));
+    assert!(names_fix(&error, &drop_trigger, THEN_RERUN), "{error}");
+    assert_eq!(deployment.ledger_rows().await, 1);
+    deployment.admin.batch_execute(&drop_trigger).await.unwrap();
+
     // Membership in a role that owns a Scheduling table counts the same.
     let owner = format!("{runtime_role}_owner");
     deployment
         .admin
         .batch_execute(&format!(
-            "ALTER TABLE {schema}.scheduling_supply OWNER TO {migration_role};\
-             CREATE ROLE {owner}; GRANT {owner} TO {runtime_role};\
-             ALTER TABLE {schema}.scheduling_meta OWNER TO {owner}",
-            schema = deployment.schema
+            "CREATE ROLE {owner}; GRANT {owner} TO {runtime_role};\
+             ALTER TABLE {schema}.scheduling_meta OWNER TO {owner}"
         ))
         .await
         .unwrap();
@@ -1044,15 +1066,21 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
     deployment
         .admin
         .batch_execute(&format!(
-            "ALTER TABLE {}.scheduling_meta OWNER TO {migration_role}; DROP ROLE {owner}",
-            deployment.schema
+            "REASSIGN OWNED BY {owner} TO {migration_role}; DROP ROLE {owner}"
         ))
         .await
         .unwrap();
     // Moving ownership back took the runtime role's grants on the table
-    // with it, so the active package is not yet served as applied: apply
-    // reissues the grants as one more row.
+    // with it, so startup refuses and the active package is not yet served
+    // as applied: apply reissues the grants as one more row.
     assert!(!holds(&deployment, &runtime_role, "scheduling_supply", "SELECT").await);
+    let error = startup_refusal(&config).await;
+    assert!(
+        error.contains(&format!(
+            "the runtime role {runtime_role} no longer holds every grant `schedulingctl apply` issues it; run `schedulingctl apply --runtime-config FILE` to reissue them"
+        )),
+        "{error}"
+    );
     let report = plan(&config);
     assert_eq!(report["effectiveRoleMode"], "split", "{report}");
     assert_eq!(report["changesPending"], true, "{report}");
@@ -1111,6 +1139,27 @@ async fn a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_namin
         1,
         "startup wrote the ledger"
     );
+
+    // Held through PUBLIC, the privilege is revoked from PUBLIC.
+    let schema = &deployment.schema;
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "REVOKE CREATE ON SCHEMA {schema} FROM {runtime_role};\
+             GRANT CREATE ON SCHEMA {schema} TO PUBLIC"
+        ))
+        .await
+        .unwrap();
+    let error = refusal(apply(&config));
+    assert!(
+        names_fix(
+            &error,
+            &format!("REVOKE CREATE ON SCHEMA {schema} FROM PUBLIC"),
+            THEN_RERUN
+        ),
+        "{error}"
+    );
+    assert_eq!(deployment.ledger_rows().await, 1);
     deployment.drop().await;
 }
 
@@ -1169,6 +1218,25 @@ async fn a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_spli
     let report = plan(&config);
     assert_eq!(report["effectiveRoleMode"], "split", "{report}");
     assert_eq!(report["changesPending"], false, "{report}");
+
+    // Held through PUBLIC, the privilege is revoked from PUBLIC.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "GRANT TRIGGER ON {schema}.scheduling_supply TO PUBLIC"
+        ))
+        .await
+        .unwrap();
+    let error = refusal(apply(&config));
+    assert!(
+        names_fix(
+            &error,
+            &format!("REVOKE TRIGGER ON {schema}.scheduling_supply FROM PUBLIC"),
+            THEN_RERUN
+        ),
+        "{error}"
+    );
+    assert_eq!(deployment.ledger_rows().await, 1);
     deployment.drop().await;
 }
 
