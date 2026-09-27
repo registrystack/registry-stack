@@ -36,8 +36,9 @@ certification is true.
 
 - Maintainers may merge their own pull requests when the change is scoped and
   the relevant checks have passed.
-- Maintainers may push directly to `main` for release, documentation, CI,
-  administrative, or urgent fixes.
+- Every change reaches `main` through a pull request and the merge queue,
+  including release, documentation, CI, and urgent fixes: the `main` ruleset
+  has no bypass actors and branch protection applies to administrators.
 - CI remains the reference gate for normal pull requests.
 - The merge queue rebases each entry onto `main` itself before merging, so a
   pull request that shows BEHIND does not need a manual rebase for that
@@ -59,7 +60,7 @@ runner contention. The maintainers own this budget alongside the CI workflow.
 Rust test shards run at most six at a time to reduce competition with the longer
 product integration jobs; all selected shards still execute.
 
-Post-classification fanout is capped at fourteen static matrix slots by making
+Post-classification fanout is capped at fifteen static matrix slots by making
 shorter and later-stage jobs wait for the existing Rust policy check. This
 leaves capacity for the longer product, native client, documentation, and
 security jobs to start. Their original path selectors remain in force and an
@@ -111,12 +112,14 @@ the heavy integration tier and the Casework review examples:
   fuzz smoke before anything lands. `nightly-security.yml` additionally
   explores every declared fuzz target daily, and `nightly-rust-coverage.yml`
   reports workspace coverage daily.
-- The heavy integration tier runs on the merge queue, in the nightly sweep
-  and in a full manual run, each behind its usual changed-path selector: the
-  Base Registry Engine PostgreSQL and immediate-actions lanes (the contracts
-  lane stays on the pull request), the Base Registry Engine WASM executor,
-  Casework and Scheduling PostgreSQL, the Evidence, Base Registry Engine and
-  Casework tutorials, and the Base Registry Engine and Evidence composition.
+- The heavy integration tier runs on the merge queue, on main pushes, in the
+  nightly sweep and in manual runs, each behind its usual changed-path
+  selector. The release protected-ci checks read the main push run. The tier
+  covers the Base Registry Engine PostgreSQL and immediate-actions lanes (the
+  contracts lane stays on the pull request), the Base Registry Engine WASM
+  executor, Casework and Scheduling PostgreSQL, the Evidence, Base Registry
+  Engine and Casework tutorials, and the Base Registry Engine and Evidence
+  composition.
   A pull request labeled `ci:full` runs the tier too; adding the label
   restarts the run. `CI result` passes a heavy job that review skipped, and
   fails one the classifier selected that did not succeed. Before you push a

@@ -988,6 +988,9 @@ def classify(
 
     # The heavy integration tier: PostgreSQL suites, the WebAssembly build and
     # the tutorial and composition journeys. Each keeps its path gate below.
+    # Every event except an unlabeled pull request runs it: the merge queue,
+    # the nightly sweep, manual runs and main pushes, whose full run the
+    # release protected-ci checks read.
     integration = full_sweep or ci_full or not pull_request
     # The production cross-compiled Linux client recipe runs only in the
     # nightly and manual full sweeps; review and the merge queue prove each
