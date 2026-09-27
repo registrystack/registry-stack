@@ -605,6 +605,26 @@ test('an expectation on a background fence checks what it printed while it ran',
   });
 });
 
+test('a background command that exits on its own before it is stopped fails the journey', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const serve = `python3 -m http.server ${port} --bind 127.0.0.1`;
+  const body =
+    '## Serve\n\n' +
+    fence(
+      `sh test-background="${url}"`,
+      `${serve} &\nserver=$!\nsleep 1\nkill "$server"\nwait "$server" 2>/dev/null || true\necho "the flaky server has exited"`,
+    ) +
+    fence('sh', 'sleep 1.5\necho after');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the flaky server has exited/u, 'the background command must be named by what it printed');
+    assert.match(output, /background command.*exited/isu);
+    assert.match(output, /tutorial FAIL/u);
+  });
+});
+
 test('a journey that ends, passing or failing, leaves no process it started running', async () => {
   const port = await freePort();
   const body = (pids, last) =>
