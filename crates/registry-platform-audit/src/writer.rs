@@ -2794,7 +2794,7 @@ mod tests {
             fs::Permissions::from_mode(0o700),
         )
         .expect("owner-only audit directory");
-        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
+        let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
 
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2807,6 +2807,9 @@ mod tests {
                 writer.append(request("req-1")).await.expect("append");
                 assert!(writer.ready().await);
             });
+        // Files the child writes at exit, such as coverage profiles, must
+        // stay readable by the parent.
+        rustix::process::umask(previous);
         assert_eq!(lines(&path).len(), 1);
     }
 
@@ -2921,7 +2924,7 @@ mod tests {
             .join("service")
             .join("audit.jsonl");
         let destination = FileDestination::new(path.clone()).expect("absolute path");
-        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
+        let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
 
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2934,6 +2937,9 @@ mod tests {
                 writer.append(request("req-1")).await.expect("append");
                 assert!(writer.ready().await);
             });
+        // Files the child writes at exit, such as coverage profiles, must
+        // stay readable by the parent.
+        rustix::process::umask(previous);
         assert_eq!(lines(&path).len(), 1);
         for created in [
             directory.path().join("audit"),
