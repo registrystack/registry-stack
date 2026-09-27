@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A runtime file refused as `runtime_config.document` says which field is
+  wrong and why, such as an unknown `audit.destination` and the destinations
+  it accepts, without repeating the refused value, in `bregctl doctor`,
+  `bregctl verify`, and every other command that reports it. A
+  removed package key is refused before any environment expression in its
+  value is substituted, and the runtime file is read through the shared
+  runtime configuration loader.
+
 - BREAKING: an Evidence source export names the compiled model it came from
   as `provenance.registryRevision` instead of `provenance.packageRevision`,
   so `evidencectl` reports changed provenance for every BReg source on its

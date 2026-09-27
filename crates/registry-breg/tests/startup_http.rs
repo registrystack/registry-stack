@@ -35,6 +35,17 @@ use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
+/// The document refusal with its message set aside, so a table can name it
+/// beside the refusals that carry none.
+const DOCUMENT: RuntimeConfigError = RuntimeConfigError::Document(String::new());
+
+fn refusal(error: RuntimeConfigError) -> RuntimeConfigError {
+    match error {
+        RuntimeConfigError::Document(_) => DOCUMENT,
+        other => other,
+    }
+}
+
 const RAW_PRINCIPAL_CANARY: &str = "breg-v1-25-raw-principal-canary";
 const RECORD_ID_CANARY: &str = "aaaaaaaa-aaaa-4aaa-8aaa-rsv125canary";
 const QUERY_VALUE_CANARY: &str = "breg-v1-25-query-value-canary";
@@ -490,7 +501,7 @@ fn startup_errors() -> [StartupError; 19] {
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
-        StartupError::RuntimeConfig(RuntimeConfigError::Document),
+        StartupError::RuntimeConfig(DOCUMENT),
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
@@ -960,7 +971,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     for (member, expected) in [
         (
             format!("metrics:\n  labels:\n    principal: {RAW_PRINCIPAL_CANARY}\n"),
-            RuntimeConfigError::Document,
+            DOCUMENT,
         ),
         (
             format!("telemetry:\n  tracestate: {TRACESTATE_CANARY}\n"),
@@ -970,7 +981,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         let error =
             parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
                 .expect_err("runtime telemetry authority is absent");
-        assert_eq!(error, expected);
+        assert_eq!(refusal(error.clone()), expected);
         assert_forbidden_values_absent(&format!("{error:?} {error}"));
     }
 
