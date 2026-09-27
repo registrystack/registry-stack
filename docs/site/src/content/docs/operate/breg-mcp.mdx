@@ -89,7 +89,9 @@ These records are the ones to watch:
 | `breg-mcp` | error | `tool audit append failed` |
 | `breg-review` | warn | `a rate limit refused a request` |
 | `breg-review` | warn | `the registry could not answer a review` |
-| `breg-review` | error | `an action could not be audited` |
+| `breg-review` | warn | `the registry declined a review request` |
+| `breg-review` | error | `an action request could not be audited` |
+| `breg-review` | error | `an action response could not be audited` |
 
 Neither service logs a token, a secret, a cookie, or a field value. The `request_id` of a gateway
 log record matches the operation correlation in its audit entries.
