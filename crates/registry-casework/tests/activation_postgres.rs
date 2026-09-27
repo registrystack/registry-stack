@@ -1016,7 +1016,7 @@ async fn a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until
         .await
         .expect_err("a split activation whose runtime role can write the ledger is refused");
     assert!(
-        matches!(weakened, RuntimeError::RoleModeWeakened),
+        matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
         "{weakened}"
     );
     assert!(weakened
@@ -1170,4 +1170,348 @@ async fn an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock()
     let applied = applied.expect("the first apply adopts the migrated database");
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
     assert_eq!(applied.schema_versions_applied, [19]);
+}
+
+/// A runtime role that owns a Casework table can attach a trigger that fires
+/// as the migration role inside apply's own transaction, so it can write the
+/// ledger. Split-role apply refuses before it changes anything, and startup
+/// refuses the split activation, until the ownership is reassigned.
+#[tokio::test]
+async fn a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_startup() {
+    let fixture = Fixture::split("owned").await;
+    let project = project();
+    let first = digest('a');
+    fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("split-role apply");
+    let migration_user = fixture
+        .migration
+        .current_user()
+        .await
+        .expect("migration role");
+    let runtime_user = fixture.runtime_user.clone();
+    let fix = format!("REASSIGN OWNED BY {runtime_user} TO {migration_user}");
+    let runtime = fixture.runtime();
+    fixture
+        .client
+        .batch_execute(&format!(
+            "ALTER TABLE casework_task_templates OWNER TO {runtime_user}"
+        ))
+        .await
+        .expect("give the runtime role a work table");
+
+    let weakened = check_activation(&runtime, DATABASE_ID, &first, &[])
+        .await
+        .expect_err("a runtime role that owns a Casework table is refused");
+    assert!(
+        matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
+        "{weakened}"
+    );
+    let message = weakened.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(
+        message.contains("caseworkctl apply --runtime-config FILE"),
+        "{message}"
+    );
+
+    let plan = runtime
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .expect("plan");
+    assert!(!plan.changes_pending);
+    assert_eq!(plan.runtime_role_mode, Some(RoleMode::Single));
+    assert!(
+        plan.refusals.iter().any(|refusal| {
+            refusal.code == "casework.activation.role-mode-weakened"
+                && refusal.message.contains(&fix)
+        }),
+        "{:?}",
+        plan.refusals
+    );
+
+    let second = digest('b');
+    let refused = fixture
+        .apply(&candidate(&project, &second, &[]))
+        .await
+        .expect_err("split-role apply refuses a runtime role that owns a Casework table");
+    assert_eq!(
+        refusal_codes(&refused),
+        ["casework.activation.role-mode-weakened"]
+    );
+    let message = refused.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(
+        message.contains("caseworkctl apply --runtime-config FILE"),
+        "{message}"
+    );
+    assert_eq!(fixture.ledger().await.len(), 1, "apply recorded nothing");
+
+    fixture
+        .client
+        .batch_execute(&fix)
+        .await
+        .expect("reassign the runtime role's objects");
+    let applied = fixture
+        .apply(&candidate(&project, &second, &[]))
+        .await
+        .expect("apply after the reassignment");
+    assert_eq!(applied.activation.role_mode, RoleMode::Split);
+    assert_eq!(
+        check_activation(&runtime, DATABASE_ID, &second, &[])
+            .await
+            .expect("the reassigned split activation starts"),
+        RoleMode::Split
+    );
+    drop(runtime);
+    fixture.drop_runtime_role().await;
+}
+
+/// CREATE on the Casework schema lets the runtime role create objects there,
+/// so split-role apply refuses it before it changes anything, and startup
+/// refuses a split activation whose runtime role gained it.
+#[tokio::test]
+async fn a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_startup() {
+    let fixture = Fixture::split("create").await;
+    let project = project();
+    let first = digest('a');
+    let runtime_user = fixture.runtime_user.clone();
+    let grant = format!(
+        "GRANT CREATE ON SCHEMA {} TO {runtime_user}",
+        fixture.schema
+    );
+    let fix = format!(
+        "REVOKE CREATE ON SCHEMA {} FROM {runtime_user}",
+        fixture.schema
+    );
+    fixture
+        .client
+        .batch_execute(&grant)
+        .await
+        .expect("grant the runtime role schema CREATE");
+
+    let refused = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect_err("split-role apply refuses a runtime role with schema CREATE");
+    assert_eq!(
+        refusal_codes(&refused),
+        ["casework.activation.role-mode-weakened"]
+    );
+    let message = refused.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(
+        message.contains("caseworkctl apply --runtime-config FILE"),
+        "{message}"
+    );
+    assert_eq!(fixture.relation_count().await, 0, "apply changed nothing");
+
+    fixture
+        .client
+        .batch_execute(&fix)
+        .await
+        .expect("revoke schema CREATE");
+    let applied = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("apply after the revoke");
+    assert_eq!(applied.activation.role_mode, RoleMode::Split);
+
+    let runtime = fixture.runtime();
+    fixture
+        .client
+        .batch_execute(&grant)
+        .await
+        .expect("grant schema CREATE again");
+    let weakened = check_activation(&runtime, DATABASE_ID, &first, &[])
+        .await
+        .expect_err("a split activation whose runtime role can create objects is refused");
+    assert!(
+        matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
+        "{weakened}"
+    );
+    let message = weakened.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(
+        message.contains("caseworkctl apply --runtime-config FILE"),
+        "{message}"
+    );
+    drop(runtime);
+    fixture.drop_runtime_role().await;
+}
+
+/// Writing the schema-migration ledger or creating triggers on a Casework
+/// table is authority over the activation ledger as much as writing it, so
+/// startup refuses the split activation, and apply takes both privileges
+/// back.
+#[tokio::test]
+async fn schema_ledger_writes_and_trigger_privileges_weaken_a_split_activation() {
+    let fixture = Fixture::split("ledgerwrite").await;
+    let project = project();
+    let first = digest('a');
+    fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("split-role apply");
+    let runtime = fixture.runtime();
+    for grant in [
+        "GRANT INSERT ON casework_schema_migrations TO {role}",
+        "GRANT TRIGGER ON casework_task_templates TO {role}",
+    ] {
+        fixture
+            .client
+            .batch_execute(&grant.replace("{role}", &fixture.runtime_user))
+            .await
+            .expect("grant the runtime role a privilege");
+        let weakened = check_activation(&runtime, DATABASE_ID, &first, &[])
+            .await
+            .expect_err("the privilege weakens the split activation");
+        assert!(
+            matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
+            "{grant}: {weakened}"
+        );
+        assert!(weakened
+            .to_string()
+            .contains("caseworkctl apply --runtime-config FILE"));
+        let reissued = fixture
+            .apply(&candidate(&project, &first, &[]))
+            .await
+            .expect("apply reissues the grants");
+        assert_eq!(reissued.activation.role_mode, RoleMode::Split, "{grant}");
+        assert_eq!(
+            check_activation(&runtime, DATABASE_ID, &first, &[])
+                .await
+                .expect("the reissued grants start"),
+            RoleMode::Split
+        );
+    }
+    drop(runtime);
+    fixture.drop_runtime_role().await;
+}
+
+/// `serve` itself refuses a migrated database no package was applied to:
+/// it returns the refusal, never listens, and writes no Casework row.
+#[tokio::test]
+async fn serve_refuses_an_unapplied_database_before_listening_or_writing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::single("serve").await;
+    fixture
+        .migration
+        .migrate()
+        .await
+        .expect("migrate without activating");
+    let rows = casework_row_counts(&fixture).await;
+    assert!(!rows.is_empty());
+
+    let root = tempfile::tempdir_in(
+        std::fs::canonicalize(env::temp_dir()).expect("canonical temporary directory"),
+    )
+    .expect("temporary directory");
+    let package = root.path().join("package");
+    std::fs::create_dir(&package).expect("package directory");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/casework/examples/standalone-decision/casework.yaml"
+        ),
+        package.join("casework.yaml"),
+    )
+    .expect("copy the project");
+    registry_platform_config::write_sum_file(
+        &package,
+        None,
+        &registry_casework::package_limits(),
+        registry_casework::PACKAGE_COMMAND,
+    )
+    .expect("package the project");
+    let secrets = root.path().join("secrets");
+    std::fs::create_dir(&secrets).expect("secrets directory");
+    std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700))
+        .expect("secrets directory mode");
+    let audit_key = secrets.join("audit");
+    std::fs::write(&audit_key, [7_u8; 32]).expect("audit key");
+    std::fs::set_permissions(&audit_key, std::fs::Permissions::from_mode(0o600))
+        .expect("audit key mode");
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("reserve a port")
+        .local_addr()
+        .expect("reserved address")
+        .port();
+    let runtime = root.path().join("runtime.yaml");
+    std::fs::write(
+        &runtime,
+        serde_json::to_string_pretty(&json!({
+            "apiVersion": "registry.registrystack.org/casework-runtime/v1alpha1",
+            "kind": "CaseworkRuntimeConfig",
+            "identity": {"databaseId": DATABASE_ID},
+            "package": {"root": package},
+            "listener": {
+                "bind": format!("127.0.0.1:{port}"),
+                "tlsTermination": "development-loopback",
+                "networkExposure": "private-address"
+            },
+            "secretProviders": {"file": {"root": secrets}, "environment": {}},
+            "database": {
+                "runtimeUrlRef": fixture.database.runtime_url_ref,
+                "migrationUrlRef": fixture.database.migration_url_ref,
+                "testOnlyPlaintext": true
+            },
+            "authentication": {"oidc": {
+                "issuer": "https://identity.example.test",
+                "audience": "urn:example:casework"
+            }},
+            "audit": {"path": root.path().join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
+            "sources": {}
+        }))
+        .expect("render the runtime configuration"),
+    )
+    .expect("write the runtime configuration");
+
+    let refused = tokio::time::timeout(
+        Duration::from_secs(30),
+        registry_casework::serve_from_path(&runtime),
+    )
+    .await
+    .expect("serve returns instead of serving")
+    .expect_err("serve refuses an unapplied database");
+    assert!(matches!(refused, RuntimeError::NotActivated), "{refused}");
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err(),
+        "serve never listened"
+    );
+    assert_eq!(
+        casework_row_counts(&fixture).await,
+        rows,
+        "serve wrote no row"
+    );
+}
+
+/// The row count of every Casework table in the fixture's schema.
+async fn casework_row_counts(fixture: &Fixture) -> Vec<(String, i64)> {
+    let tables: Vec<String> = fixture
+        .client
+        .query(
+            "SELECT format('%I.%I', n.nspname, c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE n.nspname=$1 AND c.relname LIKE 'casework\\_%' AND c.relkind IN ('r','p') ORDER BY 1",
+            &[&fixture.schema],
+        )
+        .await
+        .expect("list Casework tables")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    let mut counts = Vec::new();
+    for table in tables {
+        let count: i64 = fixture
+            .client
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .await
+            .expect("count rows")
+            .get(0);
+        counts.push((table, count));
+    }
+    counts
 }

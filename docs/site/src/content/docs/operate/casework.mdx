@@ -130,27 +130,42 @@ Grant the runtime role nothing else by hand. When the two credentials name diffe
 [`caseworkctl apply`](#plan-apply-and-serve) grants the runtime role `USAGE` on the schema, read and
 write on every other Casework table, its sequences, and `EXECUTE` on the Casework functions. It
 leaves the runtime role only `SELECT` on the two ledgers, `casework_activations` and
-`casework_schema_migrations`, and revokes every privilege `PUBLIC` holds on them. Default
+`casework_schema_migrations`, revokes every privilege `PUBLIC` holds on them, and revokes
+`TRIGGER` on every Casework table from the runtime role. Default
 privileges an earlier release's provisioning set up do no harm: apply revokes the ledger writes
 they would give.
 
 Apply then records the role mode from what the runtime role can actually do. A runtime role that
-is a superuser, bypasses row security, can insert, update, or delete rows of `casework_activations`,
-is a member of that table's owner or the schema's owner, or is a member of the migration role could
-record an activation no operator applied, so the activation is recorded as `single`; otherwise it is `split`. Both
+is a superuser, bypasses row security, can insert, update, or delete rows of `casework_activations`
+or `casework_schema_migrations`, holds `TRIGGER` on a Casework table, is a member of the ledger's
+owner or the schema's owner, or is a member of the migration role could record an activation no
+operator applied, so the activation is recorded as `single`; otherwise it is `split`. A runtime role
+that owns a Casework table, sequence, view, or function, or holds `CREATE` on the schema, could
+attach code that runs as the migration role during apply. Apply refuses it with
+`casework.activation.role-mode-weakened` before changing anything, and names the fix:
+`REASSIGN OWNED BY <runtime role> TO <migration role>` or
+`REVOKE CREATE ON SCHEMA <schema> FROM <runtime role>`, run as the migration role, then
+`caseworkctl apply` again. Split mode protects the two ledgers and the schema: the runtime role
+still writes `casework_task_templates` and `casework_source_reconciliation_progress`, so its
+credential can change template activation or source generations without an apply. Both
 credentials may name one role, but then `caseworkctl status` and `caseworkctl doctor` state that
 the runtime credential can activate packages and rewrite the ledger, so the ledger cannot show that
 it did not. A start that finds a `split` activation whose runtime role can now write the ledger
-refuses, and names `caseworkctl apply` to reissue the grants or record the single-role mode.
+refuses. It names the same `REASSIGN OWNED` or `REVOKE CREATE` statement when ownership or
+`CREATE` is the cause, and otherwise names `caseworkctl apply` to reissue the grants or record the
+single-role mode.
 
 Casework creates no extension, no schema, and no role of its own, so a missing `CONNECT` or schema
 ownership surfaces as a permission-denied database error at `caseworkctl apply`.
 
 {/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(),
     and SINGLE_ROLE_STATEMENT; crates/registry-casework/src/runtime.rs, check_activation() and
-    RuntimeError::RoleModeWeakened; crates/registry-casework/tests/activation_postgres.rs,
-    split_role_runtime_cannot_write_the_ledgers_but_still_serves() and
-    a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until_apply_records_it(). */}
+    RuntimeError::RoleModeWeakened; crates/registry-casework/src/activation.rs, stray_authority();
+    crates/registry-casework/tests/activation_postgres.rs,
+    split_role_runtime_cannot_write_the_ledgers_but_still_serves(),
+    a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until_apply_records_it(),
+    a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_startup(), and
+    a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_startup(). */}
 
 ## Write the runtime file
 
@@ -910,7 +925,8 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `no Casework package has been applied to this database`, or `the Casework database schema is not current` | No package was applied, or an earlier release migrated the database. Run `caseworkctl plan` then `caseworkctl apply`, as [Plan, apply, and serve](#plan-apply-and-serve) describes, then start the runtime. |
 | `the active Casework package in this database is X, not the configured package Y`, or `the binding of source ID differs from the one the active package was applied with` | The package or a source binding changed since the last apply. Plan and apply the configured package, then restart. |
 | `the package deployment binding differs from the runtime configuration at identity.databaseId` | The runtime file points at a database that recorded another `databaseId`. Point `database.runtimeUrlRef` and `database.migrationUrlRef` at the database this file belongs to, or correct `identity.databaseId`. |
-| `the active Casework package was applied split-role, but the runtime credential can now write the activation ledger` | The runtime role gained ledger authority, or the credential now names the migration role. Remove the extra grant or membership, then run `caseworkctl apply` to reissue the grants or record the single-role mode. |
+| `the active Casework package was applied split-role, but the runtime credential can now write the activation ledger` | The runtime role gained ledger authority, or the credential now names the migration role. Run the `REASSIGN OWNED` or `REVOKE CREATE` statement the message names, or remove the extra grant or membership, then run `caseworkctl apply` to reissue the grants or record the single-role mode. |
+| `casework.activation.role-mode-weakened` | The runtime role owns a Casework object or can create one in the schema. Run the statements the refusal names as the migration role, then apply again. |
 | `casework.activation.already-active` | The active package is applied with nothing to change. Nothing needs applying. |
 | `casework.activation.audit-unavailable` | The audit destination refused the request entry, so nothing was applied. Restore the destination named at `audit`, then apply again. |
 | `casework.activation.applied-unaudited` | The package is active but its response entry did not reach the audit destination. Do not apply again; restore the destination and record the activation `caseworkctl status` names. |

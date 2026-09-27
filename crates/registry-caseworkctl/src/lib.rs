@@ -935,6 +935,11 @@ fn activation_refusal_diagnostics(refusals: &[registry_casework::ActivationRefus
                     "Keep this database with the release that wrote it until its hosted work \
                      is exported, then apply this release to a fresh Casework database."
                 }
+                "role-mode-weakened" => {
+                    "Run the statements the refusal names as the migration role so the \
+                     runtime role owns no Casework object and cannot create one, then run \
+                     caseworkctl apply --runtime-config FILE again."
+                }
                 "schema-newer" => {
                     "Run the casework release that migrated this database or a later one; \
                      Casework does not migrate a schema down."
@@ -2027,6 +2032,7 @@ mod tests {
             "attempt-pending",
             "database-id-mismatch",
             "hosted-work-would-be-dropped",
+            "role-mode-weakened",
             "schema-newer",
             "stranded-work",
             "template-changed",

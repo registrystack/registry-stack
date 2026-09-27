@@ -505,7 +505,9 @@ pub async fn check_activation(
         .await?
         .ok_or(RuntimeError::NotActivated)?;
     if active.role_mode == crate::RoleMode::Split && role_mode == crate::RoleMode::Single {
-        return Err(RuntimeError::RoleModeWeakened);
+        return Err(RuntimeError::RoleModeWeakened {
+            fix: store.role_mode_weakened_fix().await?,
+        });
     }
     Ok(role_mode)
 }
@@ -1314,10 +1316,13 @@ pub enum RuntimeError {
         "the binding of source {0} differs from the one the active package was applied with; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]
     SourceGenerationNotActive(String),
+    /// `fix` names what to do: reassign the objects or revoke the schema
+    /// privilege that give the runtime role that authority, or, when a
+    /// privilege apply issues or revokes gives it, rerun apply.
     #[error(
-        "the active Casework package was applied split-role, but the runtime credential can now write the activation ledger; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE` to reissue the runtime role's grants or record the single-role mode"
+        "the active Casework package was applied split-role, but the runtime credential can now write the activation ledger; {fix}"
     )]
-    RoleModeWeakened,
+    RoleModeWeakened { fix: String },
     #[error("the Casework audit destination could not be initialized")]
     Audit,
     #[error("the Casework audit destination could not be initialized: {0}")]

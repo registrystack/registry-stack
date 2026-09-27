@@ -46,9 +46,12 @@ two-person rule enforce it on who can read the migration credential.
 - Only `caseworkctl apply` resolves the migration credential. `casework serve`,
   `caseworkctl plan`, `status`, and `doctor` connect with the runtime
   credential; `plan` does so in a read-only transaction.
-- The runtime no longer migrates, registers source generations, activates or
-  retires task templates, or checks stranded pinned work at startup. Its
-  activation check (`runtime::check_activation`) only reads.
+- The runtime code no longer migrates, registers source generations,
+  activates or retires task templates, or checks stranded pinned work at
+  startup. Its activation check (`runtime::check_activation`) only reads.
+  That is what the runtime does, not what its credential can do: the runtime
+  role keeps DML on the tables that hold template activation and source
+  generations (see Residual risk).
 - Startup refuses a database with no activation, a schema version other than
   its own, an active package other than the one it loaded, a source
   generation the ledger has not registered, a `databaseId` other than its own,
@@ -69,15 +72,35 @@ two-person rule enforce it on who can read the migration credential.
   the runtime role and all privileges on them from `PUBLIC`, then grants
   `SELECT` on both. Every statement is idempotent and every split-role apply
   reissues them.
-- The runtime role keeps broad DML on the work tables. That is what serving
-  needs; the separation this change adds is over activation and schema
-  authority, not over work data.
+- The runtime role keeps broad DML on the work tables, including
+  `casework_task_templates` and `casework_source_reconciliation_progress`.
+  That is what serving needs. Split mode separates authority over the two
+  ledgers and the schema, not over work data, template activation, or source
+  generation registration.
+- Apply also revokes `TRIGGER` on every Casework table and view from the
+  runtime role, since a trigger it attached would run as whichever role fires
+  it, including the migration role inside apply.
 - The role mode is recorded from the runtime role's effective authority after
   the grants, not from whether the two credentials name different roles. The
   runtime role counts as single-role when it is a superuser or bypasses row
-  security, holds any of `INSERT, UPDATE, DELETE` on the ledger, is a member of
-  the ledger's owner or the schema's owner, or is a member of the migration
-  role.
+  security, holds any of `INSERT, UPDATE, DELETE` on either ledger, is a member
+  of the ledger's owner or the schema's owner, or is a member of the migration
+  role. It counts as single-role too when it can reach the ledger through code
+  that runs as the migration role: it owns, or is a member of the owner of,
+  any `casework_*` table, sequence, view, or function, holds `TRIGGER` on a
+  Casework table or view, or holds `CREATE` on the schema. A deferred
+  constraint trigger on `casework_task_templates`, for example, fires as the
+  migration role at apply's commit and can insert a ledger row.
+- Split-role apply refuses such ownership or `CREATE` before it changes
+  anything, with `casework.activation.role-mode-weakened`, rather than record
+  it as single-role, since reassigning the objects or revoking the grant
+  takes the authority away. The refusal names the statements to run as the
+  migration role, `REASSIGN OWNED BY <owner> TO <migration role>` and
+  `REVOKE CREATE ON SCHEMA <schema> FROM <grantee>`, then rerunning
+  `caseworkctl apply --runtime-config FILE`. `plan` reports the same refusal
+  once the ledger exists, and startup's refusal of a weakened split-role
+  activation names the same statements from the same check
+  (`activation::stray_authority`).
 - Re-applying the active package is allowed, and planned as pending, when the
   effective role mode differs from the latest row or the runtime role's grants
   are not current, so moving to split or rotating the runtime role reissues
@@ -125,6 +148,11 @@ holds no lock stronger than a row lock while the runtime works.
 
 - CASEWORK-SEC-23:
   `a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until_apply_records_it`,
+  `a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_startup`,
+  `a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_startup`,
+  `schema_ledger_writes_and_trigger_privileges_weaken_a_split_activation`,
+  `serve_refuses_an_unapplied_database_before_listening_or_writing` (through
+  `serve_from_path`: the refusal, no listener, and no `casework_*` row written),
   `split_role_runtime_cannot_write_the_ledgers_but_still_serves`,
   `startup_refuses_an_unapplied_database_another_package_and_another_database`,
   `moving_to_split_and_rotating_the_runtime_role_reapply_the_active_package`,
@@ -148,6 +176,18 @@ and need `CASEWORK_ACTIVATION_TEST_DATABASE_URL`.
 - Nothing is signed. Anyone holding the migration credential can activate any
   verified package; the ledger and audit trail record it after the fact.
 - In single-role mode the runtime credential can rewrite the ledger.
+- In split-role mode the runtime role keeps `SELECT, INSERT, UPDATE, DELETE`
+  on `casework_task_templates` and `casework_source_reconciliation_progress`.
+  A runtime credential holder can therefore activate or retire a task
+  template, or register a source binding generation, without `caseworkctl
+  apply` and without a ledger row or activation audit entry. Split mode
+  protects the ledgers and the schema, not that activation state.
+- Triggers have no owner. A trigger the runtime role attached to a Casework
+  table while it owned the table survives `REASSIGN OWNED BY`, and its
+  function, reassigned to the migration role, still runs as whichever role
+  fires it. Apply does not look for such triggers; an operator who reassigns
+  after the refusal should drop any trigger on a `casework_*` table that no
+  Casework migration created.
 - A future migration that alters `casework_meta` itself could still meet a
   runtime transaction queued for its `FOR SHARE` lock; PostgreSQL detects the
   deadlock and rolls one side back, and apply can be retried.

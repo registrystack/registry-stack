@@ -298,6 +298,22 @@ impl ActivationRefusal {
         }
     }
 
+    /// Split-role apply refuses a runtime role that owns a Casework object
+    /// or can create one in the schema: a trigger it attaches fires as the
+    /// migration role inside apply's own transaction. `statements` are the
+    /// SQL statements that take that authority away.
+    fn role_mode_weakened(statements: &[String]) -> Self {
+        Self::new(
+            "role-mode-weakened",
+            "runtime.yaml:/database/runtimeUrlRef",
+            format!(
+                "the runtime role can write the activation ledger through Casework objects it \
+                 owns or can create; {}",
+                stray_authority_fix(statements)
+            ),
+        )
+    }
+
     fn database_id_mismatch() -> Self {
         Self::new(
             "database-id-mismatch",
@@ -417,7 +433,17 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.build_transaction().read_only(true).start().await?;
         let observation = observe_role(&transaction, None).await?;
-        let analysis = analyze(&transaction, candidate, observation).await?;
+        let mut analysis = analyze(&transaction, candidate, observation).await?;
+        // Before the first apply the migration role is unknown, so the check
+        // starts once the ledger names it as its owner.
+        if observation.is_some() {
+            let stray = stray_authority(&transaction, None).await?;
+            if !stray.is_empty() {
+                analysis
+                    .refusals
+                    .push(ActivationRefusal::role_mode_weakened(&stray));
+            }
+        }
         transaction.commit().await?;
         Ok(ActivationPlan {
             runtime_role_mode: observation.map(|observation| observation.mode),
@@ -560,6 +586,25 @@ impl PostgresStore {
         Ok(role_mode)
     }
 
+    /// What to do about a split-role activation whose runtime role can now
+    /// write the activation ledger: take away the ownership or schema
+    /// privilege that gives it that authority, or else rerun apply, which
+    /// reissues the grants or records the single-role mode.
+    pub(crate) async fn role_mode_weakened_fix(&self) -> Result<String, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.build_transaction().read_only(true).start().await?;
+        let stray = stray_authority(&transaction, None).await?;
+        transaction.commit().await?;
+        Ok(if stray.is_empty() {
+            "run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply \
+             --runtime-config FILE` to reissue the runtime role's grants or record the \
+             single-role mode"
+                .to_owned()
+        } else {
+            stray_authority_fix(&stray)
+        })
+    }
+
     /// Whether the ledger holds the activation `activation_id`, read on a
     /// connection outside any transaction.
     async fn activation_recorded(&self, activation_id: Uuid) -> Result<bool, StoreError> {
@@ -625,6 +670,14 @@ async fn apply_in(
         .map_err(StoreError::from)?
         .get(0);
     let split = current_user != runtime_user;
+    if split {
+        let stray = stray_authority(transaction, Some(runtime_user)).await?;
+        if !stray.is_empty() {
+            return Err(ActivationError::Refused(vec![
+                ActivationRefusal::role_mode_weakened(&stray),
+            ]));
+        }
+    }
     let observation = if split {
         observe_role(transaction, Some(runtime_user)).await?
     } else {
@@ -1148,9 +1201,13 @@ async fn lock_runtime_order(transaction: &Transaction<'_>) -> Result<(), StoreEr
 /// The authority of `role`, or of this connection's role when none is
 /// given, over the activation ledger. The role is single-role when it can
 /// write the ledger in any way: a superuser or row-security bypass attribute,
-/// an insert, update, or delete privilege, membership in the ledger's or the
-/// schema's owner, or, when `role` is named, membership in this connection's
-/// role. Absent when the role cannot see the ledger.
+/// an insert, update, or delete privilege on either ledger, membership in
+/// the ledger's or the schema's owner, or, when `role` is named, membership
+/// in this connection's role. It is single-role too when it can reach the
+/// ledger through code that runs as the migration role: it owns, or is a
+/// member of the owner of, a Casework relation or function, holds TRIGGER on
+/// a Casework table or view, or holds CREATE on the schema. Absent when the
+/// role cannot see the ledger.
 async fn observe_role(
     transaction: &Transaction<'_>,
     role: Option<&str>,
@@ -1162,7 +1219,17 @@ async fn observe_role(
                OR has_table_privilege(r.oid, c.oid, 'INSERT, UPDATE, DELETE')
                OR pg_has_role(r.oid, c.relowner, 'MEMBER')
                OR pg_has_role(r.oid, n.nspowner, 'MEMBER')
-               OR ($1::text IS NOT NULL AND pg_has_role(r.oid, current_user, 'MEMBER')),
+               OR ($1::text IS NOT NULL AND pg_has_role(r.oid, current_user, 'MEMBER'))
+               OR COALESCE(has_table_privilege(r.oid, to_regclass('casework_schema_migrations')::oid, 'INSERT, UPDATE, DELETE'), false)
+               OR has_schema_privilege(r.oid, n.oid, 'CREATE')
+               OR EXISTS(
+                 SELECT 1 FROM pg_class t
+                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND t.relkind IN ('r','p','v','m','S','f')
+                   AND (pg_has_role(r.oid, t.relowner, 'MEMBER')
+                     OR (t.relkind IN ('r','p','v') AND has_table_privilege(r.oid, t.oid, 'TRIGGER'))))
+               OR EXISTS(
+                 SELECT 1 FROM pg_proc p
+                 WHERE p.pronamespace=n.oid AND p.proname LIKE 'casework\\_%' AND pg_has_role(r.oid, p.proowner, 'MEMBER')),
                has_schema_privilege(r.oid, n.oid, 'USAGE')
                AND NOT EXISTS(
                  SELECT 1 FROM pg_class t
@@ -1195,8 +1262,91 @@ async fn observe_role(
     }))
 }
 
+/// The SQL statements that take away `role`'s authority to reach the
+/// activation ledger through Casework objects, or this connection's role's
+/// when none is given: reassign every Casework relation or function a role
+/// it belongs to owns, and revoke every CREATE grant on the schema that
+/// reaches it. `role` is measured against this connection's role, the
+/// migration role; without one it is measured against the ledger's owner.
+/// Empty when the role has neither, and for a superuser or a member of the
+/// migration role or the schema owner, whose authority no reassignment or
+/// revoke takes away.
+async fn stray_authority(
+    transaction: &Transaction<'_>,
+    role: Option<&str>,
+) -> Result<Vec<String>, StoreError> {
+    let Some(row) = transaction
+        .query_opt(
+            "WITH reference AS (
+               SELECT CASE WHEN $1::text IS NOT NULL
+                 THEN (SELECT oid FROM pg_roles WHERE rolname=current_user::text)
+                 ELSE (SELECT relowner FROM pg_class WHERE oid=to_regclass('casework_activations'))
+               END AS oid
+             )
+             SELECT
+               r.rolsuper OR reference.oid IS NULL
+               OR pg_has_role(r.oid, reference.oid, 'MEMBER')
+               OR pg_has_role(r.oid, n.nspowner, 'MEMBER'),
+               quote_ident(COALESCE((SELECT rolname FROM pg_roles WHERE oid=reference.oid), '')),
+               quote_ident(n.nspname),
+               ARRAY(
+                 SELECT DISTINCT quote_ident(o.rolname)
+                 FROM (
+                   SELECT c.relowner AS owner FROM pg_class c
+                   WHERE c.relnamespace=n.oid AND c.relname LIKE 'casework\\_%' AND c.relkind IN ('r','p','v','m','S','f')
+                   UNION
+                   SELECT p.proowner FROM pg_proc p
+                   WHERE p.pronamespace=n.oid AND p.proname LIKE 'casework\\_%'
+                 ) owned JOIN pg_roles o ON o.oid=owned.owner
+                 WHERE pg_has_role(r.oid, owned.owner, 'MEMBER')
+                 ORDER BY 1),
+               ARRAY(
+                 SELECT DISTINCT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END
+                 FROM aclexplode(n.nspacl) a LEFT JOIN pg_roles g ON g.oid=a.grantee
+                 WHERE a.privilege_type='CREATE' AND (a.grantee=0 OR pg_has_role(r.oid, a.grantee, 'MEMBER'))
+                 ORDER BY 1)
+             FROM pg_roles r, pg_namespace n, reference
+             WHERE r.rolname=COALESCE($1::text, current_user::text) AND n.nspname=current_schema()",
+            &[&role],
+        )
+        .await?
+    else {
+        return Ok(Vec::new());
+    };
+    if row.get(0) {
+        return Ok(Vec::new());
+    }
+    let migration_role: String = row.get(1);
+    let schema: String = row.get(2);
+    let owners: Vec<String> = row.get(3);
+    let grantees: Vec<String> = row.get(4);
+    Ok(owners
+        .into_iter()
+        .map(|owner| format!("REASSIGN OWNED BY {owner} TO {migration_role}"))
+        .chain(
+            grantees
+                .into_iter()
+                .map(|grantee| format!("REVOKE CREATE ON SCHEMA {schema} FROM {grantee}")),
+        )
+        .collect())
+}
+
+/// The next action for stray authority `statements` from
+/// [`stray_authority`].
+fn stray_authority_fix(statements: &[String]) -> String {
+    let statements = statements
+        .iter()
+        .map(|statement| format!("`{statement}`"))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    format!(
+        "run {statements} as the migration role, then rerun `caseworkctl apply --runtime-config FILE`"
+    )
+}
+
 /// Give `runtime_user` what the service needs in the Casework schema, and
-/// take away its write access to both ledgers. Every statement is
+/// take away its write access to both ledgers and its TRIGGER privilege on
+/// every Casework table. Every statement is
 /// idempotent, and every split-role apply reissues them.
 async fn grant_runtime_role(
     transaction: &Transaction<'_>,
@@ -1224,11 +1374,14 @@ async fn grant_runtime_role(
     {
         let name: String = row.get(0);
         let kind: String = row.get(1);
-        statements.push(if kind == "S" {
-            format!("GRANT USAGE, SELECT ON SEQUENCE {name} TO {role}")
+        if kind == "S" {
+            statements.push(format!("GRANT USAGE, SELECT ON SEQUENCE {name} TO {role}"));
         } else {
-            format!("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {name} TO {role}")
-        });
+            statements.push(format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {name} TO {role}"
+            ));
+            statements.push(format!("REVOKE TRIGGER ON TABLE {name} FROM {role}"));
+        }
     }
     for row in transaction
         .query(
