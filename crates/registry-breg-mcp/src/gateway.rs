@@ -480,7 +480,8 @@ impl Gateway {
                 .after_mutation()
             })?;
             if !status.is_closed() {
-                return application_value(&session.contract, &record);
+                return application_value(&session.contract, &record)
+                    .map_err(ToolError::after_mutation);
             }
         }
         Err(ToolError::new(ToolErrorCode::NotPermitted))
