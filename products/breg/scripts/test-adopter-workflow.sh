@@ -857,11 +857,23 @@ render_runtime_config "$temporary_root/runtime-test-v2.yaml" "$temporary_root/bu
 
 run_json "$temporary_root/diff-v2.json" diff "$temporary_root/project-v2" --runtime-config "$temporary_root/runtime-operator-v1.yaml"
 assert_json_ok "$temporary_root/diff-v2.json" diff
-python3 - "$temporary_root/diff-v2.json" <<'PY'
+python3 - "$temporary_root/diff-v2.json" "$from_release" <<'PY'
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 changes = report.get("changes", [])
+# A predecessor from the previous release lacks the compiler-owned reference
+# indexes, so the successor plan adds them as a lock risk beside the field.
+if sys.argv[2] == "1":
+    changes = [
+        entry
+        for entry in changes
+        if not (
+            entry.get("classification") == "lock_or_rewrite_risk"
+            and entry.get("change", {}).get("code") == "index_added"
+            and entry.get("change", {}).get("target", {}).get("memberId", "").startswith("reference:")
+        )
+    ]
 change = changes[0].get("change", {}) if len(changes) == 1 else {}
 if (
     len(changes) != 1
