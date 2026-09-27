@@ -718,8 +718,40 @@ curl -s 'http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001
 
 `domainData` now contains `legalName` alone, and `meta.selectedFields` says so:
 
-```json test-excerpt
-{"domainData": {"legalName": "Aurora Freight Cooperative"}}
+```json test-expect
+{
+  "data": {
+    "authorityIdentifier": "urn:example:authority:registrar",
+    "domainData": {
+      "legalName": "Aurora Freight Cooperative"
+    },
+    "lifecycleState": "ACTIVE",
+    "recordIdentifier": "BIZ-0001",
+    "recordedAt": "2026-02-11T09:00:00Z",
+    "revisionIdentifier": "3",
+    "schemaReference": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-schema",
+    "semanticModelReference": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-vocabulary"
+  },
+  "meta": {
+    "accessProfile": "public",
+    "contractRevision": "sha256:<contract-revision>",
+    "datasetIdentifier": "businesses",
+    "disclosureProfile": "public",
+    "entityTypeIdentifier": "business",
+    "family": "consultation",
+    "links": {
+      "context": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-context",
+      "schema": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-schema",
+      "self": "https://registry.example.invalid/v2/resources/registered-business/records/{recordIdentifier}",
+      "semanticModel": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-vocabulary"
+    },
+    "operationIdentifier": "registered-business.read",
+    "pattern": "retrieve",
+    "registryIdentifier": "urn:example:registry:businesses",
+    "selectedFields": ["legalName"],
+    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"}
+  }
+}
 ```
 
 A caller cannot widen it:
