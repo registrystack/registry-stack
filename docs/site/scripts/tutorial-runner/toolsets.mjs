@@ -110,8 +110,9 @@ function productToolset({
 const breg = productToolset({
   label: 'breg and bregctl',
   // A page whose sh fences match this runs the toolset, so its gate must
-  // cover it (tutorial-runner/gate.mjs).
-  commands: /(^|[^\w-])(bregctl|breg)([^\w-]|$)/mu,
+  // cover it (tutorial-runner/gate.mjs). A path such as .breg/dev or
+  // tutorial-work/breg names no command.
+  commands: /(^|[^\w./-])(bregctl|breg)([^\w./-]|$)/mu,
   binaries: [
     ['breg', 'BREG_BIN'],
     ['bregctl', 'BREGCTL_BIN'],
@@ -128,7 +129,7 @@ const breg = productToolset({
 // so they no longer reconcile against a registry that is stopping.
 const casework = productToolset({
   label: 'casework, caseworkctl, breg, and bregctl',
-  commands: /(^|[^\w-])(caseworkctl|casework)([^\w-]|$)/mu,
+  commands: /(^|[^\w./-])(caseworkctl|casework)([^\w./-]|$)/mu,
   includes: ['breg'],
   binaries: [
     ['casework', 'CASEWORK_BIN'],
@@ -208,7 +209,7 @@ const evidenceProduct = productToolset({
   label: 'evidence, evidencectl, and evidence-oid4vci',
   // Not a path such as .evidence/dev, which a page may name; but a page that
   // runs Evidence's own checks from a checkout runs Evidence.
-  commands: /(^|[^\w./-])(evidencectl|evidence-oid4vci|evidence)([^\w-]|$)|(^|\s)products\/evidence\/scripts\//mu,
+  commands: /(^|[^\w./-])(evidencectl|evidence-oid4vci|evidence)([^\w./-]|$)|(^|\s)products\/evidence\/scripts\//mu,
   binaries: [
     ['evidence', 'EVIDENCE_BIN'],
     ['evidencectl', 'EVIDENCECTL_BIN'],
