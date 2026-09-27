@@ -1965,6 +1965,15 @@ fn symlink_error() -> AuditError {
 }
 
 fn create_directory(path: &Path) -> Result<(), AuditError> {
+    create_directory_with(path, sync_created_parent)
+}
+
+/// [`create_directory`] with the step that syncs the directory holding each
+/// created one, so a test can observe it.
+fn create_directory_with(
+    path: &Path,
+    mut sync_parent: impl FnMut(&Path) -> Result<(), AuditError>,
+) -> Result<(), AuditError> {
     if fs::symlink_metadata(path).is_ok() {
         return Ok(());
     }
@@ -1987,6 +1996,15 @@ fn create_directory(path: &Path) -> Result<(), AuditError> {
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
             Err(error) => return Err(AuditError::Io(error)),
         }
+        // The new entry is durable only once the directory holding it is
+        // synced, whichever process created it.
+        let holder = directory.parent().ok_or_else(|| {
+            AuditError::Io(io::Error::new(
+                ErrorKind::NotFound,
+                "audit directory has no parent",
+            ))
+        })?;
+        sync_parent(holder)?;
     }
     Ok(())
 }
@@ -2001,10 +2019,10 @@ fn require_creatable_below(ancestor: &Path) -> Result<(), AuditError> {
         )));
     }
     // Creating an entry in a directory needs search as well as write
-    // permission on it.
+    // permission on it, and the writer opens it to sync that entry.
     if rustix::fs::access(
         ancestor,
-        rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+        rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
     )
     .is_err()
     {
@@ -2099,6 +2117,15 @@ fn parent(path: &Path) -> Result<&Path, AuditError> {
                 "audit path has no parent directory",
             ))
         })
+}
+
+/// Sync the directory holding a directory [`create_directory`] made, so
+/// the created entry survives a power loss. It may be an ancestor this user
+/// does not own, so unlike [`sync_directory`] it is not validated.
+fn sync_created_parent(path: &Path) -> Result<(), AuditError> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(AuditError::Io)
 }
 
 fn sync_directory(path: &Path) -> Result<(), AuditError> {
@@ -2526,6 +2553,54 @@ mod tests {
                 assert!(writer.ready().await);
             });
         assert_eq!(lines(&path).len(), 1);
+    }
+
+    #[test]
+    fn creating_the_audit_directory_syncs_the_parent_of_each_created_directory() {
+        let directory = directory();
+        let base = directory.path().to_path_buf();
+        let target = base.join("a").join("b").join("c");
+        let mut synced = Vec::new();
+        create_directory_with(&target, |parent| {
+            assert!(parent
+                .join(
+                    target
+                        .strip_prefix(parent)
+                        .expect("an ancestor of the target")
+                        .components()
+                        .next()
+                        .expect("a created child")
+                )
+                .is_dir());
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .expect("created");
+        assert!(target.is_dir());
+        assert_eq!(
+            synced,
+            [base.clone(), base.join("a"), base.join("a").join("b")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_directory_below_an_ancestor_it_cannot_list_is_refused() {
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: root lists every directory");
+            return;
+        }
+        let directory = directory();
+        let unlistable = directory.path().join("unlistable");
+        fs::create_dir(&unlistable).expect("dir");
+        // The writer opens the ancestor to sync the directory it creates.
+        fs::set_permissions(&unlistable, fs::Permissions::from_mode(0o300)).expect("mode");
+        let destination =
+            FileDestination::new(unlistable.join("audit").join("audit.jsonl")).expect("absolute");
+        let refused = destination.check_writable();
+        let opened = AuditWriter::open(AuditDestination::File(destination)).await;
+        fs::set_permissions(&unlistable, fs::Permissions::from_mode(0o700)).expect("restore");
+        opened.expect_err("the writer cannot sync the ancestor");
+        refused.expect_err("ancestor cannot be listed");
     }
 
     #[test]
