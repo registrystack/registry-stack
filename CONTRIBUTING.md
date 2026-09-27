@@ -97,36 +97,47 @@ feature shards do not replace PostgreSQL or TLS execution.
 The checks below run wholly or partly after review instead of on the pull
 request. Each remains a job of `RegistryStack CI` (`.github/workflows/ci.yml`),
 owned by the maintainers, runs in every nightly full sweep, and passed in that
-workflow's scheduled full sweep on 2026-09-24 before it moved:
+workflow's scheduled full sweep before it moved: on 2026-09-24 for platform
+assurance, the Linux release recipe and docs archives, and on 2026-09-27 for
+the heavy integration tier and the Casework review examples:
 
-- Platform fuzz smoke and Platform line coverage run on the merge queue and
-  on main whenever the platform crates, their products directory or the root
-  Rust inputs change, including a `Cargo.lock` change that reaches a platform
-  crate. No pull-request input brings them back: the platform tests and
-  hygiene checks still run there, and the merge queue holds the 80 percent
-  line floor and the committed-corpus fuzz smoke before anything lands.
-  `nightly-security.yml` additionally explores every declared fuzz target
-  daily, and `nightly-rust-coverage.yml` reports workspace coverage daily.
-  Coverage upload stays on protected main pushes.
-- Release Linux native clients, for both architectures, keeps its full
-  selector on the merge queue and main. On a pull request it runs only for
-  inputs the recipe reads that the native binding job does not already prove:
-  `.cargo/`, the Rust toolchain file,
-  `release/glibc-floor.env`, the pinned maturin requirement, the Linux build,
-  cross-compiler and smoke scripts under `release/scripts/`, each Node.js
-  binding's `Cargo.toml`, `build.rs`, `index.js`, `npm/`, `scripts/` and
-  package files, the Evidence Python binding's `Cargo.toml`, `build.rs` and
-  `pyproject.toml`, the unified Node.js package's `native.js`, `npm/` and
-  package files, and a `Cargo.lock` change that touches a native or
-  git-sourced package or cannot be compared.
-- Immutable docs archives run on pull requests, the merge queue and main only
-  for the archive recipe's own inputs: the docs site package, lockfile and
-  Astro configuration, the archive and link-checking scripts under
+- Platform fuzz smoke runs on the merge queue whenever the platform crates,
+  their products directory or the root Rust inputs change, including a
+  `Cargo.lock` change that reaches a platform crate. Platform line coverage
+  runs on the same inputs on main pushes and in the nightly sweep, outside the
+  `CI result` verdict, and uploads from protected main pushes. No
+  pull-request input brings either back: the platform tests and hygiene
+  checks still run there, and the merge queue holds the committed-corpus
+  fuzz smoke before anything lands. `nightly-security.yml` additionally
+  explores every declared fuzz target daily, and `nightly-rust-coverage.yml`
+  reports workspace coverage daily.
+- The heavy integration tier runs on the merge queue, in the nightly sweep
+  and in a full manual run, each behind its usual changed-path selector: the
+  Base Registry Engine PostgreSQL and immediate-actions lanes (the contracts
+  lane stays on the pull request), the Base Registry Engine WASM executor,
+  Casework and Scheduling PostgreSQL, the Evidence, Base Registry Engine and
+  Casework tutorials, and the Base Registry Engine and Evidence composition.
+  A pull request labeled `ci:full` runs the tier too; adding the label
+  restarts the run. `CI result` passes a heavy job that review skipped, and
+  fails one the classifier selected that did not succeed. Before you push a
+  change these suites cover, run the matching local commands from the
+  owning product guide (for example `products/breg/scripts/test-postgres.sh`
+  or the Casework and Scheduling PostgreSQL suites in `AGENTS.md`), because
+  the merge queue is where their failure would otherwise first appear.
+- Release Linux native clients, for both architectures, runs only in the
+  nightly sweep and a full manual run. Review and the merge queue prove each
+  binding with the native binding job.
+- Immutable docs archives run on the merge queue only for the archive
+  recipe's own inputs: the docs site package, lockfile and Astro
+  configuration, the archive and link-checking scripts under
   `docs/site/scripts/` and the modules they import, and the docset, archive
   lock and repository-docs data. A change to `ci.yml` alone does not rebuild
   history there; the nightly sweep and a manual full run do.
+- The Casework tutorial job's step that verifies the Base Registry Engine,
+  payment and standalone review examples runs only in the nightly sweep and a
+  full manual run.
 
-Main pushes and merge-queue checks select affected work using the event's exact
+Merge-queue checks and main pushes select affected work using the event's exact
 before/after commits, including every commit in a multi-commit push and both
 owners of a renamed path. Shared build and CI inputs still select the broad
 matrix. A `Cargo.lock` change without them selects the workspace packages that

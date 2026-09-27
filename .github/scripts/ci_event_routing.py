@@ -21,9 +21,12 @@ class EventSelection:
     archive_base_ref: str
     archive_comparison_required: bool
     reason: str
-    # Review defers broad assurance to the merge queue, main and the nightly
-    # sweep; every other event keeps it.
+    # Review defers broad assurance and the heavy integration tier to the
+    # merge queue and the nightly sweep; a `ci:full` label opts a pull request
+    # back into the heavy tier. A push to main runs platform line coverage.
     pull_request: bool = False
+    ci_full: bool = False
+    main_push: bool = False
     # Cargo.lock at the base and head commits when it changed; None marks a
     # side where it is absent or unreadable, which selects the complete matrix.
     lock_texts: tuple[str | None, str | None] | None = None
@@ -72,21 +75,33 @@ def select_event(
         full = False
     else:
         raise ValueError(f"unsupported CI event: {event_name}")
+    flags = {
+        "pull_request": event_name == "pull_request",
+        "ci_full": event_name == "pull_request" and any(
+            label.get("name") == "ci:full"
+            for label in event["pull_request"].get("labels", [])
+        ),
+        "main_push": event_name == "push",
+    }
 
     base_commit = commit_ref(repo, base)
     head_commit = commit_ref(repo, head)
     if not base_commit or not head_commit:
         # Run every gate, but leave the archive comparison visibly blocked if
         # its actual baseline is unavailable. Never substitute HEAD or HEAD^.
-        return EventSelection((), True, base_commit, True, "unavailable event comparison")
+        return EventSelection(
+            (), True, base_commit, True, "unavailable event comparison", **flags
+        )
     if full:
-        return EventSelection((), True, base_commit, True, "manual full sweep")
+        return EventSelection((), True, base_commit, True, "manual full sweep", **flags)
     result = subprocess.run(
         ["git", "diff", "--name-only", "--no-renames", "-z", base_commit, head_commit],
         cwd=repo, capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return EventSelection((), True, base_commit, True, "failed event comparison")
+        return EventSelection(
+            (), True, base_commit, True, "failed event comparison", **flags
+        )
     paths = tuple(path for path in result.stdout.split("\0") if path)
     lock_texts = (
         (file_at(repo, base_commit, "Cargo.lock"), file_at(repo, head_commit, "Cargo.lock"))
@@ -95,7 +110,7 @@ def select_event(
     )
     return EventSelection(
         paths, False, base_commit, True, "affected event paths",
-        pull_request=event_name == "pull_request", lock_texts=lock_texts,
+        **flags, lock_texts=lock_texts,
     )
 
 
@@ -110,7 +125,8 @@ def selection_lock_change(
 def selection_outputs(workspace: Workspace, selection: EventSelection) -> dict[str, Any]:
     outputs = classify(
         workspace, selection.paths, full_sweep=selection.full_sweep,
-        pull_request=selection.pull_request,
+        pull_request=selection.pull_request, ci_full=selection.ci_full,
+        main_push=selection.main_push,
         lock_change=selection_lock_change(workspace, selection),
     )
     outputs.update(

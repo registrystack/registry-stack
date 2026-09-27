@@ -10,6 +10,8 @@ on:
         type: boolean
         default: true
   pull_request:
+    # `labeled` lets the ci:full label start a run with the heavy tier.
+    types: [opened, synchronize, reopened, labeled]
     branches:
       - main
       - release/1.0
@@ -49,16 +51,20 @@ jobs:
     outputs:
       archive_base_ref: ${{ steps.filter.outputs.archive_base_ref }}
       archive_comparison_required: ${{ steps.filter.outputs.archive_comparison_required }}
+      full_sweep: ${{ steps.filter.outputs.full_sweep }}
       rust: ${{ steps.filter.outputs.rust }}
       rust_matrix: ${{ steps.filter.outputs.rust_matrix }}
       rust_packages: ${{ steps.filter.outputs.rust_packages }}
       platform: ${{ steps.filter.outputs.platform }}
       platform_assurance: ${{ steps.filter.outputs.platform_assurance }}
+      platform_coverage: ${{ steps.filter.outputs.platform_coverage }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
       breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
+      breg_integration: ${{ steps.filter.outputs.breg_integration }}
+      breg_contracts_lanes: ${{ steps.filter.outputs.breg_contracts_lanes }}
       casework_postgres: ${{ steps.filter.outputs.casework_postgres }}
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
@@ -220,7 +226,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform_assurance == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform_coverage == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -273,7 +279,7 @@ jobs:
     needs:
       - changes
       - platform-coverage
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.platform == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.platform_coverage == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -911,7 +917,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [contracts, postgres, immediate-actions]
+        # Review runs the contracts lane; the merge queue, the nightly sweep
+        # and a ci:full pull request add the PostgreSQL lanes.
+        lane: ${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}
     services:
       postgres:
         # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
@@ -1018,7 +1026,7 @@ jobs:
     # keeps `action.handler.wasm_build_unsupported` proven.
     name: Base Registry Engine WASM executor
     needs: changes
-    if: needs.changes.outputs.breg_contracts == 'true'
+    if: needs.changes.outputs.breg_integration == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
@@ -1637,6 +1645,9 @@ jobs:
             target/casework-tutorial-bin/
 
       - name: Verify BReg, payment, and standalone review examples
+        # The tutorial above proves the Casework journey; the review examples
+        # run in the nightly and manual full sweeps.
+        if: needs.changes.outputs.full_sweep == 'true'
         env:
           CASEWORK_REVIEW_EXAMPLES_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
           # The examples end with the retained local development lifecycle.
@@ -2129,8 +2140,6 @@ jobs:
       - changes
       - secrets
       - platform-quality
-      - platform-coverage
-      - platform-coverage-upload
       - platform-hygiene
       - platform-fuzz
       - rust-policy
@@ -2175,6 +2184,22 @@ jobs:
               for name, details in jobs.items()
               if details["result"] not in {"success", "skipped"}
           }
+          # Review skips the heavy integration tier by design. Wherever the
+          # classifier selected one of these jobs, a skip is a failure.
+          selected_by = {
+              "breg-contracts": "breg_contracts",
+              "breg-wasm": "breg_integration",
+              "casework-postgres": "casework_postgres",
+              "scheduling-postgres": "scheduling_postgres",
+              "evidence-tutorials": "evidence_tutorial",
+              "breg-tutorial": "breg_tutorial",
+              "casework-tutorial": "casework_tutorial",
+              "breg-evidence-composition": "breg_evidence_composition",
+          }
+          selection = jobs["changes"].get("outputs", {})
+          for name, output in selected_by.items():
+              if selection.get(output) == "true" and jobs[name]["result"] != "success":
+                  failed[name] = jobs[name]["result"]
           if failed:
               print(f"CI jobs did not pass: {failed}", file=sys.stderr)
               raise SystemExit(1)

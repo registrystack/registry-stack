@@ -1441,7 +1441,7 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
         or "actions/upload-artifact@" not in staging_step
         or "retention-days: 1" not in staging_step
         or "needs:\n      - changes\n      - platform-coverage" not in upload
-        or f"    if: {protected_push} && needs.changes.outputs.platform == 'true'\n"
+        or f"    if: {protected_push} && needs.changes.outputs.platform_coverage == 'true'\n"
         not in upload
         or upload_permissions not in upload
         or upload_permission_lines
@@ -1458,7 +1458,9 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
         or "actions/checkout@" in upload
         or "        run:" in upload
         or workflow.count("id-token: write") != upload.count("id-token: write")
-        or "      - platform-coverage-upload" not in aggregate
+        # Coverage publishes from main and the nightly sweep, outside the
+        # merge verdict.
+        or "      - platform-coverage-upload" in aggregate
     ):
         return [gate]
     return []

@@ -140,10 +140,32 @@ class EventRoutingTest(unittest.TestCase):
                 selection = select_event(self.repo, event_name, event, head)
                 self.assertEqual(selection.pull_request, event_name == "pull_request")
                 outputs = selection_outputs(self.workspace, selection)
+                self.assertEqual(selection.main_push, event_name == "push")
                 self.assertTrue(outputs["platform"])
+                # Fuzz waits for the merge queue; coverage runs on main only.
                 self.assertEqual(
                     outputs["platform_assurance"], event_name != "pull_request"
                 )
+                self.assertEqual(outputs["platform_coverage"], event_name == "push")
+
+    def test_ci_full_label_opts_a_pull_request_into_the_heavy_tier(self) -> None:
+        head = self.commit("crates/registry-casework/src/lib.rs")
+        for labels, expected in (
+            ([], False),
+            ([{"name": "dependencies"}], False),
+            ([{"name": "ci:full"}], True),
+        ):
+            with self.subTest(labels=labels):
+                event = {"pull_request": {
+                    "base": {"sha": self.base},
+                    "head": {"sha": head},
+                    "labels": labels,
+                }}
+                selection = select_event(self.repo, "pull_request", event, head)
+                self.assertEqual(selection.ci_full, expected)
+                outputs = selection_outputs(self.workspace, selection)
+                self.assertEqual(outputs["casework_postgres"], expected)
+                self.assertTrue(outputs["rust"])
 
     def test_lock_only_event_routes_through_locked_consumers(self) -> None:
         lock = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
