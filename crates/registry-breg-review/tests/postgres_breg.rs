@@ -37,8 +37,13 @@ use registry_breg::postgres::{
 };
 use registry_breg::startup::prepare_with_connection_config_for_test;
 use registry_breg::CompiledRegistry;
+use registry_breg_client::{
+    BRegIdempotencyKey, BRegLifecycleOperation, BRegRecordOptions, BaseRegistryClient,
+    BaseRegistryClientConfig,
+};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
+use registry_platform_httputil::client::BearerToken;
 use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, TestAuthorizationServer, TestClient,
 };
@@ -46,6 +51,7 @@ use serde_json::{json, Value};
 use support::{browser, cookie_pair, page, sign_in_to, write_secret, Page};
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
+use url::Url;
 
 const PROJECT: &str = "citizen-address-correction";
 /// The audience the registry accepts and the resource the page requests.
@@ -195,7 +201,101 @@ async fn a_person_reviews_and_submits_their_own_draft_against_the_real_registry(
         2,
         "{journal}"
     );
-    assert_eq!(journal.matches("\"succeeded\"").count(), 4, "{journal}");
+    assert_eq!(journal.matches("\"ok\"").count(), 4, "{journal}");
+    fixture.finish().await;
+}
+
+/// A retried submit reuses the action and idempotency key it was first sent
+/// with, including the precondition the draft offered then. After the draft
+/// moved to submitted, the real registry answers that retry with the receipt
+/// it stored for the key rather than a conflict, and the page then reads the
+/// submitted draft without offering another submit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retried_submit_replays_the_stored_receipt_after_the_draft_moved_to_submitted() {
+    let fixture = Fixture::start().await;
+    let a = fixture
+        .seed_citizen("P-0001", CITIZEN_A, "1 Harbour Road")
+        .await;
+    let draft = fixture
+        .create_draft(CITIZEN_A, &a.address, "a-own", "2 Quarry Lane")
+        .await;
+
+    let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        Url::parse(&fixture.registry_url).expect("the registry URL parses"),
+    ))
+    .expect("the registry client builds")
+    .with_bearer_token(
+        BearerToken::new(fixture.review_token(CITIZEN_A))
+            .expect("the review token is a header value"),
+    );
+    let metadata = registry
+        .registry_contract(Some("citizen-review"))
+        .await
+        .expect("the review profile's metadata reads")
+        .value;
+    let options = BRegRecordOptions::default()
+        .access_profile("citizen-review")
+        .expect("the access profile is valid");
+    let record = registry
+        .get_record("address-correction-requests", &draft, &options)
+        .await
+        .expect("the draft reads")
+        .value;
+    let authority = metadata
+        .select_lifecycle("address-correction-request", "citizen-review")
+        .expect("the review profile carries the request lifecycle");
+    let action = registry
+        .lifecycle_actions(&authority, &record)
+        .expect("the draft's actions promote")
+        .into_iter()
+        .find(|action| action.operation() == BRegLifecycleOperation::SubmitRequest)
+        .expect("a fresh draft offers submission");
+    let key = BRegIdempotencyKey::parse("breg-review-retry-regression")
+        .expect("the idempotency key is valid");
+
+    let first = registry
+        .execute_lifecycle_action(&action, &key)
+        .await
+        .expect("the first submit commits");
+    assert!(
+        fixture
+            .submit_precondition(CITIZEN_A, &draft)
+            .await
+            .is_none(),
+        "a submitted draft no longer offers submission"
+    );
+    let replayed = registry
+        .execute_lifecycle_action(&action, &key)
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "the retry is answered from the stored receipt, not refused: status {:?}, code {:?}, {error}",
+                error.status(),
+                error.problem_code()
+            )
+        });
+    assert!(
+        replayed.value == first.value,
+        "the retry answers the receipt the first submit stored"
+    );
+
+    let session = cookie_pair(
+        &sign_in_to(&fixture.http, &fixture.page_origin, CITIZEN_A, &draft)
+            .await
+            .set_cookie("breg-review-session")
+            .expect("the callback sets a session cookie"),
+    );
+    let review = fixture.get(&format!("/requests/{draft}"), &session).await;
+    assert_eq!(review.status, StatusCode::OK, "{}", review.body);
+    assert!(review.body.contains("1 Harbour Road"), "{}", review.body);
+    assert!(review.body.contains("2 Quarry Lane"), "{}", review.body);
+    assert!(review.input("view").is_none(), "{}", review.body);
+    let journal = fixture.journal();
+    assert_eq!(
+        audit_count(&journal, "response", "read", Some("ok")),
+        1,
+        "{journal}"
+    );
     fixture.finish().await;
 }
 

@@ -33,19 +33,17 @@ impl Action {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Outcome {
-    Succeeded,
+    Ok,
     Conflicted,
     Refused,
-    Failed,
 }
 
 impl Outcome {
     const fn as_str(self) -> &'static str {
         match self {
-            Self::Succeeded => "succeeded",
+            Self::Ok => "ok",
             Self::Conflicted => "conflicted",
             Self::Refused => "refused",
-            Self::Failed => "failed",
         }
     }
 }
@@ -284,13 +282,13 @@ mod tests {
         let second_correlation = second.request.correlation().to_owned();
         assert_ne!(first_correlation, second_correlation);
 
-        first.finish(Outcome::Succeeded, None).await.unwrap();
+        first.finish(Outcome::Ok, None).await.unwrap();
         drop(second);
         writer.wait_for_detached_entries();
 
         let entries = lines.entries();
         for (correlation, outcome) in [
-            (first_correlation, "succeeded"),
+            (first_correlation, "ok"),
             (second_correlation, "unfinished"),
         ] {
             let paired: Vec<_> = entries

@@ -7,11 +7,12 @@ mod support;
 use std::time::Duration;
 
 use axum::http::StatusCode;
+use registry_breg_client::BRegProblemCode;
 use support::{
-    browser, cookie_pair, sign_in_to, start_narrow_scope_provider, write_secret, Harness, Options,
-    ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CLIENT_ID, CURRENT_LINE_A, ENTITY, EXPECTED_CSP,
-    FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID, PROFILE, PROPOSED_LOCALITY,
-    REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
+    browser, cookie_pair, sign_in_to, start_narrow_scope_provider, write_secret, AuditSink,
+    Harness, Options, ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CLIENT_ID, CURRENT_LINE_A,
+    ENTITY, EXPECTED_CSP, FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID, PROFILE,
+    PROPOSED_LOCALITY, REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
 };
 
 fn review_path() -> String {
@@ -474,7 +475,7 @@ async fn an_uncertain_submit_retries_the_original_action_and_idempotency_key_onc
         .any(|entry| entry["record"]["outcome"] == "unfinished"));
     assert!(submit_responses
         .iter()
-        .any(|entry| entry["record"]["outcome"] == "succeeded"));
+        .any(|entry| entry["record"]["outcome"] == "ok"));
 }
 
 #[tokio::test]
@@ -707,7 +708,7 @@ async fn sign_out_requires_csrf_and_ends_the_session() {
     assert_eq!(sign_out.len(), 2, "{journal}");
     assert_eq!(sign_out[0]["phase"], "request");
     assert_eq!(sign_out[1]["phase"], "response");
-    assert_eq!(sign_out[1]["record"]["outcome"], "succeeded");
+    assert_eq!(sign_out[1]["record"]["outcome"], "ok");
     assert_eq!(sign_out[0]["correlation"], sign_out[1]["correlation"]);
 }
 
@@ -1019,9 +1020,9 @@ async fn the_audit_journal_names_pseudonyms_actions_and_outcomes() {
             .find(|record| record["action"] == action && record["outcome"] == outcome)
             .unwrap_or_else(|| panic!("no {action} {outcome} record in {journal}"))
     };
-    let signed_in = find("sign-in", "succeeded");
-    let read = find("read", "succeeded");
-    let submit = find("submit", "succeeded");
+    let signed_in = find("sign-in", "ok");
+    let read = find("read", "ok");
+    let submit = find("submit", "ok");
     let submit_request = entries
         .iter()
         .find(|entry| entry["phase"] == "request" && entry["record"]["action"] == "submit")
@@ -1032,7 +1033,7 @@ async fn the_audit_journal_names_pseudonyms_actions_and_outcomes() {
         .find(|entry| {
             entry["phase"] == "response"
                 && entry["record"]["action"] == "submit"
-                && entry["record"]["outcome"] == "succeeded"
+                && entry["record"]["outcome"] == "ok"
         })
         .expect("submit response audit entry");
     assert_eq!(
@@ -1149,7 +1150,7 @@ async fn a_sign_in_when_sessions_are_full_records_no_succeeded_sign_in() {
     let succeeded_sign_ins = journal
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["record"].clone())
-        .filter(|record| record["action"] == "sign-in" && record["outcome"] == "succeeded")
+        .filter(|record| record["action"] == "sign-in" && record["outcome"] == "ok")
         .count();
     assert_eq!(succeeded_sign_ins, 1, "{journal}");
     let refused_sign_ins = journal
@@ -1338,4 +1339,180 @@ async fn a_narrowed_token_response_is_refused_with_no_session_created() {
     assert_eq!(response.error_code(), Some("sign-in-refused"));
     assert!(response.set_cookie("breg-review-session").is_none());
     assert_eq!(provider.token_calls(), 1);
+}
+
+/// The terminal outcomes the journal `journal` recorded for `action`.
+fn response_outcomes(journal: &str, action: &str) -> Vec<String> {
+    journal
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|entry| entry["phase"] == "response" && entry["record"]["action"] == action)
+        .map(|entry| entry["record"]["outcome"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_read_the_registry_cannot_answer_is_audited_refused() {
+    let harness = Harness::start().await;
+    let cookie = harness.sign_in(CITIZEN_A).await;
+    harness.environment.registry.fail_next_draft_read();
+
+    let page = harness.get(&review_path(), Some(&cookie)).await;
+    assert_eq!(page.status, StatusCode::BAD_GATEWAY, "{}", page.body);
+    assert_eq!(page.error_code(), Some("registry-unavailable"));
+
+    let journal = harness.environment.audit_text();
+    assert_eq!(
+        response_outcomes(&journal, "read"),
+        ["refused"],
+        "{journal}"
+    );
+}
+
+#[tokio::test]
+async fn a_submit_the_registry_declines_is_refused_without_retry_advice() {
+    for code in [
+        BRegProblemCode::ActionRefused,
+        BRegProblemCode::RequestInvalid,
+    ] {
+        let harness = Harness::start().await;
+        let (cookie, page) = harness.review().await;
+        let csrf = page.input("csrf").unwrap();
+        let view = page.input("view").unwrap();
+        harness.environment.registry.refuse_next_submit(code);
+
+        let declined = harness
+            .post(
+                &submit_path(),
+                Some(&cookie),
+                &[("csrf", &csrf), ("view", &view)],
+            )
+            .await;
+        assert_eq!(
+            declined.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            declined.body
+        );
+        assert_eq!(declined.error_code(), Some("registry-refused"));
+        assert!(
+            declined.body.contains("nothing was changed"),
+            "{}",
+            declined.body
+        );
+        assert!(!declined.body.contains("Try again"), "{}", declined.body);
+        assert_eq!(harness.environment.registry.submits(), 1);
+        assert_eq!(harness.environment.registry.submit_effects(), 0);
+
+        let journal = harness.environment.audit_text();
+        assert_eq!(
+            response_outcomes(&journal, "submit"),
+            ["refused"],
+            "{journal}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_read_the_registry_declines_is_refused_without_retry_advice() {
+    let harness = Harness::start().await;
+    let cookie = harness.sign_in(CITIZEN_A).await;
+    harness
+        .environment
+        .registry
+        .refuse_next_draft_read(BRegProblemCode::RequestInvalid);
+
+    let page = harness.get(&review_path(), Some(&cookie)).await;
+    assert_eq!(
+        page.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        page.body
+    );
+    assert_eq!(page.error_code(), Some("registry-refused"));
+
+    let journal = harness.environment.audit_text();
+    assert_eq!(
+        response_outcomes(&journal, "read"),
+        ["refused"],
+        "{journal}"
+    );
+}
+
+#[tokio::test]
+async fn a_committed_submit_whose_result_cannot_be_audited_is_answered_uncertain() {
+    let sink = AuditSink::default();
+    let harness = Harness::start_with_audit_sink(&sink).await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+    // The submit's request entry is accepted; its terminal response is not.
+    sink.fail_after(1);
+
+    let submit = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+    assert_eq!(harness.environment.registry.submit_effects(), 1);
+    assert_eq!(submit.status, StatusCode::BAD_GATEWAY, "{}", submit.body);
+    assert_eq!(submit.error_code(), Some("registry-unavailable"));
+    assert!(!submit.body.contains("does nothing"), "{}", submit.body);
+}
+
+#[tokio::test]
+async fn a_sign_out_whose_result_cannot_be_audited_still_signs_out() {
+    let sink = AuditSink::default();
+    let harness = Harness::start_with_audit_sink(&sink).await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    // The sign-out's request entry is accepted; its terminal response is not.
+    sink.fail_after(1);
+
+    let signed_out = harness
+        .post("/signout", Some(&cookie), &[("csrf", &csrf)])
+        .await;
+    assert_eq!(signed_out.status, StatusCode::OK, "{}", signed_out.body);
+    assert!(signed_out.body.contains("data-outcome=\"signed-out\""));
+    let cleared = signed_out.set_cookie("breg-review-session").unwrap();
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+
+    let after = harness.get(&review_path(), Some(&cookie)).await;
+    assert_eq!(after.status, StatusCode::SEE_OTHER);
+    assert_eq!(after.location(), sign_in_location());
+}
+
+#[tokio::test]
+async fn a_read_whose_page_cannot_be_rendered_is_not_audited_ok() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    harness.environment.registry.pause_next_metadata_response();
+
+    // The session ends while the read waits on the registry, so the page the
+    // read loaded can no longer be offered to it.
+    let path = review_path();
+    let (read, ()) = tokio::join!(harness.get(&path, Some(&cookie)), async {
+        harness
+            .environment
+            .registry
+            .wait_until_metadata_response_is_paused()
+            .await;
+        let signed_out = harness
+            .post("/signout", Some(&cookie), &[("csrf", &csrf)])
+            .await;
+        assert_eq!(signed_out.status, StatusCode::OK, "{}", signed_out.body);
+        harness.environment.registry.release_metadata_response();
+    });
+    assert_eq!(read.status, StatusCode::SEE_OTHER, "{}", read.body);
+    assert_eq!(read.location(), sign_in_location());
+
+    let journal = harness.environment.audit_text();
+    assert_eq!(
+        response_outcomes(&journal, "read"),
+        ["ok", "refused"],
+        "{journal}"
+    );
 }

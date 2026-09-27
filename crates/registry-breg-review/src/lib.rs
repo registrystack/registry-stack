@@ -207,6 +207,7 @@ pub(crate) enum Problem {
     SignInsExhausted,
     AuditUnavailable,
     RegistryUnavailable,
+    RegistryRefused,
     RequestConflict,
     RateLimited,
     Internal,
@@ -287,6 +288,12 @@ impl Problem {
                 "Registry unavailable",
                 "The registry did not answer as expected. Try again later.",
             ),
+            Self::RegistryRefused => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "registry-refused",
+                "Request declined",
+                "The registry declined this request, and nothing was changed.",
+            ),
             Self::RequestConflict => (
                 StatusCode::CONFLICT,
                 "request-conflict",
@@ -342,11 +349,22 @@ impl App {
         status: StatusCode,
         rendered: Result<String, minijinja::Error>,
     ) -> Response {
+        self.try_rendered(status, rendered)
+            .unwrap_or_else(|response| response)
+    }
+
+    /// Answer `rendered`, or the problem page that replaces it when it could
+    /// not be rendered.
+    pub(crate) fn try_rendered(
+        &self,
+        status: StatusCode,
+        rendered: Result<String, minijinja::Error>,
+    ) -> Result<Response, Response> {
         match rendered {
-            Ok(body) => html(status, body),
+            Ok(body) => Ok(html(status, body)),
             Err(error) => {
                 tracing::error!(%error, "a page could not be rendered");
-                self.problem(Problem::Internal)
+                Err(self.problem(Problem::Internal))
             }
         }
     }
@@ -518,6 +536,21 @@ pub fn check(config: &RuntimeConfig) -> Result<(), RuntimeError> {
 /// secrets, fetches the provider's discovery document, opens the audit
 /// journal, and compiles the templates, and fails on the first fault.
 pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
+    build(config, None).await
+}
+
+/// Build the page as [`router`] does, but write its audit stream to `writer`
+/// instead of opening the configured journal. Tests use it to hold an audit
+/// destination whose refusals they control.
+#[doc(hidden)]
+pub async fn router_with_audit_writer(
+    config: RuntimeConfig,
+    writer: AuditWriter,
+) -> Result<Router, RuntimeError> {
+    build(config, Some(writer)).await
+}
+
+async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Router, RuntimeError> {
     let Offline {
         client_key,
         audit_profile,
@@ -582,9 +615,12 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
     )
     .map_err(|error| RuntimeError::SignInClient(error.to_string()))?;
 
-    let writer = AuditWriter::open(config.audit.destination()?)
-        .await
-        .map_err(|error| RuntimeError::Audit(error.operator_description()))?;
+    let writer = match writer {
+        Some(writer) => writer,
+        None => AuditWriter::open(config.audit.destination()?)
+            .await
+            .map_err(|error| RuntimeError::Audit(error.operator_description()))?,
+    };
     let journal = Journal::new(
         writer,
         audit_profile.key_hasher(),
