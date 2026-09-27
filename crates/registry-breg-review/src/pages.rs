@@ -305,7 +305,7 @@ pub(crate) async fn submit(
     else {
         // Not a view this session rendered for this request: show the
         // current state and ask again.
-        if let Err(response) = finish_audit(&app, operation, Outcome::Conflicted).await {
+        if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
             return response;
         }
         return render(
@@ -369,7 +369,7 @@ pub(crate) async fn submit(
                             .await
                         }
                     };
-                if let Err(response) = finish_audit(&app, operation, Outcome::Conflicted).await {
+                if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
                     return response;
                 }
                 render(
@@ -383,7 +383,7 @@ pub(crate) async fn submit(
                 .unwrap_or_else(|response| response)
             }
             Some(BRegProblemCode::IdempotencyConflict) => {
-                if let Err(response) = finish_audit(&app, operation, Outcome::Conflicted).await {
+                if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
                     return response;
                 }
                 app.problem(Problem::RequestConflict)
