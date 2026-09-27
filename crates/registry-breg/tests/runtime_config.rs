@@ -1353,7 +1353,7 @@ fn migration_database_resolver_uses_only_the_migration_reference() {
 }
 
 #[test]
-fn database_references_must_be_structurally_distinct() {
+fn split_roles_need_structurally_distinct_database_references() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
@@ -1361,10 +1361,30 @@ fn database_references_must_be_structurally_distinct() {
     );
 
     let error = parse_runtime_config_with_env(&raw, env_lookup)
-        .expect_err("same database reference is refused");
+        .expect_err("one database reference for two roles is refused");
     assert_eq!(error, RuntimeConfigError::InvalidDatabase);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("BREG_RUNTIME_CONFIG_DATABASE_URL"));
+}
+
+#[test]
+fn one_role_may_serve_as_runtime_and_migration_role() {
+    let fixture = RuntimeFixture::new();
+    let single_role = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("runtime: registry_runtime", "runtime: registry_migration");
+    let config = parse_runtime_config_with_env(&single_role, env_lookup)
+        .expect("one role with two database references parses");
+    assert_eq!(
+        config.database().roles().runtime(),
+        config.database().roles().migration()
+    );
+
+    let single_reference = single_role.replace(
+        "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
+    );
+    parse_runtime_config_with_env(&single_reference, env_lookup)
+        .expect("one role with one database reference parses");
 }
 
 #[test]
@@ -1381,11 +1401,6 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
                 "migration: registry_migration",
                 "migration: RegistryMigration",
             ),
-            RuntimeConfigError::InvalidDatabase,
-        ),
-        (
-            valid_runtime(&fixture.secret_root, &fixture.package_root)
-                .replace("runtime: registry_runtime", "runtime: registry_migration"),
             RuntimeConfigError::InvalidDatabase,
         ),
         (

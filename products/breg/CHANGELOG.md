@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A runtime file may name one role as both `database.roles.migration` and
+  `database.roles.runtime`, and then one reference as both
+  `database.runtimeUrlRef` and `database.migrationUrlRef`. Two distinct roles
+  still need two distinct references.
+
 - BREAKING: `registryRevision` is a function of the compiled model only. The
   project's `package` block no longer appears in
   `compiled/effective-model.json`, so a project that declares a package
