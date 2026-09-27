@@ -3947,6 +3947,8 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                 // The running package is the predecessor of the project being
                 // diffed, so it is read the way test and package read it: an
                 // earlier release's package is verified from its signed manifest.
+                // Its changes are classified against the signed migration
+                // baseline, the schema the successor plan runs over.
                 let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(
                     runtime_path,
                 )
@@ -3968,7 +3970,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                     }
                 })?;
                 (
-                    registry,
+                    registry.with_migration_baseline_schema(predecessor.migration_baseline()),
                     predecessor.package_revision().to_owned(),
                     BaselineAssurance::RuntimeBound,
                 )
