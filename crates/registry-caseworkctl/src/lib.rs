@@ -937,8 +937,10 @@ fn activation_refusal_diagnostics(refusals: &[registry_casework::ActivationRefus
                 }
                 "role-mode-weakened" => {
                     "Run the statements the refusal names as the migration role so the \
-                     runtime role owns no Casework object and cannot create one, then run \
-                     caseworkctl apply --runtime-config FILE again."
+                     runtime role owns no Casework object, cannot create one or attach a \
+                     trigger, and no trigger outside the Casework migrations remains, then \
+                     run caseworkctl apply --runtime-config FILE after a REASSIGN, or rerun \
+                     the refused command otherwise."
                 }
                 "schema-newer" => {
                     "Run the casework release that migrated this database or a later one; \

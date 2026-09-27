@@ -469,7 +469,8 @@ pub fn build_source_adapters(
 /// Refuse to serve a database whose activation ledger does not name this
 /// configuration: no package applied, another database's identity, another
 /// package, a source binding generation the last apply did not record, or a
-/// split-role activation whose runtime credential can now write the ledger.
+/// split-role activation whose runtime credential can now write the ledger
+/// or no longer holds the grants apply issued it.
 /// It only reads, and returns the role mode the runtime credential has.
 pub async fn check_activation(
     store: &PostgresStore,
@@ -500,14 +501,19 @@ pub async fn check_activation(
             ));
         }
     }
-    let role_mode = store
-        .effective_role_mode()
+    let (role_mode, grants_current) = store
+        .effective_role()
         .await?
         .ok_or(RuntimeError::NotActivated)?;
-    if active.role_mode == crate::RoleMode::Split && role_mode == crate::RoleMode::Single {
-        return Err(RuntimeError::RoleModeWeakened {
-            fix: store.role_mode_weakened_fix().await?,
-        });
+    if active.role_mode == crate::RoleMode::Split {
+        if role_mode == crate::RoleMode::Single {
+            return Err(RuntimeError::RoleModeWeakened {
+                fix: store.role_mode_weakened_fix().await?,
+            });
+        }
+        if !grants_current {
+            return Err(RuntimeError::RuntimeGrantsMissing);
+        }
     }
     Ok(role_mode)
 }
@@ -1316,13 +1322,19 @@ pub enum RuntimeError {
         "the binding of source {0} differs from the one the active package was applied with; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]
     SourceGenerationNotActive(String),
-    /// `fix` names what to do: reassign the objects or revoke the schema
-    /// privilege that give the runtime role that authority, or, when a
-    /// privilege apply issues or revokes gives it, rerun apply.
+    /// `fix` names what to do: reassign the objects, revoke the privileges,
+    /// or drop the triggers that give the runtime role that authority, or,
+    /// when a privilege apply issues or revokes gives it, rerun apply.
     #[error(
         "the active Casework package was applied split-role, but the runtime credential can now write the activation ledger; {fix}"
     )]
     RoleModeWeakened { fix: String },
+    /// Reassigning a Casework object back to the migration role also takes
+    /// away the grants apply issued the runtime role on it.
+    #[error(
+        "the active Casework package was applied split-role, but the runtime role no longer holds the grants apply issues it; run `caseworkctl apply --runtime-config FILE` to reissue them"
+    )]
+    RuntimeGrantsMissing,
     #[error("the Casework audit destination could not be initialized")]
     Audit,
     #[error("the Casework audit destination could not be initialized: {0}")]
