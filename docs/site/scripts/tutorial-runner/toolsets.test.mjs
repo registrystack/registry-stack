@@ -18,6 +18,10 @@ const CASES = {
     runs: ['evidencectl init .', 'evidence --version', 'evidence-oid4vci --help', 'products/evidence/scripts/check-contracts.sh'],
     names: ['cd ~/work/evidence', 'ls .evidence/clients', 'cat evidence.yaml', 'ls evidence/'],
   },
+  relay: {
+    runs: ['relayctl init business-registry', 'relay serve --runtime runtime.yaml', 'relayctl check . && echo ok'],
+    names: ['cd work/relay', 'ls .relay', 'cat relay.yaml', 'ls relay/'],
+  },
 };
 
 for (const [name, { runs, names }] of Object.entries(CASES)) {

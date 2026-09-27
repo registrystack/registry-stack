@@ -250,7 +250,7 @@ test('test-excerpt mistakes are errors that name the line', () => {
     'line 1: test-excerpt has no sh fence above it to check',
     'line 5: test-excerpt belongs on a block the page shows, not on an sh fence',
     'line 13: test-excerpt checks the output of the sh fence at line 9, which is skipped',
-    'line 17: a block is one of test-file, test-edit, test-expect, or test-excerpt',
+    'line 17: a block is one of test-file, test-append, test-edit, test-expect, or test-excerpt',
   ]);
 });
 
@@ -271,7 +271,28 @@ test('test-file mistakes are errors that name the line', () => {
     'line 1: test-file needs the file path, as title="<path>"',
     'line 5: test-file belongs on a block showing the file, not on an sh fence',
     'line 9: test-file takes the whole file; a diff block is test-edit',
-    'line 13: a block is one of test-file, test-edit, test-expect, or test-excerpt',
+    'line 13: a block is one of test-file, test-append, test-edit, test-expect, or test-excerpt',
+  ]);
+});
+
+test('a titled block marked test-append is what the page asks the reader to add to the end of a file', () => {
+  const { steps, errors } = readJourney(
+    '## Write\n\nAdd to `q.yaml`:\n\n```yaml title="q.yaml" test-append\n  purpose: check\n```\n',
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(steps, [{ kind: 'file', line: 5, heading: 'Write', path: 'q.yaml', text: '  purpose: check\n', append: true }]);
+});
+
+test('test-append mistakes are errors that name the line', () => {
+  const { errors } = readJourney(
+    '```yaml test-append\na: 1\n```\n\n```sh title="x.sh" test-append\ntrue\n```\n\n' +
+      '```diff title="a.yaml" test-append\n+a\n```\n\n```yaml title="a.yaml" test-append test-file\na\n```\n',
+  );
+  assert.deepEqual(errors, [
+    'line 1: test-append needs the file path, as title="<path>"',
+    'line 5: test-append belongs on a block showing what to add, not on an sh fence',
+    'line 9: test-append adds whole lines; a diff block is test-edit',
+    'line 13: a block is one of test-file, test-append, test-edit, test-expect, or test-excerpt',
   ]);
 });
 
