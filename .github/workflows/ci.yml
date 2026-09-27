@@ -603,6 +603,13 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -621,8 +628,28 @@ jobs:
           RELAY_V2_STOCK_ISSUER: "1"
         run: products/relay-v2/scripts/test-http.sh
 
-      - name: Relay V2 tutorial reader gate
-        run: docs/site/scripts/check-relay-tutorial.sh
+      - name: Install docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
+      - name: Test the tutorial runner
+        working-directory: docs/site
+        run: npm run test:tutorial:runner
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:relay:dry-run
+
+      - name: Build the Relay V2 toolset under test
+        run: cargo build --locked -p registry-relay-v2 --features tooling -p registry-relayctl --bins
+
+      - name: Execute the Relay V2 tutorial from a reader directory
+        env:
+          RELAY_BIN: ${{ github.workspace }}/target/debug/relay
+          RELAYCTL_BIN: ${{ github.workspace }}/target/debug/relayctl
+        # The page serves on 127.0.0.1:8080, which nothing on this runner
+        # holds, so the replay runs on the port a reader gets.
+        run: node docs/site/scripts/run-tutorial.mjs --gate relay
 
   relay-client-contracts:
     name: Relay client contract and source neutrality
