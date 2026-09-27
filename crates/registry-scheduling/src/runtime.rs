@@ -163,8 +163,16 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     {
         // A ledger that recorded split mode for a credential that can now
         // write it means a grant or a membership was added after the apply.
+        // An object the runtime role owns or a schema CREATE privilege
+        // survives a reapply, so it is named with the statement that removes
+        // it rather than as drift the next apply's grants correct.
         RoleMode::Single if active.role_mode == RoleMode::Split => {
-            return Err(database_step("role mode check")(StoreError::RoleModeDrift));
+            let refusal = store
+                .split_weakness()
+                .await
+                .map_err(database_step("role mode check"))?
+                .unwrap_or(StoreError::RoleModeDrift);
+            return Err(database_step("role mode check")(refusal));
         }
         RoleMode::Single => tracing::warn!(role_mode = "single", "{SINGLE_ROLE_STATEMENT}"),
         RoleMode::Split => tracing::info!(

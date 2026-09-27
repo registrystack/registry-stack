@@ -922,6 +922,164 @@ async fn a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_ap
     assert!(denied(&runtime, LEDGER_INSERT).await, "the grant survived");
     assert_eq!(plan(&config)["changesPending"], false);
     assert_eq!(deployment.ledger_rows().await, 2);
+
+    // A write on the schema history counts the same as one on the ledger.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "GRANT UPDATE ON {}.scheduling_schema_migrations TO {runtime_role}",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let error = startup_refusal(&config).await;
+    assert!(error.contains("records split role mode"), "{error}");
+    let reapplied = apply(&config).expect("apply reissues the runtime role's grants");
+    assert_eq!(reapplied["roleMode"], "split");
+    assert_eq!(deployment.ledger_rows().await, 3);
+    deployment.drop().await;
+}
+
+/// The refusal startup reports, bounded so a startup that serves instead
+/// fails the test rather than holding it open.
+async fn startup_refusal(config: &Path) -> String {
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        registry_scheduling::runtime::serve_from_path(config),
+    )
+    .await
+    .expect("startup refuses instead of serving")
+    .expect_err("startup refuses")
+    .to_string()
+}
+
+/// The fix a weakened split names, then the command to rerun.
+fn names_fix(error: &str, fix: &str) -> bool {
+    error.contains(&format!(
+        "run `{fix}` as a database administrator, then run `schedulingctl apply --runtime-config FILE`"
+    ))
+}
+
+#[tokio::test]
+async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned() {
+    let deployment = Deployment::split("activation_owner").await;
+    let (runtime_role, migration_role) = (deployment.roles[0].clone(), deployment.roles[1].clone());
+    let fix = format!("REASSIGN OWNED BY {runtime_role} TO {migration_role}");
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    assert_eq!(
+        apply(&config).expect("the package activates")["roleMode"],
+        "split"
+    );
+
+    // The runtime role comes to own a table apply writes, where a deferred
+    // trigger would run as the migration role at commit.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.scheduling_supply OWNER TO {runtime_role}",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let error = startup_refusal(&config).await;
+    assert!(names_fix(&error, &fix), "{error}");
+
+    let report = plan(&config);
+    assert_eq!(report["effectiveRoleMode"], "single", "{report}");
+    assert_eq!(
+        report["refusals"][0]["code"], "schedulingctl.activation.split-role-weakened",
+        "{report}"
+    );
+    let error = refusal(apply(&config));
+    assert!(names_fix(&error, &fix), "{error}");
+    assert_eq!(
+        deployment.ledger_rows().await,
+        1,
+        "a weakened split was recorded"
+    );
+
+    // Membership in a role that owns a Scheduling table counts the same.
+    let owner = format!("{runtime_role}_owner");
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {schema}.scheduling_supply OWNER TO {migration_role};\
+             CREATE ROLE {owner}; GRANT {owner} TO {runtime_role};\
+             ALTER TABLE {schema}.scheduling_meta OWNER TO {owner}",
+            schema = deployment.schema
+        ))
+        .await
+        .unwrap();
+    let error = refusal(apply(&config));
+    assert!(
+        names_fix(
+            &error,
+            &format!("REASSIGN OWNED BY {owner} TO {migration_role}")
+        ),
+        "{error}"
+    );
+    assert_eq!(deployment.ledger_rows().await, 1);
+
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.scheduling_meta OWNER TO {migration_role}; DROP ROLE {owner}",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let report = plan(&config);
+    assert_eq!(report["effectiveRoleMode"], "split", "{report}");
+    assert_eq!(report["changesPending"], false, "{report}");
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_naming_revoke_create() {
+    let deployment = Deployment::split("activation_create").await;
+    let runtime_role = deployment.roles[0].clone();
+    let fix = format!(
+        "REVOKE CREATE ON SCHEMA {} FROM {runtime_role}",
+        deployment.schema
+    );
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    let grant = format!(
+        "GRANT CREATE ON SCHEMA {} TO {runtime_role}",
+        deployment.schema
+    );
+    deployment.admin.batch_execute(&grant).await.unwrap();
+
+    let error = refusal(apply(&config));
+    assert!(names_fix(&error, &fix), "{error}");
+    assert_eq!(
+        deployment.tables().await,
+        0,
+        "the refused apply wrote tables"
+    );
+
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "REVOKE CREATE ON SCHEMA {} FROM {runtime_role}",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        apply(&config).expect("the package activates")["roleMode"],
+        "split"
+    );
+
+    deployment.admin.batch_execute(&grant).await.unwrap();
+    let error = startup_refusal(&config).await;
+    assert!(names_fix(&error, &fix), "{error}");
+    assert_eq!(
+        deployment.ledger_rows().await,
+        1,
+        "startup wrote the ledger"
+    );
     deployment.drop().await;
 }
 

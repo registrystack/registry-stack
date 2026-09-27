@@ -176,6 +176,7 @@ pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
         }
         StoreError::PackageNotActive { .. } => "schedulingctl.activation.package-not-active",
         StoreError::RoleModeDrift => "schedulingctl.activation.role-mode-drift",
+        StoreError::SplitRoleWeakened(_) => "schedulingctl.activation.split-role-weakened",
         StoreError::NotActivated => "schedulingctl.activation.not-activated",
         StoreError::SchemaPending { .. } => "schedulingctl.activation.schema-pending",
         StoreError::SchemaNewer { .. } => "schedulingctl.activation.schema-newer",

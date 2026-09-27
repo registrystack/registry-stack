@@ -562,15 +562,21 @@ invariants:
       DELETE, and TRUNCATE on scheduling_activations and
       scheduling_schema_migrations, in the activation transaction. The row
       records the runtime role and the role mode it holds after the grants,
-      read from its ledger privileges, ownership, membership in the migration
-      role, and superuser or BYPASSRLS attributes. scheduling serve compares
-      that recorded mode with the one its credential holds.
+      read from its ledger and schema-history privileges, ownership,
+      membership in the migration role, and superuser or BYPASSRLS
+      attributes. A runtime role that owns or is a member of an owner of the
+      schema or any scheduling_* relation or function, or holds CREATE on the
+      schema, holds single mode. scheduling serve compares that recorded mode
+      with the one its credential holds.
     refusal: >-
       PostgreSQL refuses every runtime-role write to the ledger and the
       schema history with insufficient_privilege, while the service still
       starts and serves. Startup refuses a ledger that recorded split mode
       for a credential that can now write it, naming schedulingctl apply
-      --runtime-config FILE to reissue the grants.
+      --runtime-config FILE to reissue the grants. In configured split mode,
+      plan, apply, and startup refuse a runtime role whose ownership or
+      schema CREATE privilege weakens the split, naming REASSIGN OWNED BY or
+      REVOKE CREATE ON SCHEMA and then schedulingctl apply.
     partialNote: >-
       In single role mode both credentials are one role that can write the
       ledger; plan, apply, and status report the mode and do not refuse it,
