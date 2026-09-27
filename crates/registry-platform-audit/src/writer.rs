@@ -13,7 +13,7 @@
 
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
-    io::{self, ErrorKind, Write},
+    io::{self, ErrorKind, Read, Write},
     os::unix::{
         ffi::OsStrExt,
         fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -60,13 +60,22 @@ const MAX_CORRELATION_BYTES: usize = 256;
 const SEGMENT_SEQUENCE_DIGITS: usize = 8;
 /// The suffix of the lock companion beside the active file.
 const LOCK_SUFFIX: &str = ".lock";
+/// The suffix of the companion that records the next sealed-segment
+/// sequence, so retention deleting every sealed segment cannot reset it.
+const SEQUENCE_SUFFIX: &str = ".seq";
+/// The suffix the sequence companion is written under before it is renamed
+/// into place.
+const SEQUENCE_TEMPORARY_SUFFIX: &str = ".seq.tmp";
 /// The longest file name common filesystems accept.
 const MAX_FILE_NAME_BYTES: usize = 255;
 /// The longest active file name that leaves room for every sibling the
 /// writer names after it: a sealed segment adds `.` and the sequence digits,
-/// the longest suffix, and the lock companion adds [`LOCK_SUFFIX`].
+/// the longest suffix, and the lock and sequence companions add
+/// [`LOCK_SUFFIX`], [`SEQUENCE_SUFFIX`], and [`SEQUENCE_TEMPORARY_SUFFIX`].
 const MAX_AUDIT_FILE_NAME_BYTES: usize = MAX_FILE_NAME_BYTES - 1 - SEGMENT_SEQUENCE_DIGITS;
 const _: () = assert!(LOCK_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
+const _: () = assert!(SEQUENCE_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
+const _: () = assert!(SEQUENCE_TEMPORARY_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const DETACHED_LOCK_ATTEMPTS: usize = 1024;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -270,6 +279,11 @@ pub enum AuditDestinationError {
     RetainDaysOutOfRange { maximum: u32 },
     #[error("an audit process role is 1 to 32 lowercase ASCII letters, digits, or hyphens")]
     InvalidProcessRole,
+    #[error(
+        "the audit process role names a file the configured audit.path reserves: \
+         a sealed segment, the lock, or the sequence companion"
+    )]
+    ProcessRoleOverlapsStream,
 }
 
 /// Where the writer sends entries.
@@ -402,7 +416,8 @@ impl FileDestination {
                         ))
                     })?;
                 }
-                return require_creatable_below(ancestor);
+                require_creatable_below(ancestor)?;
+                return validate_creation_ancestor(ancestor);
             }
             Err(error) => return Err(AuditError::Io(error)),
         }
@@ -443,6 +458,8 @@ impl FileDestination {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(AuditError::Io(error)),
         }
+        // The writer reads the sequence companion when it opens.
+        read_next_sequence(&self.path)?;
         match fs::symlink_metadata(&self.path) {
             Ok(metadata) if metadata.file_type().is_symlink() => Err(symlink_error()),
             Ok(metadata) => {
@@ -560,8 +577,12 @@ impl AuditDestination {
                         maximum: MAX_AUDIT_FILE_NAME_BYTES - 1 - role.len(),
                     });
                 }
+                let path = file.path.with_file_name(name);
+                if namespaces_overlap(&file.path, &path) {
+                    return Err(AuditDestinationError::ProcessRoleOverlapsStream);
+                }
                 Ok(Self::File(FileDestination {
-                    path: file.path.with_file_name(name),
+                    path,
                     rotate_bytes: file.rotate_bytes,
                     retain_days: file.retain_days,
                     role: Some(role.to_owned()),
@@ -1466,8 +1487,6 @@ struct FileFingerprint {
     length: u64,
     modified_seconds: i64,
     modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
 }
 
 impl SegmentedFile {
@@ -1483,7 +1502,6 @@ impl SegmentedFile {
         validate_directory(&parent)?;
 
         let lock_path = lock_path(&path);
-        let lock_created = !lock_path.exists();
         let writer_lock = open_lock(&lock_path)?;
         validate_active_file(&writer_lock)?;
         match writer_lock.try_lock() {
@@ -1497,23 +1515,31 @@ impl SegmentedFile {
             Err(TryLockError::Error(error)) => return Err(AuditError::Io(error)),
         }
 
-        let created = !path.exists();
         let active = open_append(&path)?;
         validate_active_file(&active)?;
         require_complete_final_entry(&active)?;
         require_current_entry_format(&active)?;
         active.sync_all().map_err(AuditError::Io)?;
-        if created || lock_created {
-            sync_directory(&parent)?;
+        // An earlier open may have crashed after creating the lock or active
+        // file but before syncing their names, so every open syncs them.
+        sync_directory(&parent)?;
+        // The next sequence is derived before retention deletes anything and
+        // recorded durably first, and rotation records it again before each
+        // sealed name appears, so a restart after retention or a shipper
+        // removed every sealed segment cannot reuse a name already sealed.
+        let recorded = read_next_sequence(&path)?;
+        let scanned = sealed_segments(&path)?
+            .pop()
+            .map_or(1, |(sequence, _)| sequence.saturating_add(1));
+        let next_sequence = recorded.map_or(scanned, |recorded| recorded.max(scanned));
+        if next_sequence > recorded.unwrap_or(1) {
+            write_next_sequence(&path, next_sequence)?;
         }
         let retain = Duration::from_secs(u64::from(retain_days) * SECONDS_PER_DAY);
-        apply_retention(&path, retain)?;
+        retain_or_log(&path, retain);
 
         let fingerprint = file_fingerprint(&active)?;
         let lock_fingerprint = file_fingerprint(&writer_lock)?;
-        let next_sequence = sealed_segments(&path)?
-            .pop()
-            .map_or(1, |(sequence, _)| sequence.saturating_add(1));
         Ok(Self {
             path,
             lock_path,
@@ -1759,15 +1785,39 @@ impl AppendRequest {
             sequence = next_sequence(sequence)?;
             sealed = segment_path(&self.path, sequence);
         }
-        fs::rename(&self.path, &sealed).map_err(AuditError::Io)?;
+        write_next_sequence(&self.path, next_sequence(sequence)?)?;
         // The rename seals whatever file is at the path, so confirm it is the
-        // one this writer holds before starting a fresh file.
+        // one this writer holds before sealing it.
         let held = self.active.metadata().map_err(AuditError::Io)?;
-        let sealed_metadata = fs::symlink_metadata(&sealed).map_err(AuditError::Io)?;
-        if (sealed_metadata.dev(), sealed_metadata.ino()) != (held.dev(), held.ino()) {
+        let at_path = fs::symlink_metadata(&self.path).map_err(AuditError::Io)?;
+        if (at_path.dev(), at_path.ino()) != (held.dev(), held.ino()) {
             return Err(AuditError::Io(io::Error::other(
                 "audit file changed outside the writer",
             )));
+        }
+        fs::rename(&self.path, &sealed).map_err(AuditError::Io)?;
+        #[cfg(test)]
+        if SHIPPED_ON_SEAL
+            .lock()
+            .expect("shipped on seal")
+            .iter()
+            .any(|shipped| shipped == &self.path)
+        {
+            fs::remove_file(&sealed).map_err(AuditError::Io)?;
+        }
+        // Confirm the sealed name holds that file too, unless a shipper has
+        // already taken it.
+        match fs::symlink_metadata(&sealed) {
+            Ok(sealed_metadata)
+                if (sealed_metadata.dev(), sealed_metadata.ino()) != (held.dev(), held.ino()) =>
+            {
+                return Err(AuditError::Io(io::Error::other(
+                    "audit file changed outside the writer",
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(AuditError::Io(error)),
         }
         let fresh = open_append(&self.path)?;
         validate_active_file(&fresh)?;
@@ -1779,12 +1829,81 @@ impl AppendRequest {
         fresh.sync_all().map_err(AuditError::Io)?;
         sync_directory(parent(&self.path)?)?;
         self.next_sequence = next_sequence(sequence)?;
-        apply_retention(&self.path, self.retain)?;
+        retain_or_log(&self.path, self.retain);
         Ok(fresh)
     }
 }
 
-/// Delete sealed files whose last modification is older than `retain`.
+/// Active paths whose retention pass fails, so a test can observe the writer
+/// carry on after a sealed segment it could not delete.
+#[cfg(test)]
+static RETENTION_REFUSED: StdMutex<Vec<PathBuf>> = StdMutex::new(Vec::new());
+
+#[cfg(test)]
+fn refuse_retention(path: &Path) {
+    RETENTION_REFUSED
+        .lock()
+        .expect("retention refusals")
+        .push(path.to_path_buf());
+}
+
+#[cfg(test)]
+fn allow_retention(path: &Path) {
+    RETENTION_REFUSED
+        .lock()
+        .expect("retention refusals")
+        .retain(|refused| refused != path);
+}
+
+/// Active paths whose sealed segment a simulated shipper removes the moment
+/// rotation seals it.
+#[cfg(test)]
+static SHIPPED_ON_SEAL: StdMutex<Vec<PathBuf>> = StdMutex::new(Vec::new());
+
+#[cfg(test)]
+fn ship_on_seal(path: &Path) {
+    SHIPPED_ON_SEAL
+        .lock()
+        .expect("shipped on seal")
+        .push(path.to_path_buf());
+}
+
+/// Directories [`sync_directory`] synced, so a test can observe the sync.
+#[cfg(test)]
+static DIRECTORY_SYNCS: StdMutex<Vec<PathBuf>> = StdMutex::new(Vec::new());
+
+#[cfg(test)]
+fn forget_directory_syncs(directory: &Path) {
+    DIRECTORY_SYNCS
+        .lock()
+        .expect("directory syncs")
+        .retain(|synced| synced != directory);
+}
+
+#[cfg(test)]
+fn directory_synced(directory: &Path) -> bool {
+    DIRECTORY_SYNCS
+        .lock()
+        .expect("directory syncs")
+        .iter()
+        .any(|synced| synced == directory)
+}
+
+/// Apply retention without stopping the writer: a sealed segment that could
+/// not be deleted costs disk space, never an audit entry, and the next
+/// rotation or open retries it.
+fn retain_or_log(path: &Path, retain: Duration) {
+    if let Err(error) = apply_retention(path, retain) {
+        tracing::error!(
+            %error,
+            "audit retention failed; expired sealed segments stay until the next rotation or restart"
+        );
+    }
+}
+
+/// Delete sealed files whose last modification is older than `retain`, from
+/// the oldest sequence up to the first one still inside the period, so a
+/// segment whose time was reset never opens a gap in the sealed sequence.
 fn apply_retention(path: &Path, retain: Duration) -> Result<(), AuditError> {
     let Some(cutoff) = SystemTime::now().checked_sub(retain) else {
         return Ok(());
@@ -1795,9 +1914,34 @@ fn apply_retention(path: &Path, retain: Duration) -> Result<(), AuditError> {
         if !metadata.is_file() {
             continue;
         }
+        // A sealed segment never has a lock companion; a file that does is
+        // the active file of another stream configured at this name. A lock
+        // name past the file-name limit cannot exist.
+        let lock = lock_path(&sealed);
+        if lock
+            .file_name()
+            .is_some_and(|name| name.len() <= MAX_FILE_NAME_BYTES)
+        {
+            match fs::symlink_metadata(&lock) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(AuditError::Io(error)),
+            }
+        }
         if metadata.modified().map_err(AuditError::Io)? < cutoff {
+            #[cfg(test)]
+            if RETENTION_REFUSED
+                .lock()
+                .expect("retention refusals")
+                .iter()
+                .any(|refused| refused == path)
+            {
+                return Err(AuditError::Io(io::Error::from(ErrorKind::PermissionDenied)));
+            }
             fs::remove_file(&sealed).map_err(AuditError::Io)?;
             removed = true;
+        } else {
+            break;
         }
     }
     if removed {
@@ -1846,9 +1990,84 @@ fn segment_path(path: &Path, sequence: u64) -> PathBuf {
 }
 
 fn lock_path(path: &Path) -> PathBuf {
+    companion_path(path, LOCK_SUFFIX)
+}
+
+fn sequence_path(path: &Path) -> PathBuf {
+    companion_path(path, SEQUENCE_SUFFIX)
+}
+
+fn companion_path(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
-    value.push(LOCK_SUFFIX);
+    value.push(suffix);
     PathBuf::from(value)
+}
+
+/// Whether `candidate` is `path` or a file the writer at `path` names after
+/// it: a sealed segment or a lock or sequence companion.
+fn reserved_by(path: &Path, candidate: &Path) -> bool {
+    if candidate == path {
+        return true;
+    }
+    if candidate.parent() != path.parent() {
+        return false;
+    }
+    let (Some(active), Some(name)) = (path.file_name(), candidate.file_name()) else {
+        return false;
+    };
+    let Some(suffix) = name.as_bytes().strip_prefix(active.as_bytes()) else {
+        return false;
+    };
+    segment_sequence(path, candidate).is_some()
+        || [LOCK_SUFFIX, SEQUENCE_SUFFIX, SEQUENCE_TEMPORARY_SUFFIX]
+            .iter()
+            .any(|reserved| suffix == reserved.as_bytes())
+}
+
+/// Whether two writers at `a` and `b` would name a file the other owns.
+fn namespaces_overlap(a: &Path, b: &Path) -> bool {
+    reserved_by(a, b) || reserved_by(b, a)
+}
+
+/// The next sealed-segment sequence the sequence companion records, if it
+/// exists. It must be an owner-only regular file holding a decimal number.
+fn read_next_sequence(path: &Path) -> Result<Option<u64>, AuditError> {
+    let sequence = sequence_path(path);
+    let file = match open_read(&sequence) {
+        Ok(file) => file,
+        Err(AuditError::Io(error)) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    validate_active_file(&file)?;
+    let mut content = String::new();
+    file.take(32)
+        .read_to_string(&mut content)
+        .map_err(AuditError::Io)?;
+    content
+        .strip_suffix('\n')
+        .filter(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|digits| digits.parse().ok())
+        .map(Some)
+        .ok_or_else(|| {
+            AuditError::Io(io::Error::new(
+                ErrorKind::InvalidData,
+                "audit sequence file is malformed; it must hold the next sealed segment sequence as one decimal number and a newline",
+            ))
+        })
+}
+
+/// Record `next` in the sequence companion, replacing it atomically.
+fn write_next_sequence(path: &Path, next: u64) -> Result<(), AuditError> {
+    let temporary = companion_path(path, SEQUENCE_TEMPORARY_SUFFIX);
+    let file = open_owned(&temporary, OpenOptions::new().write(true))?;
+    validate_active_file(&file)?;
+    file.set_len(0).map_err(AuditError::Io)?;
+    (&file)
+        .write_all(format!("{next}\n").as_bytes())
+        .map_err(AuditError::Io)?;
+    file.sync_all().map_err(AuditError::Io)?;
+    fs::rename(&temporary, sequence_path(path)).map_err(AuditError::Io)?;
+    sync_directory(parent(path)?)
 }
 
 /// Refuse an active file whose last entry was torn by an interrupted write.
@@ -1988,12 +2207,20 @@ fn create_directory_with(
             _ => break,
         }
     }
+    if fs::symlink_metadata(ancestor).is_ok() {
+        validate_creation_ancestor(ancestor)?;
+    }
     for directory in missing.into_iter().rev() {
         match fs::DirBuilder::new().mode(0o700).create(directory) {
             Ok(()) => fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
                 .map_err(AuditError::Io)?,
-            // Another process created it between the check and here.
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            // Another process created it between the check and here. It
+            // may be another account's, so it must meet the requirements a
+            // pre-existing audit directory meets before anything is created
+            // inside it.
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                validate_directory(directory)?;
+            }
             Err(error) => return Err(AuditError::Io(error)),
         }
         // The new entry is durable only once the directory holding it is
@@ -2034,6 +2261,26 @@ fn require_creatable_below(ancestor: &Path) -> Result<(), AuditError> {
     Ok(())
 }
 
+/// The nearest existing ancestor of a missing audit directory holds the first
+/// directory the writer creates. Any account could swap that directory once
+/// it exists if the ancestor is world-writable and not sticky, so such an
+/// ancestor is refused. A sticky one, like `/tmp`, lets only an entry's owner
+/// rename it, and a group-writable one, like `/var/log`, admits only accounts
+/// the host already trusts with its logs. A raced directory created there by
+/// another account is refused by [`validate_directory`].
+fn validate_creation_ancestor(ancestor: &Path) -> Result<(), AuditError> {
+    // The recursive create follows a linked ancestor, so the check does too.
+    let metadata = fs::metadata(ancestor).map_err(AuditError::Io)?;
+    if !metadata.is_dir() || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0) {
+        return Err(AuditError::Io(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "audit directory's nearest existing ancestor is world-writable and not sticky; \
+             create the audit directory yourself, owned by the service user, mode 0700",
+        )));
+    }
+    Ok(())
+}
+
 /// The audit directory must be a real directory owned by this user and not
 /// writable by group or others, so no other account can replace audit files.
 fn validate_directory(path: &Path) -> Result<(), AuditError> {
@@ -2044,7 +2291,7 @@ fn validate_directory(path: &Path) -> Result<(), AuditError> {
     {
         return Err(AuditError::Io(io::Error::new(
             ErrorKind::PermissionDenied,
-            "audit directory must be owned by this user and not group- or world-writable",
+            "audit directory must be owned by this user and not group- or world-writable; chown it to the service user and chmod it 0700",
         )));
     }
     Ok(())
@@ -2062,7 +2309,7 @@ fn validate_active_metadata(metadata: &fs::Metadata) -> Result<(), AuditError> {
     {
         return Err(AuditError::Io(io::Error::new(
             ErrorKind::PermissionDenied,
-            "audit files must be owner-only, singly linked regular files",
+            "audit files must be owner-only, singly linked regular files; chmod them 0600 and remove any extra hard link",
         )));
     }
     Ok(())
@@ -2081,8 +2328,6 @@ fn metadata_fingerprint(metadata: &fs::Metadata) -> FileFingerprint {
         length: metadata.len(),
         modified_seconds: metadata.mtime(),
         modified_nanoseconds: metadata.mtime_nsec(),
-        changed_seconds: metadata.ctime(),
-        changed_nanoseconds: metadata.ctime_nsec(),
     }
 }
 
@@ -2130,6 +2375,11 @@ fn sync_created_parent(path: &Path) -> Result<(), AuditError> {
 
 fn sync_directory(path: &Path) -> Result<(), AuditError> {
     validate_directory(path)?;
+    #[cfg(test)]
+    DIRECTORY_SYNCS
+        .lock()
+        .expect("directory syncs")
+        .push(path.to_path_buf());
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(AuditError::Io)
@@ -2308,6 +2558,11 @@ mod tests {
             .expect_err("incomplete final entry must refuse startup");
         assert!(
             matches!(error, AuditError::Io(ref error) if error.kind() == ErrorKind::InvalidData)
+        );
+        assert_eq!(
+            error.operator_description(),
+            "the audit file could not be opened: audit file has an incomplete final entry; \
+             archive it and restart with a fresh path"
         );
         assert_eq!(fs::read(&path).expect("read after restart"), before);
     }
@@ -2581,6 +2836,44 @@ mod tests {
             synced,
             [base.clone(), base.join("a"), base.join("a").join("b")]
         );
+    }
+
+    #[test]
+    fn an_intermediate_directory_won_by_a_concurrent_creator_is_validated() {
+        // Another account creates the next missing level between the scan
+        // and the create: once as a group- and world-writable directory, once
+        // as a symlink to a directory. Each is refused like a pre-existing
+        // unsafe directory, and nothing is created below it.
+        for raced_kind in ["writable", "symlink"] {
+            let directory = directory();
+            let base = directory.path().to_path_buf();
+            let raced = base.join("a").join("b");
+            let target = raced.join("c");
+            let elsewhere = base.join("elsewhere");
+            fs::create_dir(&elsewhere).expect("dir");
+            let refused = create_directory_with(&target, |parent| {
+                if parent == base {
+                    if raced_kind == "writable" {
+                        fs::create_dir(&raced).expect("raced dir");
+                        fs::set_permissions(&raced, fs::Permissions::from_mode(0o777))
+                            .expect("mode");
+                    } else {
+                        std::os::unix::fs::symlink(&elsewhere, &raced).expect("raced symlink");
+                    }
+                }
+                Ok(())
+            });
+            let error = refused.expect_err(raced_kind);
+            assert!(
+                matches!(&error, AuditError::Io(error) if error.kind() == ErrorKind::PermissionDenied),
+                "{raced_kind}: {error:?}"
+            );
+            assert!(fs::symlink_metadata(&target).is_err(), "{raced_kind}");
+            assert!(
+                fs::symlink_metadata(elsewhere.join("c")).is_err(),
+                "{raced_kind}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3598,6 +3891,451 @@ mod tests {
         fs::set_permissions(&write_only, fs::Permissions::from_mode(0o700)).expect("restore");
         direct.expect_err("mkdir below the ancestor needs search permission on it");
         refused.expect_err("ancestor is writable but cannot be searched");
+    }
+
+    #[tokio::test]
+    async fn a_missing_directory_is_refused_only_below_a_world_writable_non_sticky_ancestor() {
+        // Any account could swap the directory the writer creates in a
+        // world-writable, non-sticky ancestor. In a sticky one, like `/tmp`,
+        // only the entry's owner can rename it, and a group-writable one,
+        // like `/var/log`, admits only accounts the host trusts with its logs.
+        for (mode, accepted) in [(0o777, false), (0o1777, true), (0o775, true)] {
+            let directory = directory();
+            let shared = directory.path().join("shared");
+            fs::create_dir(&shared).expect("dir");
+            fs::set_permissions(&shared, fs::Permissions::from_mode(mode)).expect("mode");
+            let destination =
+                FileDestination::new(shared.join("audit").join("audit.jsonl")).expect("absolute");
+            let checked = destination.check_writable();
+            let opened = AuditWriter::open(AuditDestination::File(destination)).await;
+            if accepted {
+                checked.expect("sticky or group-writable ancestor");
+                opened.expect("sticky or group-writable ancestor");
+                assert!(shared.join("audit").is_dir());
+            } else {
+                let error = checked.expect_err("non-sticky shared ancestor");
+                assert!(
+                    matches!(&error, AuditError::Io(error) if error.kind() == ErrorKind::PermissionDenied),
+                    "{error:?}"
+                );
+                assert!(
+                    error.operator_description().contains(
+                        "create the audit directory yourself, owned by the service user, mode 0700"
+                    ),
+                    "the refusal names the fix: {error:?}"
+                );
+                opened.expect_err("non-sticky shared ancestor");
+                assert!(
+                    fs::symlink_metadata(shared.join("audit")).is_err(),
+                    "nothing is created below a non-sticky shared ancestor"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rotation_after_every_sealed_segment_expired_uses_a_fresh_sequence() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+            .expect("rotation")
+            .with_retain_days(1)
+            .expect("retention");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        // Every sealed segment has aged past retention while the service was
+        // stopped, so the first open deletes all of them.
+        let old = SystemTime::now() - Duration::from_secs(3 * SECONDS_PER_DAY);
+        for sequence in [1, 2, 3] {
+            let sealed = segment_path(&path, sequence);
+            fs::write(&sealed, "{}\n").expect("seed");
+            fs::set_permissions(&sealed, fs::Permissions::from_mode(0o600)).expect("mode");
+            File::options()
+                .write(true)
+                .open(&sealed)
+                .and_then(|handle| handle.set_modified(old))
+                .expect("age file");
+        }
+        let first = AuditWriter::open(AuditDestination::File(destination.clone()))
+            .await
+            .expect("open");
+        assert!(sealed_segments(&path).expect("sealed").is_empty());
+        drop(first);
+
+        // A second restart finds no sealed segment at all.
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("reopen");
+        let padding = "x".repeat(4096);
+        for index in 0..300 {
+            writer
+                .append(AuditEntry::request(
+                    "schema/v2",
+                    format!("req-{index}"),
+                    json!({"padding": padding}),
+                ))
+                .await
+                .expect("append");
+        }
+        let sequences: Vec<u64> = sealed_segments(&path)
+            .expect("sealed")
+            .into_iter()
+            .map(|(sequence, _)| sequence)
+            .collect();
+        assert_eq!(sequences.first(), Some(&4), "{sequences:?}");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_or_shared_sequence_file_is_refused() {
+        for (content, mode) in [("not a number\n", 0o600), ("4\n", 0o644)] {
+            let directory = directory();
+            let destination = file_destination(&directory);
+            let path = destination.path().to_path_buf();
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(path.parent().expect("parent"))
+                .expect("audit directory");
+            let sequence = sequence_path(&path);
+            fs::write(&sequence, content).expect("seed");
+            fs::set_permissions(&sequence, fs::Permissions::from_mode(mode)).expect("mode");
+            destination
+                .check_writable()
+                .expect_err("check refuses the sequence file");
+            AuditWriter::open(AuditDestination::File(destination))
+                .await
+                .expect_err("open refuses the sequence file");
+        }
+    }
+
+    /// Seal `sequence` at `path` with a last modification `age_days` ago.
+    fn seed_segment(path: &Path, sequence: u64, age_days: u64) -> PathBuf {
+        let segment = segment_path(path, sequence);
+        fs::write(&segment, current_format_line("sealed")).expect("segment");
+        fs::set_permissions(&segment, fs::Permissions::from_mode(0o600)).expect("mode");
+        File::options()
+            .write(true)
+            .open(&segment)
+            .and_then(|handle| {
+                handle.set_modified(
+                    SystemTime::now() - Duration::from_secs(age_days * SECONDS_PER_DAY),
+                )
+            })
+            .expect("age segment");
+        segment
+    }
+
+    #[tokio::test]
+    async fn retention_deletes_only_the_oldest_run_of_expired_segments() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_retain_days(1)
+            .expect("retention");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let first = seed_segment(&path, 1, 3);
+        let second = seed_segment(&path, 2, 0);
+        // A later segment whose modification time is older, as a copy or a
+        // restore can leave it, must not open a gap in the sealed sequence.
+        let third = seed_segment(&path, 3, 3);
+        let fourth = seed_segment(&path, 4, 0);
+
+        let _writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+
+        assert!(!first.exists(), "the oldest expired segment is deleted");
+        for kept in [&second, &third, &fourth] {
+            assert!(kept.exists(), "{} deleted out of order", kept.display());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retention_failure_neither_refuses_open_nor_stops_rotation() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+            .expect("rotation")
+            .with_retain_days(1)
+            .expect("retention");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let expired = seed_segment(&path, 1, 3);
+        let filler = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(1000));
+        let seeded = usize::try_from(MIN_AUDIT_ROTATE_BYTES).expect("size") / filler.len();
+        let mut content = current_format_line("seed");
+        content.push_str(&filler.repeat(seeded - 1));
+        fs::write(&path, content).expect("nearly full active file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        refuse_retention(&path);
+
+        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+            .await
+            .expect("a retention failure does not refuse open");
+        assert!(expired.exists());
+        writer
+            .append(AuditEntry::request(
+                "schema/v2",
+                "req-1",
+                json!({"padding": "x".repeat(4096)}),
+            ))
+            .await
+            .expect("a retention failure does not refuse the rotating append");
+        assert_eq!(sealed_segments(&path).expect("sealed").len(), 2);
+        writer
+            .append(request("after-rotation"))
+            .await
+            .expect("the writer keeps accepting entries");
+        assert!(expired.exists());
+        drop(writer);
+
+        allow_retention(&path);
+        let _writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("reopen");
+        assert!(
+            !expired.exists(),
+            "the next pass deletes the expired segment"
+        );
+    }
+
+    /// Fill the active file at `path` to just under the minimum rotation
+    /// size, so the next padded append rotates it.
+    fn seed_nearly_full_active(path: &Path) {
+        let filler = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(1000));
+        let seeded = usize::try_from(MIN_AUDIT_ROTATE_BYTES).expect("size") / filler.len();
+        // Only the first line is checked at open, so it alone is current
+        // format and the rest is filler.
+        let mut content = current_format_line("seed");
+        content.push_str(&filler.repeat(seeded - 1));
+        fs::write(path, content).expect("nearly full active file");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("mode");
+    }
+
+    fn rotating_entry(correlation: &str) -> AuditEntry {
+        AuditEntry::request(
+            "schema/v2",
+            correlation,
+            json!({"padding": "x".repeat(4096)}),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_restart_after_every_sealed_segment_was_shipped_does_not_reuse_a_sequence() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+            .expect("rotation");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        seed_nearly_full_active(&path);
+        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+            .await
+            .expect("open");
+        writer
+            .append(rotating_entry("req-1"))
+            .await
+            .expect("append rotates");
+        drop(writer);
+        // A shipper takes every sealed segment before the restart.
+        fs::remove_file(segment_path(&path, 1)).expect("ship the sealed segment");
+
+        seed_nearly_full_active(&path);
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("reopen");
+        writer
+            .append(rotating_entry("req-2"))
+            .await
+            .expect("append rotates");
+        assert_eq!(
+            sealed_segments(&path)
+                .expect("sealed")
+                .into_iter()
+                .map(|(sequence, _)| sequence)
+                .collect::<Vec<_>>(),
+            [2],
+            "a shipped sequence is never sealed again"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotation_carries_on_when_the_sealed_segment_is_shipped_at_once() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+            .expect("rotation");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        seed_nearly_full_active(&path);
+        ship_on_seal(&path);
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+
+        writer
+            .append(rotating_entry("req-1"))
+            .await
+            .expect("a shipped sealed segment does not stop the rotating append");
+        assert!(!segment_path(&path, 1).exists());
+        assert!(writer.ready().await);
+        writer
+            .append(request("after-rotation"))
+            .await
+            .expect("the writer keeps accepting entries");
+    }
+
+    #[tokio::test]
+    async fn reopening_an_existing_destination_syncs_its_directory() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let parent = path.parent().expect("parent").to_path_buf();
+        drop(
+            AuditWriter::open(AuditDestination::File(destination.clone()))
+                .await
+                .expect("first open creates the lock and active file"),
+        );
+        forget_directory_syncs(&parent);
+
+        let _writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("reopen");
+        // A crash after creating the names but before the directory sync
+        // leaves them undurable; the reopen must sync before acknowledging.
+        assert!(directory_synced(&parent));
+    }
+
+    #[tokio::test]
+    async fn reapplying_the_active_file_mode_does_not_stop_the_writer() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        writer.append(request("req-1")).await.expect("append");
+
+        // Configuration management re-applying the mode it already has
+        // changes only the inode change time.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod");
+        fs::set_permissions(lock_path(&path), fs::Permissions::from_mode(0o600))
+            .expect("chmod lock");
+
+        assert!(writer.ready().await);
+        writer.append(request("req-2")).await.expect("append");
+    }
+
+    #[tokio::test]
+    async fn a_copy_truncated_active_file_stops_the_writer() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        writer.append(request("req-1")).await.expect("append");
+
+        fs::copy(&path, path.with_file_name("copied.jsonl")).expect("copy");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_len(0))
+            .expect("truncate");
+
+        assert!(!writer.ready().await);
+        let refused = writer.append(request("req-2")).await.expect_err("refused");
+        assert_eq!(refused.reason(), AuditUnavailableReason::WriteFailed);
+    }
+
+    #[tokio::test]
+    async fn an_in_place_rewrite_of_the_active_file_stops_the_writer() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        writer.append(request("req-1")).await.expect("append");
+        // Keep the length: only the modification time can show the change.
+        std::thread::sleep(Duration::from_millis(20));
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.write_all_at(b"{", 0))
+            .expect("rewrite in place");
+
+        assert!(!writer.ready().await);
+    }
+
+    #[tokio::test]
+    async fn retention_keeps_another_stream_named_like_a_sealed_segment() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_retain_days(1)
+            .expect("retention");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        // A stream configured at `<path>.00000001` is an active file with its
+        // own lock companion, never a segment this stream sealed.
+        let other = FileDestination::new(segment_path(&path, 1))
+            .expect("absolute")
+            .with_retain_days(1)
+            .expect("retention");
+        let other_writer = AuditWriter::open(AuditDestination::File(other.clone()))
+            .await
+            .expect("other stream");
+        other_writer.append(request("other")).await.expect("append");
+        File::options()
+            .append(true)
+            .open(other.path())
+            .and_then(|handle| {
+                handle.set_modified(SystemTime::now() - Duration::from_secs(3 * SECONDS_PER_DAY))
+            })
+            .expect("age other stream");
+
+        let _writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        assert!(
+            other.path().exists(),
+            "another stream's active file deleted"
+        );
+    }
+
+    #[test]
+    fn a_process_role_that_names_a_file_the_stream_owns_is_refused() {
+        let directory = directory();
+        let bare = AuditDestination::File(
+            FileDestination::new(directory.path().join("audit").join("journal")).expect("file"),
+        );
+        for role in ["lock", "seq", "00000001"] {
+            assert_eq!(
+                bare.for_process(role),
+                Err(AuditDestinationError::ProcessRoleOverlapsStream),
+                "{role}"
+            );
+        }
+        bare.for_process("0000001")
+            .expect("seven digits name no segment");
+        bare.for_process("locks").expect("not a companion name");
     }
 
     #[tokio::test]

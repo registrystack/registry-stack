@@ -404,7 +404,8 @@ async fn dependency_check_fails_when_an_audit_writer_already_holds_the_destinati
     );
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: runtime audit initialization failed: another writer already holds the audit destination lock\n"
+        "evidence: runtime audit initialization failed: another process holds the single-writer \
+         lock beside the audit file; stop it before starting this one\n"
     );
     drop(writer);
 }
@@ -1957,8 +1958,9 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                 set_mode(&deployment.path("audit.jsonl"), 0o644);
                 None
             },
-            expected: "evidence: runtime audit initialization failed: the audit file or lock is \
-                       not owner-only, or its directory is unavailable or not owner-controlled\n",
+            expected: "evidence: runtime audit initialization failed: the audit file could not \
+                       be opened: audit files must be owner-only, singly linked regular files; \
+                       chmod them 0600 and remove any extra hard link\n",
         },
         AuditFaultCase {
             label: "a second writer holding the audit destination lock",
@@ -1974,8 +1976,9 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                 held.try_lock().expect("hold the audit destination lock");
                 Some(held)
             },
-            expected: "evidence: runtime audit initialization failed: another writer already \
-                       holds the audit destination lock\n",
+            expected: "evidence: runtime audit initialization failed: another process holds the \
+                       single-writer lock beside the audit file; stop it before starting this \
+                       one\n",
         },
         AuditFaultCase {
             label: "an audit file whose last entry was torn by an interrupted write",
@@ -1986,8 +1989,32 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                 deployment.stage_audit_file("{\"written\":\"before the interruption\"");
                 None
             },
-            expected: "evidence: runtime audit initialization failed: the audit file ends in \
-                       an incomplete entry; archive it and start on a fresh path\n",
+            expected: "evidence: runtime audit initialization failed: the audit file could not \
+                       be opened: audit file has an incomplete final entry; archive it and \
+                       restart with a fresh path\n",
+        },
+        AuditFaultCase {
+            label: "an audit file an earlier writer left in another format",
+            break_audit: |deployment| {
+                deployment.stage_audit_file("{\"envelope_id\":\"01J000000000000000000000\"}\n");
+                None
+            },
+            expected: "evidence: runtime audit initialization failed: the audit file could not \
+                       be opened: audit file's first entry is not in the format this writer \
+                       produces; archive it and restart with a fresh path\n",
+        },
+        AuditFaultCase {
+            label: "a malformed rotation sequence file beside the audit file",
+            break_audit: |deployment| {
+                let path = deployment.path("audit.jsonl.seq");
+                fs::write(&path, "not a number\n").expect("stage audit sequence file");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                    .expect("set owner-only audit sequence mode");
+                None
+            },
+            expected: "evidence: runtime audit initialization failed: the audit file could not \
+                       be opened: audit sequence file is malformed; it must hold the next sealed \
+                       segment sequence as one decimal number and a newline\n",
         },
     ];
 

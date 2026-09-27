@@ -1101,6 +1101,7 @@ fn audit_disposition(value: DeliveryAuditDisposition) -> &'static str {
         DeliveryAuditDisposition::DeadLettered => "dead_lettered",
         DeliveryAuditDisposition::Expired => "expired",
         DeliveryAuditDisposition::ReplayPending => "replay_pending",
+        DeliveryAuditDisposition::Unknown => "unknown",
     }
 }
 

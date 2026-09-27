@@ -94,48 +94,33 @@ pub enum RuntimeInitializationError {
 /// Why the audit boundary refused to initialize.
 ///
 /// A mode an operator fixes with `chmod` and a second writer already holding
-/// the destination lock are unrelated faults with unrelated remedies. They are
-/// reported separately because from outside the process they are
-/// indistinguishable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the destination lock are unrelated faults with unrelated remedies, so a
+/// refusal of the audit file carries the writer's own rule and recovery step.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditInitializationFault {
     /// The `audit` destination settings or the audit key version are out of
     /// range.
     Configuration,
     /// The audit hash key is missing, unreadable, or too weak.
     Secret,
-    /// The audit file or lock is not owner-only and singly linked, or its
-    /// directory is unavailable or not controlled by the service owner.
+    /// The audit boundary is unavailable for a reason other than the file.
     Storage,
-    /// Another writer already holds the destination's single-writer lock.
-    Locked,
-    /// The audit file's last entry was torn by an interrupted write, so the
-    /// writer refuses to reopen and append to it.
-    IncompleteEntry,
-}
-
-impl AuditInitializationFault {
-    /// The value-free cause, for the operator message this fault appears in.
-    /// It names the fault and never the audit path, which the operator already
-    /// has in the runtime file.
-    pub fn cause(self) -> &'static str {
-        match self {
-            Self::Configuration => "the audit destination configuration is out of range",
-            Self::Secret => "the audit hash key is unusable",
-            Self::Storage => {
-                "the audit file or lock is not owner-only, or its directory is unavailable or not owner-controlled"
-            }
-            Self::Locked => "another writer already holds the audit destination lock",
-            Self::IncompleteEntry => {
-                "the audit file ends in an incomplete entry; archive it and start on a fresh path"
-            }
-        }
-    }
+    /// The writer refused the audit file, a companion, or its directory. The
+    /// text is the writer's own rule and recovery step, or the operating
+    /// system's error, and never the audit path, a record, or a secret.
+    File(String),
 }
 
 impl fmt::Display for AuditInitializationFault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.cause())
+        match self {
+            Self::Configuration => {
+                formatter.write_str("the audit destination configuration is out of range")
+            }
+            Self::Secret => formatter.write_str("the audit hash key is unusable"),
+            Self::Storage => formatter.write_str("the audit destination is unavailable"),
+            Self::File(description) => formatter.write_str(description),
+        }
     }
 }
 
@@ -149,19 +134,12 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
             | EvidenceAuditError::Unavailable(_)
             | EvidenceAuditError::NoOperation => Self::Storage,
             EvidenceAuditError::Audit(audit) => match audit {
-                AuditError::SinkLocked { .. } => Self::Locked,
                 AuditError::EmptyEnvVarName
                 | AuditError::EnvVarUnavailable { .. }
                 | AuditError::EnvVarNotUnicode { .. }
                 | AuditError::EmptySecret { .. }
                 | AuditError::WeakSecret { .. } => Self::Secret,
-                // The writer's incomplete-final-entry refusal reports this
-                // exact kind; every other I/O failure opening a destination
-                // is about the file, its lock, or its directory.
-                AuditError::Io(io_error) if io_error.kind() == std::io::ErrorKind::InvalidData => {
-                    Self::IncompleteEntry
-                }
-                _ => Self::Storage,
+                _ => Self::File(audit.operator_description()),
             },
         }
     }
@@ -3082,13 +3060,12 @@ impl EvidenceRuntime {
         // awaited send, so abandoning it abandons an in-flight request and
         // nothing else.
         //
-        // No audit append is ever wrapped. The segmented JSONL sink poisons
-        // itself on a durable-write error, not on cancellation: cancelling a
-        // task inside its flush, after the buffered lines were taken, silently
-        // drops already-hashed lines with no poison at all, leaving a chain
-        // that no longer matches its tail hash while the service keeps serving.
-        // That silent audit-integrity break is worse than a refusal, and it is
-        // why the timeout never crosses an append.
+        // No audit append is ever wrapped. An append is a durability
+        // boundary: it returns once the entry is synced or the writer has
+        // stopped. A deadline that abandoned it would leave the runtime not
+        // knowing whether the entry is on disk, so it could neither answer as
+        // the entry records nor report the entry missing. That is why the
+        // timeout never crosses an append.
         let execution =
             executor.execute_with_prior_facts(&selectors, prior_facts, &request, observed_at);
         let executed = match deadline {

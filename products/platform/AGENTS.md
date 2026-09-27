@@ -26,11 +26,32 @@ Preserve these shared boundaries:
   guarantees. Follow [secret-provider readiness](docs/secret-provider-readiness.md)
   for signer/secret integrations and [audit reference hashing](docs/audit-reference-hashing.md)
   for identifier correlation.
-- Audit primitives provide integrity and minimized records; products decide
-  which operations require durable acceptance before source access or release.
-  Local chain consistency alone does not prove complete remote retention.
+- Audit primitives provide minimized, fail-closed records with keyed
+  references; products decide which operations require durable acceptance
+  before source access or release. The local file carries no hash chain, so
+  only shipping it to append-only storage proves completeness.
 - SQLite is bounded and read-only. Shared OIDC helpers verify tokens but do
   not replace each product's principal, claim, scope, or authority rules.
+
+## Audit writer
+
+Review `registry-platform-audit`'s file writer against this contract:
+
+- It creates a missing audit directory owner-only, except below a
+  world-writable, non-sticky ancestor, where it refuses and says to create the
+  directory owned by the service user, mode 0700. Every refusal names its fix.
+- Sealed segments are `<path>.<sequence>`. `<path>.seq` records the next
+  sequence at open and before each rotation, so numbering continues across
+  restarts even after a shipper removed every sealed segment.
+- A shipper may copy and remove sealed segments while the writer runs.
+  Retention deletes the oldest expired ones and never the active file, a lock,
+  or another stream's active file; a failed deletion is logged, not fatal.
+- An entry is acknowledged only after the file is synced, and every open syncs
+  the directory before its first acknowledgement.
+- A delivery terminal whose commit cannot be read back is answered
+  `WorkerInterrupted` with the `Unknown` disposition, never a guessed state.
+- A review fix adds no configuration key or companion file unless the defect
+  cannot be fixed without one.
 
 Keep APIs small enough for products and adopters to compose directly, with
 safe defaults and explicit exceptional policies. Test a changed primitive
