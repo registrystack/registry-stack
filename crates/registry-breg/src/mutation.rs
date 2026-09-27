@@ -1141,14 +1141,16 @@ impl MutationCoordinator {
             return Err(error);
         }
         let result = self.execute_after_attempt(client, &request, fault).await;
-        if result.is_err() && !fault.is_enabled() {
+        if failure_is_refusal(&result) && !fault.is_enabled() {
             self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
         }
         // The retry distinction belongs to request actions. Ordinary mutations
         // retain their existing public failure for aborted SQL transactions.
         result.map_err(|error| match error {
-            MutationError::RetryableConflict => MutationError::Unavailable,
+            MutationError::RetryableConflict | MutationError::CommitUnresolved => {
+                MutationError::Unavailable
+            }
             other => other,
         })
     }
@@ -1190,12 +1192,14 @@ impl MutationCoordinator {
         let result = self
             .execute_batch_after_attempt(client, &request, fault)
             .await;
-        if result.is_err() && !fault.is_enabled() {
+        if failure_is_refusal(&result) && !fault.is_enabled() {
             self.record_batch_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
         }
         result.map_err(|error| match error {
-            MutationError::RetryableConflict => MutationError::Unavailable,
+            MutationError::RetryableConflict | MutationError::CommitUnresolved => {
+                MutationError::Unavailable
+            }
             other => other,
         })
     }
@@ -1458,8 +1462,11 @@ impl MutationCoordinator {
             transaction
                 .commit()
                 .await
-                .map_err(|_| MutationError::Unavailable)?;
-            self.audit.append(entry).await?;
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            self.audit
+                .append(entry)
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
             return Ok(MutationOutcome {
                 response: stored.response,
                 replayed: true,
@@ -1632,8 +1639,11 @@ impl MutationCoordinator {
         transaction
             .commit()
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        self.audit.append(entry).await?;
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -1972,8 +1982,11 @@ impl MutationCoordinator {
             transaction
                 .commit()
                 .await
-                .map_err(|_| MutationError::Unavailable)?;
-            self.audit.append(entry).await?;
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            self.audit
+                .append(entry)
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
             return Ok(MutationOutcome {
                 response: stored.response,
                 replayed: true,
@@ -2218,12 +2231,15 @@ impl MutationCoordinator {
         transaction
             .commit()
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        self.audit.append(entry).await?;
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
         if let Some(record) = run_record {
             crate::ingestion_store::append_run_audit(&self.audit, record)
                 .await
-                .map_err(|_| MutationError::Unavailable)?;
+                .map_err(|_| MutationError::CommitUnresolved)?;
         }
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
@@ -2442,6 +2458,12 @@ pub enum MutationError {
     Unavailable,
     #[error("mutation transaction was aborted by PostgreSQL concurrency control")]
     RetryableConflict,
+    /// The transaction reached its commit and its outcome is not proven: the
+    /// commit itself failed, or an audit append that follows it did. The
+    /// attempt is answered `unfinished`, never refused, and callers see
+    /// `Unavailable`.
+    #[error("mutation commit outcome is not proven")]
+    CommitUnresolved,
     /// The bounded change-request planner produced no plan. The failure kind
     /// travels with the error so the refusal is recorded and reported by the
     /// planner's closed vocabulary, never by script text or request values.
@@ -4240,6 +4262,13 @@ fn map_field_database_error(
         }
     }
     map_database_error(error)
+}
+
+/// A guarded boundary records a refusal only for a failure that proves the
+/// mutation did not commit. An unresolved commit is answered `unfinished` by
+/// the attempt's drop instead, consistent with ingestion's `reach_commit`.
+pub(crate) fn failure_is_refusal<T>(result: &Result<T, MutationError>) -> bool {
+    matches!(result, Err(error) if *error != MutationError::CommitUnresolved)
 }
 
 fn map_database_error(error: tokio_postgres::Error) -> MutationError {

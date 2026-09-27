@@ -2299,9 +2299,65 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
     // A crash-held lease is durable and becomes reclaimable after expiry.
     database.admin.execute("UPDATE registry_internal.registry_attachment_verification SET lease_id=$1,lease_expires_at=transaction_timestamp()-interval '1 second' WHERE verdict='pending'", &[&Uuid::new_v4()]).await.unwrap();
     mode.store(0, Ordering::SeqCst);
+    // The verdict commit fails after the verifier answered. A deferred
+    // constraint trigger refuses the verdict only at COMMIT, so the
+    // transaction rolls back after every statement in it succeeded. The
+    // stream answers the attempt as unfinished, never with the verdict that
+    // did not commit, and the job stays pending until its lease expires.
+    let entries_before = verification_audit(&database).len();
+    database
+        .admin
+        .batch_execute(
+            "CREATE FUNCTION registry_internal.test_refuse_verdict() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'verdict refused at commit'; END $$;
+             CREATE CONSTRAINT TRIGGER test_refuse_verdict
+               AFTER UPDATE ON registry_internal.registry_attachment_verification
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               WHEN (OLD.verdict = 'pending' AND NEW.verdict <> 'pending')
+               EXECUTE FUNCTION registry_internal.test_refuse_verdict();",
+        )
+        .await
+        .unwrap();
+    assert!(worker.clone().run_once().await.is_err());
+    database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_verdict ON registry_internal.registry_attachment_verification;
+             DROP FUNCTION registry_internal.test_refuse_verdict();",
+        )
+        .await
+        .unwrap();
+    let uncommitted = verification_audit(&database);
+    assert_eq!(
+        uncommitted[entries_before..]
+            .iter()
+            .map(|entry| (
+                entry["phase"].as_str().unwrap(),
+                entry["record"]["phase"].as_str().unwrap(),
+                entry["record"]["outcome"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("request", "attempt", "started"),
+            ("response", "terminal", "unfinished")
+        ],
+        "a verdict whose commit failed is answered as unfinished"
+    );
+    assert_eq!(
+        uncommitted[entries_before]["correlation"],
+        uncommitted[entries_before + 1]["correlation"]
+    );
+    assert_eq!(
+        get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
+            ["verificationStatus"],
+        "pending",
+        "a failed verdict commit leaves the job pending"
+    );
+    database.admin.batch_execute("UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second' WHERE lease_id IS NOT NULL").await.unwrap();
     // The attempt entry is accepted and the terminal entry refused. The
-    // terminal entry gates the verdict commit, so the approval rolls back
-    // and the job stays pending until its lease expires.
+    // terminal entry is appended only after the verdict commits, so the
+    // approval stands and the attempt stays unanswered in the stream: the
+    // refusing writer stops and cannot append the unfinished answer either.
     let entries_before = verification_audit(&database).len();
     database.audit_capture().fail_after(1);
     assert!(worker.run_once().await.is_err());
@@ -2313,29 +2369,10 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
     assert_eq!(
         get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
             ["verificationStatus"],
-        "pending",
-        "a refused terminal entry leaves no committed verdict"
+        "approved",
+        "a refused terminal entry follows the committed verdict"
     );
-    database.admin.batch_execute("UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second' WHERE lease_id IS NOT NULL").await.unwrap();
     let worker = open_worker();
-    assert!(worker.clone().run_once().await.unwrap());
-    let retried = verification_audit(&database);
-    assert_eq!(
-        retried[entries_before + 1..]
-            .iter()
-            .map(|entry| (
-                entry["record"]["phase"].as_str().unwrap(),
-                entry["record"]["outcome"].as_str().unwrap()
-            ))
-            .collect::<Vec<_>>(),
-        [("attempt", "started"), ("terminal", "approved")],
-        "the retried verification records its verdict"
-    );
-    assert_eq!(
-        get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
-            ["verificationStatus"],
-        "approved"
-    );
     assert!(
         !worker.clone().run_once().await.unwrap(),
         "a committed verdict leaves no verification work behind"

@@ -5391,6 +5391,7 @@ fn mutation_problem(error: MutationError) -> Response {
         // closed vocabulary.
         MutationError::Unavailable
         | MutationError::RetryableConflict
+        | MutationError::CommitUnresolved
         | MutationError::LegacyReviewDataPresent
         | MutationError::RetiredAuditRowsPresent => fixed_problem(
             StatusCode::SERVICE_UNAVAILABLE,

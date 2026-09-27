@@ -546,8 +546,6 @@ impl PostgresRecordReadService {
         Ok(())
     }
 
-    /// Append the read's `response` entry. The caller releases the result
-    /// only after this returns `Ok`.
     /// Record the Refused terminal of a read that failed after its attempt,
     /// then hand back the failure. A terminal the destination refuses is
     /// logged: the read already fails, and its held attempt then writes the
@@ -612,6 +610,8 @@ impl PostgresRecordReadService {
         Ok(())
     }
 
+    /// Append the read's `response` entry. The caller releases the result
+    /// only after this returns `Ok`.
     async fn record_read_terminal_audit(
         &self,
         request: &RecordReadRequest,

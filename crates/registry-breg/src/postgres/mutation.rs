@@ -103,17 +103,18 @@ pub struct IngestionRefusal {
 struct IngestionAudit {
     run: Option<ingestion_store::RunAttempt>,
     batch: bool,
-    /// The transition's commit returned an error, so whether it committed
-    /// is unknown and the request is answered unfinished, never refused.
-    commit_unknown: bool,
+    /// The transition reached its commit. A commit that returned an error
+    /// does not prove it rolled back, and a commit that succeeded before its
+    /// response entry was accepted happened, so from here the request is
+    /// answered unfinished, never refused.
+    reached_commit: bool,
 }
 
 impl IngestionAudit {
-    /// Mark the transition's commit outcome unknown and refuse the call as
-    /// an outage.
-    fn commit_failed(&mut self) -> IngestionServiceError {
-        self.commit_unknown = true;
-        IngestionServiceError::Unavailable
+    /// Mark the transition as committing: every later failure leaves its
+    /// outcome unknown to the request entry.
+    fn reach_commit(&mut self) {
+        self.reached_commit = true;
     }
 }
 
@@ -1141,6 +1142,20 @@ impl PostgresRecordMutationService {
         Self::settle_ingestion(result, attempt).await
     }
 
+    /// Refuse a committed run transition before its response entry is
+    /// appended, as a lost audit append would, when the test fault after
+    /// commit is configured.
+    fn fail_before_run_response(&self) -> Result<(), IngestionServiceError> {
+        #[cfg(feature = "postgres-test")]
+        if matches!(
+            self.fault,
+            MutationFaultControl::At(MutationFaultPoint::AfterCommitBeforeResponseRelease)
+        ) {
+            return Err(IngestionServiceError::Unavailable);
+        }
+        Ok(())
+    }
+
     /// Answer the ingestion `request` entry a refused call wrote, in the
     /// ingestion schema, so the refusal is never recorded only in another
     /// schema. A call refused before it wrote one leaves the refusal to its
@@ -1155,7 +1170,7 @@ impl PostgresRecordMutationService {
         };
         let answered = match audit.run {
             Some(attempt) if attempt.is_answered() => true,
-            Some(attempt) if audit.commit_unknown => attempt.abandon().await,
+            Some(attempt) if audit.reached_commit => attempt.abandon().await,
             Some(attempt) => attempt.refuse().await,
             None => audit.batch,
         };
@@ -1288,12 +1303,14 @@ impl PostgresRecordMutationService {
             &record.created_principal_reference,
             Some(&request_correlation),
         );
+        attempt.reach_commit();
         transaction
             .commit()
             .await
-            .map_err(|_| attempt.commit_failed())?;
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         // The run exists once the transaction commits; its answer leaves only
         // after the audit entry is accepted.
+        self.fail_before_run_response()?;
         ingestion_store::append_run_audit(&self.audit, audit_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
@@ -1533,10 +1550,12 @@ impl PostgresRecordMutationService {
             &cancelled.created_principal_reference,
             Some(&request_correlation),
         );
+        attempt.reach_commit();
         transaction
             .commit()
             .await
-            .map_err(|_| attempt.commit_failed())?;
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        self.fail_before_run_response()?;
         ingestion_store::append_run_audit(&self.audit, audit_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
@@ -1777,10 +1796,11 @@ impl PostgresRecordMutationService {
                 ),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
             });
+            attempt.reach_commit();
             disclosure_transaction
                 .commit()
                 .await
-                .map_err(|_| attempt.commit_failed())?;
+                .map_err(|_| IngestionServiceError::Unavailable)?;
             ingestion_store::append_run_audit(&self.audit, disclosure_record)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?;
@@ -1873,10 +1893,11 @@ impl PostgresRecordMutationService {
                 &run.created_principal_reference,
                 Some(&request_correlation),
             );
+            attempt.reach_commit();
             transaction
                 .commit()
                 .await
-                .map_err(|_| attempt.commit_failed())?;
+                .map_err(|_| IngestionServiceError::Unavailable)?;
             ingestion_store::append_run_audit(&self.audit, blocked_record)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?;
@@ -2091,6 +2112,7 @@ impl PostgresRecordMutationService {
                     MutationError::IdempotencyConflict
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
+                    | MutationError::CommitUnresolved
                     | MutationError::LegacyReviewDataPresent
                     | MutationError::RetiredAuditRowsPresent
                     | MutationError::FieldEncryptionUnavailable
@@ -2289,10 +2311,11 @@ impl PostgresRecordMutationService {
             &principal_reference,
             Some(&request_correlation),
         );
+        attempt.reach_commit();
         transaction
             .commit()
             .await
-            .map_err(|_| attempt.commit_failed())?;
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         ingestion_store::append_run_audit(&self.audit, disclosure_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;

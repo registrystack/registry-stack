@@ -711,6 +711,7 @@ fn audit_disposition(disposition: DeliveryAuditDisposition) -> WebhookAuditDispo
         DeliveryAuditDisposition::DeadLettered => WebhookAuditDisposition::DeadLettered,
         DeliveryAuditDisposition::Expired => WebhookAuditDisposition::Expired,
         DeliveryAuditDisposition::ReplayPending => WebhookAuditDisposition::ReplayPending,
+        DeliveryAuditDisposition::Unknown => WebhookAuditDisposition::Unknown,
     }
 }
 

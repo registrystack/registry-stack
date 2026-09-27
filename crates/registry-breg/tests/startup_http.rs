@@ -482,7 +482,10 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     .expect("request_id is a UUID");
 }
 
-fn startup_errors() -> [StartupError; 17] {
+/// A description the audit writer gives for a torn audit file.
+const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
+
+fn startup_errors() -> [StartupError; 18] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -496,6 +499,7 @@ fn startup_errors() -> [StartupError; 17] {
             field_id: "pattern-private-field".to_owned(),
         },
         StartupError::Audit,
+        StartupError::AuditDestination(AUDIT_DESTINATION_REASON.to_owned()),
         StartupError::Cursor,
         StartupError::Oidc,
         StartupError::Authentication,
@@ -634,6 +638,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
             "a persisted field pattern has invalid PostgreSQL syntax"
         }
         StartupError::Audit => "the Registry audit profile or destination was refused",
+        StartupError::AuditDestination(_) => "the Registry audit destination was refused",
         StartupError::Cursor => "the Registry cursor profile was refused",
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
@@ -732,6 +737,12 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             }
             _ => None,
         };
+        let reason = match &event {
+            OperationalEvent::StoppedWithError(StartupError::AuditDestination(reason)) => {
+                Some(reason.clone())
+            }
+            _ => None,
+        };
         let (level, target, message, error, code) = expected_operational_event(event);
         assert_eq!(expected.level(), level);
         assert_eq!(expected.target(), target);
@@ -759,6 +770,9 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         if observed.is_some() {
             expected_field_names.insert("observed");
         }
+        if reason.is_some() {
+            expected_field_names.insert("reason");
+        }
         assert_eq!(
             fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             expected_field_names
@@ -772,6 +786,11 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         assert_eq!(
             fields.get("observed").and_then(Value::as_str),
             observed.as_deref()
+        );
+        // The writer's refusal reaches the operator with its recovery step.
+        assert_eq!(
+            fields.get("reason").and_then(Value::as_str),
+            reason.as_deref()
         );
         assert!(matches!(
             expected.target(),

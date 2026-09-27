@@ -1444,12 +1444,13 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
     )
     .await
     .expect("the serving writer takes the audit file lock");
-    assert_eq!(
+    let refusal =
         prepare_with_connection_config_for_test(serving_config, database.runtime_config.clone())
             .await
-            .err(),
-        Some(StartupError::Audit),
-        "a second writer over the serving audit file refuses to start"
+            .err();
+    assert!(
+        matches!(&refusal, Some(StartupError::AuditDestination(reason)) if reason.contains("stop it")),
+        "a second writer over the serving audit file refuses to start and says to stop the other one: {refusal:?}"
     );
     check_with_connection_config_for_test(serving_config, database.runtime_config.clone())
         .await
@@ -1493,12 +1494,13 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
             .expect("torn companion entry is written");
         fs::set_permissions(&companion_path, fs::Permissions::from_mode(0o600))
             .expect("companion audit file mode is set");
-        assert_eq!(
+        let refusal =
             check_with_connection_config_for_test(unopened, database.runtime_config.clone())
                 .await
-                .err(),
-            Some(StartupError::Audit),
-            "a torn final entry in the bregctl companion destination refuses the startup check"
+                .err();
+        assert!(
+            matches!(&refusal, Some(StartupError::AuditDestination(reason)) if reason.contains("archive it")),
+            "a torn final entry in the bregctl companion destination refuses the startup check and names the recovery: {refusal:?}"
         );
         fs::write(&companion_path, complete_entry).expect("companion entry is completed");
         check_with_connection_config_for_test(unopened, database.runtime_config.clone())

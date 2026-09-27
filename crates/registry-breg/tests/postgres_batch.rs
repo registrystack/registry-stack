@@ -551,6 +551,63 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         );
     }
 
+    // A COMMIT that fails does not prove the batch rolled back, so its
+    // attempt is answered `unfinished`, never refused.
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.test_refuse_batch_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'test refuses this batch commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_batch_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_batch_commit
+               AFTER INSERT ON registry_data.\"{table}\"
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_batch_commit();"
+        ))
+        .await
+        .expect("administrator installs the deferred commit refusal");
+    let journal_before = database.audit_entries().len();
+    let response = send_json(
+        &app,
+        "/v1/records/widgets:batch",
+        Some(authorized_claims.clone()),
+        "commit-refused-batch",
+        json!({"items": [{"operation":"create", "data": {
+            "jurisdiction":"zone-a", "label":"commit-refused", "secret":"not-disclosed", "quantity":6
+        }}]}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_refuse_batch_commit ON registry_data.\"{table}\";
+             DROP FUNCTION public.test_refuse_batch_commit();"
+        ))
+        .await
+        .expect("administrator removes the deferred commit refusal");
+    let commit_refused = database.audit_entries()[journal_before..]
+        .iter()
+        .map(|entry| {
+            (
+                entry["phase"].as_str().unwrap_or_default().to_owned(),
+                entry["record"]["phase"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commit_refused,
+        [
+            ("request".to_owned(), "attempt".to_owned()),
+            ("response".to_owned(), "unfinished".to_owned()),
+        ],
+        "an unproven batch commit is answered unfinished, never refused"
+    );
+
     let audit_entries = database.audit_entries();
     let audit_text = audit_entries
         .iter()

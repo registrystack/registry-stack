@@ -298,6 +298,9 @@ pub(crate) enum WebhookAuditDisposition {
     DeadLettered,
     Expired,
     ReplayPending,
+    /// The terminal commit's fate could not be read back; no database state
+    /// is claimed.
+    Unknown,
 }
 
 pub(crate) struct WebhookAudit<'a> {
@@ -801,6 +804,11 @@ pub(crate) fn webhook_entry(
             | WebhookAuditOutcome::PayloadRefused
             | WebhookAuditOutcome::WorkerInterrupted,
             WebhookAuditDisposition::RetryPending | WebhookAuditDisposition::DeadLettered,
+        )
+        | (
+            WebhookAuditPhase::Terminal,
+            WebhookAuditOutcome::WorkerInterrupted,
+            WebhookAuditDisposition::Unknown,
         ) => event.attempt > 0,
         (
             WebhookAuditPhase::Terminal,
@@ -915,6 +923,7 @@ fn webhook_disposition_name(disposition: WebhookAuditDisposition) -> &'static st
         WebhookAuditDisposition::DeadLettered => "dead_lettered",
         WebhookAuditDisposition::Expired => "expired",
         WebhookAuditDisposition::ReplayPending => "replay_pending",
+        WebhookAuditDisposition::Unknown => "unknown",
     }
 }
 
@@ -1315,6 +1324,41 @@ mod action_terminal_tests {
         assert_eq!(attempt.schema(), WEBHOOK_AUDIT_SCHEMA);
         assert!(!attempt.correlation().contains(&event_id.to_string()));
         assert!(!attempt.correlation().contains("delivery."));
+    }
+
+    #[test]
+    fn an_interrupted_terminal_of_unknown_fate_is_recorded_only_as_unknown() {
+        let event = |outcome, disposition| WebhookAudit {
+            event_id: Uuid::new_v4(),
+            compiled_delivery_id: "delivery",
+            package_revision: "package-revision",
+            generation: 1,
+            attempt: 1,
+            phase: WebhookAuditPhase::Terminal,
+            outcome,
+            disposition,
+        };
+        let entry = webhook_entry(
+            &profile(),
+            event(
+                WebhookAuditOutcome::WorkerInterrupted,
+                WebhookAuditDisposition::Unknown,
+            ),
+        )
+        .expect("interrupted terminal of unknown fate");
+        assert_eq!(entry.record()["disposition"], "unknown");
+        // Only an interruption may leave the disposition unknown.
+        assert_eq!(
+            webhook_entry(
+                &profile(),
+                event(
+                    WebhookAuditOutcome::Delivered,
+                    WebhookAuditDisposition::Unknown,
+                ),
+            )
+            .err(),
+            Some(RegistryAuditError::InvalidContext)
+        );
     }
 
     #[test]

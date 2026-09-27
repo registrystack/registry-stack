@@ -62,6 +62,10 @@ pub enum StartupError {
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("the Registry audit profile or destination was refused")]
     Audit,
+    /// The audit writer refused the destination. The reason is the writer's
+    /// own rule and recovery sentence, never a path or a secret.
+    #[error("the Registry audit destination was refused: {0}")]
+    AuditDestination(String),
     #[error("the Registry cursor profile was refused")]
     Cursor,
     #[error("the Registry OIDC key source was refused")]
@@ -284,6 +288,17 @@ impl OperationalEvent {
             Self::Stopped => {
                 tracing::error!(target: "registry_breg::startup", message = record.message);
             }
+            Self::StoppedWithError(StartupError::AuditDestination(reason)) => {
+                let error = record
+                    .error
+                    .expect("stopped-with-error records have a closed error");
+                tracing::error!(
+                    target: "registry_breg::startup",
+                    error,
+                    reason = reason.as_str(),
+                    message = record.message
+                );
+            }
             Self::StoppedWithError(_) => {
                 let error = record
                     .error
@@ -333,6 +348,7 @@ impl StartupError {
                 "a persisted field pattern has invalid PostgreSQL syntax"
             }
             Self::Audit => "the Registry audit profile or destination was refused",
+            Self::AuditDestination(_) => "the Registry audit destination was refused",
             Self::Cursor => "the Registry cursor profile was refused",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
@@ -805,7 +821,7 @@ async fn open_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
     let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
     let writer = AuditWriter::open(config.audit().destination().clone())
         .await
-        .map_err(|_| StartupError::Audit)?;
+        .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     Ok(RegistryAudit::new(profile, writer))
 }
 
@@ -823,12 +839,12 @@ fn check_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
     let destination = config.audit().destination();
     destination
         .check_writable()
-        .map_err(|_| StartupError::Audit)?;
+        .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     destination
         .for_process(crate::audit::COMPANION_PROCESS_ROLE)
         .map_err(|_| StartupError::Audit)?
         .check_writable()
-        .map_err(|_| StartupError::Audit)?;
+        .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     Ok(RegistryAudit::new(
         profile,
         AuditWriter::from_line_sink(Box::new(RefuseEveryEntry)),

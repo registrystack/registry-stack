@@ -1078,6 +1078,101 @@ async fn real_postgres_mutation_audit_refusals_fail_closed_around_the_commit() {
     database.cleanup().await;
 }
 
+/// A COMMIT that fails does not prove the transaction rolled back, so the
+/// attempt is answered `unfinished`, never refused: a lost acknowledgement of a
+/// durable mutation must not leave a journal that says the mutation was
+/// refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_mutation_commit_failure_is_answered_unfinished_not_refused() {
+    let database = TestDatabase::create(4).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let create_plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let claims = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.test_refuse_mutation_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'test refuses this mutation commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_mutation_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_mutation_commit
+               AFTER INSERT ON registry_data.\"{table}\"
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_mutation_commit();"
+        ))
+        .await
+        .expect("administrator installs the deferred commit refusal");
+
+    let before = durable_counts(&database, table).await;
+    let failed = audited_coordinator(&database, &identity)
+        .execute(
+            &mut client,
+            create_request(
+                &create_plan,
+                "commit-refused-create",
+                &claims,
+                RECORD_RECOVERY,
+                "commit-refused-label",
+                Some(5),
+            ),
+        )
+        .await;
+    assert_eq!(failed, Err(MutationError::Unavailable));
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_refuse_mutation_commit ON registry_data.\"{table}\";
+             DROP FUNCTION public.test_refuse_mutation_commit();"
+        ))
+        .await
+        .expect("administrator removes the deferred commit refusal");
+
+    let after = durable_counts(&database, table).await;
+    assert_eq!(
+        after.current, before.current,
+        "the refused commit rolled back"
+    );
+    let journal = database
+        .audit_entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry["phase"].as_str().unwrap_or_default().to_owned(),
+                entry["record"]["phase"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                entry["correlation"].to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(journal.len(), 2, "{journal:?}");
+    {
+        let pair = &journal[..];
+        assert_eq!(
+            (pair[0].0.as_str(), pair[0].1.as_str()),
+            ("request", "attempt")
+        );
+        assert_eq!(
+            (pair[1].0.as_str(), pair[1].1.as_str()),
+            ("response", "unfinished"),
+            "an unproven commit is answered unfinished, never refused"
+        );
+        assert_eq!(pair[0].2, pair[1].2);
+    }
+    assert_eq!(refusal_audit_count(&database).await, 0);
+
+    drop(client);
+    drop(pool);
+    database.cleanup().await;
+}
+
 /// Two runtimes over one database each own their audit writer. Their
 /// concurrent mutations commit independently, and every request entry is
 /// answered by exactly one response entry carrying its correlation.
@@ -2260,8 +2355,8 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             audit: before_fault.audit + 2,
             ..before_fault
         },
-        "terminal audit failure releases no success bytes, commits no mutation packet, and \
-         answers its attempt as unfinished"
+        "a fault before the terminal audit releases no success bytes, commits no mutation \
+         packet, and answers its attempt as unfinished"
     );
 
     assert_journals_are_minimized_and_paired(&database).await;

@@ -1016,7 +1016,6 @@ async fn scrub_plaintext_request_snapshots(
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?
         .get(0);
     let lifecycle_started = scrubbed_any || has_pending_revisions;
-    let mut scrub_entry = None;
     if terminal_exists && lifecycle_started {
         // A completed flip manifest must never acquire fresh pre-flip work.
         // Returning before commit rolls back any request scrubs above.
@@ -1036,6 +1035,9 @@ async fn scrub_plaintext_request_snapshots(
         if changed != 1 {
             return Err(FieldEncryptionHistoryErasureError::Unavailable);
         }
+        // The scrub counts are durable progress the terminal entry
+        // aggregates. They are never a response entry of their own, which
+        // would answer the lifecycle request before the lifecycle ends.
         if scrubbed_any {
             record_lifecycle_progress(
                 &transaction,
@@ -1045,12 +1047,6 @@ async fn scrub_plaintext_request_snapshots(
                 scrubbed_request_proposal_count,
             )
             .await?;
-            scrub_entry = Some(request_scrub_entry(
-                request,
-                &lifecycle_reference,
-                scrubbed_request_target_count,
-                scrubbed_request_proposal_count,
-            ));
         }
     }
     let head_incomplete = !head.coverage_ready || head.unavailable_after_position.is_some();
@@ -1060,7 +1056,6 @@ async fn scrub_plaintext_request_snapshots(
         .commit()
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
-    append_maintenance_entries(request.audit, scrub_entry.into_iter().collect()).await?;
     Ok((
         scrubbed_request_target_count,
         scrubbed_request_proposal_count,
@@ -1286,27 +1281,6 @@ async fn record_lifecycle_progress(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     Ok(())
-}
-
-fn request_scrub_entry(
-    request: &FieldEncryptionHistoryErasureRequest<'_>,
-    lifecycle_reference: &str,
-    scrubbed_request_target_count: u64,
-    scrubbed_request_proposal_count: u64,
-) -> AuditEntry {
-    AuditEntry::response(
-        FIELD_ENCRYPTION_AUDIT_SCHEMA,
-        lifecycle_reference,
-        json!({
-            "phase": "request-scrub",
-            "outcome": "committed",
-            "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
-            "lifecycleReference": lifecycle_reference,
-            "scrubbedRequestTargetCount": scrubbed_request_target_count,
-            "scrubbedRequestProposalCount": scrubbed_request_proposal_count,
-        }),
-    )
 }
 
 async fn aggregate_lifecycle_counts(
