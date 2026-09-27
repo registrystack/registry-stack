@@ -11,6 +11,9 @@
   flight. A file destination flushes that line on the runtime,
   or when the last reference to the writer is dropped at shutdown.
 
+- Refuse an audit file name longer than 246 bytes, including a process
+  role's sibling name, so the writer's rotated and lock files fit a 255-byte
+  file-name limit instead of stopping the writer at its first rotation.
 - Refuse to reopen an audit file ending in an incomplete JSONL entry, preserving
   its bytes for operator archival before starting a fresh stream.
 - Keep queued stream appends stopped after an earlier write fails, and finish
