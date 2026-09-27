@@ -10,7 +10,10 @@
 //   background.mjs stop <state file>          stop the group, show its output
 //
 // A fence whose group ends before its URL answers, or that does not answer
-// within READY_TIMEOUT_MS, fails the wait.
+// within READY_TIMEOUT_MS, fails the wait. A group that has already ended by
+// the time stop is called fails too: a background command promises to keep
+// running until it is stopped, so one that exited on its own is a failure
+// even though it answered while it was up.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -86,11 +89,19 @@ async function ready(url, stateFile) {
 async function stop(stateFile) {
   const state = await readState(stateFile);
   if (!state) return 0;
+  // Checked before stopping it, so a group that already ended on its own is
+  // told apart from one this call is the one to stop.
+  const alreadyEnded = !groupAlive(state.group);
   await stopGroup(state.group);
   const output = await readFile(state.output, 'utf8');
+  await writeFile(stateFile, '');
+  if (alreadyEnded) {
+    console.error(`the background command had already exited, although it must keep running until it is stopped${output === '' ? '' : '; it printed:'}`);
+    process.stdout.write(output);
+    return 1;
+  }
   console.log(`\nstopped the background command${output === '' ? '' : ', which printed:'}`);
   process.stdout.write(output);
-  await writeFile(stateFile, '');
   return 0;
 }
 
