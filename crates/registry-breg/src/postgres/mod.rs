@@ -73,8 +73,8 @@ pub use read::PostgresRecordReadService;
 pub use read::ReadFaultPoint;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub use rehearsal::{
-    rehearse_successor_migration, MigrationRehearsalError, RehearsalAssertionPhase,
-    SuccessorMigrationRehearsal,
+    rehearse_successor_migration, BaselineFingerprintDrift, MigrationRehearsalError,
+    RehearsalAssertionPhase, RehearsalOutcome, SuccessorMigrationRehearsal,
 };
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]

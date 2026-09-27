@@ -609,7 +609,12 @@ pub async fn rehearse_schema_fingerprint(
 pub async fn rehearse_successor_migration(
     config: &RuntimeConfig,
     rehearsal: crate::postgres::SuccessorMigrationRehearsal<'_>,
-) -> Result<std::result::Result<(), crate::postgres::MigrationRehearsalError>> {
+) -> Result<
+    std::result::Result<
+        crate::postgres::RehearsalOutcome,
+        crate::postgres::MigrationRehearsalError,
+    >,
+> {
     validate_schema_test_candidate_binding(config, rehearsal.candidate)?;
     let migration = config
         .migration_database_connection_config()
