@@ -230,6 +230,20 @@ impl PostgresStore {
         split_weakness_in(&**client, &user).await
     }
 
+    /// The refusal naming a split runtime credential that no longer holds
+    /// every grant apply issues it, or none when it does.
+    pub async fn missing_runtime_grants(&self) -> Result<Option<StoreError>, StoreError> {
+        let client = self.client().await?;
+        let user: String = client
+            .query_one("SELECT current_user::text", &[])
+            .await?
+            .get(0);
+        Ok(
+            (!grants_current_in(&**client, &user, Some(RoleMode::Split)).await?)
+                .then_some(StoreError::RuntimeGrantsMissing(user)),
+        )
+    }
+
     /// Accept one package in one transaction under the migration lock:
     /// refuse a foreign database, or the package already active with nothing
     /// left to change, before any statement changes anything, then migrate,
@@ -638,13 +652,17 @@ async fn role_mode_in(
 /// it, it holds TRIGGER on a `scheduling_*` relation, or it holds CREATE on
 /// the schema. Each lets it attach code that runs as the migration role
 /// inside a later apply, such as a deferred constraint trigger on a table
-/// apply writes. None when the ledger does not
-/// exist yet, when `role` is or holds the ledger's owner or is a superuser
-/// (single role mode), or when neither holds.
+/// apply writes. A trigger already attached to a `scheduling_*` table
+/// weakens the split the same way, since no Scheduling migration creates
+/// one and revoking the power that attached it leaves it in place. None
+/// when the ledger does not exist yet, when `role` is or holds the ledger's
+/// owner or is a superuser (single role mode), or when nothing holds.
 async fn split_weakness_in(
     client: &impl GenericClient,
     role: &str,
 ) -> Result<Option<StoreError>, StoreError> {
+    // The grantee a privilege is revoked from is the one `role` holds it
+    // through: `role` itself, PUBLIC, or a role it is a member of.
     let Some(row) = client
         .query_opt(
             "SELECT quote_ident(r.rolname), quote_ident(n.nspname), \
@@ -658,15 +676,31 @@ async fn split_weakness_in(
                  ) AS owners \
                  WHERE pg_has_role(r.oid, owner, 'USAGE') \
                  ORDER BY owner = r.oid DESC, pg_get_userbyid(owner) LIMIT 1), \
-                 (SELECT format('%I.%I', n.nspname, t.relname) FROM pg_class AS t \
-                     WHERE t.relnamespace = n.oid AND t.relname LIKE 'scheduling\\_%' \
-                       AND t.relkind IN ('r', 'p', 'v', 'm', 'f') \
-                       AND has_table_privilege(r.oid, t.oid, 'TRIGGER') \
-                     ORDER BY t.relname LIMIT 1), \
-                 has_schema_privilege(r.oid, n.oid, 'CREATE') \
+                 triggers.relation, triggers.grantee, \
+                 has_schema_privilege(r.oid, n.oid, 'CREATE'), \
+                 (SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' \
+                         ELSE quote_ident(pg_get_userbyid(a.grantee)) END \
+                     FROM aclexplode(n.nspacl) AS a \
+                     WHERE a.privilege_type = 'CREATE' \
+                       AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'USAGE')) \
+                     ORDER BY a.grantee = r.oid DESC, a.grantee = 0 DESC LIMIT 1) \
              FROM pg_roles AS r \
              CROSS JOIN pg_class AS c \
              JOIN pg_namespace AS n ON n.oid = c.relnamespace \
+             LEFT JOIN LATERAL ( \
+                 SELECT format('%I.%I', n.nspname, t.relname) AS relation, \
+                     (SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' \
+                             ELSE quote_ident(pg_get_userbyid(a.grantee)) END \
+                         FROM aclexplode(t.relacl) AS a \
+                         WHERE a.privilege_type = 'TRIGGER' \
+                           AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'USAGE')) \
+                         ORDER BY a.grantee = r.oid DESC, a.grantee = 0 DESC LIMIT 1) AS grantee \
+                 FROM pg_class AS t \
+                 WHERE t.relnamespace = n.oid AND t.relname LIKE 'scheduling\\_%' \
+                   AND t.relkind IN ('r', 'p', 'v', 'm', 'f') \
+                   AND has_table_privilege(r.oid, t.oid, 'TRIGGER') \
+                 ORDER BY t.relname LIMIT 1 \
+             ) AS triggers ON true \
              WHERE r.rolname = $1::text AND c.oid = to_regclass('scheduling_activations') \
                AND NOT pg_has_role(r.oid, c.relowner, 'USAGE') \
                AND NOT r.rolsuper",
@@ -680,7 +714,9 @@ async fn split_weakness_in(
         (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
     let owner: Option<String> = row.try_get(3)?;
     let triggers_on: Option<String> = row.try_get(4)?;
-    let creates: bool = row.try_get(5)?;
+    let trigger_grantee: Option<String> = row.try_get(5)?;
+    let creates: bool = row.try_get(6)?;
+    let create_grantee: Option<String> = row.try_get(7)?;
     // Moving ownership takes the runtime role's grants on the object with
     // it, so only that fix needs an apply to reissue them.
     const THEN_APPLY: &str =
@@ -694,15 +730,50 @@ async fn split_weakness_in(
         ),
         (None, Some(table)) => (
             format!("it holds TRIGGER on {table}"),
-            format!("REVOKE TRIGGER ON {table} FROM {runtime}"),
+            format!(
+                "REVOKE TRIGGER ON {table} FROM {}",
+                trigger_grantee.as_deref().unwrap_or(&runtime)
+            ),
             THEN_RERUN,
         ),
         (None, None) if creates => (
             format!("it holds CREATE on the Scheduling schema {schema}"),
-            format!("REVOKE CREATE ON SCHEMA {schema} FROM {runtime}"),
+            format!(
+                "REVOKE CREATE ON SCHEMA {schema} FROM {}",
+                create_grantee.as_deref().unwrap_or(&runtime)
+            ),
             THEN_RERUN,
         ),
-        (None, None) => return Ok(None),
+        (None, None) => {
+            let attached = client
+                .query(
+                    "SELECT quote_ident(g.tgname), format('%I.%I', n.nspname, t.relname) \
+                     FROM pg_trigger AS g \
+                     JOIN pg_class AS t ON t.oid = g.tgrelid \
+                     JOIN pg_namespace AS n ON n.oid = t.relnamespace \
+                     WHERE NOT g.tgisinternal AND t.relname LIKE 'scheduling\\_%' \
+                       AND n.oid = (SELECT relnamespace FROM pg_class \
+                                    WHERE oid = to_regclass('scheduling_activations')) \
+                     ORDER BY 2, 1",
+                    &[],
+                )
+                .await?;
+            if attached.is_empty() {
+                return Ok(None);
+            }
+            let mut listed = Vec::with_capacity(attached.len());
+            let mut drops = Vec::with_capacity(attached.len());
+            for trigger in &attached {
+                let (name, table): (String, String) = (trigger.try_get(0)?, trigger.try_get(1)?);
+                listed.push(format!("{name} on {table}"));
+                drops.push(format!("DROP TRIGGER {name} ON {table}"));
+            }
+            return Ok(Some(StoreError::SplitRoleWeakened(format!(
+                "the Scheduling tables carry triggers no Scheduling migration creates ({}), which run as the migration role {migration} inside an apply, so the runtime role {runtime} is not separated from it; run `{}` as a database administrator, {THEN_RERUN}",
+                listed.join(", "),
+                drops.join("; ")
+            ))));
+        }
     };
     Ok(Some(StoreError::SplitRoleWeakened(format!(
         "the runtime role {runtime} is not separated from the migration role {migration}: {cause}, so it can write the activation ledger indirectly; run `{fix}` as a database administrator, {then}"

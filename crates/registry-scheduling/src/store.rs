@@ -185,11 +185,19 @@ pub enum StoreError {
     )]
     RoleModeDrift,
     /// The runtime role differs from the migration role but can still write
-    /// the ledger indirectly, through an object it owns or a schema CREATE
-    /// privilege, which the grants apply issues cannot take away. The text
-    /// names the runtime role and the statement that separates it.
+    /// the ledger indirectly, through an object it owns, a TRIGGER or schema
+    /// CREATE privilege, or a trigger already attached to a Scheduling
+    /// table, which the grants apply issues cannot take away. The text names
+    /// the statement that separates the roles.
     #[error("{0}")]
     SplitRoleWeakened(String),
+    /// A split runtime role no longer holds every grant apply issued it,
+    /// which moving an object's ownership back to the migration role takes
+    /// away. The field names the runtime role.
+    #[error(
+        "the runtime role {0} no longer holds every grant `schedulingctl apply` issues it; run `schedulingctl apply --runtime-config FILE` to reissue them"
+    )]
+    RuntimeGrantsMissing(String),
     /// A retained hook event could not be proven deliverable under the
     /// destination binding it was captured for.
     #[error(
@@ -265,6 +273,7 @@ impl StoreError {
                 | Self::PackageNotActive { .. }
                 | Self::RoleModeDrift
                 | Self::SplitRoleWeakened(_)
+                | Self::RuntimeGrantsMissing(_)
                 | Self::RetainedHookBindings
                 | Self::DeploymentIdentity
                 | Self::PolicyInUse(_)

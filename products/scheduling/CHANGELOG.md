@@ -56,12 +56,15 @@
     `schedulingctl.activation.split-role-weakened` a runtime role that owns,
     or is a member of an owner of, the Scheduling schema or a `scheduling_*`
     table, sequence, view, or function, that holds TRIGGER on a
-    `scheduling_*` table or view, or that holds CREATE on the schema. The
+    `scheduling_*` table or view, or that holds CREATE on the schema, and a
+    database where a trigger is attached to a `scheduling_*` table. The
     refusal names `REASSIGN OWNED BY` then `schedulingctl apply`, or `REVOKE
-    TRIGGER` or `REVOKE CREATE ON SCHEMA` then a rerun of the refused
-    command. Split-mode apply revokes TRIGGER from the runtime role, and
-    re-applies the active package when the runtime role no longer holds
-    every grant apply issues.
+    TRIGGER`, `REVOKE CREATE ON SCHEMA` (from PUBLIC when that is how the
+    runtime role holds it), or `DROP TRIGGER` for each attached trigger, then
+    a rerun of the refused command. Split-mode apply revokes TRIGGER from the
+    runtime role, and re-applies the active package when the runtime role no
+    longer holds every grant apply issues; `scheduling serve` refuses that
+    runtime role, naming `schedulingctl apply`.
   - `scheduling migrate` is removed; it exits 2 naming `schedulingctl plan
     --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`.
   - The operator commands exit 0 on success, 1 on a refusal, 2 on a usage

@@ -175,10 +175,19 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             return Err(database_step("role mode check")(refusal));
         }
         RoleMode::Single => tracing::warn!(role_mode = "single", "{SINGLE_ROLE_STATEMENT}"),
-        RoleMode::Split => tracing::info!(
-            role_mode = "split",
-            "the runtime credential cannot write the Scheduling activation ledger"
-        ),
+        RoleMode::Split => {
+            if let Some(refusal) = store
+                .missing_runtime_grants()
+                .await
+                .map_err(database_step("role mode check"))?
+            {
+                return Err(database_step("role mode check")(refusal));
+            }
+            tracing::info!(
+                role_mode = "split",
+                "the runtime credential cannot write the Scheduling activation ledger"
+            )
+        }
     }
 
     // The accepted package's policy is the one apply published, under the
