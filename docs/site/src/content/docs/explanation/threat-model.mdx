@@ -585,6 +585,13 @@ conformance claim:
 - Adapters, connectors, and feature-gated protocol surfaces: Relay has none. Its route set is
   fixed by the compiled contract and does not vary by build feature, so there is no OGC API
   Features, Records, or EDR adapter and no SP-DCI synchronization surface to reason about.
+- A hostile local account on the machine that runs adopter tooling: `bregctl`, `evidencectl`,
+  `caseworkctl`, `schedulingctl`, `relayctl`, and the other authoring and scaffolding commands
+  assume a single-user machine the adopter trusts. Their file writes are not a defense against
+  another account on that machine that races directory creation, plants a symbolic link, or can
+  write to a parent directory. Generate production key material on a machine where no other
+  account can write anywhere along the output path. The owner, mode, and no-follow checks
+  described for the runtimes are runtime startup checks, not tooling guarantees.
 - Non-Unix targets: both runtimes are Unix-only, and both fail closed rather than degrading.
   Evidence Gateway's secret and audit invariants depend on owner, mode, no-follow, link-count,
   and open-file identity checks. Relay refuses to start on a non-Unix target outright, because
