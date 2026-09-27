@@ -64,9 +64,10 @@ sequence on a restored copy first, as
 4. **Upgrade BReg.** Build the successor package with the new `bregctl`, `apply` it, update the
    runtime file, run `bregctl verify`, and restart every `breg` process on the new binary; see
    [Activate the successor](../../breg-changes/#activate-the-successor). Casework reports each
-   BReg source as unavailable from here until step 5 finishes. Upgrading a package built by the
-   previous release is tracked in
-   [registry-stack issue #1633](https://github.com/registrystack/registry-stack/issues/1633).
+   BReg source as unavailable from here until step 5 finishes. A registry from a release without
+   an instance claim refuses to start after this first `apply` until you run
+   `bregctl instance-claim adopt --acknowledge-original-retired` once; see
+   [back up and restore the database](../../breg-changes/#back-up-and-restore-the-database).
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
    `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see
    [Migrate and serve](../../casework/#migrate-and-serve).
