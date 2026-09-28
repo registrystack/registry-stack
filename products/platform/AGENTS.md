@@ -48,6 +48,13 @@ Review `registry-platform-audit`'s file writer against this contract:
   or another stream's active file; a failed deletion is logged, not fatal.
 - An entry is acknowledged only after the file is synced, and every open syncs
   the directory before its first acknowledgement.
+- A torn final line is moved at open to the owner-only side file
+  `<path>.torn`, synced before the active file is truncated to its last
+  complete line; an existing side file holding other bytes is never
+  overwritten. The log names the side file and byte count, never the bytes.
+- A configured path ending in a companion suffix (`.lock`, `.seq`, `.seq.tmp`,
+  `.torn`, `.<8 digits>`) is refused; `AuditSegments` is the one reading of
+  that namespace for writer and inspection tooling alike.
 - A delivery terminal whose commit cannot be read back is answered
   `WorkerInterrupted` with the `Unknown` disposition, never a guessed state.
 - A review fix adds no configuration key or companion file unless the defect
