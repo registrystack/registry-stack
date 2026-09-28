@@ -175,7 +175,7 @@ elsewhere before transport. Bind production secret and audit paths separately.
 evidencectl target new ./evidence/targets/production \
   --settings ./production-settings.yaml \
   --signing-public-key ./evidence-signing-public.jwk.json
-evidencectl target explain ./evidence/targets/production --project ./evidence --json
+evidencectl target explain ./evidence/targets/production ./evidence --json
 evidencectl test ./evidence --target ./evidence/targets/production
 ```
 

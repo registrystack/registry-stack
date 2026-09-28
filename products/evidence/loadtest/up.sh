@@ -78,7 +78,7 @@ cleanup_failed_start() {
     if [[ -f "$project/.evidence/dev/state.json" ]]; then
       printf '%s\n' 'Load-test startup failed; stopping only the project-owned dev session.' >&2
       "$evidencectl" --format json dev stop "$project" >/dev/null 2>&1 || :
-      "$evidencectl" --format json dev clean --project "$project" >/dev/null 2>&1 ||
+      "$evidencectl" --format json dev clean "$project" >/dev/null 2>&1 ||
         printf '%s\n' "Automatic owned-session cleanup did not complete; inspect $project/.evidence." >&2
     fi
     if [[ -n "$mock_pid" ]]; then
@@ -97,7 +97,7 @@ python3 "$support" openapi --template "$tracked/source.openapi.yaml" --port "$mo
 "$evidencectl" init "$project" --openapi "$run_dir/source.openapi.yaml" --profile local >"$run_dir/init.log"
 python3 "$support" local-project --tracked "$tracked" --project "$project" --pool "$run_dir/pool"
 "$evidencectl" --format json check "$project" >"$run_dir/check-report.json"
-"$evidencectl" source mock check --project "$project" >"$run_dir/mock-check.log"
+"$evidencectl" source mock check "$project" >"$run_dir/mock-check.log"
 
 # Each load client is a distinct principal, so the per-principal limit of the
 # stock development bundle applies to each one separately. Clients must exist

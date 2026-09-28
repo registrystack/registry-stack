@@ -252,7 +252,7 @@ struct CleanArgs {
     /// Project root. Defaults to the current directory.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Retired spelling of the project directory argument, accepted for one release.
+    /// Retired spelling of the project directory argument, still accepted.
     #[arg(
         long = "project",
         value_name = "PROJECT",

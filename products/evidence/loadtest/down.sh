@@ -32,7 +32,7 @@ if [[ -f "$project/.evidence/dev/state.json" ]]; then
   "$evidencectl" --format json dev stop "$project" >"$run_dir/stop-report.json" || {
     printf '%s\n' 'evidencectl dev stop did not confirm a clean stop; the session may already be stopped.' >&2
   }
-  "$evidencectl" --format json dev clean --project "$project" >"$run_dir/clean-report.json" || {
+  "$evidencectl" --format json dev clean "$project" >"$run_dir/clean-report.json" || {
     printf '%s\n' "evidencectl dev clean did not remove the stopped session; inspect $project/.evidence." >&2
     status=1
   }

@@ -68,7 +68,7 @@ pub struct ServeArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, accepted for one release.
+    /// Retired spelling of the project directory argument, still accepted.
     #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
     legacy_project: Option<PathBuf>,
 
@@ -123,7 +123,7 @@ pub struct GenerateArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, accepted for one release.
+    /// Retired spelling of the project directory argument, still accepted.
     #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
     legacy_project: Option<PathBuf>,
 
@@ -164,7 +164,7 @@ pub struct CheckArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, accepted for one release.
+    /// Retired spelling of the project directory argument, still accepted.
     #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "config"])]
     legacy_project: Option<PathBuf>,
 }

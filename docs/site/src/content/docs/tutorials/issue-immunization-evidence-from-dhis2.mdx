@@ -262,8 +262,7 @@ Ask `evidencectl` to draft the selected operation and response fields from the r
 document:
 
 ```sh
-evidencectl source suggest \
-  --project . \
+evidencectl source suggest . \
   --source-id child-tracker \
   --operation 'GET /api/tracker/trackedEntities/{uid}' \
   --select /trackedEntity \

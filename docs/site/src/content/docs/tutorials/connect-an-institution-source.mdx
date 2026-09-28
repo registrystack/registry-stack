@@ -67,12 +67,11 @@ which string, integer, and collection bounds came from OpenAPI and which still r
 
 ## Write the source draft
 
-Write the reviewed selection into the project. Omit `--openapi`: `--project` always reads the
+Write the reviewed selection into the project. Omit `--openapi`: a named project always reads the
 retained `source.openapi.yaml`, so a later command cannot draft against a different contract.
 
 ```sh
-evidencectl source suggest \
-  --project . \
+evidencectl source suggest . \
   --operation 'GET /people/{person_id}' \
   --source-id people \
   --select /date_of_birth

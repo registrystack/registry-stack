@@ -47,7 +47,7 @@ evidencectl init "$project_dir" --transport sqlite-extract --profile local
 ```
 
 The OpenAPI path retains the document bytes exactly and creates empty authoring directories.
-`evidencectl source suggest --project <dir>` then drafts one HTTP source and its editable artifacts.
+`evidencectl source suggest <dir>` then drafts one HTTP source and its editable artifacts.
 The SQLite path creates a neutral synthetic source, statement, question, derivation, schemas, and
 fixture that `evidencectl test <dir>` can evaluate immediately. Neither path
 creates identity-provider configuration, a production target, a real extract, or a deployable bundle. Both

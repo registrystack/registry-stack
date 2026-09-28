@@ -345,7 +345,7 @@ Mock plan valid: operations=1 cases=3
 ```
 
 The check does not bind a port or rewrite a file. For another API, start an editable case with
-`evidencectl source mock generate --project . --operation "GET /path/{id}" --case adult-positive` and add one
+`evidencectl source mock generate . --operation "GET /path/{id}" --case adult-positive` and add one
 `--path-parameter id=<value>` for each path parameter. Generation creates an initial plan and response
 body without overwriting an existing mock directory. Edit the body, run `check`, and serve those exact
 checked bytes.

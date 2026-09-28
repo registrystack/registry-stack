@@ -74,12 +74,33 @@ An ordinary `check` can succeed with `status: incomplete` and visible findings. 
 report accepts only `--format human`, and the CLI reference shows which commands those are;
 `--format json` on one of them is the usage error `evidencectl.format.unsupported`.
 
-The workflow exit classes are `0` for success, `1` for a domain refusal or denied finding, `2` for
-command-line usage, and `3` for an operational failure. These classes belong to adopter tooling;
+Under `--format json`, a command writes exactly one JSON object on standard output and nothing on
+standard error. The object opens with `ok`, `command`, and `status`, in that order, then carries the
+command's own members. Every key is camelCase. `command` is the command path, such as `check` or
+`dev start`, and `status` names what happened, such as `complete`, `incomplete`, `passed`, or
+`ready`. `ok` is `true` exactly when the process exits `0`. A refusal uses the same object with
+`ok: false`, a `diagnostics` array whose entries each name the next step in `suggestedAction`, and
+one of the statuses `refused`, `failed`, `domain-refusal`, `usage-error`, or
+`operational-failure`. A command-line error that stops before a command is selected reports
+`command: "usage"`. Pending changes, such as a `source add` preview, are a `status`, never an exit
+code.
+
+The workflow exit classes are `0` for success, `1` for a domain refusal, denied finding, or failing
+fixture, `2` for command-line usage, and `3` for an operational failure, such as a file, process,
+or local session the command depends on being unavailable. These classes belong to adopter tooling;
 they do not change the Evidence Gateway runtime verifier's frozen exit contract.
 
-{/* Evidence: crates/registry-evidencectl/src/lib.rs, Cli, Command, OutputFormat,
+`evidencectl test` and `evidencectl fixtures run` also accept `--format junit`. The run is the same;
+standard output carries one JUnit XML document with a `check` suite for the bundle check and one
+suite per fixture file, holding one test case per case the runtime's trace named, and the human
+summary moves to standard error. A run that evaluated no case carries a failing `run` suite, so the
+document never reads greener than the exit code. Every other command refuses `--format junit` as a
+usage error.
+
+{/* Evidence: crates/registry-evidencectl/src/lib.rs, Cli, Command, OutputFormat, CliFormat,
     run_check_command(), and run_explain_command();
+    crates/registry-evidencectl/src/report.rs, the exit constants, success(), refused(), and failure();
+    crates/registry-evidencectl/src/junit.rs, render();
     crates/registry-evidencectl/src/check.rs, check() and explain();
     crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
     crates/registry-evidencectl/src/authoring.rs, read_inputs() and declared_fact_names();
@@ -92,8 +113,13 @@ transition. The retired `build` spelling refuses the request and names `package`
 New projects, examples, and current procedures use `init`, `test`, and `package`.
 The `doctor --project <target>` compatibility form retains artifact inspection;
 use `artifact inspect <target>` for that operation and reserve `doctor --runtime-config` for
-live startup dependency checks. Do not combine a canonical positional project with its former
-`--project` flag; conflicting old and new forms are usage errors.
+live startup dependency checks. Every command that reads one project names it as a positional
+`<project>` argument, defaulting to the current directory where the command allows it. The former
+`--project <project>` spelling remains accepted, but hidden, on commands whose project is now
+positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
+the export, and `target new`, whose positional argument is the target, document `--project`. Do
+not combine a canonical positional project with its former `--project` flag; conflicting old and
+new forms are usage errors.
 Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
 response choice cannot collide with global report formatting. The released
 `request prepare --format` spelling remains accepted only for those two legacy
@@ -144,10 +170,15 @@ When borrowing a shared issuer, pass `--issuer-project <owner>` and an exact `--
 registered for this Evidence Gateway service. The default resource is
 `urn:registrystack:evidence:local:gateway`; a retained session keeps its selected resource and
 refuses a different one on restart. The compiled governed bundle binds this audience.
+The local issuer container's name starts with `thunderid-<prefix>-`, with the prefix
+`evidence-dev` by default. Pass `--name-prefix <prefix>` to `dev start` so parallel jobs on one
+host can tell their containers apart: 1 to 32 lowercase letters, digits, and inner hyphens,
+starting with a letter, such as `ci-4711`. The session records its prefix as `namePrefix` and keeps
+it until `dev clean`.
 For a nondefault resource, the compiler also derives distinct governed provider, issuer, and
 service identifiers from that resource, so multiple local Evidence services remain separate in
 Discovery.
-{/* Evidence: crates/registry-evidencectl/src/dev.rs, DevArgs, select_resource;
+{/* Evidence: crates/registry-evidencectl/src/dev.rs, DevArgs, select_resource, StartArgs, issuer_label;
     crates/registry-evidencectl/src/authoring.rs, render_local_bundle, local_compilation_keeps_two_exact_evidence_resources_separate */}
 It creates a session-scoped P-256 pair for an SD-JWT VC holder and an implicit caller pair only when the project has no explicit access
 policy; explicit local clients use their keys under `.evidence/clients/`. Nothing under
@@ -212,7 +243,7 @@ production candidate input.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl tooling editor --project <project>` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
+| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
 | `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
 
 `tooling editor` writes six files into the project:
