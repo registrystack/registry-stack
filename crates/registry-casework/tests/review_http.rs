@@ -2821,3 +2821,99 @@ async fn an_inbox_emptied_only_by_the_missing_source_profile_says_so() {
     assert_eq!(hidden.status(), StatusCode::OK);
     idp.stop().await;
 }
+
+#[tokio::test]
+async fn an_inbox_page_short_only_of_its_source_read_budget_continues_without_a_source_profile() {
+    let idp = MockIdp::start().await;
+    let (app, service, _, _, _, _) = app(&idp).await;
+    let producer = ActorContext {
+        principal: registry_casework_core::IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "registry-service".to_owned(),
+        },
+        profile_id: "producer".to_owned(),
+        role: CaseworkRole::Requester,
+    };
+    // More source-backed candidates than the default source-read budget of
+    // 25, then one submitted-context task the caller can see without a
+    // source profile.
+    for index in 0..30 {
+        service
+            .create_review_request(
+                &producer,
+                review_request_for_subject(
+                    &format!("budget-source-{index:04}"),
+                    &format!("budget-source-reference-{index:04}"),
+                    &idp.issuer(),
+                ),
+                &format!("budget-source-create-{index:04}"),
+            )
+            .await
+            .expect("create source-backed review task");
+    }
+    let mut answer_request = review_request_for_subject(
+        "budget-answer-record",
+        "budget-answer-reference",
+        &idp.issuer(),
+    );
+    answer_request.kind = "registry-answer".to_owned();
+    answer_request.context = ReviewContext::Submitted {
+        snapshot: json!({}),
+    };
+    let answer = service
+        .create_review_request(&producer, answer_request, "budget-answer-create")
+        .await
+        .expect("create submitted-context review task");
+
+    let reviewer_token = reviewer_token(&idp);
+    let list = |cursor: Option<Uuid>| {
+        let uri = match cursor {
+            Some(cursor) => format!("/v1/review-tasks?limit=10&cursor={cursor}"),
+            None => "/v1/review-tasks?limit=10".to_owned(),
+        };
+        app.clone().oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("profile-less inbox request"),
+        )
+    };
+
+    // The first page is empty because the source-read budget ran out, not
+    // because the inbox holds nothing this caller can see, so it is an
+    // ordinary short page with its continuation rather than a refusal.
+    let first = list(None).await.expect("first profile-less page response");
+    assert_eq!(first.status(), StatusCode::OK);
+    let first: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(first.into_body(), 32 * 1024)
+            .await
+            .expect("bounded first page"),
+    )
+    .expect("first page JSON");
+    assert!(first.items.is_empty());
+    assert_eq!(
+        first.status,
+        registry_casework_core::PageStatus::BudgetExhausted
+    );
+    let continuation = first
+        .next_cursor
+        .expect("a budget-exhausted page keeps its continuation");
+
+    let second = list(Some(continuation))
+        .await
+        .expect("continued profile-less page response");
+    assert_eq!(second.status(), StatusCode::OK);
+    let second: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(second.into_body(), 32 * 1024)
+            .await
+            .expect("bounded continued page"),
+    )
+    .expect("continued page JSON");
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].request_id, answer.accepted.request_id);
+    assert_eq!(second.status, registry_casework_core::PageStatus::Complete);
+
+    idp.stop().await;
+}
