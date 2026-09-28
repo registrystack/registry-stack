@@ -410,9 +410,14 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             if "tool" not in contract:
                 continue
             tool = contract["tool"]
+            command = (
+                f"install -m 0755 /workspace/image-bin/{tool} "
+                f"/workspace/runtime-root/usr/local/bin/{tool}"
+            )
             install = (
-                f"    && install -m 0755 /workspace/image-bin/{tool} "
-                f"/workspace/runtime-root/usr/local/bin/{tool} \\\n"
+                f"    && if [ -e /workspace/image-bin/{tool} ]; then \\\n"
+                f"        {command}; \\\n"
+                "    fi \\\n"
             )
             normalization = f"    && {POLICY.RUNTIME_ROOT_NORMALIZATION}\n"
             mutations = {
@@ -421,10 +426,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                     install, ""
                 ).replace(
                     normalization,
-                    normalization.rstrip("\n")
-                    + " \\\n"
-                    + install.rstrip(" \\\n")
-                    + "\n",
+                    normalization.rstrip("\n") + f" \\\n    && {command}\n",
                 ),
             }
             for case, mutate in mutations.items():
