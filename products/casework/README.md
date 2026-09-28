@@ -698,7 +698,8 @@ export CASEWORK_INBOX_TEST_DATABASE_URL=postgresql://localhost/casework_inbox_or
 export CASEWORK_ACTIVATION_TEST_DATABASE_URL=postgresql://localhost/casework_activation_test
 cargo test -p registry-casework --features postgres-test --test postgres_transactions --locked
 cargo test -p registry-caseworkctl --features postgres-test --lib --locked \
-  -- --exact cli_contract_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal
+  -- --exact cli_contract_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal \
+  dev::tests::a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime
 cargo test -p registry-casework --features postgres-test --test service_visibility --locked
 cargo test -p registry-casework --features postgres-test --test source_retention_postgres --locked
 cargo test -p registry-casework --features postgres-test --lib --locked \
