@@ -514,7 +514,11 @@ its own connection.
 `identity.databaseId` is recorded by the first apply, and a later apply,
 `records apply`, or startup under another id is refused before any statement
 changes the database. The refusal names only the key: both values are
-operator identifiers, not a diagnosis.
+operator identifiers, not a diagnosis. `records apply` reads the ledger again
+inside its swap, once it holds every supply anchor and the meta row that an
+apply takes before recording its row, so an apply of another package that
+commits between the command's first check and the swap refuses the swap
+rather than leaving records written under a package no longer active.
 
 **Audit integrity of the activation record.** Apply writes a
 `scheduling-activation-audit/v1` request entry to the `schedulingctl`
