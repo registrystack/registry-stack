@@ -1542,19 +1542,49 @@ impl DedicatedApplyConnection {
     ) -> Result<()> {
         validate_runtime_acl_reconciliation_request(self.locked)?;
         let transaction = self.client.transaction().await?;
-        install_mutation_schema(
+        reconcile_runtime_acl_in(
             &transaction,
+            registry,
             runtime_role,
             acknowledge_retired_audit_discard,
         )
-        .await
-        .map_err(|error| match error {
-            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
-            _ => PostgresKernelError::Connection,
-        })?;
-        reconcile_compiled_runtime_acl(&transaction, registry, runtime_role).await?;
+        .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Activates a re-apply that changes only the roles the registry serves
+    /// with. The runtime grants, the retirement of the runtime role the
+    /// activation stops serving with, and the activation commit in one
+    /// transaction, so a refused activation leaves the role the ledger still
+    /// names with every grant it serves with.
+    pub(crate) async fn activate_role_change(
+        &mut self,
+        registry: &CompiledRegistry,
+        current: Option<&ExpectedRegistryIdentity>,
+        target: &ExpectedRegistryIdentity,
+        transition: MaintenanceTransition<'_>,
+        retired_runtime_role: Option<&SqlIdentifier>,
+        acknowledge_retired_audit_discard: bool,
+    ) -> Result<Vec<Value>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        transition.ledger.validate()?;
+        let transaction = self.client.transaction().await?;
+        reconcile_runtime_acl_in(
+            &transaction,
+            registry,
+            transition.runtime_role,
+            acknowledge_retired_audit_discard,
+        )
+        .await?;
+        if let Some(retired) = retired_runtime_role {
+            retire_runtime_role_in(&transaction, retired, transition.migration_role).await?;
+        }
+        let superseded =
+            activate_verified_package_in(&transaction, current, target, transition).await?;
+        transaction.commit().await?;
+        Ok(superseded)
     }
 
     /// Bootstraps only durable state and ledger structures, then records the
@@ -2097,107 +2127,12 @@ impl DedicatedApplyConnection {
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
     ) -> Result<Vec<Value>> {
-        let MaintenanceTransition {
-            ledger,
-            expected_catalog,
-            migration_role,
-            runtime_role,
-        } = transition;
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         target.validate()?;
-        ledger.validate()?;
+        transition.ledger.validate()?;
         let transaction = self.client.transaction().await?;
-        verify_managed_catalog(
-            &transaction,
-            target,
-            expected_catalog,
-            migration_role,
-            runtime_role,
-        )
-        .await?;
-        // A field-encryption erase lifecycle marks coverage incomplete before
-        // releasing its first lock transaction. Refusing successor activation
-        // until rebaseline completes freezes the durable flip manifest used to
-        // correlate crash-resumable audit counts.
-        if current.is_some() {
-            verify_complete_history_coverage(&transaction).await?;
-        }
-        record_applied(&transaction, ledger).await?;
-        // A registry that has never recorded a claim, as one upgraded from a
-        // release before the claim, is claimed by the activation that runs in
-        // it. A recorded claim is kept, so a restored copy stays a copy until
-        // an operator adopts it.
-        crate::instance_claim::record_if_unclaimed(&transaction).await?;
-        let changed = if let Some(current) = current {
-            current.validate()?;
-            transaction
-                .execute(
-                    "UPDATE registry_internal.registry_state
-                     SET active_package_digest = $1,
-                         active_activation_id = $2,
-                         schema_fingerprint = $3,
-                         maintenance_status = 'ready',
-                         maintenance_target_package_digest = NULL,
-                         updated_at = transaction_timestamp()
-                     WHERE singleton
-                       AND package_id = $4
-                       AND database_id = $5
-                       AND active_package_digest = $6
-                       AND active_activation_id = $7
-                       AND schema_fingerprint = $8
-                       AND maintenance_status IN ('applying', 'failed')
-                       AND maintenance_target_package_digest = $1",
-                    &[
-                        &target.package_digest,
-                        &target.activation_uuid()?,
-                        &target.schema_fingerprint,
-                        &target.package_id,
-                        &target.database_id,
-                        &current.package_digest,
-                        &current.activation_uuid()?,
-                        &current.schema_fingerprint,
-                    ],
-                )
-                .await?
-        } else {
-            transaction
-                .execute(
-                    "UPDATE registry_internal.registry_state
-                     SET maintenance_status = 'ready',
-                         maintenance_target_package_digest = NULL,
-                         updated_at = transaction_timestamp()
-                     WHERE singleton
-                       AND package_id = $1
-                       AND database_id = $2
-                       AND active_package_digest = $3
-                       AND active_activation_id = $4
-                       AND schema_fingerprint = $5
-                       AND maintenance_status IN ('applying', 'failed')
-                       AND maintenance_target_package_digest = $3",
-                    &[
-                        &target.package_id,
-                        &target.database_id,
-                        &target.package_digest,
-                        &target.activation_uuid()?,
-                        &target.schema_fingerprint,
-                    ],
-                )
-                .await?
-        };
-        if changed != 1 {
-            return Err(PostgresKernelError::RegistryUnavailable);
-        }
-        // A model change retires every grant an operator opened under the
-        // activation it replaces, so the transaction that makes the target
-        // active also supersedes every open import authority.
-        let mut superseded = Vec::new();
-        crate::import_authority::supersede_every_open(
-            &transaction,
-            &mut superseded,
-            &target.activation_id,
-        )
-        .await
-        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let superseded =
+            activate_verified_package_in(&transaction, current, target, transition).await?;
         transaction.commit().await?;
         Ok(superseded)
     }
@@ -2348,67 +2283,6 @@ impl DedicatedApplyConnection {
             )
             .await?;
         Ok(row.map(|row| (row.get(0), row.get(1))))
-    }
-
-    /// Retires the runtime role an activation stops serving with, so the role
-    /// a registry stops serving with keeps no access it held as the runtime.
-    /// A separate runtime role loses every privilege on the managed schemas
-    /// and their tables, sequences, and functions; a role that no longer
-    /// exists holds nothing to revoke. When the retired runtime role is the
-    /// migration role, it keeps its ownership and loses only the column
-    /// grants it held as the runtime, which the serving runtime role now holds.
-    pub(crate) async fn retire_runtime_role(
-        &mut self,
-        retired: &SqlIdentifier,
-        migration_role: &SqlIdentifier,
-    ) -> Result<()> {
-        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        let transaction = self.client.transaction().await?;
-        if retired == migration_role {
-            let revokes = transaction
-                .query(
-                    "SELECT DISTINCT format(
-                         'REVOKE ALL (%I) ON TABLE %I.%I FROM %I',
-                         attribute.attname, namespace.nspname, class.relname,
-                         pg_catalog.pg_get_userbyid(class.relowner)
-                     )
-                     FROM pg_catalog.pg_class AS class
-                     JOIN pg_catalog.pg_namespace AS namespace
-                       ON namespace.oid = class.relnamespace
-                     JOIN pg_catalog.pg_attribute AS attribute
-                       ON attribute.attrelid = class.oid
-                      AND attribute.attnum > 0
-                      AND NOT attribute.attisdropped
-                     CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
-                     WHERE namespace.nspname = ANY($1::text[])
-                       AND acl.grantee = class.relowner",
-                    &[&super::catalog::MANAGED_SCHEMAS],
-                )
-                .await?;
-            for revoke in revokes {
-                let revoke: String = revoke.try_get(0)?;
-                transaction.batch_execute(&revoke).await?;
-            }
-        } else {
-            let exists: bool = transaction
-                .query_one("SELECT to_regrole($1) IS NOT NULL", &[&retired.as_str()])
-                .await?
-                .try_get(0)?;
-            if exists {
-                let schemas = super::catalog::MANAGED_SCHEMAS.join(", ");
-                let role = retired.quoted();
-                transaction
-                    .batch_execute(&format!(
-                        "REVOKE ALL ON ALL TABLES IN SCHEMA {schemas} FROM {role};
-                         REVOKE ALL ON ALL SEQUENCES IN SCHEMA {schemas} FROM {role};
-                         REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schemas} FROM {role};
-                         REVOKE ALL ON SCHEMA {schemas} FROM {role};"
-                    ))
-                    .await?;
-            }
-        }
-        transaction.commit().await?;
-        Ok(())
     }
 
     /// Reads the durable maintenance state while this session holds the
@@ -2597,6 +2471,190 @@ impl DedicatedApplyConnection {
         self.connection_task.abort();
         Ok(())
     }
+}
+
+/// The activation transaction's work: closed catalog verification, the
+/// applied ledger outcome, and the registry state transition. Answers the
+/// supersession record of every import authority the activation retired.
+async fn activate_verified_package_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    current: Option<&ExpectedRegistryIdentity>,
+    target: &ExpectedRegistryIdentity,
+    transition: MaintenanceTransition<'_>,
+) -> Result<Vec<Value>> {
+    let MaintenanceTransition {
+        ledger,
+        expected_catalog,
+        migration_role,
+        runtime_role,
+    } = transition;
+    verify_managed_catalog(
+        transaction,
+        target,
+        expected_catalog,
+        migration_role,
+        runtime_role,
+    )
+    .await?;
+    // A field-encryption erase lifecycle marks coverage incomplete before
+    // releasing its first lock transaction. Refusing successor activation
+    // until rebaseline completes freezes the durable flip manifest used to
+    // correlate crash-resumable audit counts.
+    if current.is_some() {
+        verify_complete_history_coverage(transaction).await?;
+    }
+    record_applied(transaction, ledger).await?;
+    // A registry that has never recorded a claim, as one upgraded from a
+    // release before the claim, is claimed by the activation that runs in
+    // it. A recorded claim is kept, so a restored copy stays a copy until
+    // an operator adopts it.
+    crate::instance_claim::record_if_unclaimed(transaction).await?;
+    let changed = if let Some(current) = current {
+        current.validate()?;
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_state
+                 SET active_package_digest = $1,
+                     active_activation_id = $2,
+                     schema_fingerprint = $3,
+                     maintenance_status = 'ready',
+                     maintenance_target_package_digest = NULL,
+                     updated_at = transaction_timestamp()
+                 WHERE singleton
+                   AND package_id = $4
+                   AND database_id = $5
+                   AND active_package_digest = $6
+                   AND active_activation_id = $7
+                   AND schema_fingerprint = $8
+                   AND maintenance_status IN ('applying', 'failed')
+                   AND maintenance_target_package_digest = $1",
+                &[
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                    &target.package_id,
+                    &target.database_id,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
+                    &current.schema_fingerprint,
+                ],
+            )
+            .await?
+    } else {
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_state
+                 SET maintenance_status = 'ready',
+                     maintenance_target_package_digest = NULL,
+                     updated_at = transaction_timestamp()
+                 WHERE singleton
+                   AND package_id = $1
+                   AND database_id = $2
+                   AND active_package_digest = $3
+                   AND active_activation_id = $4
+                   AND schema_fingerprint = $5
+                   AND maintenance_status IN ('applying', 'failed')
+                   AND maintenance_target_package_digest = $3",
+                &[
+                    &target.package_id,
+                    &target.database_id,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                ],
+            )
+            .await?
+    };
+    if changed != 1 {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    // A model change retires every grant an operator opened under the
+    // activation it replaces, so the transaction that makes the target
+    // active also supersedes every open import authority.
+    let mut superseded = Vec::new();
+    crate::import_authority::supersede_every_open(
+        transaction,
+        &mut superseded,
+        &target.activation_id,
+    )
+    .await
+    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    Ok(superseded)
+}
+
+/// Installs the mutation schema and the compiled runtime grants inside the
+/// caller's transaction.
+async fn reconcile_runtime_acl_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    registry: &CompiledRegistry,
+    runtime_role: &SqlIdentifier,
+    acknowledge_retired_audit_discard: bool,
+) -> Result<()> {
+    install_mutation_schema(transaction, runtime_role, acknowledge_retired_audit_discard)
+        .await
+        .map_err(|error| match error {
+            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+            _ => PostgresKernelError::Connection,
+        })?;
+    reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await
+}
+
+/// Retires the runtime role an activation stops serving with, so the role
+/// a registry stops serving with keeps no access it held as the runtime.
+/// A separate runtime role loses every privilege on the managed schemas
+/// and their tables, sequences, and functions; a role that no longer
+/// exists holds nothing to revoke. When the retired runtime role is the
+/// migration role, it keeps its ownership and loses only the column
+/// grants it held as the runtime, which the serving runtime role now holds.
+async fn retire_runtime_role_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    retired: &SqlIdentifier,
+    migration_role: &SqlIdentifier,
+) -> Result<()> {
+    if retired == migration_role {
+        let revokes = transaction
+            .query(
+                "SELECT DISTINCT format(
+                     'REVOKE ALL (%I) ON TABLE %I.%I FROM %I',
+                     attribute.attname, namespace.nspname, class.relname,
+                     pg_catalog.pg_get_userbyid(class.relowner)
+                 )
+                 FROM pg_catalog.pg_class AS class
+                 JOIN pg_catalog.pg_namespace AS namespace
+                   ON namespace.oid = class.relnamespace
+                 JOIN pg_catalog.pg_attribute AS attribute
+                   ON attribute.attrelid = class.oid
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+                 CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+                 WHERE namespace.nspname = ANY($1::text[])
+                   AND acl.grantee = class.relowner",
+                &[&super::catalog::MANAGED_SCHEMAS],
+            )
+            .await?;
+        for revoke in revokes {
+            let revoke: String = revoke.try_get(0)?;
+            transaction.batch_execute(&revoke).await?;
+        }
+    } else {
+        let exists: bool = transaction
+            .query_one("SELECT to_regrole($1) IS NOT NULL", &[&retired.as_str()])
+            .await?
+            .try_get(0)?;
+        if exists {
+            let schemas = super::catalog::MANAGED_SCHEMAS.join(", ");
+            let role = retired.quoted();
+            transaction
+                .batch_execute(&format!(
+                    "REVOKE ALL ON ALL TABLES IN SCHEMA {schemas} FROM {role};
+                     REVOKE ALL ON ALL SEQUENCES IN SCHEMA {schemas} FROM {role};
+                     REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schemas} FROM {role};
+                     REVOKE ALL ON SCHEMA {schemas} FROM {role};"
+                ))
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a successor unless history coverage is complete or narrowed only by
