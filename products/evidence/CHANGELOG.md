@@ -62,6 +62,12 @@
   directories to the intended modes after creating them, so they no longer
   refuse the directory they just created when the operator's shell runs under
   a strict umask such as `077`.
+- Fix: a request batch with more items than `burstPerPrincipal`, or a
+  holder-bound release presenting more holder keys than the burst, is refused
+  as `evidence.invalid_request` (400) without `Retry-After` and charges
+  nothing. It previously returned `evidence.rate_limited` with a retry hint,
+  although the bucket never refills past the burst and the retry could never
+  be admitted.
 
 ## v0.35.0 - 2026-09-28
 
