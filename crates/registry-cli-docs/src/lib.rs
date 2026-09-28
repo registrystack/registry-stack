@@ -642,7 +642,7 @@ mod tests {
         let source_suggest = find_command(&catalog.binaries, "evidencectl source suggest");
         assert!(source_suggest.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
-                && constraint.arguments == ["--openapi <OPENAPI>", "--project <PROJECT>"]
+                && constraint.arguments == ["--openapi <OPENAPI>", "[PROJECT]"]
         }));
 
         let mock_serve = find_command(&catalog.binaries, "evidencectl source mock serve");
