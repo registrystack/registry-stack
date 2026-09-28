@@ -89,6 +89,20 @@
     backfills the retained policy document. With split roles, a trigger an
     operator added to a `scheduling_*` table blocks `plan`, `apply`, and
     startup until it is dropped.
+- BREAKING: every `schedulingctl --format json` report opens with `ok`,
+  `command`, and `status`, in that order, the envelope `evidencectl` writes.
+  - `ok` is true exactly when the command exits 0. `status` is the command's
+    own (`check` keeps `complete`, `incomplete`, or `invalid`), `passed`,
+    `failed`, or `refused` for `test`, `refused` for a `plan` that names a
+    refusal, and `complete` otherwise.
+  - A refused report carries a non-empty `diagnostics` array whose entries
+    each name a `suggestedAction`: a refused `check`, `test`, or `plan`
+    points at its `findings`, `fixtures`, or `refusals` member, which it
+    keeps.
+  - A failure without a report of its own names the command and reports
+    `usage-error`, `domain-refusal`, or `operational-failure` by exit class.
+  - `records apply` reports `command: "records apply"` instead of
+    `records-apply`.
 
 ## v0.35.0 - 2026-09-28
 

@@ -6288,6 +6288,7 @@ dependencies = [
  "registry-platform-config",
  "registry-scheduling",
  "registry-scheduling-core",
+ "serde",
  "serde_json",
  "serde_norway",
  "serde_path_to_error",

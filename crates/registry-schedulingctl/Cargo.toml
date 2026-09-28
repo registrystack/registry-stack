@@ -28,6 +28,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-scheduling.workspace = true
 registry-scheduling-core.workspace = true
+serde.workspace = true
 serde_norway.workspace = true
 serde_path_to_error.workspace = true
 serde_json.workspace = true

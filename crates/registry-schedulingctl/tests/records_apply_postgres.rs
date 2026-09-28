@@ -256,7 +256,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     activate(&config_path);
 
     let report = apply(&config_path, &root.path().join("first.yaml"));
-    assert_eq!(report["command"], "records-apply");
+    assert_eq!(report["command"], "records apply");
     assert_eq!(
         report["applied"],
         json!({"locations": 1, "pools": 1, "members": 2, "windows": 1, "exceptions": 1})

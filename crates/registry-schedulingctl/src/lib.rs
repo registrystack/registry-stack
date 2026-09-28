@@ -14,6 +14,7 @@ pub mod activation;
 pub mod intents;
 mod project;
 pub mod records;
+mod report;
 mod templates;
 
 use anyhow::Result;
@@ -170,8 +171,7 @@ enum OutputFormat {
     Json,
 }
 
-const DOMAIN_REFUSAL_EXIT: u8 = 1;
-const OPERATIONAL_FAILURE_EXIT: u8 = 3;
+use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 
 pub fn main_entry() -> ExitCode {
     main_entry_from(
@@ -217,7 +217,7 @@ where
             } else {
                 let _ = write!(stderr, "{error}");
             }
-            return ExitCode::from(2);
+            return ExitCode::from(USAGE_EXIT);
         }
     };
     if let Command::Apply(args) = &cli.command {
@@ -231,10 +231,11 @@ where
             } else {
                 let _ = writeln!(stderr, "error: {message}");
             }
-            return ExitCode::from(2);
+            return ExitCode::from(USAGE_EXIT);
         }
     }
     let format = cli.format;
+    let command = command_path(&cli.command);
     let deny_findings = matches!(&cli.command, Command::Check(args) if args.deny_findings);
     match run(cli) {
         Ok(mut report) => {
@@ -242,7 +243,9 @@ where
             // the JSON must agree instead of reporting "ok": true underneath
             // a nonzero exit.
             let refusal = report_is_refusal(&report, deny_findings);
-            if refusal {
+            if format == OutputFormat::Json {
+                report = completed_report(report, command, refusal);
+            } else if refusal {
                 report["ok"] = json!(false);
             }
             let outcome = write_success(&report, format, stdout, stderr);
@@ -258,13 +261,31 @@ where
         Err(error) => {
             let (exit, diagnostic) = classify_failure(&error);
             write_failure(
-                &json!({"ok": false, "diagnostics": [diagnostic]}),
+                &report::failure(command, exit, vec![diagnostic]),
                 format,
                 stdout,
                 stderr,
             );
             ExitCode::from(exit)
         }
+    }
+}
+
+/// The subcommand path a parsed invocation selected, as its report names it.
+fn command_path(command: &Command) -> &'static str {
+    match command {
+        Command::Init(_) => "init",
+        Command::Check(_) => "check",
+        Command::Test(_) => "test",
+        Command::Explain(_) => "explain",
+        Command::Package(_) => "package",
+        Command::Plan(_) => "plan",
+        Command::Apply(_) => "apply",
+        Command::Status(_) => "status",
+        Command::Records(RecordsArgs {
+            command: RecordsCommand::Apply(_),
+        }) => "records apply",
+        Command::Intents(_) => "intents",
     }
 }
 
@@ -318,19 +339,82 @@ fn report_is_refusal(report: &Value, deny_findings: bool) -> bool {
             .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"))
 }
 
+/// Complete a command's own report into the shared envelope: `ok` agrees
+/// with the exit code, `status` names what happened, and a refusal points at
+/// the member that says what to correct. A check keeps its own status
+/// (`complete`, `incomplete`, or `invalid`), and a plan keeps its own
+/// `refusals` list.
+fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
+    report["ok"] = json!(!refusal);
+    report["command"] = json!(command);
+    let failed_fixtures = report["fixtures"]
+        .as_array()
+        .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"));
+    if report.get("status").is_none() {
+        let status = match (command, refusal) {
+            ("test", true) if failed_fixtures => "failed",
+            (_, true) => "refused",
+            ("test", false) => "passed",
+            (_, false) => "complete",
+        };
+        report["status"] = json!(status);
+    }
+    if refusal && report.get("diagnostics").is_none() {
+        let (code, artifact, path, message, action) = match command {
+            "plan" => (
+                "schedulingctl.plan.refused",
+                "database",
+                "$.refusals",
+                "The activation plan names a refusal apply would raise.",
+                "Resolve each entry under refusals as its message names, then rerun schedulingctl plan --runtime-config FILE.",
+            ),
+            "test" if failed_fixtures => (
+                "schedulingctl.test.fixtures-failed",
+                "scheduling_project",
+                "$.fixtures",
+                "One or more offline synthetic fixture cases failed.",
+                "Correct each failing case under fixtures, or the policy it exercises, then rerun schedulingctl test PROJECT.",
+            ),
+            "test" => (
+                "schedulingctl.test.refused",
+                "scheduling_project",
+                "$.findings",
+                "The authored policy has a value outside its grammar, so no fixture ran.",
+                "Correct each entry under findings, then rerun schedulingctl test PROJECT.",
+            ),
+            _ => (
+                "schedulingctl.check.refused",
+                "scheduling_project",
+                "$.findings",
+                "The authoring check refused the project.",
+                "Correct each entry under findings, then rerun schedulingctl check PROJECT.",
+            ),
+        };
+        report["diagnostics"] = json!([{
+            "severity": "error",
+            "code": code,
+            "artifact": artifact,
+            "path": path,
+            "message": message,
+            "suggestedAction": action,
+        }]);
+    }
+    report
+}
+
 fn usage_failure(message: String) -> Value {
-    json!({
-        "ok": false,
-        "command": "usage",
-        "diagnostics": [{
+    report::failure(
+        "usage",
+        USAGE_EXIT,
+        vec![json!({
             "severity": "error",
             "code": "schedulingctl.usage-invalid",
             "artifact": "command_arguments",
             "path": "arguments",
             "message": message,
             "suggestedAction": "Correct the command arguments and retry.",
-        }],
-    })
+        })],
+    )
 }
 
 fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
@@ -459,9 +543,7 @@ fn write_success(
     stderr: &mut dyn io::Write,
 ) -> ExitCode {
     let result = match format {
-        OutputFormat::Json => serde_json::to_writer_pretty(&mut *stdout, report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout)),
+        OutputFormat::Json => report::write(report, stdout),
         OutputFormat::Human => render_human(report, stdout),
     };
     if result.is_ok() {
@@ -479,8 +561,7 @@ fn write_failure(
     stderr: &mut dyn io::Write,
 ) {
     if format == OutputFormat::Json {
-        let _ = serde_json::to_writer_pretty(&mut *stdout, report);
-        let _ = writeln!(stdout);
+        let _ = report::write(report, stdout);
         return;
     }
     if let Some(diagnostics) = report["diagnostics"].as_array() {
@@ -539,7 +620,7 @@ fn human_lead(report: &Value) -> String {
         ("plan", _, _) => "Activation planned; nothing was written.".to_owned(),
         ("apply", _, _) => "Package activated.".to_owned(),
         ("status", _, _) => "Activation status read.".to_owned(),
-        ("records-apply", _, _) => "Environment records applied.".to_owned(),
+        ("records apply", _, _) => "Environment records applied.".to_owned(),
         ("intents", _, _) => "Undelivered delivery intents listed.".to_owned(),
         _ => format!("{command} succeeded."),
     }
@@ -596,7 +677,111 @@ mod tests {
         all.extend(arguments.iter().map(OsString::from));
         let exit = main_entry_from(all, &mut stdout, &mut stderr);
         let report = serde_json::from_slice(&stdout).unwrap_or(Value::Null);
+        assert_envelope(&stdout, &report, exit);
         (exit, report, stderr)
+    }
+
+    /// Every JSON report opens with `ok`, `command`, and `status` in that
+    /// order; `ok` is true exactly when the process exits zero, and a report
+    /// that is not ok carries at least one diagnostic naming the next step.
+    fn assert_envelope(stdout: &[u8], report: &Value, exit: ExitCode) {
+        let text = String::from_utf8_lossy(stdout);
+        let head = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("  \""))
+            .filter_map(|line| line.split_once('"').map(|(key, _)| key))
+            .take(3)
+            .collect::<Vec<_>>();
+        assert_eq!(head, ["ok", "command", "status"], "{text}");
+        assert!(report["command"].as_str().is_some_and(|c| !c.is_empty()));
+        assert!(report["status"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_eq!(report["ok"], json!(exit == ExitCode::SUCCESS), "{text}");
+        if exit != ExitCode::SUCCESS {
+            let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+            assert!(!diagnostics.is_empty(), "{text}");
+            for diagnostic in diagnostics {
+                assert!(
+                    diagnostic["suggestedAction"]
+                        .as_str()
+                        .is_some_and(|action| !action.is_empty()),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_successful_report_names_its_status() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let project = project.to_str().unwrap();
+        let (_, report, _) = run_json(&["check", project]);
+        assert_eq!(report["status"], "complete");
+        let (_, report, _) = run_json(&["test", project]);
+        assert_eq!(report["status"], "passed");
+        let (_, report, _) = run_json(&["explain", project]);
+        assert_eq!(report["status"], "complete");
+        let (_, report, _) = run_json(&["package", project, "--dry-run"]);
+        assert_eq!(report["status"], "complete");
+    }
+
+    #[test]
+    fn a_failure_without_its_own_report_is_named_by_its_exit_class() {
+        let (exit, report, _) = run_json(&["check"]);
+        assert_eq!(exit, ExitCode::from(USAGE_EXIT));
+        assert_eq!(report["command"], "usage");
+        assert_eq!(report["status"], "usage-error");
+
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        let (exit, report, _) = run_json(&["check", missing.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        assert_eq!(report["command"], "check");
+        assert_eq!(report["status"], "operational-failure");
+
+        let (exit, report, _) = run_json(&["explain", missing.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        assert_eq!(report["command"], "explain");
+
+        let (_root, project) = initialized("standalone-exact-time");
+        let (exit, report, _) = run_json(&[
+            "package",
+            project.to_str().unwrap(),
+            "--output",
+            project.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert_eq!(report["command"], "package");
+        assert_eq!(report["status"], "domain-refusal");
+    }
+
+    /// A plan that names a refusal keeps its own `refusals` member and
+    /// points at it, so a caller reading only the envelope finds the next
+    /// step; a plan that refuses nothing is complete.
+    #[test]
+    fn a_refused_plan_points_at_its_refusals() {
+        let plan = json!({
+            "ok": true,
+            "command": "plan",
+            "refusals": [{"code": "schedulingctl.activation.database-id-mismatch", "message": "m"}],
+        });
+        let report = completed_report(plan, "plan", true);
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["status"], "refused");
+        assert_eq!(report["refusals"][0]["message"], "m");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "schedulingctl.plan.refused"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "$.refusals");
+
+        let report = completed_report(
+            json!({"ok": true, "command": "plan", "refusals": []}),
+            "plan",
+            false,
+        );
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["status"], "complete");
+        assert!(report.get("diagnostics").is_none());
     }
 
     #[test]
@@ -965,6 +1150,11 @@ mod tests {
         assert_eq!(report["status"], "incomplete");
         // The exit code already says this refused; the JSON must agree.
         assert_eq!(report["ok"], false);
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "schedulingctl.check.refused"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "$.findings");
 
         let (_root, clean) = initialized("standalone-exact-time");
         let (exit, report, stderr) =
@@ -1034,6 +1224,11 @@ mod tests {
         assert_eq!(report["authoringStatus"], "invalid");
         assert_eq!(report["ok"], false);
         assert_eq!(report["fixtures"].as_array().unwrap().len(), 0);
+        assert_eq!(report["status"], "refused");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "schedulingctl.test.refused"
+        );
     }
 
     #[test]
@@ -1051,6 +1246,12 @@ mod tests {
         assert!(stderr.is_empty());
         // The exit code already says this refused; the JSON must agree.
         assert_eq!(report["ok"], false);
+        assert_eq!(report["status"], "failed");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "schedulingctl.test.fixtures-failed"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "$.fixtures");
         let fixtures = report["fixtures"].as_array().unwrap();
         let counter = fixtures
             .iter()
@@ -1424,6 +1625,8 @@ mod tests {
         ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
+        assert_eq!(report["command"], "records apply");
+        assert_eq!(report["status"], "domain-refusal");
         let message = report["diagnostics"][0]["message"]
             .as_str()
             .unwrap()
