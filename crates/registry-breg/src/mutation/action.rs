@@ -784,7 +784,7 @@ impl MutationCoordinator {
                     "The proposed mutation found its target in an unexpected state.",
                 );
             }
-            Err(MutationError::InvalidRequest) => {
+            Err(MutationError::InvalidRequest | MutationError::InvalidRequestAt(_)) => {
                 return refused_proposal(
                     "hook.proposal.mutation_refused",
                     "The proposed mutation was refused by the mutation contract.",

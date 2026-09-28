@@ -116,6 +116,10 @@ Record envelope:
 | `data.requestPresence` | object | Present when the grant declares `requestPresence`: the pending change requests that target this record. |
 | `meta.*` | strings | Registry, dataset, and entity identifiers from the compiled package. |
 
+Every field is served, read, filtered, and written under its `apiName`. A field id in kebab-case
+becomes its camelCase `apiName`, so `household-code` is `householdCode`, unless the field sets
+`apiName` itself; the field id is never accepted in its place.
+
 A field name that would collide with an envelope member is refused at compile time, so
 `domainData` never contains `data`, `meta`, `items`, `pageInfo`, `nextCursor`, `@context`,
 `@id`, `@type`, or any of the identifier members named in the table.
@@ -171,8 +175,9 @@ matching total beside the page.
 
 Options apply only where the grant permits them: `$select` draws from `readableFields`,
 `$filter` from `filterableFields`, `$orderby` from `sortableFields`, and `$count` needs
-`allowCount`. Anything else returns `400 query.invalid` with the same status for an unknown
-field and for a field the grant withholds.
+`allowCount`. Anything else returns `400 query.invalid`, whose `fieldPath` names the parameter,
+such as `$select` or `$filter`. An unknown field and a field the grant withholds return the same
+problem, and the field itself is never named.
 
 <ApiReferenceTable id="query-options" />
 
@@ -195,8 +200,12 @@ bbox=30.0,-2.1,30.9,-1.8
 ## Mutations
 
 Every write needs `Content-Type: application/json`, except a patch, which needs
-`application/json-patch+json`. A body over the entity's byte bound or with an unknown member is
-refused with `400 request.invalid` and a `fieldPath`.
+`application/json-patch+json`. A write body that is refused answers `400 request.invalid`, and its
+`fieldPath` names the member at fault as a JSON Pointer into the body: `/data` for a field the
+grant does not let you write, whether it exists or not, and `/data/householdCode` for a missing
+required field or a wrong value of a field you may write. A body over the entity's byte bound or
+one that is not JSON has no single member at fault and carries no `fieldPath`; see
+[Problem documents](#problem-documents).
 
 ### Create
 
@@ -224,7 +233,9 @@ violated `unique` constraint are refused before anything is written.
 
 `If-Match` is required and must carry the `ETag` of the revision you read; a stale value returns
 `412 precondition.failed` and a missing one `428 precondition.required`. A field outside
-`writableFields`, an envelope member, or a path that does not start with `/data/` is refused.
+`writableFields`, an envelope member, or a path that does not start with `/data/` is refused with
+`fieldPath` `/0/path` for the first operation, `/1/path` for the second, and so on; a wrong value
+for a field you may write is `/1/value`.
 The response is the new revision's envelope with `data.snapshot`.
 
 ### Tombstone
@@ -801,13 +812,13 @@ A refusal is an RFC 9457 problem document with `Content-Type: application/proble
 
 ```json
 {
-  "type": "https://id.registrystack.org/problems/registry-breg/precondition/failed",
-  "title": "Precondition failed",
-  "status": 412,
-  "detail": "The If-Match header does not match the current revision.",
-  "code": "precondition.failed",
+  "type": "https://id.registrystack.org/problems/registry-breg/request/invalid",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "The request is invalid.",
+  "code": "request.invalid",
   "traceId": "3f1a9c2e5b7d4e6f8a9b0c1d2e3f4a5b",
-  "fieldPath": null
+  "fieldPath": "/data/householdCode"
 }
 ```
 
@@ -816,7 +827,22 @@ every request the journal records, in its audit record, so an operator can find 
 the client sending any record value. A request that presents no credential and is refused before
 admission is counted on the metrics listener rather than journaled, so its `traceId` is in the
 request log only; see [Scrape metrics](../../operate/breg/#scrape-metrics).
-`fieldPath` names the offending body member when the refusal is about one.
+`fieldPath` is present only when one member is at fault, and `detail` stays the registered text
+of the code. On a record or query refusal it takes one of these forms:
+
+| Refusal | `fieldPath` |
+| --- | --- |
+| Create body | `/data` for a missing `data` member or a field you may not write, known or not; `/data/<apiName>` for a missing required field or a wrong value of a field you may write. |
+| Patch document | `/<n>` for operation `n`, `/<n>/op`, `/<n>/path` for a path outside `/data/` or a field you may not write or read, known or not, and `/<n>/value`. |
+| Batch body | `/items`, `/changeContext`, `/items/<n>`, `/items/<n>/operation`, `/items/<n>/recordId`, `/items/<n>/ifMatch`, `/items/<n>/patch`, and the create and patch forms above under `/items/<n>` and `/items/<n>/patch`. |
+| Header | `Idempotency-Key` when it is missing or malformed. |
+| Query | The parameter: `$select`, `$filter`, `$orderby`, `$top`, `$count`, `$skiptoken`, `bbox`, `accessProfile`, `asOf`, `snapshot`, `validAt`, or `requestHistoryAfterProposalVersion`. |
+
+A name you sent is never echoed: an unknown member or parameter and one your grant withholds stop
+at the same location, so the two answers are identical. A body over its byte bound, a body that is
+not JSON, a member beside `data` or `items`, and a query parameter the API does not define carry
+no `fieldPath`, and neither do lookup bodies, ingestion runs and chunks, attachments, and the
+feature API.
 
 `type` is the published identifier for the code, and `code` is the same fact in the short form a
 program branches on: the type is the code with each dot read as a path segment, under
@@ -825,7 +851,11 @@ want the published description of a refusal you have not seen before.
 
 <ApiReferenceTable id="problem-codes" />
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), and precondition_required();
+{/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), precondition_required(), invalid_request_at(), and invalid_query_at();
+    crates/registry-breg/src/problem_location.rs, RequestLocation;
+    crates/registry-breg/src/query.rs, QUERY_PARAMETERS;
+    crates/registry-breg/src/mutation.rs, admit_submitted_names();
+    crates/registry-breg/tests/postgres_mutation.rs, record_and_query_refusals_name_only_fixed_members_and_admitted_fields();
     crates/registry-breg/src/auth.rs;
     crates/registry-breg/src/problem.rs, ProblemCode;
     crates/registry-breg/src/artifacts.rs, problem_schema. */}

@@ -583,6 +583,20 @@ where
     K: AsRef<str>,
     V: AsRef<str>,
 {
+    parse_read_query_located(pairs).map_err(|(error, _)| error)
+}
+
+/// Parse like [`parse_read_query`], and on refusal also name the fixed query
+/// parameter at fault. An unrecognized or disallowed parameter name comes
+/// from the caller and is never named; neither is a payload over the bound.
+pub fn parse_read_query_located<I, K, V>(
+    pairs: I,
+) -> Result<ParsedReadQuery, (QueryParseError, Option<&'static str>)>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
     let mut builder = QueryBuilder::default();
     let mut payload_bytes = 0_usize;
 
@@ -593,14 +607,46 @@ where
             .checked_add(key.len())
             .and_then(|bytes| bytes.checked_add(value.len()))
             .and_then(|bytes| bytes.checked_add(2))
-            .ok_or(QueryParseError::PayloadTooLarge)?;
+            .ok_or((QueryParseError::PayloadTooLarge, None))?;
         if payload_bytes > MAX_QUERY_PAYLOAD_BYTES {
-            return Err(QueryParseError::PayloadTooLarge);
+            return Err((QueryParseError::PayloadTooLarge, None));
         }
-        builder.apply(key, value)?;
+        builder
+            .apply(key, value)
+            .map_err(|error| (error, parameter_at_fault(error, key)))?;
     }
 
-    builder.finish()
+    builder.finish_located()
+}
+
+/// The fixed query parameter names a refusal may name as its location.
+pub const QUERY_PARAMETERS: [&str; 12] = [
+    "$select",
+    "$filter",
+    "$orderby",
+    "$top",
+    "$count",
+    "$skiptoken",
+    "bbox",
+    "accessProfile",
+    "asOf",
+    "snapshot",
+    "validAt",
+    "requestHistoryAfterProposalVersion",
+];
+
+/// The fixed name of `key`, when a refusal while reading it is its own.
+fn parameter_at_fault(error: QueryParseError, key: &str) -> Option<&'static str> {
+    if matches!(
+        error,
+        QueryParseError::UnknownOption | QueryParseError::PayloadTooLarge
+    ) {
+        return None;
+    }
+    QUERY_PARAMETERS
+        .iter()
+        .copied()
+        .find(|parameter| *parameter == key)
 }
 
 pub fn parse_filter(value: &str) -> Result<FilterExpr, QueryParseError> {
@@ -621,6 +667,19 @@ where
     K: AsRef<str>,
     V: AsRef<str>,
 {
+    parse_snapshot_query_located(pairs).map_err(|(error, _)| error)
+}
+
+/// Parse like [`parse_snapshot_query`], also naming the fixed parameter at
+/// fault, under the same rule as [`parse_read_query_located`].
+pub fn parse_snapshot_query_located<I, K, V>(
+    pairs: I,
+) -> Result<ParsedSnapshotQuery, (QueryParseError, Option<&'static str>)>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
     let mut builder = QueryBuilder::default();
     let mut snapshot = None;
     let mut valid_at = None;
@@ -632,30 +691,31 @@ where
             .checked_add(key.len())
             .and_then(|bytes| bytes.checked_add(value.len()))
             .and_then(|bytes| bytes.checked_add(2))
-            .ok_or(QueryParseError::PayloadTooLarge)?;
+            .ok_or((QueryParseError::PayloadTooLarge, None))?;
         if payload_bytes > MAX_QUERY_PAYLOAD_BYTES {
-            return Err(QueryParseError::PayloadTooLarge);
+            return Err((QueryParseError::PayloadTooLarge, None));
         }
+        let located = |error| (error, parameter_at_fault(error, key));
         match key {
             "snapshot" => {
-                ensure_absent(snapshot.is_none())?;
-                snapshot = Some(parse_opaque_value(value)?);
+                ensure_absent(snapshot.is_none()).map_err(located)?;
+                snapshot = Some(parse_opaque_value(value).map_err(located)?);
             }
             "validAt" => {
-                ensure_absent(valid_at.is_none())?;
-                valid_at = Some(parse_bounded_scalar(value)?);
+                ensure_absent(valid_at.is_none()).map_err(located)?;
+                valid_at = Some(parse_bounded_scalar(value).map_err(located)?);
             }
-            "asOf" | "recordedAsOf" => return Err(QueryParseError::DisallowedOption),
-            _ => builder.apply(key, value)?,
+            "asOf" | "recordedAsOf" => return Err(located(QueryParseError::DisallowedOption)),
+            _ => builder.apply(key, value).map_err(located)?,
         }
     }
-    let parsed = builder.finish()?;
+    let parsed = builder.finish_located()?;
     // Continuations carry the already selected snapshot and validity value.
     // Accepting a second value would make one request describe two queries.
     if matches!(parsed.mode, ParsedReadQueryMode::SkipToken { .. })
         && (snapshot.is_some() || valid_at.is_some())
     {
-        return Err(QueryParseError::ConflictingOptions);
+        return Err((QueryParseError::ConflictingOptions, Some("$skiptoken")));
     }
     Ok(ParsedSnapshotQuery {
         access_profile: parsed.access_profile,
@@ -728,6 +788,12 @@ impl QueryBuilder {
             _ => return Err(QueryParseError::UnknownOption),
         }
         Ok(())
+    }
+
+    /// A continuation carries its whole query, so a conflict is always the
+    /// `$skiptoken` parameter's.
+    fn finish_located(self) -> Result<ParsedReadQuery, (QueryParseError, Option<&'static str>)> {
+        self.finish().map_err(|error| (error, Some("$skiptoken")))
     }
 
     fn finish(self) -> Result<ParsedReadQuery, QueryParseError> {

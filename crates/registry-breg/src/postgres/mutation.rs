@@ -2147,7 +2147,7 @@ impl PostgresRecordMutationService {
                             Some(IngestionServiceError::ReceiptErased),
                         ),
                     },
-                    MutationError::InvalidRequest => (
+                    MutationError::InvalidRequest | MutationError::InvalidRequestAt(_) => (
                         IngestionAttemptOutcome::InvalidItem,
                         Some(IngestionServiceError::RequestInvalid),
                     ),
