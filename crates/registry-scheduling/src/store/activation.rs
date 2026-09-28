@@ -591,9 +591,12 @@ fn already_active(
 }
 
 /// Whether `role` still holds every grant apply issues a split runtime role:
-/// USAGE on the schema, SELECT on every table, INSERT, UPDATE, and DELETE on
-/// every table but the ledger and the schema history, use of every
-/// sequence, and EXECUTE on every function. Moving an object's ownership
+/// USAGE on the schema, SELECT on every `scheduling_*` table, INSERT,
+/// UPDATE, and DELETE on every one but the ledger and the schema history,
+/// use of every `scheduling_*` sequence, and EXECUTE on every `scheduling_*`
+/// function, and the same on the platform hook delivery objects Scheduling
+/// installs in its schema. Another application's objects in the same schema
+/// are neither granted nor required. Moving an object's ownership
 /// back to the migration role drops the grants the runtime role held on it,
 /// and a reapply is what restores them. True in single role mode, where
 /// apply issues no grants.
@@ -605,11 +608,15 @@ async fn grants_current_in(
     if role_mode != Some(RoleMode::Split) {
         return Ok(true);
     }
+    let schema = current_schema_in(client).await?;
+    let delivery = registry_platform_hooks::delivery_schema::object_names(&schema);
     Ok(client
         .query_one(
             "SELECT has_schema_privilege(r.oid, n.oid, 'USAGE') \
                  AND NOT EXISTS (SELECT 1 FROM pg_class AS t \
                      WHERE t.relnamespace = n.oid AND t.relkind IN ('r', 'p', 'v', 'm', 'f') \
+                       AND (t.relname LIKE 'scheduling\\_%' \
+                           OR format('%I.%I', n.nspname, t.relname) = ANY($2::text[])) \
                        AND NOT (has_table_privilege(r.oid, t.oid, 'SELECT') \
                            AND (t.relname IN ('scheduling_activations', 'scheduling_schema_migrations') \
                                OR (has_table_privilege(r.oid, t.oid, 'INSERT') \
@@ -617,16 +624,19 @@ async fn grants_current_in(
                                    AND has_table_privilege(r.oid, t.oid, 'DELETE'))))) \
                  AND NOT EXISTS (SELECT 1 FROM pg_class AS q \
                      WHERE q.relnamespace = n.oid AND q.relkind = 'S' \
+                       AND (q.relname LIKE 'scheduling\\_%' \
+                           OR format('%I.%I', n.nspname, q.relname) = ANY($2::text[])) \
                        AND NOT (has_sequence_privilege(r.oid, q.oid, 'USAGE') \
                            AND has_sequence_privilege(r.oid, q.oid, 'SELECT'))) \
                  AND NOT EXISTS (SELECT 1 FROM pg_proc AS p \
-                     WHERE p.pronamespace = n.oid \
+                     WHERE p.pronamespace = n.oid AND p.prokind = 'f' \
+                       AND p.proname LIKE 'scheduling\\_%' \
                        AND NOT has_function_privilege(r.oid, p.oid, 'EXECUTE')) \
              FROM pg_roles AS r \
              CROSS JOIN pg_class AS c \
              JOIN pg_namespace AS n ON n.oid = c.relnamespace \
              WHERE r.rolname = $1::text AND c.oid = to_regclass('scheduling_activations')",
-            &[&role],
+            &[&role, &delivery],
         )
         .await?
         .get(0))
@@ -1163,8 +1173,12 @@ pub(super) async fn apply_migrations_in(
 }
 
 /// Give the runtime role what the service needs and nothing that writes a
-/// ledger. The statements are idempotent, so every split-mode apply reissues
-/// them and a table a later migration adds is covered.
+/// ledger. Only `scheduling_*` tables, views, sequences, and functions and
+/// the platform hook delivery objects Scheduling installs are granted, so an
+/// object another application keeps in a shared schema such as `public`
+/// stays out of the runtime's reach. The statements are
+/// idempotent, so every split-mode apply reissues them and a table a later
+/// migration adds is covered.
 async fn grant_runtime_role(
     transaction: &deadpool_postgres::Transaction<'_>,
     runtime_role: &str,
@@ -1174,17 +1188,50 @@ async fn grant_runtime_role(
         .query_one("SELECT quote_ident($1)", &[&runtime_role])
         .await?
         .get(0);
-    transaction
-        .batch_execute(&format!(
-            "GRANT USAGE ON SCHEMA {schema} TO {role};\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO {role};\
-             GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {schema} TO {role};\
-             GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {schema} TO {role};\
-             REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON \
-             {schema}.scheduling_activations, {schema}.scheduling_schema_migrations FROM {role};\
-             REVOKE ALL ON {schema}.scheduling_activations FROM PUBLIC;"
-        ))
-        .await?;
+    let delivery = registry_platform_hooks::delivery_schema::object_names(&schema);
+    let mut statements = vec![format!("GRANT USAGE ON SCHEMA {schema} TO {role}")];
+    for row in transaction
+        .query(
+            "SELECT format('%I.%I', n.nspname, c.relname), c.relkind::text \
+             FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace \
+             WHERE n.nspname = current_schema() \
+               AND (c.relname LIKE 'scheduling\\_%' \
+                   OR format('%I.%I', n.nspname, c.relname) = ANY($1::text[])) \
+               AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') \
+             ORDER BY c.relname",
+            &[&delivery],
+        )
+        .await?
+    {
+        let (name, kind): (String, String) = (row.try_get(0)?, row.try_get(1)?);
+        statements.push(if kind == "S" {
+            format!("GRANT USAGE, SELECT ON SEQUENCE {name} TO {role}")
+        } else {
+            format!("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {name} TO {role}")
+        });
+    }
+    for row in transaction
+        .query(
+            "SELECT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) \
+             FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace \
+             WHERE n.nspname = current_schema() AND p.proname LIKE 'scheduling\\_%' \
+               AND p.prokind = 'f' \
+             ORDER BY 1",
+            &[],
+        )
+        .await?
+    {
+        let name: String = row.try_get(0)?;
+        statements.push(format!("GRANT EXECUTE ON FUNCTION {name} TO {role}"));
+    }
+    statements.push(format!(
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON \
+         {schema}.scheduling_activations, {schema}.scheduling_schema_migrations FROM {role}"
+    ));
+    statements.push(format!(
+        "REVOKE ALL ON {schema}.scheduling_activations FROM PUBLIC"
+    ));
+    transaction.batch_execute(&statements.join(";")).await?;
     Ok(())
 }
 

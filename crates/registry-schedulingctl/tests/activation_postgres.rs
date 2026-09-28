@@ -904,6 +904,72 @@ async fn split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serve
 }
 
 #[tokio::test]
+async fn split_apply_grants_the_runtime_role_only_scheduling_objects() {
+    // A schema Scheduling shares with another application, such as public,
+    // holds objects the migration role owns that are not Scheduling's.
+    let deployment = Deployment::split("activation_foreign").await;
+    let (runtime_role, migration_role) = (deployment.roles[0].clone(), deployment.roles[1].clone());
+    let schema = deployment.schema.clone();
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE {schema}.other_app_records (id bigint GENERATED ALWAYS AS IDENTITY, body text);\
+             CREATE SEQUENCE {schema}.other_app_counter;\
+             CREATE FUNCTION {schema}.other_app_touch() RETURNS integer LANGUAGE sql AS 'SELECT 1';\
+             REVOKE EXECUTE ON FUNCTION {schema}.other_app_touch() FROM PUBLIC;\
+             ALTER TABLE {schema}.other_app_records OWNER TO {migration_role};\
+             ALTER SEQUENCE {schema}.other_app_counter OWNER TO {migration_role};\
+             ALTER FUNCTION {schema}.other_app_touch() OWNER TO {migration_role};"
+        ))
+        .await
+        .expect("another application's objects are created");
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+
+    let applied = apply(&config).expect("the package activates with the migration credential");
+    assert_eq!(applied["roleMode"], "split");
+    let row = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT has_table_privilege($1, '{schema}.other_app_records', 'SELECT, INSERT, UPDATE, DELETE'), \
+                        has_sequence_privilege($1, '{schema}.other_app_counter', 'USAGE, SELECT'), \
+                        has_sequence_privilege($1, pg_get_serial_sequence('{schema}.other_app_records', 'id'), 'USAGE, SELECT'), \
+                        has_function_privilege($1, '{schema}.other_app_touch()', 'EXECUTE'), \
+                        has_table_privilege($1, '{schema}.scheduling_claims', 'SELECT, INSERT, UPDATE, DELETE')"
+            ),
+            &[&runtime_role],
+        )
+        .await
+        .expect("the runtime role's privileges are readable");
+    let privileges: [bool; 5] = [row.get(0), row.get(1), row.get(2), row.get(3), row.get(4)];
+    assert_eq!(
+        privileges,
+        [false, false, false, false, true],
+        "the runtime role holds [foreign table, foreign sequence, foreign identity, foreign function, scheduling_claims]"
+    );
+
+    // The foreign objects it was never granted do not count as lost grants.
+    let digest = applied["packageDigest"].as_str().unwrap().to_owned();
+    let error = refusal(apply(&config));
+    assert!(
+        error.contains(&format!(
+            "package {digest} is already the active package on this database; nothing needs applying"
+        )),
+        "{error}"
+    );
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "DROP TABLE {schema}.other_app_records; DROP SEQUENCE {schema}.other_app_counter; \
+             DROP FUNCTION {schema}.other_app_touch()"
+        ))
+        .await
+        .expect("the foreign objects are dropped");
+    deployment.drop().await;
+}
+
+#[tokio::test]
 async fn plan_before_the_first_split_apply_reports_the_initial_activation() {
     // The runtime role holds nothing until the first apply grants it, so it
     // cannot even see the schema: plan must read that as an empty database.

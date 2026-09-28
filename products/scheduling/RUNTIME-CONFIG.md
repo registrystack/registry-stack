@@ -94,7 +94,9 @@ ledger, such as one rotated in after the last apply, is refused with
 FILE`. When the two credentials log in as different PostgreSQL roles
 (split role mode), apply grants the runtime role USAGE on the schema,
 SELECT, INSERT, UPDATE, and DELETE on its tables, use of its sequences, and
-EXECUTE on its functions, then revokes INSERT, UPDATE, DELETE, and TRUNCATE
+EXECUTE on its functions (only the `scheduling_*` objects and the platform
+hook delivery tables Scheduling installs, never another application's objects
+in a shared schema), then revokes INSERT, UPDATE, DELETE, and TRUNCATE
 on the activation ledger and the schema history. It never grants or revokes
 TRIGGER: before any migration it refuses a default privilege of the
 migration role that would grant the runtime role TRIGGER on the tables it
