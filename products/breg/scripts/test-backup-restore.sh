@@ -503,13 +503,30 @@ start_server() {
 }
 
 # Starts a runtime that must refuse to serve, and asserts that it exits
-# non-zero and that its log names the expected refusal.
+# non-zero within 60 seconds and that its log names the expected refusal. A
+# runtime still alive at the deadline is stopped and fails the check, so a
+# regression that lets it serve cannot hang the workflow.
 expect_startup_refusal() {
   local config=$1
   local log=$2
   local expected=$3
   local status=0
-  BREG_LOG=error "$breg" --runtime-config "$config" >"$log" 2>&1 || status=$?
+  local refusing_pid
+  local attempt
+  BREG_LOG=error "$breg" --runtime-config "$config" >"$log" 2>&1 &
+  refusing_pid=$!
+  for attempt in $(seq 1 120); do
+    if ! kill -0 "$refusing_pid" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+  if kill -0 "$refusing_pid" >/dev/null 2>&1; then
+    kill "$refusing_pid" >/dev/null 2>&1 || true
+    wait "$refusing_pid" >/dev/null 2>&1 || true
+    fail "breg was still running with $(basename -- "$config") after $attempt checks where startup had to refuse"
+  fi
+  wait "$refusing_pid" || status=$?
   if [[ "$status" == 0 ]]; then
     fail "breg started with $(basename -- "$config") where startup had to refuse"
   fi
