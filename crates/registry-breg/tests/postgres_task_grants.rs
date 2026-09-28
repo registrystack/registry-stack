@@ -868,9 +868,10 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
     let hasher = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
         .unwrap()
         .key_hasher();
+    let activation = registry_breg::postgres::test_activation_id(REVISION);
     let pseudonym = |domain, value| {
         hasher
-            .audit_reference_hash(domain, REVISION, value)
+            .audit_reference_hash(domain, &activation, value)
             .unwrap()
     };
     let entries = db.audit_entries();

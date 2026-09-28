@@ -26,10 +26,8 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_yaml, RegistryProject};
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageSignature, PackageSourceFile, PackageTrustAnchor,
-    SignaturePolicy, TrustAnchorKey, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
-    TRUST_ANCHOR_API_VERSION,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageSourceFile, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -41,8 +39,7 @@ use registry_breg_client::{
     BRegIdempotencyKey, BRegLifecycleOperation, BRegRecordOptions, BaseRegistryClient,
     BaseRegistryClientConfig,
 };
-use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::client::BearerToken;
 use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, TestAuthorizationServer, TestClient,
@@ -66,6 +63,8 @@ const STEWARD_SCOPE: &str = "registry:steward";
 const CITIZEN_A: &str = "synthetic-citizen-a";
 const CITIZEN_B: &str = "synthetic-citizen-b";
 const ACCESS_TOKEN_TYP: &str = "at+jwt";
+const ENVIRONMENT: &str = "acceptance";
+const INSTANCE_ID: &str = "citizen-address-correction-acceptance";
 // Each fixture owns the process-global configured WASM runtime until it ends.
 static RUNTIME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -423,22 +422,18 @@ impl Fixture {
         .await
         .expect("the managed schema fingerprint computes");
         let package = Package::build(&root, &sources, &schema_fingerprint);
-        let manifest = package.verified.manifest();
         initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
             &sources.compiled,
             RegistryStateTestIdentity {
-                package_id: &manifest.package_id,
-                environment: &manifest.environment,
-                instance_id: &manifest.instance_id,
-                database_id: &manifest.database_id,
-                package_revision: &manifest.package_revision,
-                package_sequence: 1,
+                package_id: &package.verified.manifest().package_id,
+                database_id: &package.database_id,
+                label: package.verified.package_digest(),
             },
         )
         .await
-        .expect("the database initializes from the signed package identity");
+        .expect("the database initializes from the package identity");
         drop(migration);
         migration_task.abort();
 
@@ -838,8 +833,7 @@ impl ProjectSources {
 
 struct Package {
     root: PathBuf,
-    anchor: PathBuf,
-    revision: String,
+    database_id: String,
     verified: VerifiedPackage,
 }
 
@@ -851,21 +845,10 @@ impl Package {
             .as_ref()
             .expect("the acceptance project declares its package identity");
         let database_id = format!("{}-database", sources.project.registry.id);
-        let signing =
-            generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("a signing key generates");
-        let key_id = signing.public().kid.expect("a generated key has a kid");
         let prepared = prepare_package(PackageBuildRequest {
-            environment: identity.environment.clone(),
-            instance_id: identity.instance_id.clone(),
-            database_id: database_id.clone(),
-            sequence: identity.sequence,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: identity.source_revision.clone(),
             schema_fingerprint: schema_fingerprint.to_owned(),
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.clone()],
-            },
             project: PackageSourceFile {
                 path: "registry.yaml".to_owned(),
                 bytes: sources.project_bytes.clone(),
@@ -879,52 +862,19 @@ impl Package {
         })
         .expect("the package prepares from its sources");
         let package_root = root.join("package");
-        let revision = prepared.package_revision().to_owned();
-        let signature =
-            sign(prepared.canonical_signed_bytes(), &signing).expect("the package signs");
         prepared
-            .publish_to_directory(
-                &package_root,
-                vec![PackageSignature {
-                    key_id: key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
-            .expect("the signed package publishes");
-        let anchor = root.join("trust-anchor.json");
-        let anchor_document = serde_json::to_value(PackageTrustAnchor {
-            api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-            environment: identity.environment.clone(),
-            instance_id: identity.instance_id.clone(),
-            database_id: database_id.clone(),
-            threshold: 1,
-            keys: vec![TrustAnchorKey {
-                key_id,
-                jwk: serde_json::to_value(signing.public()).expect("the public key serializes"),
-            }],
-        })
-        .expect("the trust anchor serializes");
-        write_private(
-            &anchor,
-            &canonicalize_json(&anchor_document).expect("the trust anchor canonicalizes"),
-        );
+            .publish_to_directory(&package_root)
+            .expect("the package publishes");
         let verified = load_package(
             &package_root,
             &PackageLoadContext {
-                environment: &identity.environment,
-                instance_id: &identity.instance_id,
-                database_id: &database_id,
-                database_initialization_environment: &identity.environment,
-                compiler_source_revision: &identity.source_revision,
-                trust_anchor: Some(&anchor),
-                intent: PackageIntent::InitialActivation,
+                database_initialization_environment: ENVIRONMENT,
             },
         )
         .expect("the published package verifies");
         Self {
             root: package_root,
-            anchor,
-            revision,
+            database_id,
             verified,
         }
     }
@@ -947,7 +897,6 @@ impl Package {
             ))
             .expect("the JWKS serializes"),
         );
-        let identity = self.verified.manifest();
         let path = root.join("registry.yaml");
         let audit_path = root.join("registry-audit.jsonl");
         fs::write(
@@ -978,10 +927,6 @@ database:
     runtime: {runtime_role}
 package:
   root: {package_root}
-  trustAnchorPath: {anchor}
-  compilerSourceRevision: {source_revision}
-  activeRevision: {revision}
-  activeSequence: {sequence}
 authentication:
   oidc:
     issuer: {issuer}
@@ -1027,17 +972,13 @@ operationalTimeouts:
   migrationLockMilliseconds: 2000
   migrationStatementMilliseconds: 5000
 "#,
-                environment = identity.environment,
-                instance = identity.instance_id,
-                database_id = identity.database_id,
+                environment = ENVIRONMENT,
+                instance = INSTANCE_ID,
+                database_id = self.database_id,
                 secrets = secrets.display(),
                 migration_role = database.migration_role.as_str(),
                 runtime_role = database.runtime_role.as_str(),
                 package_root = self.root.display(),
-                anchor = self.anchor.display(),
-                source_revision = identity.compiler.source_revision,
-                revision = self.revision,
-                sequence = identity.sequence,
                 audit_path = audit_path.display(),
             ),
         )
@@ -1050,8 +991,4 @@ operationalTimeouts:
 fn write_private(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).expect("a private file writes");
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("owner-only permissions");
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
