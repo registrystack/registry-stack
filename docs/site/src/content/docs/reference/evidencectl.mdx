@@ -119,8 +119,8 @@ live startup dependency checks. Every command that reads one project names it as
 `--project <project>` spelling remains accepted, but hidden, on commands whose project is now
 positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
 the export, and `target new`, whose positional argument is the target, document `--project`.
-The `access` commands and `audit show` act on the current directory and take no positional
-project. Do
+`doctor` keeps its visible `--project <target>` option, and the `access` commands and
+`audit show` act on the current directory; none of these takes a positional project. Do
 not combine a canonical positional project with its former `--project` flag; conflicting old and
 new forms are usage errors.
 Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
