@@ -218,6 +218,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::BackupEvidence
             | MigrationError::RetiredAuditRowsPresent
             | MigrationError::ActivationAuditIncomplete
+            | MigrationError::ActivationAuditUnavailable
             | MigrationError::PreLedgerDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
             MigrationError::RuntimeWriteAuthority(_) => Self::MigrationAuthority,

@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use registry_platform_audit::{AuditEntry, AuditRequest};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -38,6 +40,9 @@ const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
 const MAX_BACKUP_BINDING_BYTES: u64 = 64 * 1024;
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
+const ACTIVATION_AUDIT_OPERATION_ID: &str = "breg.activation";
+/// The audit schema of each activation's request and response entries.
+pub const ACTIVATION_AUDIT_SCHEMA: &str = "breg-activation-audit/v1";
 
 /// Value-free apply failures. Authored identifiers cross this boundary, and
 /// a refused statement adds its SQLSTATE and the object names PostgreSQL
@@ -103,6 +108,10 @@ pub enum MigrationError {
     /// the activation stands and its audit trail is incomplete.
     #[error("the activation committed but the audit refused a record it owed")]
     ActivationAuditIncomplete,
+    /// Refused before the activation changed any state: the audit refused
+    /// the activation's request entry.
+    #[error("the audit refused the activation's request entry")]
+    ActivationAuditUnavailable,
     /// The operator reference is empty, longer than 512 bytes, or carries a
     /// control character, or the audit profile derives no keyed hash to
     /// record it under.
@@ -919,6 +928,21 @@ pub async fn apply_verified_package(
         request.deployment.database_id(),
         ledger.activation_id,
     );
+    let attempt = match ActivationAttempt::begin(
+        &request.audit,
+        request.deployment,
+        current,
+        &target,
+        &ledger,
+    )
+    .await
+    {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            let _ = connection.release().await;
+            return Err(error);
+        }
+    };
     if current.is_some() {
         // Existing registries may have been initialized by a binary that
         // predates newer product-owned control tables. Reconcile them while
@@ -929,8 +953,8 @@ pub async fn apply_verified_package(
             .await
             .is_err()
         {
-            let _ = connection.release().await;
-            return Err(MigrationError::ApplyFailed);
+            return refuse_and_release(connection, attempt, &target, MigrationError::ApplyFailed)
+                .await;
         }
         // A role change keeps the compiled model, so no request proposal
         // needs a rebase.
@@ -944,13 +968,13 @@ pub async fn apply_verified_package(
             .await
         };
         if let Err(error) = proposals_guarded {
-            let _ = connection.release().await;
-            return Err(match error {
+            let refused = match error {
                 crate::request_retention::RequestRetentionError::ActiveProposalRequiresRebase => {
                     MigrationError::ActiveRequestProposals
                 }
                 _ => MigrationError::ApplyFailed,
-            });
+            };
+            return refuse_and_release(connection, attempt, &target, refused).await;
         }
     }
     let began = if let Some(current) = current {
@@ -968,15 +992,15 @@ pub async fn apply_verified_package(
             .await
     };
     if let Err(error) = began {
-        let _ = connection.release().await;
         // The coverage check runs inside the begin transaction before its
         // first write, so a coverage refusal leaves maintenance state as it was.
-        return Err(match error {
+        let refused = match error {
             crate::postgres::PostgresKernelError::HistoryCoverageIncomplete => {
                 MigrationError::HistoryCoverage
             }
             _ => MigrationError::ApplyFailed,
-        });
+        };
+        return refuse_and_release(connection, attempt, &target, refused).await;
     }
 
     if declares_encrypted_fields {
@@ -996,7 +1020,7 @@ pub async fn apply_verified_package(
             .await
             .is_err()
         {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_and_release(connection, attempt, &target, &ledger).await;
         }
     }
 
@@ -1011,14 +1035,14 @@ pub async fn apply_verified_package(
             .await
             .is_err()
         {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_and_release(connection, attempt, &target, &ledger).await;
         }
         if connection
             .retain_target_history_descriptor(request.package.registry(), &target.activation_id)
             .await
             .is_err()
         {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_and_release(connection, attempt, &target, &ledger).await;
         }
     }
 
@@ -1029,7 +1053,7 @@ pub async fn apply_verified_package(
             .await
             .is_err()
         {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_and_release(connection, attempt, &target, &ledger).await;
         }
         if let Err(error) = connection
             .reconcile_runtime_acl(
@@ -1039,14 +1063,15 @@ pub async fn apply_verified_package(
             )
             .await
         {
-            return fail_with_error_and_release(connection, &target, &ledger, error).await;
+            return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
         }
         if let Some(retired) = retired_runtime_role.as_ref() {
             if let Err(error) = connection
                 .retire_runtime_role(retired, request.roles.migration)
                 .await
             {
-                return fail_with_error_and_release(connection, &target, &ledger, error).await;
+                return fail_with_error_and_release(connection, attempt, &target, &ledger, error)
+                    .await;
             }
         }
         let Ok(superseded) = connection
@@ -1062,9 +1087,9 @@ pub async fn apply_verified_package(
             )
             .await
         else {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_and_release(connection, attempt, &target, &ledger).await;
         };
-        return finish_activation(connection, &request.audit, superseded, target).await;
+        return finish_activation(connection, &request.audit, attempt, superseded, target).await;
     }
     if let Some(plan) = reviewed_plan {
         let prior_tables = successor_history
@@ -1109,11 +1134,17 @@ pub async fn apply_verified_package(
         match execution {
             Ok(ReviewedExecutionOutcome::Complete) => {}
             Ok(ReviewedExecutionOutcome::Interrupted) => {
-                let _ = connection.release().await;
-                return Err(MigrationError::ApplyFailed);
+                return refuse_and_release(
+                    connection,
+                    attempt,
+                    &target,
+                    MigrationError::ApplyFailed,
+                )
+                .await;
             }
             Err(error) => {
-                return fail_with_error_and_release(connection, &target, &ledger, error).await;
+                return fail_with_error_and_release(connection, attempt, &target, &ledger, error)
+                    .await;
             }
         }
         if let Err(error) = connection
@@ -1124,7 +1155,7 @@ pub async fn apply_verified_package(
             )
             .await
         {
-            return fail_with_error_and_release(connection, &target, &ledger, error).await;
+            return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
         }
         let Ok(superseded) = connection
             .activate_verified_package(
@@ -1139,9 +1170,9 @@ pub async fn apply_verified_package(
             )
             .await
         else {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_and_release(connection, attempt, &target, &ledger).await;
         };
-        return finish_activation(connection, &request.audit, superseded, target).await;
+        return finish_activation(connection, &request.audit, attempt, superseded, target).await;
     }
 
     if connection
@@ -1166,7 +1197,8 @@ pub async fn apply_verified_package(
             )
             .await
         {
-            return finish_activation(connection, &request.audit, superseded, target).await;
+            return finish_activation(connection, &request.audit, attempt, superseded, target)
+                .await;
         }
     }
 
@@ -1191,7 +1223,7 @@ pub async fn apply_verified_package(
             .await
     };
     if let Err(error) = ddl_result {
-        return fail_with_error_and_release(connection, &target, &ledger, error).await;
+        return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
     }
     let acl_result = connection
         .reconcile_runtime_acl(
@@ -1201,7 +1233,7 @@ pub async fn apply_verified_package(
         )
         .await;
     if let Err(error) = acl_result {
-        return fail_with_error_and_release(connection, &target, &ledger, error).await;
+        return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
     }
     let activation_result = connection
         .activate_verified_package(
@@ -1216,9 +1248,9 @@ pub async fn apply_verified_package(
         )
         .await;
     let Ok(superseded) = activation_result else {
-        return fail_and_release(connection, &target, &ledger).await;
+        return fail_and_release(connection, attempt, &target, &ledger).await;
     };
-    finish_activation(connection, &request.audit, superseded, target).await
+    finish_activation(connection, &request.audit, attempt, superseded, target).await
 }
 
 /// The keyed hash the ledger records for an operator reference, scoped to one
@@ -1372,6 +1404,16 @@ async fn adopt_verified_package(
         request.deployment.database_id(),
         ledger.activation_id,
     );
+    let attempt =
+        match ActivationAttempt::begin(&request.audit, request.deployment, None, &target, &ledger)
+            .await
+        {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                let _ = connection.release().await;
+                return Err(error);
+            }
+        };
     let expected_catalog = ExpectedManagedCatalog::compiled(request.package.registry());
     let adopted = connection
         .adopt_pre_ledger_database(
@@ -1389,6 +1431,14 @@ async fn adopt_verified_package(
     let superseded = match adopted {
         Ok(superseded) => superseded,
         Err(error) => {
+            // Adoption is one transaction: a database that still has the
+            // pre-ledger shape was not adopted.
+            if matches!(
+                connection.registry_state_shape().await,
+                Ok(crate::postgres::RegistryStateShape::PreLedger)
+            ) {
+                attempt.respond_failed().await;
+            }
             let _ = connection.release().await;
             return Err(match error {
                 crate::postgres::PostgresKernelError::AdoptionFingerprintMismatch { live } => {
@@ -1407,30 +1457,151 @@ async fn adopt_verified_package(
             });
         }
     };
-    finish_activation(connection, &request.audit, superseded, target).await
+    finish_activation(connection, &request.audit, attempt, superseded, target).await
 }
 
-/// Append the records of the import authorities a committed activation
-/// superseded, then release the lock. The activation stands either way; a
-/// refused append is reported so the operator knows the audit trail is
-/// missing records, and the lock is still released.
+/// Answer the activation's audit request with its applied outcome and append
+/// the records of the import authorities it superseded, then release the
+/// lock. The activation stands either way; a refused entry is reported so
+/// the operator knows the audit trail is missing records, and the lock is
+/// still released.
 async fn finish_activation(
     connection: VerifiedPackageApplyConnection,
     audit: &RegistryAudit,
+    attempt: ActivationAttempt,
     superseded: Vec<serde_json::Value>,
     target: ExpectedRegistryIdentity,
 ) -> Result<ExpectedRegistryIdentity> {
+    let answered = attempt.respond("applied").await;
     let appended = crate::import_authority::append_transitions(audit, superseded).await;
     connection
         .release()
         .await
         .map_err(|_| MigrationError::ApplyFailed)?;
-    appended.map_err(|_| MigrationError::ActivationAuditIncomplete)?;
+    if answered.is_err() || appended.is_err() {
+        return Err(MigrationError::ActivationAuditIncomplete);
+    }
     Ok(target)
+}
+
+/// One activation's audit request, accepted before the activation changes
+/// any state and answered once the durable state shows how it ended.
+///
+/// Threat: an activation the audit trail does not account for. The audit
+/// journal is a file, so no entry can share the activation's transaction.
+/// Enforcement: the request entry is accepted before the first activation
+/// write, and a refused request refuses the activation; the response follows
+/// the commit (`applied`) or durable state that shows the target did not
+/// become active (`failed`). An attempt whose end the durable state cannot
+/// show is answered `unfinished` when its handle is dropped.
+struct ActivationAttempt {
+    request: AuditRequest,
+    record: Value,
+}
+
+impl ActivationAttempt {
+    /// Records identities, the plan shape, the role mode, and the keyed
+    /// operator reference; no package, catalog, or record value. Request
+    /// and response share the activation id as their correlation.
+    async fn begin(
+        audit: &RegistryAudit,
+        deployment: ActivationDeployment<'_>,
+        prior: Option<&ExpectedRegistryIdentity>,
+        target: &ExpectedRegistryIdentity,
+        ledger: &MigrationLedgerEntry,
+    ) -> Result<Self> {
+        let record = json!({
+            "operationId": ACTIVATION_AUDIT_OPERATION_ID,
+            "activationId": target.activation_id,
+            "priorActivationId": prior.map(|prior| &prior.activation_id),
+            "packageDigest": target.package_digest,
+            "predecessorPackageDigest": ledger.predecessor_package_digest,
+            "registryRevision": ledger.registry_revision,
+            "planKind": ledger.plan_kind.as_str(),
+            "databaseId": deployment.database_id(),
+            "environment": deployment.environment(),
+            "instanceId": deployment.instance_id(),
+            "roleMode": ledger.role_mode.as_str(),
+            "operatorReference": ledger.operator_reference_hash,
+        });
+        let request = audit
+            .begin(
+                AuditEntry::request(
+                    ACTIVATION_AUDIT_SCHEMA,
+                    target.activation_id.clone(),
+                    outcome_record(&record, "attempt", "started"),
+                ),
+                outcome_record(&record, "terminal", "unfinished"),
+            )
+            .await
+            .map_err(|_| MigrationError::ActivationAuditUnavailable)?;
+        Ok(Self { request, record })
+    }
+
+    async fn respond(mut self, outcome: &'static str) -> Result<()> {
+        let record = outcome_record(&self.record, "terminal", outcome);
+        self.request
+            .respond(record)
+            .await
+            .map_err(|_| MigrationError::ActivationAuditIncomplete)
+    }
+
+    /// The activation already failed, so a refused entry is only logged;
+    /// the dropped handle then writes its `unfinished` outcome instead.
+    async fn respond_failed(self) {
+        if self.respond("failed").await.is_err() {
+            tracing::error!("the failed activation's response audit entry was not recorded");
+        }
+    }
+}
+
+fn outcome_record(record: &Value, phase: &'static str, outcome: &'static str) -> Value {
+    let mut record = record.clone();
+    record["phase"] = phase.into();
+    record["outcome"] = outcome.into();
+    record
+}
+
+/// Answer the audit request of an activation that returned an error:
+/// `failed` when the durable state shows the target is not active and no
+/// longer applying, or no registry state exists; otherwise the dropped
+/// handle answers `unfinished`. An error does not prove the transaction
+/// rolled back, so the durable state decides.
+async fn answer_unlanded(
+    connection: &mut VerifiedPackageApplyConnection,
+    attempt: ActivationAttempt,
+    target: &ExpectedRegistryIdentity,
+) {
+    let failed = match connection.maintenance_snapshot().await {
+        Ok(snapshot) => {
+            snapshot.identity.activation_id != target.activation_id
+                && snapshot.maintenance_status != "applying"
+        }
+        Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => true,
+        Err(_) => false,
+    };
+    if failed {
+        attempt.respond_failed().await;
+    }
+}
+
+/// Refuse an activation after its audit request was accepted but before it
+/// pinned a failed target: answer the request as the durable state shows,
+/// then release the lock.
+async fn refuse_and_release(
+    mut connection: VerifiedPackageApplyConnection,
+    attempt: ActivationAttempt,
+    target: &ExpectedRegistryIdentity,
+    refused: MigrationError,
+) -> Result<ExpectedRegistryIdentity> {
+    answer_unlanded(&mut connection, attempt, target).await;
+    let _ = connection.release().await;
+    Err(refused)
 }
 
 async fn fail_and_release(
     mut connection: VerifiedPackageApplyConnection,
+    attempt: ActivationAttempt,
     target: &ExpectedRegistryIdentity,
     ledger: &MigrationLedgerEntry,
 ) -> Result<ExpectedRegistryIdentity> {
@@ -1438,6 +1609,7 @@ async fn fail_and_release(
         .mark_verified_package_failed(target, ledger)
         .await
         .is_ok();
+    answer_unlanded(&mut connection, attempt, target).await;
     let released = connection.release().await.is_ok();
     let _ = (marked_failed, released);
     Err(MigrationError::ApplyFailed)
@@ -1445,11 +1617,12 @@ async fn fail_and_release(
 
 async fn fail_with_error_and_release(
     connection: VerifiedPackageApplyConnection,
+    attempt: ActivationAttempt,
     target: &ExpectedRegistryIdentity,
     ledger: &MigrationLedgerEntry,
     error: crate::postgres::PostgresKernelError,
 ) -> Result<ExpectedRegistryIdentity> {
-    let _ = fail_and_release(connection, target, ledger).await;
+    let _ = fail_and_release(connection, attempt, target, ledger).await;
     Err(match error {
         crate::postgres::PostgresKernelError::FieldPatternSyntax {
             entity_id,
