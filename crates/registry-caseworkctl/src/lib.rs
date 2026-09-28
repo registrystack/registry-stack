@@ -54,6 +54,8 @@ enum Command {
     /// Evaluate a fixture using its controlled clock and source facts.
     Simulate(SimulateArgs),
     /// Package validated policy and exact imported descriptions for deployment.
+    ///
+    /// The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a BReg registry package from a tested BReg project.
     Package(PackageArgs),
     /// Run the project's bounded synthetic fixtures offline.
     Test(ProjectArgs),
@@ -2411,6 +2413,18 @@ mod tests {
             Cli::try_parse_from(malformed_id).unwrap_err().kind(),
             clap::error::ErrorKind::ValueValidation
         );
+    }
+
+    #[test]
+    fn package_help_says_what_the_verb_means_beside_bregctl_package() {
+        let error = Cli::try_parse_from(["caseworkctl", "package", "--help"]).unwrap_err();
+        let help = error.to_string();
+        for expected in [
+            "caseworkctl plan and apply activate",
+            "bregctl package is a different verb",
+        ] {
+            assert!(help.contains(expected), "missing help text: {expected}");
+        }
     }
 
     #[test]
