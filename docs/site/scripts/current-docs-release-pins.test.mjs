@@ -48,6 +48,12 @@ const TARGET_RULES = [
       'g',
     ),
   },
+  {
+    // The client packages the same inventory publishes under the bare package version: npm
+    // tarballs such as registrystack-client-<version>.tgz and Python wheels.
+    id: 'client-package-file',
+    pattern: /\b[a-z][a-z0-9_-]*-\d+\.\d+\.\d+[0-9A-Za-z._-]*\.(?:tgz|whl)\b/g,
+  },
 ];
 
 // On an operator page, a repository link frozen at a release tag is an install or verification
@@ -165,6 +171,15 @@ test('each release-pin rule flags its install or download target', () => {
   ]) {
     assert.deepEqual(flagged(`take ${asset}`), ['release-asset-name'], asset);
   }
+  for (const asset of [
+    'registrystack-client-0.26.1.tgz',
+    'registrystack-client-linux-x64-gnu-0.26.1.tgz',
+    'registrystack-discovery-client-0.35.0-rc.1.tgz',
+    'registry_stack_client-0.26.1-cp310-abi3-manylinux_2_28_x86_64.whl',
+    'registry_relay_client-0.35.0-cp310-abi3-macosx_11_0_arm64.whl',
+  ]) {
+    assert.deepEqual(flagged(`take ${asset}`), ['client-package-file'], asset);
+  }
 
   const verify = 'https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md';
   assert.deepEqual(flagged(verify, true), ['repository-link-at-release-tag']);
@@ -181,6 +196,7 @@ test('release-pin rules leave tags, latest releases and history alone', () => {
     'The package ships from Registry Stack v0.26.1, so install a v0.26.1 or later release.',
     'python -m pip install "registry-stack-client==${version}"',
     'CASEWORK_VERSION=<tag> bash',
+    'pip install ./registry_stack_client-<version>-cp310-abi3-<platform>.whl',
     'listener.bind: 127.0.0.1:8080',
   ]) {
     assert.deepEqual(findReleasePins(text, { operator: true }), [], text);
