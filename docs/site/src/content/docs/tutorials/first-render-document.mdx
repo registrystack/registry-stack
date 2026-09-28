@@ -35,16 +35,17 @@ cargo build --release --locked -p registry-render
 target/release/registry-render --version
 ```
 
-You know this worked when the version line names the release and the Typst pin:
+You know this worked when the version line names your checkout's version, with the `-dev` suffix
+every local build carries, and the Typst pin:
 
 ```text
-registry-render 0.32.0-dev (typst 0.15.1)
+registry-render <version>-dev (typst 0.15.1)
 ```
 
 The version string appears in every audit event this service writes, so the binary you build now
 is the provenance of everything you render in this tutorial.
 
-{/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
+{/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN; crates/registry-platform-buildinfo/src/lib.rs, DISPLAY_VERSION. */}
 
 ## Scaffold a bundle
 

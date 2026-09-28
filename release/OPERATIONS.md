@@ -366,7 +366,9 @@ candidate's `published_at` field, not a human review date. The command derives
 product pins from the current docset and selected manifest, adds missing
 candidate metadata, and snapshots each applicable mirrored page's current
 standards and review metadata. It preserves the development and released
-selectors and every historical record. Conflicting existing candidate metadata
+selectors and every historical record; the released selector moves only after
+publication, in [Promote the published documentation](#promote-the-published-documentation).
+Conflicting existing candidate metadata
 or changes to a frozen archive stop preparation.
 
 The command builds a committed-source clone in Ubuntu 24.04 on Linux AMD64,
@@ -1050,6 +1052,44 @@ build reports `<version>-dev`, which SemVer orders before the release it
 follows. Do not wait for the next release PR to make this change.
 The release manifest, notes, changelogs, and documentation archive stay with
 that release PR.
+
+### Promote the published documentation
+
+Once `verify-public` passes, record the release as published in one PR against
+protected `main`, on its own or with the next development version. Publication
+serves the release's documentation at `/` from its release asset, but the
+`released` selector in `docs/site/src/data/docsets.yaml` still names the
+previous release, because preparation never moves it. That selector is the
+release the `/dev/` banner sends readers to as supported guidance, and the
+docset rebuilt archives mark indexable.
+
+1. Resolve the commit the tag dereferences to:
+
+   ```sh
+   git ls-remote origin "refs/tags/v<version>^{}"
+   ```
+
+2. In `release/manifests/registry-stack-<release-id>.yaml`, add
+   `source_ref: <commit>` before `source_tag` and `status: released` after it.
+3. In `docs/site/src/data/docsets.yaml`, set `released: v<version>`. In the
+   `v<version>` docset, set `availability: released`, begin the description with
+   `Released Registry Stack v<version> <release-id>` and drop `candidate`, and
+   set every product `ref` to the same commit. Leave the archive lock and every
+   other docset unchanged.
+4. From `docs/site`, run `npm test`, `npm run check:docset`, and
+   `npm run check:release-manifests`, and check the selector against the live
+   release list:
+
+   ```sh
+   gh api --paginate --slurp "repos/registrystack/registry-stack/releases?per_page=100" \
+     | jq 'add' > published-releases.json
+   release/scripts/registry-release validate-docsets \
+     --published-releases published-releases.json
+   ```
+
+The docs test allows one prepared candidate ahead of the selector. If this step
+is skipped, the next release preparation fails `npm test` until every published
+release before it is promoted.
 
 ## Failure handling
 
