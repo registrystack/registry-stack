@@ -263,6 +263,11 @@ pub trait SourceAdapter: Send + Sync {
         limit: usize,
     ) -> Result<ActiveSubjectsPage, SourceAdapterError>;
 
+    /// Read the subject as the exact caller sees it. A subject the source no
+    /// longer discloses to this caller is `Concealed` or `Denied`.
+    /// `BindingMoved` means the source still disclosed the subject to this
+    /// caller but the adapter cannot bind the served representation, so
+    /// Casework may show the caller its retained occurrence without actions.
     async fn read_for_caller(
         &self,
         subject: &SubjectRef,

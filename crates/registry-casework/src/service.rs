@@ -65,6 +65,32 @@ enum MovedBinding {
     /// Return the retained occurrence without actions or routing copy, so the
     /// item stays readable until reconciliation applies the moved binding.
     WithoutActions,
+    /// A plain read of one item: as `WithoutActions`, and also across a moved
+    /// source binding generation or a caller read the adapter refused as
+    /// `BindingMoved` after the source disclosed the subject to this caller.
+    /// A superseded occurrence is refused as superseded so the caller opens
+    /// its replacement.
+    Retained,
+}
+
+/// The retained occurrence for a plain read the current source binding cannot
+/// bind: no actions and no routing copy. Every other read mode refuses.
+fn retained_without_actions(
+    mut item: WorkItem,
+    routing: Option<registry_casework_core::WorkItemRouting>,
+    clock_occurrences: Vec<registry_casework_core::ClockOccurrenceView>,
+    moved_binding: MovedBinding,
+) -> Result<WorkItem, ServiceError> {
+    if moved_binding != MovedBinding::Retained {
+        return Err(ServiceError::BindingMoved);
+    }
+    if item.state == OccurrenceState::Superseded {
+        return Err(ServiceError::Store(StoreError::StaleGeneration));
+    }
+    item.routing = routing;
+    item.clock_occurrences = clock_occurrences;
+    item.actions.clear();
+    Ok(item)
 }
 
 impl std::fmt::Debug for CaseworkService {
@@ -451,7 +477,7 @@ impl CaseworkService {
             source_profile_id,
             token,
             None,
-            MovedBinding::WithoutActions,
+            MovedBinding::Retained,
         )
         .await
         .map(|(item, _)| item)
@@ -465,15 +491,21 @@ impl CaseworkService {
         token: &str,
         completed_attempt: Option<&AttemptStatus>,
     ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
-        self.read_caller_item(
-            actor,
-            item_id,
-            source_profile_id,
-            token,
-            completed_attempt,
-            MovedBinding::Refuse,
-        )
-        .await
+        match self
+            .read_caller_item(
+                actor,
+                item_id,
+                source_profile_id,
+                token,
+                completed_attempt,
+                MovedBinding::Refuse,
+            )
+            .await?
+        {
+            (item, Some(view)) => Ok((item, view)),
+            // Refuse propagates the adapter's BindingMoved before assembly.
+            (_, None) => Err(ServiceError::BindingMoved),
+        }
     }
 
     async fn read_caller_item(
@@ -484,25 +516,35 @@ impl CaseworkService {
         token: &str,
         completed_attempt: Option<&AttemptStatus>,
         moved_binding: MovedBinding,
-    ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
+    ) -> Result<(WorkItem, Option<CallerSubjectView>), ServiceError> {
         let item = self.store.item(item_id).await?;
         if !self.store.can_view_item(actor, &item).await? {
             return Err(ServiceError::NotFound);
         }
-        let view = self
+        let view = match self
             .adapter(&item.subject.source_id)?
             .read_for_caller(
                 &item.subject,
                 source_profile_id,
                 EphemeralCredential::new(token),
             )
-            .await?;
+            .await
+        {
+            Ok(view) => Some(view),
+            // The adapter contract returns BindingMoved from a caller read only
+            // after the source disclosed the subject to this caller. Concealed
+            // and Denied still refuse the read below.
+            Err(SourceAdapterError::BindingMoved) if moved_binding == MovedBinding::Retained => {
+                None
+            }
+            Err(error) => return Err(error.into()),
+        };
         let item = self
             .assemble_caller_visible_item(
                 actor,
                 item_id,
                 source_profile_id,
-                &view,
+                view.as_ref(),
                 None,
                 completed_attempt,
                 moved_binding,
@@ -517,7 +559,7 @@ impl CaseworkService {
         actor: &ActorContext,
         item_id: Uuid,
         source_profile_id: &str,
-        view: &CallerSubjectView,
+        view: Option<&CallerSubjectView>,
         known_holder_timing: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)>,
         completed_attempt: Option<&AttemptStatus>,
         moved_binding: MovedBinding,
@@ -534,7 +576,10 @@ impl CaseworkService {
             .store
             .live_attempt_status_for_actor(actor, item_id, source_profile_id)
             .await?;
-        let routing_copy = self.filtered_routing_copy(item_id, view).await?;
+        let routing_copy = match view {
+            Some(view) => Some(self.filtered_routing_copy(item_id, view).await?),
+            None => None,
+        };
         let routing = self.store.work_item_routing(item_id).await?;
         let clock_occurrences = self.store.clock_occurrences_for_item(item_id).await?;
         let mut holder_timing = if let Some(timing) = known_holder_timing {
@@ -572,7 +617,12 @@ impl CaseworkService {
             None
         };
         item.live_attempt = live_attempt;
-        item.display_reference = view.display_reference.clone();
+        // Without a caller view nothing caller-filtered is known, so neither
+        // the display reference nor routing copy is disclosed.
+        item.display_reference = view.and_then(|view| view.display_reference.clone());
+        let (Some(view), Some(routing_copy)) = (view, routing_copy) else {
+            return retained_without_actions(item, routing, clock_occurrences, moved_binding);
+        };
         if view.binding != item.binding {
             if item.live_attempt.is_some() {
                 item.routing = routing;
@@ -603,7 +653,7 @@ impl CaseworkService {
                 return Ok(item);
             }
             if view.binding.generation != item.binding.generation {
-                return Err(ServiceError::BindingMoved);
+                return retained_without_actions(item, routing, clock_occurrences, moved_binding);
             }
             // An active occurrence whose binding moved is waiting for
             // reconciliation. Mutations refuse it. Reads keep the retained
@@ -1181,7 +1231,7 @@ impl CaseworkService {
                             actor,
                             item.item_id,
                             source_profile_id,
-                            &view,
+                            Some(&view),
                             holder_timings.get(&item.item_id).cloned(),
                             None,
                             MovedBinding::WithoutActions,

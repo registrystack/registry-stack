@@ -684,6 +684,21 @@ const ITEM_READ: &[ProblemCode] = &[
     ProblemCode::WorkItemSourceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
+// A plain read of one item returns the retained occurrence across a moved
+// source binding; only a superseded occurrence is refused.
+const ITEM_OPEN: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::WorkItemSuperseded,
+    ProblemCode::RuntimeFailure,
+];
 const SOURCE_ITEM_PAGE: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
     ProblemCode::CursorExpired,
@@ -696,6 +711,7 @@ const SOURCE_ITEM_PAGE: &[ProblemCode] = &[
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::WorkItemSuperseded,
     ProblemCode::RuntimeFailure,
 ];
 const CLAIM: &[ProblemCode] = &[
@@ -926,8 +942,8 @@ const CLOCK_ITEM_READ: &[ProblemCode] = &[
     ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemProposalChanged,
     ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::WorkItemSuperseded,
     ProblemCode::RuntimeFailure,
 ];
 const HOLIDAY_CREATE: &[ProblemCode] = &[
@@ -1545,7 +1561,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: ITEM_READ,
+        problems: ITEM_OPEN,
     },
     OperationContract {
         method: "POST",

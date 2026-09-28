@@ -19948,6 +19948,21 @@
               }
             }
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemSuperseded"
+                }
+              }
+            },
+            "description": "Problem response: work-item.superseded",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "413": {
             "content": {
               "application/problem+json": {
@@ -21528,11 +21543,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemWorkItemProposalChanged"
+                  "$ref": "#/components/schemas/ProblemWorkItemSuperseded"
                 }
               }
             },
-            "description": "Problem response: work-item.proposal-changed",
+            "description": "Problem response: work-item.superseded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -23470,6 +23485,21 @@
               }
             },
             "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemSuperseded"
+                }
+              }
+            },
+            "description": "Problem response: work-item.superseded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

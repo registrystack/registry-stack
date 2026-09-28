@@ -603,7 +603,12 @@ impl BregAdapter {
         // A 404 from the registry contract, readiness, or a list still is.
         let response = match record {
             Err(error) if error.status() == Some(404) => return Err(read_error(error)),
-            record => self.read_result(client, record)?,
+            // A record read answered with a conflict disclosed nothing, and
+            // BindingMoved from a caller read means the record was disclosed.
+            record => match self.read_result(client, record) {
+                Err(SourceAdapterError::BindingMoved) => return Err(SourceAdapterError::Invalid),
+                result => result?,
+            },
         };
         let representation_etag = response
             .metadata
