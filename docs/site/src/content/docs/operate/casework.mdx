@@ -158,9 +158,10 @@ the runtime credential can activate packages and rewrite the ledger, so the ledg
 it did not. A start that finds a `split` activation whose runtime role can now write the ledger
 refuses. It names the same statements when ownership, a privilege, or a trigger is the cause, and
 otherwise names `caseworkctl apply` to reissue the grants or record the single-role mode. A start
-that finds a `split` activation whose runtime role no longer holds the grants apply issued it, as
-after a `REASSIGN OWNED`, refuses too and names `caseworkctl apply`, which `plan` reports as
-pending.
+whose runtime role cannot write the ledger but does not hold the grants a split-role apply issues
+it refuses too and names `caseworkctl apply`, which `plan` reports as pending. That happens after a
+`REASSIGN OWNED`, and after `database.runtimeUrlRef` is rotated to a separate role, including in a
+deployment whose last apply was single-role.
 
 Casework creates no extension, no schema, and no role of its own, so a missing `CONNECT` or schema
 ownership surfaces as a permission-denied database error at `caseworkctl apply`.
@@ -978,7 +979,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `the active Casework package in this database is X, not the configured package Y`, or `the binding of source ID differs from the one the active package was applied with` | The package or a source binding changed since the last apply. Plan and apply the configured package, then restart. |
 | `the package deployment binding differs from the runtime configuration at identity.databaseId` | The runtime file points at a database that recorded another `databaseId`. Point `database.runtimeUrlRef` and `database.migrationUrlRef` at the database this file belongs to, or correct `identity.databaseId`. |
 | `the active Casework package was applied split-role, but the runtime credential can now write the activation ledger` | The runtime role gained ledger authority, a trigger no Casework migration creates is attached to a Casework table, or the credential now names the migration role. Run the `REASSIGN OWNED`, `REVOKE`, or `DROP TRIGGER` statement the message names and do what it says next, or remove the extra grant or membership, then run `caseworkctl apply` to reissue the grants or record the single-role mode. |
-| `the active Casework package was applied split-role, but the runtime role no longer holds the grants apply issues it` | A `REASSIGN OWNED` or a manual revoke took the runtime role's grants. Run `caseworkctl apply` to reissue them. |
+| `the Casework runtime role cannot write the activation ledger but does not hold the grants a split-role apply issues it` | A `REASSIGN OWNED` or a manual revoke took the runtime role's grants, or `database.runtimeUrlRef` names a separate role no apply has granted yet. Run `caseworkctl apply` to issue them. |
 | `casework.activation.role-mode-weakened` | The runtime role owns a Casework object, can create one in the schema, or can attach a trigger, or a trigger no Casework migration creates is attached to a Casework table. Run the statements the refusal names as the migration role, then apply after a `REASSIGN OWNED`, or rerun the refused command after a revoke or a drop. |
 | `casework.activation.ledger-unreadable` | `plan` connected as a runtime role that cannot read the activation ledger, such as one rotated in after the last apply. Run `caseworkctl apply --runtime-config FILE` with the migration credential to grant it, then `caseworkctl plan --runtime-config FILE` again. |
 | `source ID pins sourceRevision X, but the source serves registry revision Y`, or `casework.source-revision.stale` | The imported BReg source description no longer matches the registry the source serves, or the package `check` compared. Run the `caseworkctl check PROJECT --against-breg-package DIR --source-id ID` the message names with the package the source serves, repin with `caseworkctl source add`, then package, plan, and apply as [Check a BReg source's pinned revision](#check-a-breg-sources-pinned-revision) describes. |

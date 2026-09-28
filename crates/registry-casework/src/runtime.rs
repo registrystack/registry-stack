@@ -469,8 +469,9 @@ pub fn build_source_adapters(
 /// Refuse to serve a database whose activation ledger does not name this
 /// configuration: no package applied, another database's identity, another
 /// package, a source binding generation the last apply did not record, or a
-/// split-role activation whose runtime credential can now write the ledger
-/// or no longer holds the grants apply issued it.
+/// split-role activation whose runtime credential can now write the ledger,
+/// or a runtime credential that cannot write the ledger and does not hold
+/// the grants a split-role apply issues it.
 /// It only reads, and returns the role mode the runtime credential has.
 pub async fn check_activation(
     store: &PostgresStore,
@@ -505,15 +506,16 @@ pub async fn check_activation(
         .effective_role()
         .await?
         .ok_or(RuntimeError::NotActivated)?;
-    if active.role_mode == crate::RoleMode::Split {
-        if role_mode == crate::RoleMode::Single {
-            return Err(RuntimeError::RoleModeWeakened {
-                fix: store.role_mode_weakened_fix().await?,
-            });
-        }
-        if !grants_current {
-            return Err(RuntimeError::RuntimeGrantsMissing);
-        }
+    if active.role_mode == crate::RoleMode::Split && role_mode == crate::RoleMode::Single {
+        return Err(RuntimeError::RoleModeWeakened {
+            fix: store.role_mode_weakened_fix().await?,
+        });
+    }
+    // The credential decides the mode, not the ledger row: a single-role
+    // activation whose runtime credential was rotated to a separate role is
+    // split, and serves only once apply has issued that role its grants.
+    if role_mode == crate::RoleMode::Split && !grants_current {
+        return Err(RuntimeError::RuntimeGrantsMissing);
     }
     Ok(role_mode)
 }
@@ -1497,9 +1499,10 @@ pub enum RuntimeError {
     )]
     RoleModeWeakened { fix: String },
     /// Reassigning a Casework object back to the migration role also takes
-    /// away the grants apply issued the runtime role on it.
+    /// away the grants apply issued the runtime role on it, and a runtime
+    /// credential rotated to a separate role since the last apply holds none.
     #[error(
-        "the active Casework package was applied split-role, but the runtime role no longer holds the grants apply issues it; run `caseworkctl apply --runtime-config FILE` to reissue them"
+        "the Casework runtime role cannot write the activation ledger but does not hold the grants a split-role apply issues it; run `caseworkctl apply --runtime-config FILE` to issue them"
     )]
     RuntimeGrantsMissing,
     #[error(

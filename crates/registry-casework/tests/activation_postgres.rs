@@ -1256,6 +1256,82 @@ async fn moving_to_split_and_rotating_the_runtime_role_reapply_the_active_packag
     fixture.drop_roles(&[&one, &two]).await;
 }
 
+/// A single-role activation whose runtime credential is rotated to a
+/// separate role is split by that credential, so startup checks the grants
+/// a split apply issues rather than trusting the single-role ledger row.
+#[tokio::test]
+async fn a_single_role_activation_rotated_to_a_role_without_its_grants_is_refused_at_startup() {
+    let fixture = Fixture::single("singlerotate").await;
+    let project = project();
+    let first = digest('a');
+    fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("single-role apply");
+    let (role, rotated) = fixture.login_role().await;
+    fixture
+        .client
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA {schema} TO {role};
+             GRANT SELECT ON casework_activations, casework_schema_migrations,
+               casework_source_reconciliation_progress TO {role}",
+            schema = fixture.schema
+        ))
+        .await
+        .expect("let the rotated role read the ledgers only");
+    let missing = check_activation(&rotated, DATABASE_ID, &first, &[])
+        .await
+        .expect_err("a split runtime role without its grants is refused");
+    assert!(
+        matches!(missing, RuntimeError::RuntimeGrantsMissing),
+        "{missing}"
+    );
+    assert!(missing
+        .to_string()
+        .contains("caseworkctl apply --runtime-config FILE"));
+
+    // A rotated role that can reach the ledger is single-role, as the
+    // ledger records, and a split apply for it still refuses that authority.
+    fixture
+        .client
+        .batch_execute(&format!("GRANT TRIGGER ON casework_teams TO {role}"))
+        .await
+        .expect("grant the rotated role TRIGGER");
+    assert_eq!(
+        check_activation(&rotated, DATABASE_ID, &first, &[])
+            .await
+            .expect("a single-role activation starts"),
+        RoleMode::Single
+    );
+    let refused = fixture
+        .apply_as(&role, &candidate(&project, &first, &[]))
+        .await
+        .expect_err("a split apply refuses the rotated role's TRIGGER");
+    assert_eq!(
+        refusal_codes(&refused),
+        ["casework.activation.role-mode-weakened"]
+    );
+    fixture
+        .client
+        .batch_execute(&format!("REVOKE TRIGGER ON casework_teams FROM {role}"))
+        .await
+        .expect("revoke TRIGGER");
+    let applied = fixture
+        .apply_as(&role, &candidate(&project, &first, &[]))
+        .await
+        .expect("apply issues the rotated role its grants");
+    assert_eq!(applied.activation.role_mode, RoleMode::Split);
+    assert_eq!(
+        check_activation(&rotated, DATABASE_ID, &first, &[])
+            .await
+            .expect("the rotated runtime role starts"),
+        RoleMode::Split
+    );
+    assert_eq!(fixture.ledger().await.len(), 2);
+    drop(rotated);
+    fixture.drop_roles(&[&role]).await;
+}
+
 #[tokio::test]
 async fn plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply() {
     let fixture = Fixture::single("plan_rotated").await;
