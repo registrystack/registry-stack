@@ -319,6 +319,33 @@ mod tests {
     }
 
     #[test]
+    fn the_schema_states_the_database_identity_grammar_the_runtime_enforces() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let validator =
+            jsonschema::JSONSchema::compile(&document["properties"]["identity"]).unwrap();
+        let with_id =
+            |database_id: &str| validator.is_valid(&serde_json::json!({"databaseId": database_id}));
+        for accepted in ["scheduling-production", "a", "two words", "caf\u{e9}"] {
+            assert!(with_id(accepted), "{accepted:?} must be accepted");
+        }
+        for refused in [
+            "",
+            " ",
+            " leading",
+            "trailing ",
+            "\u{a0}no-break",
+            "ideographic\u{3000}",
+            "line\u{2028}",
+            "bell\u{7}inside",
+            "next-line\u{85}inside",
+            "tab\tinside",
+        ] {
+            assert!(!with_id(refused), "{refused:?} must be refused");
+        }
+    }
+
+    #[test]
     fn committed_runtime_schema_matches_generated_bytes() {
         let generated = runtime_documents().unwrap();
         let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
