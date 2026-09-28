@@ -86,6 +86,18 @@ pub(crate) fn run_preflight(
         .map_err(FieldEncryptionPreflightLifecycleError::PredecessorPackage)?;
     let target = load_package(request.package, &config.package_load_context())
         .map_err(FieldEncryptionPreflightLifecycleError::TargetPackage)?;
+    // Only the exact successor of the active package describes a backfill
+    // from that state; any other package would report counts for an apply
+    // the engine refuses.
+    let manifest = target.manifest();
+    if manifest.package_id != predecessor.package_id()
+        || manifest.migration_plan.from_package_digest.as_deref()
+            != Some(predecessor.package_digest())
+    {
+        return Err(FieldEncryptionPreflightLifecycleError::TargetPackage(
+            PackageError::Binding,
+        ));
+    }
     let plan = target
         .reviewed_migration_plan()
         .ok_or(FieldEncryptionPreflightLifecycleError::NoBackfillSteps)?;
