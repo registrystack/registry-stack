@@ -794,10 +794,26 @@ zero-padded, eight-digit number, and opens a fresh active file at
 `audit.path`, online and with no operator action. When the writer opens and
 each time it rotates, it deletes sealed files last modified more than
 `audit.retainDays` ago (90 by default); it never deletes the active file.
-Sequence numbers restart after retention has deleted every sealed file and the
-process restarts, so archives must not be keyed on the sealed file name alone.
-An entry larger than 1 MiB is refused, and the request it belongs to fails
-closed.
+The next sequence is recorded in `<audit.path>.seq` at every start and before
+every rotation, so numbering continues across restarts even after retention or
+a shipper removed every sealed file. It restarts only when `<audit.path>.seq`
+is lost with them, as in a fresh or restored directory, and two replicas'
+streams use the same names, so archives must still not be keyed on the sealed
+file name alone. An entry larger than 1 MiB is refused, and the request it
+belongs to fails closed.
+
+A crash, a kill, or a full disk can leave the active file ending in part of an
+entry. At the next start the writer copies the bytes after the last complete
+line to the owner-only (`0600`) side file `<audit.path>.torn`, syncs it,
+truncates the active file to its last complete line, and logs the side file's
+path and byte count, never the bytes, at error level. An entry is acknowledged
+only after the write holding it is synced, so the torn bytes belong to no
+acknowledged entry and no acknowledged entry is lost. Inspect the side file and
+archive it with the sealed files, then remove it: a later torn line finds the
+side file holding other bytes and is refused until it is moved, because the
+writer never overwrites it. A configured `audit.path` whose file name ends in
+`.lock`, `.seq`, `.seq.tmp`, `.torn`, or a sealed-segment `.<sequence>` is
+refused, because a stream at the shorter name owns that file.
 
 Never rename, edit, or truncate the active file while the service runs; the
 writer treats that as tampering and stops. Copying a sealed file is safe at any
@@ -1074,7 +1090,8 @@ single-writer lock by design. The option requires
 that lock: the audit destination settings and hash key, an owner-controlled
 directory the service user can write, and an existing active file and lock
 companion that are owner-only, singly linked, and writable, with an active file
-whose final entry is complete. Every other dependency is proved as without the
+whose final entry is complete or ends in a torn line `serve` would move to its
+side file. Every other dependency is proved as without the
 option, and no audit entry is appended. It does not detect a second writer, so
 `serve` still refuses to start while another instance holds the lock; without
 the option, a held lock refuses the check with `another process holds the

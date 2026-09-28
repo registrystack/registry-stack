@@ -112,8 +112,20 @@ Copying a sealed file is safe at any time.
 Ship sealed files, or the `stdout` stream, to storage the Evidence Gateway host cannot rewrite:
 object storage with an object lock, a write-once archive, or a log pipeline whose retention the
 Evidence operator account cannot change. Ship each sealed file before `retainDays` deletes it.
-Sequence numbers restart once retention has deleted every sealed file and the process restarts, so
-key archived copies on more than the sealed file name.
+The writer records the next sequence in `<path>.seq` at every start and before every rotation, so
+numbering continues after retention or a shipper removed every sealed file. It restarts only in a
+directory that lost `<path>.seq`, such as a fresh or restored one, and every replica's stream uses
+the same names, so key archived copies on more than the sealed file name.
+
+If the process stopped mid-write, the active file ends in part of an entry. The next start copies
+those bytes to the owner-only side file `<path>.torn`, truncates the active file to its last
+complete line, and logs the side file's path and byte count at error level. Entries are
+acknowledged only after they are synced, so no acknowledged entry is lost. Archive the side file
+with the sealed files and remove it; the writer never overwrites it, so a second torn line refuses
+to start until the first side file is moved.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, write_next_sequence,
+    AuditSegments::next_sequence, and recover_torn_tail. */}
 
 Confirm that entries reached the store as part of backup, restore, and incident procedures.
 Restore audit history into that store, never back into the live audit directory.
