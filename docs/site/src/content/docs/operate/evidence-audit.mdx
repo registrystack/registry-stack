@@ -87,8 +87,8 @@ audit:
   `<path>.<sequence>` with an eight-digit sequence and opens a fresh file at `path`. When it opens
   and each time it rotates, it deletes sealed files last modified more than `retainDays` ago (90
   by default); it never deletes the active file.
-- **`stdout`** writes each entry as one flushed line on standard output. The process's operational
-  records share that stream; only audit entries carry a `schema` member. Durability, rotation, and
+- **`stdout`** writes each entry as one flushed line on standard output. The process writes its
+  operational records to standard error, so the stream carries audit entries alone. Durability, rotation, and
   retention belong to your log collector, and `path`, `rotateBytes`, and `retainDays` are refused.
   `evidence check --require-audit-under` refuses this destination, because it has no local file to
   contain.
