@@ -63,6 +63,13 @@ def messaging_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def version_argument(value: str) -> tuple[int, int, int]:
+    try:
+        return parse_version(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -70,20 +77,16 @@ def main(argv: list[str] | None = None) -> int:
         "breg-services-in-release",
         help="print true when the release version ships breg-mcp and breg-review, else false",
     )
-    breg_services.add_argument("version", help="release version as X.Y.Z")
+    breg_services.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     breg_services.set_defaults(in_release=breg_services_in_release)
     messaging = commands.add_parser(
         "messaging-in-release",
         help="print true when the release version ships Registry Messaging, else false",
     )
-    messaging.add_argument("version", help="release version as X.Y.Z")
+    messaging.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     messaging.set_defaults(in_release=messaging_in_release)
     args = parser.parse_args(argv)
-    try:
-        version = parse_version(args.version)
-    except ValueError as error:
-        parser.error(str(error))
-    print("true" if args.in_release(version) else "false")
+    print("true" if args.in_release(args.version) else "false")
     return 0
 
 
