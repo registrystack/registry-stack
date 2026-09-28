@@ -21,6 +21,7 @@ mod doctor;
 mod evidence_binary;
 mod fixtures;
 mod junit;
+mod jwk;
 mod jwks;
 mod keygen;
 mod report;
@@ -82,6 +83,9 @@ enum Command {
     Keygen(keygen::KeygenCommand),
     /// Assemble a public JWKS document from public JWK files.
     Jwks(jwks::JwksArgs),
+    /// Convert public key material into a public JWK.
+    #[command(subcommand)]
+    Jwk(jwk::JwkCommand),
     /// Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract.
     New(scaffold::NewArgs),
     /// Retired spelling of `package`.
@@ -501,6 +505,7 @@ fn run_entry() -> ExitCode {
         Command::Access(command) => access::run(command, format),
         Command::Keygen(command) => keygen::run(command, format),
         Command::Jwks(args) => jwks::run(args, format),
+        Command::Jwk(command) => jwk::run(command, format),
         Command::New(args) => scaffold::run_with_format(args, "new", format),
         Command::Build(args) => Err(SafeCliFailure {
             operational: false,
@@ -1241,6 +1246,7 @@ mod tests {
         "keygen holder",
         "keygen client-assertion",
         "jwks",
+        "jwk from-pem",
         "new",
         "build",
         "fixtures run",
