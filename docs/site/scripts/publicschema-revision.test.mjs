@@ -40,21 +40,37 @@ test('the Evidence tutorial selection is the shipped selection at the embedded r
   assert.equal(snippet, shipped, 'the snippet must match products/breg/evidence/organization-selection.yaml');
 });
 
+// `readme()` in crates/registry-bregctl/src/init_from_model/render.rs writes the attribution from
+// one format literal. Read that literal, so a wording change there fails here as surely as a sync.
+function attributionTemplate() {
+  const source = readRepo('crates/registry-bregctl/src/init_from_model/render.rs');
+  const literal = source.match(/"(The concepts, properties, and code lists in this project[^"]*)",\s*\n\s*plan\.model\.repository, plan\.model\.license, plan\.model\.license_url\s*\n/);
+  assert.ok(literal, 'render.rs readme() must still format the attribution from repository, license and licenseUrl');
+  // A Rust string continuation drops the backslash, the newline and the next line's indentation.
+  const template = literal[1].replace(/\\\n\s*/g, '');
+  assert.deepEqual(
+    template.match(/\{[a-z_]*\}/g),
+    ['{model}', '{version}', '{revision}', '{}', '{}', '{}'],
+    'the attribution placeholders changed; update this check with render.rs',
+  );
+  return template;
+}
+
 test('the PublicSchema tutorial quotes the attribution init writes for the embedded pin', () => {
   const page = readRepo('docs/site/src/content/docs/tutorials/derive-a-registry-from-publicschema.mdx');
   const note = page.match(/:::note\[Keep the attribution notice\]\n"([\s\S]*?)"\n/);
   assert.ok(note, 'the tutorial must quote the README attribution notice');
 
-  // The markdown link form renders the bare URL `readme()` in
-  // crates/registry-bregctl/src/init_from_model/render.rs writes.
+  // The page renders each bare URL readme() writes as a self-labelled markdown link.
   const quoted = note[1]
     .replace(/\[([^\]]+)\]\(\1\)/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
-  const expected =
-    `The concepts, properties, and code lists in this project are derived from PublicSchema ${pin.version}, `
-    + `revision ${pin.commit} (${pin.repository}), licensed under ${pin.license} (${pin.licenseUrl}). `
-    + 'The derivation selects, renames, and retypes definitions, so this project is a modified form of '
-    + 'the model. Keep this notice with the project and with any package built from it.';
+  const positional = [pin.repository, pin.license, pin.licenseUrl];
+  const expected = attributionTemplate()
+    .replace('{model}', 'PublicSchema')
+    .replace('{version}', pin.version)
+    .replace('{revision}', pin.commit)
+    .replace(/\{\}/g, () => positional.shift());
   assert.equal(quoted, expected);
 });
