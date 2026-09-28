@@ -923,7 +923,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         .push(rcgen::DnType::CommonName, "BREG local PostgreSQL");
     server_params.use_authority_key_identifier_extension = true;
     server_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
-    let server = server_params.signed_by(&server_key, &ca, &ca_key)?;
+    let server = server_params.signed_by(
+        &server_key,
+        &rcgen::Issuer::from_params(&ca_params, &ca_key),
+    )?;
     private::create(
         &root.join("tls/ca.pem"),
         pem("CERTIFICATE", ca.der()).as_bytes(),

@@ -574,7 +574,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     let ca = ca_params.self_signed(&ca_key)?;
     let server_key = rcgen::KeyPair::generate()?;
     let server = rcgen::CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])?
-        .signed_by(&server_key, &ca, &ca_key)?;
+        .signed_by(
+            &server_key,
+            &rcgen::Issuer::from_params(&ca_params, &ca_key),
+        )?;
     let ca_pem = pem("CERTIFICATE", ca.der());
     private::create(&root.join("tls/ca.pem"), ca_pem.as_bytes())?;
     // Casework pins this one generated root for its database connection. Left

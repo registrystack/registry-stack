@@ -1106,13 +1106,16 @@ mod tests {
             rcgen::CertificateParams::new(Vec::<String>::new()).expect("private CA parameters");
         authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let authority_key = rcgen::KeyPair::generate().expect("private CA key");
-        let authority = authority
+        let authority_certificate = authority
             .self_signed(&authority_key)
             .expect("private CA certificate");
         let server_key = rcgen::KeyPair::generate().expect("server key");
         let server = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
             .expect("server parameters")
-            .signed_by(&server_key, &authority, &authority_key)
+            .signed_by(
+                &server_key,
+                &rcgen::Issuer::from_params(&authority, &authority_key),
+            )
             .expect("the private CA signs the server certificate");
         let server_config = tokio_rustls::rustls::ServerConfig::builder()
             .with_no_client_auth()
@@ -1150,7 +1153,7 @@ mod tests {
                 });
             }
         });
-        let authority = reqwest::Certificate::from_der(authority.der())
+        let authority = reqwest::Certificate::from_der(authority_certificate.der())
             .expect("the private CA certificate parses");
         (addr, authority)
     }

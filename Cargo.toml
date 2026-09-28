@@ -194,7 +194,7 @@ pyo3-build-config = { version = "0.29.1" }
 rand = { version = "0.9" }
 rand_chacha = { version = "0.9" }
 rand_core = { version = "0.6", features = ["std"] }
-rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "zeroize"] }
 # Pattern evaluation for encrypted fields happens in Rust before sealing, so
 # no regex engine besides this one ever sees the plaintext. The default
 # features stay off: Unicode tables are wanted, but the code generator and

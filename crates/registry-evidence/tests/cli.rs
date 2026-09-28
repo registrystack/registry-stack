@@ -48,13 +48,16 @@ impl JwksServer {
             rcgen::CertificateParams::new(Vec::<String>::new()).expect("private CA parameters");
         authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let authority_key = rcgen::KeyPair::generate().expect("private CA key");
-        let authority = authority
+        let authority_certificate = authority
             .self_signed(&authority_key)
             .expect("private CA certificate");
         let server_key = rcgen::KeyPair::generate().expect("server key");
         let server = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
             .expect("server parameters")
-            .signed_by(&server_key, &authority, &authority_key)
+            .signed_by(
+                &server_key,
+                &rcgen::Issuer::from_params(&authority, &authority_key),
+            )
             .expect("the private CA signs the server certificate");
         let config = tokio_rustls::rustls::ServerConfig::builder()
             .with_no_client_auth()
@@ -64,7 +67,7 @@ impl JwksServer {
             )
             .expect("TLS server configuration");
         let server = Self::start_with(Some(Arc::new(config)));
-        (server, pem_certificate(authority.der()))
+        (server, pem_certificate(authority_certificate.der()))
     }
 
     fn start_with(tls: Option<Arc<tokio_rustls::rustls::ServerConfig>>) -> Self {
