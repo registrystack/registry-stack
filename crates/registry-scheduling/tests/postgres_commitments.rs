@@ -324,6 +324,10 @@ async fn fixture_publishing_with_hook_url(
         .await
         .expect("the scheduling migrations");
     let store = PostgresStore::connect_runtime(&database, &secrets).expect("the runtime store");
+    // Every handle cloned from this store, the service and the router
+    // included, reads the pinned instant as its now.
+    let now = pinned_now();
+    store.pin_clock(Arc::new(move || now));
 
     // The admin connection seeds the facts the policy resolves supply
     // against (the path operator tooling owns), and the store adopts the
@@ -493,6 +497,54 @@ fn exact_supply_parts(
     (members, open, closures)
 }
 
+/// The instant every fixture pins the deployment's clock at: tomorrow at
+/// 10:00 UTC. The time of day is fixed, so every slot, window, availability
+/// range, cutoff, closure, and expiry a test derives from it falls at the same
+/// place against the test opening's 00:00-23:30 day, whenever the suite runs.
+/// The date is tomorrow's so the instant always lies ahead of the wall clock:
+/// the task grant's expiry is stamped from this instant, and the edge's
+/// credential check judges it, with the token's own `iat` and `exp`, against
+/// the system clock, so a grant that outlives the pinned instant outlives the
+/// real one too. One process pins one instant, so every test agrees on it.
+fn pinned_now() -> DateTime<Utc> {
+    static PINNED: std::sync::OnceLock<DateTime<Utc>> = std::sync::OnceLock::new();
+    *PINNED.get_or_init(|| {
+        let today = Utc::now().date_naive();
+        today
+            .succ_opt()
+            .and_then(|tomorrow| tomorrow.and_hms_opt(10, 0, 0))
+            .expect("tomorrow at ten o'clock")
+            .and_utc()
+    })
+}
+
+/// Issue #1527: an instant derived from the wall clock against the test
+/// opening's fixed daily closing is a latent time-of-day flake. Every slot,
+/// window, availability range, closure, and expiry this suite builds starts
+/// from the pinned instant instead. The wall clock is read in two places
+/// only: where the pinned instant is chosen, and for the access token's own
+/// `iat` and `exp`, which the OIDC verifier judges against the system clock.
+#[test]
+fn the_suite_reads_the_wall_clock_only_to_pin_it_and_to_sign_tokens() {
+    let source = include_str!("postgres_commitments.rs");
+    let reader = concat!("Utc", "::", "now()");
+    let allowed = [
+        concat!("let today = ", "Utc", "::", "now().date_naive();"),
+        concat!("let now = ", "Utc", "::", "now().timestamp();"),
+    ];
+    let unexpected: Vec<_> = source
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(reader))
+        .filter(|(_, line)| !allowed.contains(&line.trim()))
+        .map(|(index, line)| format!("line {}: {}", index + 1, line.trim()))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "these lines build instants from the wall clock instead of the pinned instant: {unexpected:#?}"
+    );
+}
+
 /// Sign an access token, filling in the claims a real token always carries.
 fn token(mut claims: Value) -> String {
     let now = Utc::now().timestamp();
@@ -526,7 +578,7 @@ fn grant_claims() -> Value {
         "registry_grant_source_issuer": "https://authority.test",
         "registry_grant_client": CLIENT,
         "registry_grant_resource": AUDIENCE,
-        "registry_grant_exp": Utc::now().timestamp() + 600,
+        "registry_grant_exp": pinned_now().timestamp() + 600,
         "registry_grant_bounds": {
             "type": "scheduling",
             "permissions": [{
@@ -628,7 +680,7 @@ fn moment(value: &Value, field: &str) -> DateTime<Utc> {
 }
 
 fn availability_uri(offering: &str, from_minutes: i64, to_minutes: i64) -> String {
-    let now = Utc::now();
+    let now = pinned_now();
     format!(
         "/v1/availability?offering={offering}&start={}&end={}",
         stamp(now + TimeDelta::minutes(from_minutes)),
@@ -1246,10 +1298,10 @@ async fn a_hold_confirms_into_an_appointment_with_attributable_history() {
     assert_eq!(hold["resource"], "station-1");
     assert_eq!(hold["policyRevision"], fx.revision);
     assert_eq!(moment(&hold, "start"), slot);
-    let expires_in = moment(&hold, "expiresAt") - Utc::now();
-    assert!(
-        expires_in >= TimeDelta::minutes(9) && expires_in <= TimeDelta::minutes(11),
-        "the hold expires at the authored ten minutes: {expires_in}"
+    assert_eq!(
+        moment(&hold, "expiresAt"),
+        pinned_now() + TimeDelta::minutes(10),
+        "the hold expires at the authored ten minutes"
     );
 
     // A retried create with the same key answers as it first did.
@@ -1358,7 +1410,7 @@ async fn exact_time_commitments_include_buffers_outside_the_opening_range() {
         &["north-counter".to_owned(), "two-counter".to_owned()],
     )
     .await;
-    let day = (Utc::now() + TimeDelta::days(2)).date_naive();
+    let day = (pinned_now() + TimeDelta::days(2)).date_naive();
     let midnight = DateTime::<Utc>::from_naive_utc_and_offset(
         day.and_hms_opt(0, 0, 0).expect("midnight"),
         Utc,
@@ -1481,12 +1533,12 @@ async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET \
-             displayed_start = now() - interval '2 hours', \
-             displayed_end = now() - interval '1 hour', \
-             occupied_start = now() - interval '2 hours', \
-             occupied_end = now() - interval '1 hour' \
+             displayed_start = $2::timestamptz - interval '2 hours', \
+             displayed_end = $2::timestamptz - interval '1 hour', \
+             occupied_start = $2::timestamptz - interval '2 hours', \
+             occupied_end = $2::timestamptz - interval '1 hour' \
              WHERE duplicate_key = $1",
-            &[&"subject:elapsed"],
+            &[&"subject:elapsed", &pinned_now()],
         )
         .await
         .expect("the standing booking elapses");
@@ -1923,6 +1975,12 @@ async fn cancellation_respects_the_cutoff_and_replays_its_verdict() {
             .1,
         "start",
     );
+    // A minute passes before the caller cancels. History pages newest first
+    // by the instant each event occurred, so two events stamped with one
+    // pinned instant would tie, and their order would be left to their
+    // random event identifiers.
+    let later = pinned_now() + TimeDelta::minutes(1);
+    fx.store.pin_clock(Arc::new(move || later));
     let (status, cancelled) = fx
         .post(
             &format!("/v1/appointments/{far_id}/cancel"),
@@ -2027,7 +2085,7 @@ async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
     // The hold-expiry worker's pass, run past the hold's due moment.
     let expired = fx
         .store
-        .expire_due_holds(Utc::now() + TimeDelta::minutes(11), 100)
+        .expire_due_holds(pinned_now() + TimeDelta::minutes(11), 100)
         .await
         .expect("the hold expiry pass");
     assert_eq!(expired, 1);
@@ -2084,7 +2142,7 @@ async fn a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl() {
         .expect("the stand-in's backend")
         .get(0);
 
-    let entered = Utc::now();
+    let entered = pinned_now();
     let create = tokio::spawn(send(
         http,
         "POST".to_owned(),
@@ -2247,7 +2305,7 @@ async fn hold_expiry_advances_the_claim_revision_like_every_other_close() {
 
     let expired = fx
         .store
-        .expire_due_holds(Utc::now() + TimeDelta::minutes(11), 100)
+        .expire_due_holds(pinned_now() + TimeDelta::minutes(11), 100)
         .await
         .expect("the hold expiry pass");
     assert_eq!(expired, 1);
@@ -2763,7 +2821,7 @@ async fn an_idempotency_key_replays_refuses_a_reuse_and_expires_into_a_refusal()
     // The retention sweep passes over the receipt's period.
     let erased = fx
         .store
-        .erase_expired_attempts(Utc::now() + TimeDelta::days(8))
+        .erase_expired_attempts(pinned_now() + TimeDelta::days(8))
         .await
         .expect("the retention sweep runs");
     assert_eq!(erased, 1, "the sweep covers the one stored receipt");
@@ -3108,7 +3166,7 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
     // reminder is not due with it.
     let now_due = fx
         .store
-        .claim_due_intents(Utc::now(), 100, TimeDelta::minutes(10))
+        .claim_due_intents(pinned_now(), 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs");
     assert_eq!(
@@ -3120,7 +3178,7 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
         "a reminder ahead of its offset is not due yet"
     );
 
-    let due = Utc::now() + TimeDelta::days(1);
+    let due = pinned_now() + TimeDelta::days(1);
     let claimed: Vec<_> = fx
         .store
         .claim_due_intents(due, 100, TimeDelta::minutes(10))
@@ -4305,8 +4363,8 @@ async fn claim_keyed(fx: &Fixture, duplicate_key: &str) -> Result<u64, tokio_pos
              displayed_start, displayed_end, occupied_start, occupied_end, units, \
              duplicate_key, revision, policy_revision, actor) \
              VALUES($1,'booking','active','registry-update-30','station-1', \
-             now(), now(), now(), now(), 1, $2, 1, 1, 'actor-pseudonym')",
-            &[&Uuid::new_v4(), &duplicate_key],
+             $3, $3, $3, $3, 1, $2, 1, 1, 'actor-pseudonym')",
+            &[&Uuid::new_v4(), &duplicate_key, &pinned_now()],
         )
         .await
 }
@@ -4391,7 +4449,7 @@ async fn an_unknown_offering_and_a_malformed_body_answer_their_own_codes() {
 async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let fx = fixture().await;
     let (appointment_id, _) = booked(&fx, 90, 200, "held-1").await;
-    let due = Utc::now() + TimeDelta::days(1);
+    let due = pinned_now() + TimeDelta::days(1);
     let claimed = fx
         .store
         .claim_due_intents(due, 100, TimeDelta::minutes(10))
@@ -4449,7 +4507,7 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let (second, _) = booked(&fx, 210, 320, "held-2").await;
     let pending = fx
         .store
-        .claim_due_intents(Utc::now(), 100, TimeDelta::minutes(10))
+        .claim_due_intents(pinned_now(), 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs");
     let delivered = pending
@@ -4620,8 +4678,8 @@ async fn active_holds(fx: &Fixture) -> i64 {
     fx.admin
         .query_one(
             "SELECT count(*) FROM scheduling_claims \
-             WHERE kind='hold' AND state='active' AND hold_expires_at > now()",
-            &[],
+             WHERE kind='hold' AND state='active' AND hold_expires_at > $1",
+            &[&pinned_now()],
         )
         .await
         .expect("count the caller's open holds")
@@ -4773,7 +4831,7 @@ async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing(
 
     // Long past the cursor's fifteen minutes and the receipt period the
     // fixture deploys.
-    let after = Utc::now() + TimeDelta::days(8);
+    let after = pinned_now() + TimeDelta::days(8);
     assert_eq!(
         fx.store
             .erase_expired_cursors(after)
@@ -4867,9 +4925,9 @@ async fn intent_state(fx: &Fixture, claim_id: &str) -> (String, i32, bool) {
     let row = fx
         .admin
         .query_one(
-            "SELECT delivery_state, attempts, next_attempt_at > now() \
+            "SELECT delivery_state, attempts, next_attempt_at > $2 \
              FROM scheduling_outbox WHERE claim_id=$1 AND purpose='confirmation'",
-            &[&claim],
+            &[&claim, &pinned_now()],
         )
         .await
         .expect("read one intent back");
@@ -5040,7 +5098,7 @@ fn policy_with_shared_window() -> String {
 /// inside the availability range the window tests query and inside the
 /// offering's cancellation cutoff, as three hours does.
 fn window_start() -> DateTime<Utc> {
-    window_start_at(Utc::now())
+    window_start_at(pinned_now())
 }
 
 fn window_start_at(now: DateTime<Utc>) -> DateTime<Utc> {
@@ -5165,7 +5223,7 @@ async fn window_entry(fx: &Fixture, from_minutes: i64, to_minutes: i64) -> Optio
 
 #[tokio::test]
 async fn records_replacement_refuses_to_move_a_window_with_standing_commitments() {
-    let day = (Utc::now() + TimeDelta::days(2)).date_naive();
+    let day = (pinned_now() + TimeDelta::days(2)).date_naive();
     let start = DateTime::<Utc>::from_naive_utc_and_offset(
         day.and_hms_opt(9, 0, 0).expect("a morning instant"),
         Utc,
@@ -5201,7 +5259,7 @@ async fn records_replacement_refuses_to_move_a_window_with_standing_commitments(
 /// through that tool.
 #[tokio::test]
 async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
-    let start = (Utc::now() + TimeDelta::days(2))
+    let start = (pinned_now() + TimeDelta::days(2))
         .with_nanosecond(0)
         .expect("second precision");
     let fx = fixture_publishing(
@@ -5248,7 +5306,7 @@ async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
 /// Both directions are refused by name instead.
 #[tokio::test]
 async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
-    let start = (Utc::now() + TimeDelta::days(2))
+    let start = (pinned_now() + TimeDelta::days(2))
         .with_nanosecond(0)
         .expect("second precision");
     let fx = fixture_publishing(
@@ -5341,7 +5399,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
 /// open.
 #[tokio::test]
 async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows_staffing() {
-    let start = (Utc::now() + TimeDelta::days(2))
+    let start = (pinned_now() + TimeDelta::days(2))
         .with_nanosecond(0)
         .expect("second precision");
     let pools = [
@@ -5409,7 +5467,7 @@ async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows
 
 #[tokio::test]
 async fn changed_window_records_must_advance_the_revision_even_after_removal() {
-    let start = (Utc::now() + TimeDelta::days(2))
+    let start = (pinned_now() + TimeDelta::days(2))
         .with_nanosecond(0)
         .expect("second precision");
     let fx = fixture_with_window(start).await;
@@ -5572,7 +5630,7 @@ async fn a_window_record_must_belong_to_the_authorized_offering_and_location() {
 
 #[tokio::test]
 async fn a_location_closure_hides_and_refuses_an_arrival_window() {
-    let day = (Utc::now() + TimeDelta::days(2)).date_naive();
+    let day = (pinned_now() + TimeDelta::days(2)).date_naive();
     let start = DateTime::<Utc>::from_naive_utc_and_offset(
         day.and_hms_opt(9, 0, 0).expect("a morning instant"),
         Utc,
@@ -6256,12 +6314,23 @@ async fn a_reschedule_and_a_cancellation_commit_exactly_one_transition() {
 /// the door and lapses before the commit books nothing.
 #[tokio::test]
 async fn a_grant_that_lapses_before_the_commit_never_books() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     let fx = fixture().await;
-    // The pinned clock sits past the test token's grant expiry, while the
-    // request's own now, observed at the door, is still inside it.
-    let pinned = Utc::now() + TimeDelta::minutes(20);
-    fx.store.pin_clock(Arc::new(move || pinned));
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    // The request's own now, the edge's first observation of the clock, is
+    // still inside the test token's grant; every later observation, the
+    // re-check immediately before the write among them, sits past it.
+    let door = pinned_now();
+    let observations = Arc::new(AtomicUsize::new(0));
+    let observed = observations.clone();
+    fx.store.pin_clock(Arc::new(move || {
+        if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+            door
+        } else {
+            door + TimeDelta::minutes(20)
+        }
+    }));
     let (status, problem) = fx
         .post(
             "/v1/appointments",
@@ -6284,6 +6353,10 @@ async fn a_grant_that_lapses_before_the_commit_never_books() {
         committed.get::<_, i64>(0),
         0,
         "a lapsed grant commits nothing"
+    );
+    assert!(
+        observations.load(Ordering::SeqCst) >= 2,
+        "the transaction observed the clock again after the door"
     );
 }
 
@@ -6371,11 +6444,16 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
             .await
             .expect("snapshot before mutation")
             .get(0);
+        // The edge's observation, the request's own now, stands inside the
+        // grant. A confirmation reads the clock once more to judge its hold
+        // after it takes the anchor, and must still find the hold live. Every
+        // later observation, the re-check after the writes, is past the grant.
+        let valid_reads = if operation == "confirm" { 2 } else { 1 };
         let calls = Arc::new(AtomicUsize::new(0));
         let observed = calls.clone();
-        let valid = Utc::now();
+        let valid = pinned_now();
         fx.store.pin_clock(Arc::new(move || {
-            if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+            if observed.fetch_add(1, Ordering::SeqCst) < valid_reads {
                 valid
             } else {
                 valid + TimeDelta::minutes(20)
@@ -6387,7 +6465,7 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{operation}: {problem}");
         assert_eq!(problem["code"], "operation.not-authorized", "{operation}");
         assert!(
-            calls.load(Ordering::SeqCst) >= 2,
+            calls.load(Ordering::SeqCst) > valid_reads,
             "{operation} observes the final clock"
         );
         let after: Value = fx
@@ -6542,7 +6620,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         prerequisites: Vec::new(),
     };
     let commitment = Commitment {
-        now: Utc::now(),
+        now: pinned_now(),
         policy_revision: i64::try_from(fx.revision).expect("a bounded revision"),
         facts_revision: resolved_under,
         actor: "actor-pseudonym",
@@ -6550,7 +6628,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         actor_subject: "principal-agent",
         idempotency_key: "stale-facts",
         request_hash: "sha256:stale-facts",
-        attempt_expires_at: Utc::now() + TimeDelta::days(7),
+        attempt_expires_at: pinned_now() + TimeDelta::days(7),
         grant_exp_unix: None,
         hooks: None,
     };
@@ -6584,7 +6662,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
 async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_attempt() {
     let fx = fixture().await;
     let _ = booked(&fx, 90, 200, "lease-1").await;
-    let due = Utc::now() + TimeDelta::days(1);
+    let due = pinned_now() + TimeDelta::days(1);
     let claimed: Vec<_> = fx
         .store
         .claim_due_intents(due, 100, TimeDelta::minutes(10))
@@ -6656,7 +6734,7 @@ async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_attempt() {
 async fn an_expired_dispatch_lease_cannot_start_a_send() {
     let fx = fixture().await;
     let _ = booked(&fx, 90, 200, "expired-dispatch").await;
-    let due = Utc::now() + TimeDelta::days(1);
+    let due = pinned_now() + TimeDelta::days(1);
     let rows = fx
         .store
         .claim_due_intents(due, 1, TimeDelta::minutes(10))
@@ -6684,7 +6762,7 @@ async fn an_expired_dispatch_lease_cannot_start_a_send() {
 async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
     let fx = fixture().await;
     let (appointment, revision) = booked(&fx, 300, 440, "suppress-1").await;
-    let due = Utc::now() + TimeDelta::days(1);
+    let due = pinned_now() + TimeDelta::days(1);
     let claimed: Vec<_> = fx
         .store
         .claim_due_intents(due, 100, TimeDelta::minutes(10))
@@ -6839,7 +6917,7 @@ async fn a_default_availability_request_continues_its_own_cursor() {
         .get(
             &format!(
                 "/v1/availability?offering={OFFERING}&limit=2&start={}&cursor={cursor}",
-                stamp(Utc::now() + TimeDelta::minutes(90))
+                stamp(pinned_now() + TimeDelta::minutes(90))
             ),
             &fx.agent,
         )
@@ -6876,7 +6954,7 @@ async fn a_default_availability_request_continues_its_own_cursor() {
 async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement() {
     let fx = fixture().await;
     let (appointment, revision) = booked(&fx, 300, 440, "reschedule-remind").await;
-    let due = Utc::now() + TimeDelta::days(1);
+    let due = pinned_now() + TimeDelta::days(1);
     let claimed: Vec<_> = fx
         .store
         .claim_due_intents(due, 100, TimeDelta::minutes(10))
@@ -7298,7 +7376,7 @@ async fn an_idempotency_key_refusal_pairs_its_request_entry() {
     );
 
     fx.store
-        .erase_expired_attempts(Utc::now() + TimeDelta::days(8))
+        .erase_expired_attempts(pinned_now() + TimeDelta::days(8))
         .await
         .expect("the retention sweep runs");
     let before = fx.capture.entries().len();

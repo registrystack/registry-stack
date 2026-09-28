@@ -118,11 +118,13 @@ const HOLD_CEILING_LOCK_NAMESPACE: i32 = 0x5343_4844;
 /// The send deadline must fit inside the remaining dispatch lease.
 pub(crate) const REMINDER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The clock the store reads when it re-checks authorization currency.
-/// Production observes the system clock; the database suite pins one to
-/// cross an expiry boundary deterministically inside a transaction. The
-/// clock sits behind a shared lock so every handle cloned from one store
-/// reads the same time.
+/// The deployment's clock: the instant the HTTP edge stamps on each request,
+/// the store's authorization re-checks and hold expiry inside a capacity
+/// transaction, and the runtime workers' passes all read it. Production
+/// observes the system clock; the database suite pins one, so a test's
+/// slots and windows sit at a fixed time of day and an expiry boundary is
+/// crossed deterministically inside a transaction. The clock sits behind a
+/// shared lock so every handle cloned from one store reads the same time.
 pub type Clock = std::sync::Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 type SharedClock = std::sync::Arc<std::sync::RwLock<Clock>>;
 
@@ -308,9 +310,10 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
-    /// One observation of the store's clock: the time an authorization
-    /// re-check inside a transaction is decided under.
-    fn observed_now(&self) -> DateTime<Utc> {
+    /// One observation of the store's clock: a request's own `now` at the
+    /// edge, and the time an authorization re-check inside a transaction is
+    /// decided under. Production observes the system clock.
+    pub fn observed_now(&self) -> DateTime<Utc> {
         let clock = self
             .clock
             .read()
@@ -330,9 +333,10 @@ impl PostgresStore {
         check_grant_current_at(commitment, self.observed_now())
     }
 
-    /// Pin the clock the store's authorization re-checks read. Test-only:
-    /// production always observes the system clock. Every handle cloned
-    /// from this store reads the pinned time.
+    /// Pin the store's clock, which the HTTP edge, the authorization
+    /// re-checks, and the worker passes read. Test-only: production always
+    /// observes the system clock. Every handle cloned from this store reads
+    /// the pinned time.
     #[cfg(feature = "postgres-test")]
     pub fn pin_clock(&self, clock: Clock) {
         *self
