@@ -40,6 +40,9 @@ registry-cli-reference.workspace = true
 registry-platform-crypto.workspace = true
 registry-thunderid-tooling.workspace = true
 p256.workspace = true
+# `jwk from-pem` reads a PEM SubjectPublicKeyInfo or PKCS #1 public key.
+pkcs1.workspace = true
+pkcs8 = { workspace = true, features = ["pem"] }
 rhai.workspace = true
 rustix.workspace = true
 serde.workspace = true

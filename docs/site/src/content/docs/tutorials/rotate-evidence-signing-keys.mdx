@@ -31,8 +31,10 @@ public key makes the key discoverable, but does not make independent consumers t
 ## Stage a new key version
 
 Create the replacement as a new version of the non-exportable P-256 Transit key. Read that version's
-public PEM from Transit metadata, convert the public projection to the exact governed JWK, and commit
-only that JWK to the reviewed deployment repository. For local rehearsal, generate a disposable
+public PEM from Transit metadata, convert the public projection to the exact governed JWK with
+`evidencectl jwk from-pem`, as in
+[Publish the exact public projections](../move-evidence-to-production-signing/#publish-the-exact-public-projections),
+and commit only that JWK to the reviewed deployment repository. For local rehearsal, generate a disposable
 P-256 pair:
 
 ```sh

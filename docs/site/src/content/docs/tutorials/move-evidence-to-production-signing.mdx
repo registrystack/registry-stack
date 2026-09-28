@@ -29,9 +29,10 @@ You need:
 - An auto-auth method appropriate for the deployment platform.
 - A reviewed deployment target based on the ready-to-copy templates under
   `products/evidence/reference/deployment-targets/`.
-- Python 3.11 or later, run through [`uv`](https://docs.astral.sh/uv/), to convert each service's
-  public key from PEM to JWK and compute its RFC 7638 SHA-256 thumbprint. [Publish the exact public
-  projections](#publish-the-exact-public-projections) gives the exact command for Evidence Gateway.
+- `evidencectl` from the same release as the Evidence Gateway runtime, and
+  [`jq`](https://jqlang.org/), to convert each service's public key from PEM to JWK.
+  [Publish the exact public projections](#publish-the-exact-public-projections) gives the exact
+  command for Evidence Gateway.
 
 The commands use a Transit mount named `transit`. Change the mount consistently when your provider
 uses another name.
@@ -85,9 +86,8 @@ the approved public projection and controls. Do not commit provider responses.
 
 ## Publish the exact public projections
 
-Convert the selected version's public PEM to an exact public JSON Web Key (JWK). Compute the RFC
-7638 thumbprint from `crv`, `kty`, `x`, and `y`, then use that 43-character value as both `kid` and
-the filename:
+Convert the selected version's public PEM to an exact public JSON Web Key (JWK). The `kid` is the
+RFC 7638 thumbprint of `crv`, `kty`, `x`, and `y`, a 43-character value that also names the file:
 
 ```json
 {
@@ -100,50 +100,19 @@ the filename:
 }
 ```
 
-The object must contain exactly those six members and no private member. Run this conversion from
-each service's saved review metadata; it reads the pinned version's PEM, derives `x` and `y`,
-computes the RFC 7638 thumbprint, and writes the finished JWK to the named directory as
-`<thumbprint>.jwk.json`:
+The object must contain exactly those six members and no private member. `evidencectl jwk from-pem`
+produces it: it reads one PEM public key, refuses a private key or an unsupported key type, derives
+`x` and `y` from the P-256 point, computes the thumbprint, and with `--output-dir` writes the JWK as
+`<thumbprint>.jwk.json`. Run it on the pinned version's PEM from each service's saved review
+metadata:
 
 ```sh
-pem_to_jwk() {
-  metadata_path=$1
-  version=$2
-  out_dir=$3
-  uv run --with cryptography python3 - "$metadata_path" "$version" "$out_dir" <<'PY'
-import base64, hashlib, json, sys
-
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
-
-metadata_path, version, out_dir = sys.argv[1:4]
-
-with open(metadata_path) as f:
-    metadata = json.load(f)
-pem = metadata["data"]["keys"][version]["public_key"].encode()
-numbers = load_pem_public_key(pem).public_numbers()
-
-
-def b64url(n):
-    return base64.urlsafe_b64encode(n.to_bytes(32, "big")).rstrip(b"=").decode()
-
-
-x, y = b64url(numbers.x), b64url(numbers.y)
-canonical = json.dumps({"crv": "P-256", "kty": "EC", "x": x, "y": y}, separators=(",", ":"), sort_keys=True)
-kid = base64.urlsafe_b64encode(hashlib.sha256(canonical.encode()).digest()).rstrip(b"=").decode()
-jwk = {"kty": "EC", "crv": "P-256", "x": x, "y": y, "alg": "ES256", "kid": kid}
-
-with open(f"{out_dir}/{kid}.jwk.json", "w") as f:
-    json.dump(jwk, f, indent=2)
-    f.write("\n")
-print(kid)
-PY
-}
-
-pem_to_jwk "<operator-review-path>/evidence-key.json" "<nonzero-version>" "environments/<environment>/evidence/public-keys"
+jq -r '.data.keys["<nonzero-version>"].public_key' "<operator-review-path>/evidence-key.json" \
+  | evidencectl jwk from-pem - --output-dir "environments/<environment>/evidence/public-keys"
 ```
 
-Each command prints the thumbprint it used as the filename. The result lands in the same
-environment target the command publishes to:
+The command prints the path it wrote and the thumbprint it used as the filename. The result lands
+in the same environment target the command publishes to:
 
 ```text
 environments/<environment>/

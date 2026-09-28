@@ -99,7 +99,7 @@ pub fn run(args: JwksArgs, format: OutputFormat) -> Result<ExitCode> {
 /// including a symlink, so the create that follows always creates a fresh
 /// file and `OUTPUT_FILE_MODE` is always the one `O_CREAT` applies, never a
 /// later chmod that could instead land on whatever a symlink now points at.
-fn write_owner_file(path: &std::path::Path, contents: &[u8], force: bool) -> Result<()> {
+pub(crate) fn write_owner_file(path: &std::path::Path, contents: &[u8], force: bool) -> Result<()> {
     if force {
         match fs::symlink_metadata(path) {
             Ok(_) => fs::remove_file(path)
