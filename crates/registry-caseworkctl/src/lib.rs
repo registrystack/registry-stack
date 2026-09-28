@@ -55,7 +55,7 @@ enum Command {
     Simulate(SimulateArgs),
     /// Package validated policy and exact imported descriptions for deployment.
     ///
-    /// The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a BReg registry package from a tested BReg project.
+    /// The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a Base Registry Engine (BReg) registry package from a tested BReg project.
     Package(PackageArgs),
     /// Run the project's bounded synthetic fixtures offline.
     Test(ProjectArgs),
@@ -143,8 +143,9 @@ struct CheckArgs {
     /// Exit unsuccessfully when the authoring check reports any finding.
     #[arg(long)]
     deny_findings: bool,
-    /// Closed BReg package whose rederived registry revision must equal the
-    /// pinned sourceRevision of a BReg source; verified by bregctl.
+    /// Closed Base Registry Engine (BReg) package whose rederived registry
+    /// revision must equal the pinned sourceRevision of a BReg source; verified
+    /// by bregctl.
     #[arg(long, value_name = "DIRECTORY")]
     against_breg_package: Option<PathBuf>,
     /// BReg source to compare with the package; required when the project
