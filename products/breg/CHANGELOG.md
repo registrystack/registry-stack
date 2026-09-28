@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- BREAKING: package signing is removed. Upgrade to v0.35.0 before this
+  release: a deployment on v0.34.0 or earlier must pass through v0.35.0,
+  because this release no longer reads a predecessor package that has no
+  `SHA256SUMS` envelope.
+  - A package is unsigned and named by its package digest, the SHA-256 of
+    its `SHA256SUMS`. `bregctl package` seals and publishes it in one step
+    into `<output>/package`, with no signing input, signature document, or
+    `awaiting_signatures` state, and refuses an output directory that
+    already holds a published package.
+  - `bregctl test` and `package` refuse `--signature-threshold`,
+    `--signature-key-id`, and `--database-id`, `package` refuses
+    `--signatures`, and both take the active package directory as
+    `--baseline-package` instead of `--baseline-runtime-config`. Each
+    refusal says what to do instead.
+  - The runtime `package` block holds `root` and an optional
+    `expectedDigest`. `trustAnchorPath`, `activeRevision`, and
+    `activeSequence` are refused, and the trust anchor file is gone.
+  - The project `package` block holds only `sourceRevision`.
+    `environment`, `instanceId`, and `sequence` are refused as
+    `package.environment.removed`, `package.instance_id.removed`, and
+    `package.sequence.removed`; the environment and instance belong in the
+    runtime file's `identity`.
+  - The legacy-predecessor fallback v0.35.0 added is gone: `diff`, `test`,
+    `package`, `apply`, and the field-encryption preflight no longer read a
+    predecessor without `SHA256SUMS` through its BReg signature, and
+    `package.digest_pin_unverifiable` is gone. The migration rehearsal still
+    reports `migration.rehearsal.baseline_fingerprint_drift` as a finding.
+  - <!-- ledger: lead fills: how `apply` refuses a package that does not follow the active one -->
+  - <!-- ledger: lead fills: old packages must be rebuilt -->
+  - <!-- ledger: lead fills: the first apply adopts -->
+  - <!-- ledger: lead fills: Casework repins -->
+  - <!-- ledger: lead fills: Evidence sources re-import once -->
+
 - BREAKING: the database records every activation, the initial one included,
   as one row of `registry_internal.registry_migrations`, keyed by a UUID
   activation id and ordered by `apply_order`. Each row names the package
