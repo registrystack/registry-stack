@@ -384,6 +384,12 @@ impl ExpectedManagedCatalog {
             Some((false, false)),
         );
         catalog.table(
+            "registry_internal.registry_pre_ledger_package_positions",
+            std::iter::empty::<&str>(),
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        catalog.table(
             "registry_internal.registry_field_encryption_keys",
             ["SELECT"],
             std::iter::empty::<&str>(),

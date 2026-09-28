@@ -38,11 +38,11 @@ use super::{
     },
     config::ConnectionTls,
     migration_ledger::{
-        in_flight_activation, migration_phase_state, record_applied, record_chunk_progress,
-        record_failed, record_postconditions_complete, record_preconditions_complete,
-        record_reverted, record_started, record_step_complete, statement_checksum, step_progress,
-        verify_resumable, ActivationPlanKind, MigrationLedgerEntry, MigrationLedgerStep,
-        MigrationLedgerStepKind,
+        carry_pre_ledger_package_positions, in_flight_activation, migration_phase_state,
+        record_applied, record_chunk_progress, record_failed, record_postconditions_complete,
+        record_preconditions_complete, record_reverted, record_started, record_step_complete,
+        statement_checksum, step_progress, verify_resumable, ActivationPlanKind,
+        MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
     },
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
@@ -1762,6 +1762,18 @@ impl DedicatedApplyConnection {
                     target.activation_uuid()?.hyphenated(),
                 ))
                 .await?;
+        }
+        // Flips and request proposals recorded before adoption name the
+        // revisions the old ledger ordered; their order outlives that ledger.
+        if transaction
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_migrations') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .try_get::<_, bool>(0)?
+        {
+            carry_pre_ledger_package_positions(&transaction).await?;
         }
         transaction
             .batch_execute(

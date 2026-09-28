@@ -428,14 +428,82 @@ pub(crate) async fn install_migration_ledger(
              REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;",
         )
         .await?;
+    install_pre_ledger_package_positions(migration).await?;
     let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
             "{}
+             {}
              {}",
             revoke.revoke_all_on("TABLE registry_internal.registry_migrations"),
             revoke.revoke_all_on("TABLE registry_internal.registry_migration_steps"),
+            revoke.revoke_all_on("TABLE registry_internal.registry_pre_ledger_package_positions"),
         ))
+        .await?;
+    Ok(())
+}
+
+/// Installs the order of the package revisions a pre-ledger database's
+/// ledger named. Field-encryption flips and request proposals recorded before
+/// adoption name those revisions, and erasure orders them against each other
+/// here; every position precedes the first activation, so a revision the
+/// ledger records always follows them. The table stays empty on a database
+/// the ledger recorded from its first activation.
+async fn install_pre_ledger_package_positions(migration: &impl GenericClient) -> Result<()> {
+    migration
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS registry_internal.registry_pre_ledger_package_positions (
+                 package_revision text PRIMARY KEY
+                     CONSTRAINT registry_pre_ledger_package_positions_revision_nonempty
+                     CHECK (package_revision <> ''),
+                 package_sequence bigint NOT NULL
+                     CONSTRAINT registry_pre_ledger_package_positions_precede_the_ledger
+                     CHECK (package_sequence < 1)
+             );
+             REVOKE ALL ON TABLE registry_internal.registry_pre_ledger_package_positions
+                 FROM PUBLIC;",
+        )
+        .await?;
+    Ok(())
+}
+
+/// Keeps the order a pre-ledger ledger gave its package revisions, before
+/// adoption drops that ledger. A revision is ordered as the ledger ordered
+/// it: a target at its sequence, and a source the ledger never targeted just
+/// before the first target it preceded. The positions are shifted so the
+/// last of them is 0 and the adoption, at apply order 1, follows them all.
+pub(crate) async fn carry_pre_ledger_package_positions(
+    migration: &impl GenericClient,
+) -> Result<()> {
+    install_pre_ledger_package_positions(migration).await?;
+    migration
+        .execute(
+            "WITH target_positions AS (
+                 SELECT target_package_revision AS package_revision, package_sequence
+                   FROM registry_internal.registry_migrations
+             ),
+             source_positions AS (
+                 SELECT source.source_package_revision AS package_revision,
+                        min(source.package_sequence - 1)::bigint AS package_sequence
+                   FROM registry_internal.registry_migrations AS source
+                  WHERE source.source_package_revision IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM target_positions AS target
+                         WHERE target.package_revision = source.source_package_revision
+                    )
+                  GROUP BY source.source_package_revision
+             ),
+             positions AS (
+                 SELECT package_revision, package_sequence FROM target_positions
+                 UNION ALL
+                 SELECT package_revision, package_sequence FROM source_positions
+             )
+             INSERT INTO registry_internal.registry_pre_ledger_package_positions
+                 (package_revision, package_sequence)
+             SELECT package_revision, package_sequence - max(package_sequence) OVER ()
+               FROM positions",
+            &[],
+        )
         .await?;
     Ok(())
 }
