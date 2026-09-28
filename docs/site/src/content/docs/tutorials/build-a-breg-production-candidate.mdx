@@ -23,15 +23,16 @@ installed and a `tutorial-work` directory. This tutorial builds from a fresh pro
 `tutorial-work/candidate-project`, because the module tutorial edits its project and every edit
 changes the digests. In this tutorial you read what the production profile finds in the new project,
 run its journeys against a PostgreSQL you start yourself, and turn the result into a package that
-`bregctl verify` checks the way the runtime checks its files at startup. You end with a verified
-package on disk, not a running registry: [Deploy a registry](../../operate/breg/) takes it
-from there.
+`bregctl verify` checks the way the runtime checks its files at startup. You then promote that one
+package through two local databases, staging and production, the way a release moves between
+environments: you plan and apply it in each, and confirm that both serve the same registry revision.
+[Deploy a registry](../../operate/breg/) takes the same steps to a PostgreSQL you run for real.
 
 <QuickstartMeta
-  outcome="A package built from your project and accepted by bregctl verify under a runtime configuration you wrote."
-  time="About 30 minutes"
+  outcome="A package built from your project, accepted by bregctl verify, and activated in a staging and a production database that serve the same registry revision."
+  time="About 45 minutes"
   level="Production build with synthetic data and a local issuer key"
-  prerequisites={['The bregctl from Create and query your first registry', 'Docker', 'OpenSSL 3']}
+  prerequisites={['The source-built bregctl and breg pair', 'Docker', 'OpenSSL 3', 'curl and jq']}
 />
 
 ## Before you start
@@ -443,12 +444,170 @@ Verified the package against the runtime it is bound to.
 
 `runtime_bound` means the check read the runtime configuration the runtime reads at startup,
 recomputed every file digest against `SHA256SUMS`, and re-derived every generated artifact from the
-package's own source. It opens no database.
+package's own source. It opens no database: reading the database is what `plan` does, in the next
+section.
 
 To pin the exact package, add `package.expectedDigest` with the digest `package` printed. `verify`
-and the runtime then refuse any other package at `package.root`, naming both digests.
+and the runtime then refuse any other package at `package.root`, naming both digests. Once a
+database has activated a package, the runtime also refuses to serve any package its activation
+ledger does not name as active, pin or no pin.
 
 {/* Evidence: crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package; crates/registry-breg/src/package.rs, inspect_package_integrity_with_verified_envelope, rederive; crates/registry-platform-config/src/blocks.rs, verify_digest; crates/registry-breg/src/startup.rs, verify_package_envelope. */}
+
+## Promote the package to staging and production
+
+You built and tested the package once. Each environment now plans and applies that same package
+directory against its own database; nothing is rebuilt between them.
+
+### Create one database per environment
+
+In the same shell, so `umask 077` still applies, create `registry_staging` and
+`registry_production` the way you created the test database, and write each one's connection URLs
+beside the others. The roles and their passwords are the ones you already made:
+
+```sh
+for env in staging production; do
+  docker exec breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres -c "CREATE DATABASE registry_$env"
+  docker exec -i breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres -d "registry_$env" <<SQL
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+REVOKE ALL ON DATABASE registry_$env FROM PUBLIC;
+GRANT CONNECT ON DATABASE registry_$env TO registry_migration, registry_runtime;
+CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
+REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC;
+SQL
+  sed "s#/registry_candidate_test\$#/registry_$env#" tutorial-work/candidate/secrets/migration-database-url > "tutorial-work/candidate/secrets/$env-migration-url"
+  sed "s#/registry_candidate_test\$#/registry_$env#" tutorial-work/candidate/secrets/runtime-database-url > "tutorial-work/candidate/secrets/$env-runtime-url"
+done
+```
+
+### Write one runtime file per environment
+
+Derive `staging.yaml` and `production.yaml` from `runtime.yaml`. Both keep `package.root` on
+`build-1/package`; each gets its own identity, connection URLs, listener port, and audit file:
+
+```sh
+port=8081
+for env in staging production; do
+  mkdir -p "tutorial-work/candidate/audit-$env"
+  sed -e "s#bind: 127.0.0.1:8080#bind: 127.0.0.1:$port#" \
+    -e "s#: development\$#: $env#" \
+    -e "s#instanceId: generic-registry-1#instanceId: generic-registry-$env#" \
+    -e "s#databaseId: generic-registry-db-1#databaseId: generic-registry-$env-db#" \
+    -e "s#secret:file/runtime-database-url#secret:file/$env-runtime-url#" \
+    -e "s#secret:file/migration-database-url#secret:file/$env-migration-url#" \
+    -e "s#/audit/breg.jsonl#/audit-$env/breg.jsonl#" \
+    tutorial-work/candidate/runtime.yaml > "tutorial-work/candidate/$env.yaml"
+  port=$((port + 1))
+done
+diff tutorial-work/candidate/staging.yaml tutorial-work/candidate/production.yaml
+```
+
+`diff` lists the listener, the four `identity` values, the two URL references, and the audit path,
+and nothing else. The first `apply` records `databaseId` in its database, and every later `plan`,
+`apply`, and startup refuses a runtime file that names another.
+
+### Plan and apply in each environment
+
+`plan` makes the checks `apply` makes, under the same lock, and rolls them back, so it changes
+nothing. Run it for both environments first:
+
+```sh
+export SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem"
+for env in staging production; do
+  bregctl plan --runtime-config "$PWD/tutorial-work/candidate/$env.yaml" \
+    --package "$PWD/tutorial-work/candidate/build-1/package"
+done
+```
+
+Each plan reports `activation` `initial` and the package digest `package` printed. Apply the
+package, then read what each database recorded:
+
+```sh
+for env in staging production; do
+  bregctl apply --initial --runtime-config "$PWD/tutorial-work/candidate/$env.yaml" \
+    --package "$PWD/tutorial-work/candidate/build-1/package"
+  bregctl status --runtime-config "$PWD/tutorial-work/candidate/$env.yaml"
+done
+```
+
+`--initial` activates the first package in a database that has never activated one; every later
+`apply` omits it. `status` reads the activation
+ledger: both databases report the same active package digest, maintenance status `ready`, and one
+ledger entry with plan kind `initial` and outcome `applied`. Their activation ids differ, because
+each database records its own activation.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, PlanArgs, ApplyArgs, StatusArgs, PlanSuccessReport, StatusSuccessReport; crates/registry-breg/src/migration.rs, rehearse_begin(); products/breg/scripts/test-promotion.sh, render_runtime_config(). */}
+
+### Serve both and compare
+
+Start one runtime per environment, wait until both are ready, and ask each for its registry
+metadata with the operator token. The header file keeps the token off the command line:
+
+```sh
+breg --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" > tutorial-work/candidate/staging.log 2>&1 &
+staging_pid=$!
+breg --runtime-config "$PWD/tutorial-work/candidate/production.yaml" > tutorial-work/candidate/production.log 2>&1 &
+production_pid=$!
+until curl -fsS http://127.0.0.1:8081/ready >/dev/null && curl -fsS http://127.0.0.1:8082/ready >/dev/null; do sleep 1; done
+printf 'Authorization: Bearer %s\n' "$(cat tutorial-work/candidate/secrets/operator-token)" > tutorial-work/candidate/secrets/operator-header
+for port in 8081 8082; do
+  curl -fsS -H @tutorial-work/candidate/secrets/operator-header "http://127.0.0.1:$port/v1/registry?accessProfile=operator" | jq -r .revision
+done
+kill "$staging_pid" "$production_pid"
+```
+
+Both lines print the registry revision `package` printed. Staging and production serve the same
+registry because they run the same package, which is the point of promoting the artifact rather
+than rebuilding it.
+
+### See what apply refuses
+
+The ledger decides what each database accepts. Apply the active package to staging again, then
+point a copy of the staging file at the production database and plan against it:
+
+```sh
+bregctl apply --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" \
+  --package "$PWD/tutorial-work/candidate/build-1/package"
+sed 's#secret:file/staging-#secret:file/production-#' tutorial-work/candidate/staging.yaml > tutorial-work/candidate/staging-on-production.yaml
+bregctl plan --runtime-config "$PWD/tutorial-work/candidate/staging-on-production.yaml" \
+  --package "$PWD/tutorial-work/candidate/build-1/package"
+```
+
+Both exit with status 1 and change nothing. The first reports `apply.package.already_active`: the
+package is already active, so a deploy job runs `plan` and applies only when it reports `pending`
+`true`. The second reports `apply.database.identity_mismatch`: the production database recorded
+`generic-registry-production-db`, and the file names `generic-registry-staging-db`. Two more refusals
+hold once you promote a successor: an older package, or one that does not name the active package as
+its predecessor, is refused with `apply.package.refused`, and a backup binding recorded for another
+database is refused with `apply.backup_evidence.refused`.
+
+{/* Evidence: crates/registry-breg/src/migration.rs, verify_successor_package_binding(), AlreadyActive, DatabaseMismatch; crates/registry-bregctl/src/lib.rs, apply.package.already_active, apply.database.identity_mismatch, apply.backup_evidence.refused. */}
+
+### Promote a reviewed successor
+
+This project has no successor yet. When a later build changes the schema, it is packaged once and
+promoted the same way, and a destructive change requires one backup per environment. Each
+environment takes its own backup and writes its own binding, which names its `databaseId`, so the
+production apply never accepts the staging backup. For a successor whose reviewed migration names
+`modules/core/migrations/retire-legacy-field/backup.json`, the per-environment step is:
+
+```sh
+bregctl plan --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" \
+  --package "$PWD/tutorial-work/candidate/build-2/package" \
+  --backup "modules/core/migrations/retire-legacy-field/backup.json=$PWD/tutorial-work/candidate/backups/staging-binding.json"
+bregctl apply --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" \
+  --package "$PWD/tutorial-work/candidate/build-2/package" \
+  --backup "modules/core/migrations/retire-legacy-field/backup.json=$PWD/tutorial-work/candidate/backups/staging-binding.json"
+```
+
+Production repeats it with `production.yaml` and its own binding. `apply` reports `activation`
+`successor`, and `status` then lists two ledger entries, `initial` and `successor`, the second
+naming the first package as its predecessor. [Change a live registry](../../operate/breg-changes/)
+covers writing the reviewed migration and the binding.
 
 ## Clean up
 
@@ -459,8 +618,9 @@ rm -rf tutorial-work/candidate/secrets
 ```
 
 :::caution[Removal is final]
-`docker rm -f` deletes the container and the test database inside it, which is what a disposable
-database is for. Keep `build-1` and `runtime.yaml` if you continue with Deploy a registry.
+`docker rm -f` deletes the container and the test, staging, and production databases inside it,
+which is what disposable databases are for. Keep `build-1` and `runtime.yaml` if you continue with
+Deploy a registry.
 :::
 
 ## What you built
@@ -468,9 +628,10 @@ database is for. Keep `build-1` and `runtime.yaml` if you continue with Deploy a
 A project reviewed under the production profile; a schema-test receipt from its journeys, run against
 PostgreSQL 17 over TLS with tokens from a static JWKS; and a package whose digest covers every file
 it holds, which `bregctl verify` accepts with `runtime_bound` assurance under the runtime
-configuration you wrote.
-No registry served a request: the test drove the journeys in-process, and the database was
-disposable.
+configuration you wrote. You then promoted that one package to a staging and a production
+database: `plan` checked each before `apply` changed it, `status` read what each activation
+ledger recorded, and both runtimes served the same registry revision. The databases were
+disposable, and the successor step is the one you repeat for every later build.
 
 ## Troubleshooting
 
@@ -483,10 +644,14 @@ disposable.
 | `bregctl verify` reports `verify.runtime_config.environment_identity_conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
 | `verify.package.integrity_refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
 | `verify.package.integrity_refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
+| The readiness loop never ends | A runtime refused to start. Read `staging.log` or `production.log` for the refusal code, stop the other runtime with `kill`, and rerun the block once the cause is fixed. |
+| `breg` logs `startup.package.not_active` | `package.root` in that runtime file names a package the database has not activated. Point it at `build-1/package`, or plan and apply the package it names. |
+| `curl` fails with `401` | The operator token expired an hour after you issued it. Reissue it with `issue-token.sh`, rewrite `operator-header`, and query again. |
 | `openssl` rejects `-rawin` or `-algorithm ED25519` | The `openssl` on `PATH` is LibreSSL. Install OpenSSL 3 and put it first on `PATH`. |
 
 ## Next
 
-- [Deploy a registry](../../operate/breg/): provision PostgreSQL for real, write the runtime configuration, activate the package with `apply`, and serve it with `breg`.
+- [Deploy a registry](../../operate/breg/): provision PostgreSQL for real, write each environment's runtime configuration, check and activate the package with `plan`, `apply`, and `status`, and serve it with `breg`.
+- [Change a live registry](../../operate/breg-changes/) when the next build changes the schema.
 - [Test with journeys](../../configure/breg-journeys/) to extend the journeys before the next candidate.
 - [Control access per profile](../../configure/breg-access/) to close the finding with a row boundary.

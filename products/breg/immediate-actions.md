@@ -399,9 +399,8 @@ For edited fixture copies, pass `--asset-project /private/tmp/path/to/copy`,
 `--household-project /private/tmp/path/to/copy`, or
 `--rhai-project /private/tmp/path/to/copy`. All three fixtures run by default.
 The runner reads
-`package.environment`, `package.instanceId`, and `package.sourceRevision` from
-each selected `registry.yaml`, so the runtime binding matches the candidate
-under test.
+`package.sourceRevision` from each selected `registry.yaml`, so the schema test
+records the source revision of the candidate under test.
 
 The schema-test credentials must bind every journey step to a bearer token whose
 verified claims satisfy the selected profile:

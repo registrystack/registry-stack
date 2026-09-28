@@ -29,11 +29,39 @@
     predecessor without `SHA256SUMS` through its BReg signature, and
     `package.digest_pin_unverifiable` is gone. The migration rehearsal still
     reports `migration.rehearsal.baseline_fingerprint_drift` as a finding.
-  - <!-- ledger: lead fills: how `apply` refuses a package that does not follow the active one -->
-  - <!-- ledger: lead fills: old packages must be rebuilt -->
-  - <!-- ledger: lead fills: the first apply adopts -->
+  - With no signature to check, the database decides what follows what.
+    `bregctl apply` refuses a package whose package id differs from the
+    active one or whose `migrationPlan.fromPackageDigest` is not the active
+    package digest as `apply.package.refused`, which covers the previous or
+    an older package; the active package itself as
+    `apply.package.already_active`, naming `bregctl status`; and a runtime
+    file whose `identity.databaseId` is not the one the database recorded as
+    `apply.database.identity_mismatch`. `bregctl plan` reports the same
+    refusals without changing anything.
+  - Rebuild every package an earlier release built with this release's
+    `bregctl package`: its `package/v1` manifest is refused and its schema
+    fingerprint has changed. For the upgrade, rebuild the deployed project
+    unchanged, then build each successor from that package.
+  - The first `bregctl apply --package DIR` on a database an earlier release
+    installed, without `--initial`, adopts it into the activation ledger;
+    `bregctl plan` reports that activation as `adopted`. The ledger history
+    that release kept is dropped, and the adoption becomes ledger row 1.
+    Adoption also records the adoption's activation id on every import
+    authority the database holds, closed ones included, so an authority
+    closed before the upgrade no longer names the activation it was opened
+    under.
   - <!-- ledger: lead fills: Casework repins -->
-  - <!-- ledger: lead fills: Evidence sources re-import once -->
+  - An Evidence deployment re-imports each BReg source once: the export names
+    `provenance.registryRevision` instead of `provenance.packageRevision`, so
+    `evidencectl` reports changed provenance on the first import after the
+    upgrade.
+  - With separate migration and runtime roles, a trigger an operator added to
+    a registry table, such as a local audit trigger, blocks startup:
+    `breg` refuses as `startup.runtime_role.can_write` and `bregctl apply`
+    and `bregctl plan` as `apply.runtime_role.can_write`, naming the exact
+    `DROP TRIGGER` to run. Drop it, then rerun the refused command.
+  - An import authority's `activationRevision` is `activationId` in its audit
+    record and in the `bregctl import-authority` report.
 
 - BREAKING: the database records every activation, the initial one included,
   as one row of `registry_internal.registry_migrations`, keyed by a UUID
@@ -91,6 +119,24 @@
   either refusal changes nothing. Any other apply of a pre-ledger database is
   refused as `apply.database.pre_ledger`, naming `bregctl apply --package
   DIR`.
+
+- `bregctl plan --runtime-config FILE --package DIR` makes the checks
+  `bregctl apply` makes before it changes anything, under the same apply lock
+  and in transactions it rolls back, and changes nothing. It reports whether
+  an activation is pending and its kind (`initial`, `successor`,
+  `role_change`, `adopted`, or `none`), the package and active package
+  digests, the `registryRevision`, the role mode, the activation a retry
+  would resume, and the backup bindings apply requires. It refuses what apply
+  would refuse, with the same `apply.*` codes, and runs no migration
+  statement; `bregctl test` rehearsed those. With `--backup
+  BINDING_PATH=BINDING_FILE` it checks each binding as apply would.
+
+- `bregctl status --runtime-config FILE` reads the activation ledger under the
+  migration credential and reports the package id, the database id, the
+  active package digest and activation id, the `registryRevision`, the role
+  mode, the schema fingerprint, the maintenance status and target, and every
+  ledger row with its package and predecessor digests, plan and migration
+  kinds, outcome, and times.
 
 - `bregctl apply` of the active package under other configured database
   roles, such as a separate runtime role in place of one role for both, is its

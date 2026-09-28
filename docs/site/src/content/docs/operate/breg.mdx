@@ -28,7 +28,9 @@ journal, and
 
 Two roles take part. The author prepares a package from the project. The operator, holding the
 migration credential, activates the package and runs the server. One person may hold both roles on
-a pilot; the commands stay the same. Every command reads `--help`. Paths given to `--runtime-config`,
+a pilot; the commands stay the same. A package carries no signature: the migration credential is
+what authorizes an activation, and the database records each one in its activation ledger, which
+`bregctl status` reads. Every command reads `--help`. Paths given to `--runtime-config`,
 `--credentials`, `--output`, and `--package` must be absolute.
 
 Many operator paths are resolved through held directory descriptors rather than by name: data export output and checkpoint, data import state and checkpoint, test receipt
@@ -121,6 +123,19 @@ project with a `crs84-point` field also needs PostGIS. Create two login
 roles: a migration role that owns the schema and applies packages, and a runtime role the serving
 process uses. Keep the migration credential off the serving host when no activation is in
 progress.
+
+Two separate roles are the split role mode, and production uses it. The serving process then
+cannot write the activation ledger or the registry state, and both `apply` and startup refuse a
+runtime role that could, naming the grant, ownership, membership, or trigger and the statement
+that removes it. Naming the same role for both is the single role mode that `bregctl dev` and the
+quickstart use: the ledger still catches a wrong package or database, but not someone who holds
+that one credential. Startup logs which mode it serves in, and `plan` and `status` report it as
+`roleMode`.
+
+{/* Evidence: crates/registry-breg/src/postgres/migration_ledger.rs, RoleMode, from_roles;
+    crates/registry-breg/src/postgres/roles.rs, RuntimeWriteAuthority, find_runtime_write_authority;
+    crates/registry-breg/src/startup.rs, RuntimeWriteAuthority;
+    crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport. */}
 
 ```sql
 CREATE ROLE registry_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
@@ -354,10 +369,10 @@ configured prefix and never derive their authority from request headers.
 | Section | What it binds |
 | --- | --- |
 | `listener` | The bind address and the optional public origin that generated documents cite. The runtime reads neither peer addresses nor forwarded headers, so client addresses and TLS termination are enforced at your proxy. |
-| `identity` | The environment, instance, and database this file may serve. `environment` must equal `databaseInitializationEnvironment`. |
+| `identity` | The environment, instance, and database this file may serve. `environment` must equal `databaseInitializationEnvironment`. The first `apply` records `databaseId` in the database; every later `plan`, `apply`, and startup refuses a file that names another. |
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
-| `package` | The activated package directory and, optionally, the `expectedDigest` it must carry. |
+| `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |
 | `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
 | `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms; changing the cursor secret invalidates existing cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
@@ -590,7 +605,7 @@ Test new tokens before the serving cutover, including refused permissions and as
 Resolve uncertain writes before changing issuer mappings, profiles, or packages.
 After a timeout, retry the same request with its original idempotency key and the same effective principal, profile, purpose, and row context.
 A replacement token can satisfy those conditions; changing identity or authority context can produce `idempotency.conflict` instead of a replay.
-The binding also covers the request and package revision, so issuing a fresh key blindly can duplicate a write whose first response was lost.
+The binding also covers the request and the activation that serves it, so issuing a fresh key blindly can duplicate a write whose first response was lost.
 [Mutation retry rules](../../reference/breg-api/#idempotency) explain the request contract.
 
 Pagination cursors bind the principal, profile, purpose, row scope, query, projection, and compiled registry identity.
@@ -679,17 +694,31 @@ that already holds a published package, so each candidate needs a build director
 ## Activate and serve
 
 Write the serving runtime file with `package.root` pointing at `build-1/package` and, if you pin
-it, `package.expectedDigest` equal to the reported `packageDigest`. Then activate with the migration
-credential:
+it, `package.expectedDigest` equal to the reported `packageDigest`. Rehearse the activation with the
+migration credential, then activate:
 
 ```sh
+bregctl --format json plan \
+  --runtime-config /etc/breg/runtime.yaml \
+  --package /srv/registry/build-1/package
 bregctl --format json apply \
   --runtime-config /etc/breg/runtime.yaml \
   --package /srv/registry/build-1/package --initial
 ```
 
-`--initial` activates the first package in an uninitialized database. Confirm the configuration
-before starting the process:
+`plan` makes the checks `apply` makes before it changes anything, under the same lock, and rolls
+all of them back: it writes nothing, appends no audit entry, and exits 0 with `pending: true` and `activation: initial` when
+`apply` would succeed, or 1 with the refusal `apply` would give. `--initial` activates the first
+package in an uninitialized database, and `apply` reports the `activationId` of the row it recorded
+in the activation ledger. `bregctl status` reads that ledger back without taking the lock:
+
+```sh
+bregctl --format json status --runtime-config /etc/breg/runtime.yaml
+```
+
+It reports the `databaseId`, the `activePackageDigest` with its `activationId` and
+`registryRevision`, the `roleMode`, the schema fingerprint and maintenance state, and one `ledger`
+entry per activation, each with its outcome. Confirm the configuration before starting the process:
 
 ```sh
 bregctl verify --runtime-config /etc/breg/runtime.yaml
@@ -700,8 +729,8 @@ breg --runtime-config /etc/breg/runtime.yaml
 `verify` opens no runtime dependency. It verifies the configured package's files against its sum
 file and, when set, `package.expectedDigest`, re-derives every generated artifact from the
 package's own source, and reports the package digest, the registry id, version, and revision plus
-inventory counts. It does not say whether the database is on that package; the `apply` report and readiness
-do. `doctor` opens every startup dependency without binding the listener: the runtime file, the
+inventory counts. It does not say whether the database is on that package; `status` and readiness
+do, and startup refuses to serve a package the ledger does not name as active. `doctor` opens every startup dependency without binding the listener: the runtime file, the
 package, the database connection and its readiness, the audit key and destination writability, the cursor key, the OIDC
 verifier's key material, the event destination bindings, the retained review authority and
 executor bindings, the authentication profile's claim mapping, accepted algorithms, and audience
@@ -778,6 +807,11 @@ PostgreSQL advisories:
   ]
 }
 ```
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, PlanArgs, PlanSuccessReport, StatusArgs,
+    StatusSuccessReport, ApplySuccessReport;
+    crates/registry-breg/src/migration.rs, AlreadyActive;
+    crates/registry-breg/src/startup.rs, ActivePackageMismatch. */}
 
 Start the process and check
 `GET /ready` before admitting traffic; `GET /health` reports liveness only.
@@ -1071,6 +1105,13 @@ behind an upstream rate limit.
 | A secret reference is refused | The file under the secret root must be a regular file owned by the running user, with mode `0400` or `0600`, one link, and no symbolic link, and its name must follow the naming rule in [Create the secret files](#create-the-secret-files). |
 | `package` refuses the receipt | The receipt binds sources, baseline, and fingerprint. Rerun `test` for the exact candidate. |
 | `doctor` reports `startup.instance_claim.mismatch` | The database is a copy the registry's instance claim does not name, as after a logical restore. Adopt it once the original is stopped for good, as [back up and restore the database](../breg-changes/#back-up-and-restore-the-database) describes. |
+| `doctor` reports `startup.database.uninitialized` | No package was ever activated in this database. Run `plan`, then `apply --initial`, as [Activate and serve](#activate-and-serve) shows. |
+| `doctor` reports `startup.database.pre_ledger` | A release before the activation ledger activated this database. Rebuild the active project unchanged with this release's `bregctl package`, point `package.root` at the rebuilt package, then `plan` and `apply` it once with `--package` naming the same directory and without `--initial`; that apply adopts the database into the ledger. |
+| `doctor` reports `startup.database.identity_mismatch` | The database records another database id than `identity.databaseId`. Point the database URLs at the database the file names, or correct `identity.databaseId`. |
+| `doctor` reports `startup.package.not_active` | The ledger names another package as active than the one at `package.root`. Run `bregctl status` to see the active digest, then set `package.root` to that package, or `plan` and `apply` the package you meant to serve. |
+| `doctor` reports `startup.runtime_role.can_write` | In split role mode the runtime role can write the activation ledger or the registry state, for example through a grant, an ownership, a membership, or a trigger no compiled migration creates. Run `bregctl plan --package DIR`: its refusal names the object and the statement that removes it, such as `DROP TRIGGER`. |
+| `doctor` reports `startup.runtime_role.grants_missing` | The runtime role lacks a grant the active package gives it, as after `REASSIGN OWNED`. Run `bregctl apply --package DIR` with the active package to reissue the grants. |
+| `doctor` reports `startup.role_mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role, which records a `role_change` activation. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
 | `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `diff --runtime-config` reads the active package, and `test` and `package` accept its directory through `--baseline-package`; `verify` refuses it until the successor is active. |
 | `doctor` or startup warns `postgres.connections.pool_over_half` | Lower `database.pool.maxSize` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |

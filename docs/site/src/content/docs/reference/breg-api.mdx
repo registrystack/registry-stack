@@ -321,7 +321,7 @@ bytes are never reinterpreted under a different chunking contract.
 
 A profile that holds `import` on the entity announces `"operation": "create"` here; an import
 grant has no other write route. Its run is created only while the entity holds an open import
-authority for that profile: unexpired, opened under the active package revision, with remaining
+authority for that profile: unexpired, opened under the activation now active, with remaining
 volume that covers the whole announced `itemCount`, and, when the authority pins input digests,
 listing this `inputDigest`. Otherwise the answer is `412 precondition.failed` and no run exists.
 `inputDigest` is the caller's label for its source, recorded with the run; the server never

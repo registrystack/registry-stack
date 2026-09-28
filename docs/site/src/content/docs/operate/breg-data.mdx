@@ -115,7 +115,7 @@ governed entity receives its initial or additional records through an `import` g
 `import` grant is create only and is served only by the ingestion-run routes, so it never changes
 an existing record. It loads nothing on its own: an operator first opens an import authority, a
 window bounded by entity, profile, item volume, expiry, and optionally the input digests a run may
-announce, over the migration connection that no API caller holds. The authority is bound to the package revision
+announce, over the migration connection that no API caller holds. The authority is bound to the activation
 active when it opened.
 
 Validate the file, then open the window with the digest the report names. `--expires-in` takes a
@@ -146,7 +146,7 @@ bregctl import-authority list --runtime-config /etc/registry/runtime.yaml
 
 One entity holds at most one open authority. It stops admitting work when the operator closes it,
 when its expiry passes, when its committed items reach the volume (`exhausted`), or when another
-package revision is activated (`superseded`). Run `bregctl import-authority close-expired` on a
+activation succeeds (`superseded`). Run `bregctl import-authority close-expired` on a
 schedule, or after an activation, to record the expiries and supersessions no load has observed
 yet. `list` is a read: it takes no Registry lock, so it never holds back a write and still answers
 during an interrupted apply, and it records nothing, but it shows an authority whose expiry or

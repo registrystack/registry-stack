@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-09-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -19,7 +19,9 @@ on your machine.
 ## What you provide
 
 - **PostgreSQL 17 or newer**, with two login roles: a migration role that owns the schema and
-  applies packages, and a runtime role the serving process uses. A registry with spatial fields
+  applies packages, and a runtime role the serving process uses. The migration credential is what
+  authorizes an activation; packages carry no signature, and the database records every activation
+  in its own ledger. A registry with spatial fields
   also needs PostGIS 3.5 or newer. Your administrator installs the extensions the
   runtime checks for; neither role creates a schema, an extension, or a role. SQLite is not a
   target.
@@ -30,8 +32,11 @@ on your machine.
   ingress terminates TLS, and generated links use the public origin you configure.
 - **A token issuer.** BReg verifies bearer tokens from one OpenID Connect issuer and issues none.
   Configure a compatible OAuth issuer for this role.
-- **A backup of the database before every activation.** The product restores nothing itself,
-  and it refuses to serve a logically restored copy until an operator adopts it, as
+- **A backup of the database before every activation.** A destructive change goes further: its
+  activation is refused unless you name each backup the reviewed migration requires, in a
+  binding file that states the database it came from and the backup file's digest. The product
+  restores nothing itself, and it refuses to serve a logically restored copy until an operator
+  adopts it, as
   [back up and restore the database](../breg-changes/#back-up-and-restore-the-database)
   describes. That check reads the cluster's system identifier through `pg_control_system()`,
   which PostgreSQL grants to every role; on a managed service that withholds it, the check falls
@@ -43,6 +48,8 @@ on your machine.
     crates/registry-breg/src/auth.rs, RegistryAuthenticator;
     crates/registry-breg/src/package.rs, verify_shared_package;
     crates/registry-breg/src/instance_claim.rs; products/breg/README.md;
+    crates/registry-breg/src/migration_plan.rs, ExternalBackupBinding;
+    crates/registry-breg/src/migration.rs, check_backup_binding();
     products/breg/DECISIONS.md. */}
 
 ## What it does not need
@@ -84,8 +91,8 @@ webhook destination, and the issuer's key material when you pin a static key set
 file names each of them by reference and refuses one that carries a value inline.
 
 **Every production change.** A one-line access widening takes the same path as a new registry: a
-production check, a test run against a schema-test database with real tokens, packaging, and
-activation under the migration credential. A change the tooling classifies as
+production check, a test run against a schema-test database with real tokens, packaging, and a
+`plan` and an activation under the migration credential in each environment. A change the tooling classifies as
 additive needs no more; one it marks for review needs a reviewed migration with a rehearsal, and a
 destructive one names its backup. A failed activation holds the database in maintenance until you
 reconcile or restore.
