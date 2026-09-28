@@ -1,5 +1,5 @@
 current: latest
-released: v0.26.1
+released: v0.35.0
 published_archive_limit: 3
 docsets:
   - id: latest
@@ -36,236 +36,236 @@ docsets:
     label: v0.35.0
     path: /v/0.35.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.35.0
     repo_docs_source: monorepo
     published_at: 2026-09-28
-    description: Registry Stack v0.35.0 beta-47 candidate documentation set.
+    description: Released Registry Stack v0.35.0 beta-47 documentation set.
     products:
       registry-stack:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
       registry-relay:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
       registry-manifest:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
       registry-evidence:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
       registry-casework:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
       registry-scheduling:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
       registry-render:
         version: v0.35.0
-        ref: v0.35.0
+        ref: d6304d1ebbc6f746663daafee4235e6b51ff64cc
   - id: v0.34.0
     label: v0.34.0
     path: /v/0.34.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.34.0
     repo_docs_source: monorepo
     published_at: 2026-09-25
-    description: Registry Stack v0.34.0 beta-46 candidate documentation set.
+    description: Released Registry Stack v0.34.0 beta-46 documentation set.
     products:
       registry-stack:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
       registry-relay:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
       registry-manifest:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
       registry-evidence:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
       registry-casework:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
       registry-scheduling:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
       registry-render:
         version: v0.34.0
-        ref: v0.34.0
+        ref: 73e49d1a8256badbf8536f24aad995e9cb6074a1
   - id: v0.33.0
     label: v0.33.0
     path: /v/0.33.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.33.0
     repo_docs_source: monorepo
     published_at: 2026-09-22
-    description: Registry Stack v0.33.0 beta-45 candidate documentation set.
+    description: Released Registry Stack v0.33.0 beta-45 documentation set.
     products:
       registry-stack:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
       registry-relay:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
       registry-manifest:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
       registry-evidence:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
       registry-casework:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
       registry-scheduling:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
       registry-render:
         version: v0.33.0
-        ref: v0.33.0
+        ref: 1f6facb57e9d142652019e8065dc093fc9f0dd12
   - id: v0.32.0
     label: v0.32.0
     path: /v/0.32.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.32.0
     repo_docs_source: monorepo
     published_at: 2026-09-15
-    description: Registry Stack v0.32.0 beta-44 candidate documentation set.
+    description: Released Registry Stack v0.32.0 beta-44 documentation set.
     products:
       registry-stack:
         version: v0.32.0
-        ref: v0.32.0
+        ref: 22ea92286036f28a59cfbe5d7c835f4738d62074
       registry-relay:
         version: v0.32.0
-        ref: v0.32.0
+        ref: 22ea92286036f28a59cfbe5d7c835f4738d62074
       registry-manifest:
         version: v0.32.0
-        ref: v0.32.0
+        ref: 22ea92286036f28a59cfbe5d7c835f4738d62074
       registry-evidence:
         version: v0.32.0
-        ref: v0.32.0
+        ref: 22ea92286036f28a59cfbe5d7c835f4738d62074
       registry-casework:
         version: v0.32.0
-        ref: v0.32.0
+        ref: 22ea92286036f28a59cfbe5d7c835f4738d62074
   - id: v0.31.0
     label: v0.31.0
     path: /v/0.31.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.31.0
     repo_docs_source: monorepo
     published_at: 2026-09-13
-    description: Registry Stack v0.31.0 beta-43 candidate documentation set.
+    description: Released Registry Stack v0.31.0 beta-43 documentation set.
     products:
       registry-stack:
         version: v0.31.0
-        ref: v0.31.0
+        ref: 08ad15a57982ccc2780b3984bf477e589298d2d2
       registry-relay:
         version: v0.31.0
-        ref: v0.31.0
+        ref: 08ad15a57982ccc2780b3984bf477e589298d2d2
       registry-manifest:
         version: v0.31.0
-        ref: v0.31.0
+        ref: 08ad15a57982ccc2780b3984bf477e589298d2d2
       registry-evidence:
         version: v0.31.0
-        ref: v0.31.0
+        ref: 08ad15a57982ccc2780b3984bf477e589298d2d2
       registry-casework:
         version: v0.31.0
-        ref: v0.31.0
+        ref: 08ad15a57982ccc2780b3984bf477e589298d2d2
   - id: v0.30.0
     label: v0.30.0
     path: /v/0.30.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.30.0
     repo_docs_source: monorepo
     published_at: 2026-09-12
-    description: Registry Stack v0.30.0 beta-42 candidate documentation set.
+    description: Released Registry Stack v0.30.0 beta-42 documentation set.
     products:
       registry-stack:
         version: v0.30.0
-        ref: v0.30.0
+        ref: 6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d
       registry-relay:
         version: v0.30.0
-        ref: v0.30.0
+        ref: 6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d
       registry-manifest:
         version: v0.30.0
-        ref: v0.30.0
+        ref: 6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d
       registry-evidence:
         version: v0.30.0
-        ref: v0.30.0
+        ref: 6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d
       registry-casework:
         version: v0.30.0
-        ref: v0.30.0
+        ref: 6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d
   - id: v0.29.0
     label: v0.29.0
     path: /v/0.29.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.29.0
     repo_docs_source: monorepo
     published_at: 2026-09-10
-    description: Registry Stack v0.29.0 beta-41 candidate documentation set.
+    description: Released Registry Stack v0.29.0 beta-41 documentation set.
     products:
       registry-stack:
         version: v0.29.0
-        ref: v0.29.0
+        ref: c248f5cd22208458c1228e3e588e584a13533a01
       registry-relay:
         version: v0.29.0
-        ref: v0.29.0
+        ref: c248f5cd22208458c1228e3e588e584a13533a01
       registry-manifest:
         version: v0.29.0
-        ref: v0.29.0
+        ref: c248f5cd22208458c1228e3e588e584a13533a01
       registry-evidence:
         version: v0.29.0
-        ref: v0.29.0
+        ref: c248f5cd22208458c1228e3e588e584a13533a01
   - id: v0.28.0
     label: v0.28.0
     path: /v/0.28.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.28.0
     repo_docs_source: monorepo
     published_at: 2026-09-09
-    description: Registry Stack v0.28.0 beta-40 candidate documentation set.
+    description: Released Registry Stack v0.28.0 beta-40 documentation set.
     products:
       registry-stack:
         version: v0.28.0
-        ref: v0.28.0
+        ref: c3398dba7960ba51fff7752591fd4c34744c079e
       registry-relay:
         version: v0.28.0
-        ref: v0.28.0
+        ref: c3398dba7960ba51fff7752591fd4c34744c079e
       registry-manifest:
         version: v0.28.0
-        ref: v0.28.0
+        ref: c3398dba7960ba51fff7752591fd4c34744c079e
       registry-evidence:
         version: v0.28.0
-        ref: v0.28.0
+        ref: c3398dba7960ba51fff7752591fd4c34744c079e
   - id: v0.27.0
     label: v0.27.0
     path: /v/0.27.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.27.0
     repo_docs_source: monorepo
     published_at: 2026-09-07
-    description: Registry Stack v0.27.0 beta-39 candidate documentation set.
+    description: Released Registry Stack v0.27.0 beta-39 documentation set.
     products:
       registry-stack:
         version: v0.27.0
-        ref: v0.27.0
+        ref: 39c5be8d52291e9ffe133050536cae4c4e2a3ab1
       registry-relay:
         version: v0.27.0
-        ref: v0.27.0
+        ref: 39c5be8d52291e9ffe133050536cae4c4e2a3ab1
       registry-manifest:
         version: v0.27.0
-        ref: v0.27.0
+        ref: 39c5be8d52291e9ffe133050536cae4c4e2a3ab1
       registry-evidence:
         version: v0.27.0
-        ref: v0.27.0
+        ref: 39c5be8d52291e9ffe133050536cae4c4e2a3ab1
   - id: v0.26.1
     label: v0.26.1
     path: /v/0.26.1/

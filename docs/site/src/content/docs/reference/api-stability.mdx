@@ -218,7 +218,7 @@ The promise is machine-checked where a checker exists:
   tables retired by this breaking upgrade must first be preserved in an archive whose row counts
   are checked. Old audit files are preserved separately from the new entry stream. It refuses to
   start from a release before `v0.33.0`. Scheduling state is not rehearsed: the rehearsal verifies
-  release binaries, and `v0.33.0` and `v0.34.0` shipped Scheduling only as a container image.
+  release binaries, and `v0.33.0` through `v0.35.0` shipped Scheduling only as a container image.
   Retiring Scheduling's audit outbox is covered instead by migration 8, which refuses while the
   outbox holds unpublished rows, and by the operator archiving the old audit file, as
   [Retention and persistent state](../../operate/retention-and-persistent-state/) describes.
