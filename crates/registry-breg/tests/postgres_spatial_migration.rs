@@ -285,6 +285,150 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     database.cleanup().await;
 }
 
+/// A role change on a spatial registry moves each candidate view to the bbox
+/// role of the runtime role it serves with, and the bbox role of the runtime
+/// role it retires keeps no view, policy, or privilege on the managed
+/// schemas, in the transaction that activates the change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_role_change_moves_spatial_candidate_views_to_the_serving_bbox_role() {
+    let database = TestDatabase::create(2).await;
+    let spatial = compile_variant(Variant::WithBbox);
+    let split_bbox = provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator provisions PostGIS for the split runtime role");
+    let fingerprint = initial_fingerprint(&database, &spatial).await;
+    let package = publish_and_load(
+        prepare_package(build_request(
+            Variant::WithBbox,
+            None,
+            &fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ))
+        .expect("initial bbox package prepares"),
+        local_context(),
+    );
+    let initial = apply(
+        &database,
+        &package.verified,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await
+    .expect("initial bbox package activates in split mode");
+    assert_spatial_candidate_view_owner(&database, &spatial, &split_bbox).await;
+
+    let single_bbox = provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.migration_role,
+    )
+    .await
+    .expect("administrator provisions PostGIS for the single-role runtime");
+    let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package.verified,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::RoleChange { current: &initial },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("serving a spatial registry with one role is its own activation");
+    assert_ne!(single.activation_id, initial.activation_id);
+
+    assert_eq!(
+        candidate_view_owners(&database, &spatial).await,
+        vec![single_bbox.as_str().to_owned()],
+        "every candidate view belongs to the serving runtime role's bbox role"
+    );
+    assert_eq!(
+        bbox_role_holdings(&database, &split_bbox).await,
+        (0, 0, 0),
+        "the retired runtime role's bbox role keeps no view, policy, or privilege"
+    );
+
+    cleanup_bbox_role(&database, &split_bbox).await;
+    cleanup_bbox_role(&database, &single_bbox).await;
+    database.cleanup().await;
+}
+
+async fn candidate_view_owners(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+) -> Vec<String> {
+    let mut owners = Vec::new();
+    for view in registry
+        .ddl()
+        .views
+        .iter()
+        .filter(|view| view.name.starts_with("breg_spcand_"))
+    {
+        let row = database
+            .admin
+            .query_one(
+                "SELECT owner.rolname
+                   FROM pg_catalog.pg_class c
+                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                   JOIN pg_catalog.pg_roles owner ON owner.oid = c.relowner
+                  WHERE n.nspname = $1
+                    AND c.relname = $2",
+                &[&view.schema, &view.name],
+            )
+            .await
+            .expect("candidate-ID view ownership reads");
+        owners.push(row.get::<_, String>(0));
+    }
+    owners.dedup();
+    owners
+}
+
+const MANAGED_SCHEMAS: [&str; 5] = [
+    "registry_internal",
+    "registry_data",
+    "registry_source",
+    "registry_derived",
+    "registry_context",
+];
+
+/// The relations a role owns, the row-security policies naming it, and the
+/// privileges granted to it on the managed schemas and their objects.
+async fn bbox_role_holdings(database: &TestDatabase, role: &SqlIdentifier) -> (i64, i64, i64) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM pg_catalog.pg_class AS class
+                  JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+                  WHERE namespace.nspname = ANY($2)
+                    AND class.relowner = to_regrole($1)),
+                 (SELECT count(*) FROM pg_catalog.pg_policy AS policy
+                  WHERE to_regrole($1) = ANY(policy.polroles)),
+                 (SELECT count(*) FROM pg_catalog.pg_class AS class
+                  JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+                  CROSS JOIN LATERAL aclexplode(class.relacl) AS acl
+                  WHERE namespace.nspname = ANY($2)
+                    AND acl.grantee = to_regrole($1))
+               + (SELECT count(*) FROM pg_catalog.pg_namespace AS namespace
+                  CROSS JOIN LATERAL aclexplode(namespace.nspacl) AS acl
+                  WHERE namespace.nspname = ANY($2)
+                    AND acl.grantee = to_regrole($1))
+               + (SELECT count(*) FROM pg_catalog.pg_proc AS function
+                  JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = function.pronamespace
+                  CROSS JOIN LATERAL aclexplode(function.proacl) AS acl
+                  WHERE namespace.nspname = ANY($2)
+                    AND acl.grantee = to_regrole($1))",
+            &[&role.as_str(), &MANAGED_SCHEMAS.as_slice()],
+        )
+        .await
+        .expect("the catalog reads");
+    (row.get(0), row.get(1), row.get(2))
+}
+
 #[derive(Clone, Copy)]
 enum Variant {
     NoBbox,
