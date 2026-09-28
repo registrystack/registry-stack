@@ -518,7 +518,13 @@ supply and meta tables exist, apply locks every supply anchor and then the
 meta row before it runs any migration, the order a capacity transaction
 takes them, so a migration's table locks are never held while the apply
 waits on a booking; the retained-binding check runs before those locks on
-its own connection.
+its own connection. A delivery an earlier runtime appends between that
+check and the locks, bound to a destination the candidate rebinds, is not
+seen by the apply. That fails closed with an availability cost: delivery
+re-checks each binding, so no payload reaches a rebound destination, and
+startup verifies retained bindings again and refuses to serve until the
+delivery drains or its binding is kept. Moving the check inside the
+activation transaction is tracked in #1720.
 `identity.databaseId` is recorded by the first apply, and a later apply,
 `records apply`, or startup under another id is refused before any statement
 changes the database. The refusal names only the key: both values are
