@@ -180,7 +180,7 @@ ipnet = { version = "2" }
 # line parser for the bundled CLI. Every consumer here compiles schemas it
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
