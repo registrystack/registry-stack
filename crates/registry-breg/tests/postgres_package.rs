@@ -1541,6 +1541,7 @@ async fn wrong_migration_role_is_refused_before_initial_control_plane_or_ddl() {
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
             .expect("test apply timeouts are bounded"),
+        database.activation_audit(),
     ))
     .await;
     assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
@@ -1657,6 +1658,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
             .expect("test apply timeouts are bounded"),
+        database.activation_audit(),
     ))
     .await;
     assert_eq!(
@@ -3117,6 +3119,7 @@ async fn apply_package(
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         timeouts,
+        database.activation_audit(),
     ))
     .await
 }
@@ -3137,6 +3140,7 @@ async fn apply_package_with_event_destination_compatibility(
             precondition,
             ApplyRoles::new(&database.migration_role, &database.runtime_role),
             timeouts,
+            database.activation_audit(),
         )
         .with_event_destination_compatibility_inventory(inventory),
     )

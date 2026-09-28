@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
+use crate::audit::RegistryAudit;
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatement;
 use crate::history_schema::HistorySchemaDescriptor;
@@ -96,6 +97,10 @@ pub enum MigrationError {
     /// them.
     #[error("a retired audit table still carries rows that were not acknowledged for discard")]
     RetiredAuditRowsPresent,
+    /// The activation committed, but the audit refused a record it owed:
+    /// the activation stands and its audit trail is incomplete.
+    #[error("the activation committed but the audit refused a record it owed")]
+    ActivationAuditIncomplete,
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -424,6 +429,8 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
     fault_after_committed_chunks: Option<u64>,
     acknowledge_retired_audit_discard: bool,
+    audit: RegistryAudit,
+    operator_reference: Option<&'a str>,
 }
 
 /// The key source one apply resolves field-encryption data keys through. It
@@ -453,6 +460,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         precondition: ApplyPrecondition<'a>,
         roles: ApplyRoles<'a>,
         timeouts: ApplyTimeouts,
+        audit: RegistryAudit,
     ) -> Self {
         Self {
             config,
@@ -468,7 +476,17 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             field_encryption: None,
             fault_after_committed_chunks: None,
             acknowledge_retired_audit_discard: false,
+            audit,
+            operator_reference: None,
         }
+    }
+
+    /// Bind the operator's reference for this activation. The ledger and the
+    /// activation audit record only its keyed hash, never the text.
+    #[must_use]
+    pub fn with_operator_reference(mut self, operator_reference: &'a str) -> Self {
+        self.operator_reference = Some(operator_reference);
+        self
     }
 
     #[must_use]
@@ -868,7 +886,7 @@ pub async fn apply_verified_package(
         {
             return fail_with_error_and_release(connection, &target, &ledger, error).await;
         }
-        if connection
+        let Ok(superseded) = connection
             .activate_verified_package(
                 current,
                 &target,
@@ -880,15 +898,10 @@ pub async fn apply_verified_package(
                 },
             )
             .await
-            .is_err()
-        {
+        else {
             return fail_and_release(connection, &target, &ledger).await;
-        }
-        connection
-            .release()
-            .await
-            .map_err(|_| MigrationError::ApplyFailed)?;
-        return Ok(target);
+        };
+        return finish_activation(connection, &request.audit, superseded, target).await;
     }
 
     if connection
@@ -899,7 +912,8 @@ pub async fn apply_verified_package(
         )
         .await
         .is_ok()
-        && connection
+    {
+        if let Ok(superseded) = connection
             .activate_verified_package(
                 current,
                 &target,
@@ -911,13 +925,9 @@ pub async fn apply_verified_package(
                 },
             )
             .await
-            .is_ok()
-    {
-        connection
-            .release()
-            .await
-            .map_err(|_| MigrationError::ApplyFailed)?;
-        return Ok(target);
+        {
+            return finish_activation(connection, &request.audit, superseded, target).await;
+        }
     }
 
     let ddl_result = if current.is_some() {
@@ -965,13 +975,28 @@ pub async fn apply_verified_package(
             },
         )
         .await;
-    if activation_result.is_err() {
+    let Ok(superseded) = activation_result else {
         return fail_and_release(connection, &target, &ledger).await;
-    }
+    };
+    finish_activation(connection, &request.audit, superseded, target).await
+}
+
+/// Append the records of the import authorities a committed activation
+/// superseded, then release the lock. The activation stands either way; a
+/// refused append is reported so the operator knows the audit trail is
+/// missing records, and the lock is still released.
+async fn finish_activation(
+    connection: VerifiedPackageApplyConnection,
+    audit: &RegistryAudit,
+    superseded: Vec<serde_json::Value>,
+    target: ExpectedRegistryIdentity,
+) -> Result<ExpectedRegistryIdentity> {
+    let appended = crate::import_authority::append_transitions(audit, superseded).await;
     connection
         .release()
         .await
         .map_err(|_| MigrationError::ApplyFailed)?;
+    appended.map_err(|_| MigrationError::ActivationAuditIncomplete)?;
     Ok(target)
 }
 

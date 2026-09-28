@@ -2812,7 +2812,7 @@ fn import_authority_pairs(
             "committed items",
             format!("{} of {}", authority.committed_items, authority.max_items),
         ),
-        ("activation revision", authority.activation_revision.clone()),
+        ("activation id", authority.activation_id.to_string()),
         ("opened at", authority.opened_at.to_rfc3339()),
         ("expires at", authority.expires_at.to_rfc3339()),
     ];
@@ -4798,6 +4798,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::CorrectPackageBuild,
         ),
+        ApplyLifecycleError::Audit => (
+            "apply.audit.unavailable",
+            "audit",
+            "the activation audit destination could not be opened; check the audit path and its directory permissions",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         ApplyLifecycleError::Runtime => (
             "apply.runtime.unavailable",
             "runtime",
@@ -4874,6 +4881,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                     SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
+            registry_breg::migration::MigrationError::ActivationAuditIncomplete => (
+                "apply.audit.incomplete",
+                "audit",
+                "the package was activated, but the audit destination refused a record the activation owed, so the audit trail is incomplete: do not apply again; check the audit path and its directory permissions, and run `bregctl status` to see the active package",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
             registry_breg::migration::MigrationError::ActivePackageMismatch => (
                 "apply.package.active_mismatch",
                 "package.root",
@@ -13592,7 +13606,7 @@ mod tests {
             max_items: 10,
             committed_items: 4,
             input_digests: Vec::new(),
-            activation_revision: "package-1".to_owned(),
+            activation_id: uuid::Uuid::nil(),
             opened_at,
             expires_at: opened_at + chrono::Duration::days(7),
             status: ImportAuthorityStatus::Open,

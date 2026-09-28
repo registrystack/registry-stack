@@ -704,6 +704,7 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
             ApplyRoles::new(&database.migration_role, &database.runtime_role),
             ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
                 .expect("test timeouts are bounded"),
+            database.activation_audit(),
         ))
         .await
         .err(),
@@ -1453,6 +1454,166 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
         .get(0);
     assert_eq!(claim_table, None);
 
+    database.cleanup().await;
+}
+
+/// A successor activation supersedes every open import authority in the
+/// transaction that makes it active, and each supersession is recorded
+/// under the successor's activation id once that transaction commits. The
+/// authority keeps the activation id it was opened under.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_successor_activation_supersedes_every_open_import_authority() {
+    let (database, active, authority_id, package) = successor_over_an_open_import_authority().await;
+    let activated = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the successor activates");
+
+    assert_eq!(
+        import_authority_status(&database, authority_id).await,
+        ("superseded".to_owned(), true)
+    );
+    let records = import_authority_records(&database, authority_id);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["transition"], "superseded");
+    assert_eq!(records[0]["activationId"], active.activation_id);
+    assert_eq!(records[0]["packageRevision"], activated.activation_id);
+    assert!(records[0].get("activationRevision").is_none());
+    database.cleanup().await;
+}
+
+/// When the audit refuses a supersession record after the activation
+/// committed, the activation stands and apply reports the audit trail as
+/// incomplete rather than as a failed activation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_refused_supersession_record_reports_the_activation_audit_incomplete() {
+    let (database, active, authority_id, package) = successor_over_an_open_import_authority().await;
+    // The audit refuses the next entry, the supersession record this
+    // activation owes it.
+    database.activation_audit_capture().fail_after(0);
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect_err("the refused record is reported");
+    assert_eq!(refused, MigrationError::ActivationAuditIncomplete);
+    assert_eq!(
+        import_authority_status(&database, authority_id).await,
+        ("superseded".to_owned(), true)
+    );
+    let activated = ExpectedRegistryIdentity {
+        activation_id: activation_at(&database, 2).await,
+        ..target_identity(&package)
+    };
+    assert_ready_target(&database, &activated).await;
+    database.cleanup().await;
+}
+
+/// An initial activation, one import authority opened under it, and a
+/// reviewed successor ready to apply.
+async fn successor_over_an_open_import_authority() -> (
+    TestDatabase,
+    ExpectedRegistryIdentity,
+    Uuid,
+    VerifiedPackage,
+) {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+    let base = compile_variant(Variant::Base);
+    let initial_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+    let authority_id = open_raw_import_authority(&database, &active.activation_id).await;
+
+    let candidate = compile_variant(Variant::BatchAddedRequired);
+    let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
+    let source = added_required_source(
+        "add-required-supersede",
+        &active,
+        &base,
+        &candidate,
+        &target_fingerprint,
+        0,
+    );
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::BatchAddedRequired,
+        &target_fingerprint,
+        source,
+    );
+    (database, active, authority_id, package)
+}
+
+/// A successor activation that fails supersedes nothing: the authority it
+/// would have retired stays open and no supersession is recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_failed_successor_activation_supersedes_no_import_authority() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+    seed_backfill_rows(&database, &base, 1).await;
+    let authority_id = open_raw_import_authority(&database, &active.activation_id).await;
+    let required = compile_variant(Variant::RankRequired);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let entity = &required.entities()["asset"];
+    let source = backfill_source_with_steps(
+        BackfillSourceRequest {
+            id: "rank-uncastable-supersede",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 1,
+        },
+        Some(format!(
+            "UPDATE registry_data.{} SET {} = 'uncastable' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            entity.physical_table, entity.fields["rank"].physical_name
+        )),
+        true,
+    );
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        source,
+    );
+    apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect_err("PostgreSQL refuses the reviewed step's constant");
+
+    assert_eq!(
+        import_authority_status(&database, authority_id).await,
+        ("open".to_owned(), false)
+    );
+    assert!(import_authority_records(&database, authority_id).is_empty());
     database.cleanup().await;
 }
 
@@ -2610,6 +2771,56 @@ async fn refused_step_reports_its_sqlstate() {
     assert_value_free(Some(refused.clone()), refused);
     assert_non_ready_target(&database, &active, &package, "failed").await;
     database.cleanup().await;
+}
+
+/// Open one import authority under the named activation, as an operator
+/// would have before the activation under test.
+async fn open_raw_import_authority(database: &TestDatabase, activation_id: &str) -> Uuid {
+    let authority_id = Uuid::new_v4();
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_import_authorities
+                 (authority_id, entity_id, profile_id, operation, max_items,
+                  activation_id, expires_at, operator_reference, reason_reference)
+             VALUES ($1, 'asset', 'loader', 'create', 5, $2::text::uuid,
+                     now() + interval '1 day', 'operator-hash', 'reason-hash')",
+            &[&authority_id, &activation_id],
+        )
+        .await
+        .expect("administrator opens an import authority");
+    authority_id
+}
+
+async fn import_authority_status(database: &TestDatabase, authority_id: Uuid) -> (String, bool) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT status, closed_at IS NOT NULL
+               FROM registry_internal.registry_import_authorities
+              WHERE authority_id = $1",
+            &[&authority_id],
+        )
+        .await
+        .expect("administrator reads the import authority");
+    (row.get(0), row.get(1))
+}
+
+/// The import authority transitions the activation recorded for one
+/// authority, oldest first.
+fn import_authority_records(database: &TestDatabase, authority_id: Uuid) -> Vec<serde_json::Value> {
+    database
+        .activation_audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == "breg-import-authority-audit/v1"
+                && entry["correlation"] == authority_id.to_string()
+        })
+        .map(|mut entry| {
+            assert_eq!(entry["phase"], "response");
+            entry["record"].take()
+        })
+        .collect()
 }
 
 fn compile_variant(variant: Variant) -> CompiledRegistry {
@@ -4361,6 +4572,7 @@ fn request_for_deployment<'a>(
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
+        database.activation_audit(),
     )
 }
 

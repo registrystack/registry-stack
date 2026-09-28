@@ -19,6 +19,14 @@
     `packageRevision`, since a client knows the package it holds, not the
     activation the database recorded for it.
   - `bregctl apply` reports `activationId` instead of `packageSequence`.
+  - An import authority records the activation it was opened under as the
+    UUID `activation_id` instead of the text `activation_revision`. Its
+    `breg-import-authority-audit/v1` record and the `bregctl
+    import-authority` JSON report name it as `activationId` instead of
+    `activationRevision`. A successful activation supersedes every open
+    import authority in the transaction that makes it active and records
+    each supersession once that transaction commits; a failed activation
+    supersedes none. Open a new authority after the activation.
   - Reconciliation audits under `breg-migration-reconcile-audit/v3`, naming
     `packageDigest`, `targetPackageDigest`, and `activationId` instead of
     `packageRevision`, `targetPackageRevision`, and `packageSequence`.

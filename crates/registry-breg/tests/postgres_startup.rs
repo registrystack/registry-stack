@@ -1199,6 +1199,7 @@ async fn one_database_role_applies_the_initial_package_and_serves_reads() {
         ApplyRoles::new(&database.migration_role, &database.migration_role),
         ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
             .expect("test apply timeouts are bounded"),
+        database.activation_audit(),
     ))
     .await
     .expect("one role applies the initial package");
@@ -1722,6 +1723,7 @@ async fn apply_startup_package_result(
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
             .expect("test apply timeouts are bounded"),
+        database.activation_audit(),
     ))
     .await
 }
