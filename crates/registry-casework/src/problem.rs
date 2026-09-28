@@ -420,12 +420,17 @@ const AUTHENTICATION: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
 ];
-const REVIEW_PRODUCER: &[ProblemCode] = &[
+// Each review-producer operation lists only what its handler and store path
+// can return. Every producer route authenticates (the three profile codes and
+// a malformed header's request.invalid), refuses a source profile header, and
+// admits only the configured producer (operation.not-authorized).
+const REVIEW_REQUEST_CREATE: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
     ProblemCode::IdempotencyExpired,
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::OperationNotAuthorized,
     ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::RequestUnprocessable,
     ProblemCode::RequestUnsupportedMediaType,
@@ -435,6 +440,57 @@ const REVIEW_PRODUCER: &[ProblemCode] = &[
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const REVIEW_REQUEST_READ: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ReviewResultExpired,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const REVIEW_REQUEST_CANCEL: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ReviewResultExpired,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+// A missing or expired result is the 404 or 410 success status, not a problem.
+const REVIEW_RESULT_READ: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::RuntimeFailure,
+];
+// A cursor naming an event no longer retained is review.result-expired.
+const REVIEW_RESULT_FEED: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ReviewResultExpired,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const REVIEW_TASK: &[ProblemCode] = &[
@@ -1093,7 +1149,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_PRODUCER,
+        problems: REVIEW_REQUEST_CREATE,
     },
     OperationContract {
         method: "GET",
@@ -1120,7 +1176,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_PRODUCER,
+        problems: REVIEW_REQUEST_READ,
     },
     OperationContract {
         method: "POST",
@@ -1129,7 +1185,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_PRODUCER,
+        problems: REVIEW_REQUEST_CANCEL,
     },
     OperationContract {
         method: "GET",
@@ -1138,7 +1194,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_PRODUCER,
+        problems: REVIEW_RESULT_READ,
     },
     OperationContract {
         method: "GET",
@@ -1156,7 +1212,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_PRODUCER,
+        problems: REVIEW_RESULT_FEED,
     },
     OperationContract {
         method: "POST",
@@ -1627,6 +1683,153 @@ mod tests {
             assert_eq!(path, problem.code().replace('.', "/"), "{problem}");
             assert!(!problem.title().is_empty(), "{problem}");
             assert!(!problem.detail().is_empty(), "{problem}");
+        }
+    }
+
+    /// Every code a review-producer operation advertises names the handler
+    /// or store path that returns it, so a list cannot keep a code its
+    /// operation stopped returning, or gain one without a reason.
+    #[test]
+    fn review_producer_operations_list_only_codes_their_handlers_return() {
+        use ProblemCode::*;
+        const AUTHENTICATE: &[(ProblemCode, &str)] = &[
+            (
+                AuthenticationRefused,
+                "authenticate: missing or refused bearer",
+            ),
+            (
+                ProfileNotAuthorized,
+                "authenticate: profile or scopes refused",
+            ),
+            (
+                ProfileNotHuman,
+                "authenticate: a person profile with a non-human token",
+            ),
+            (RequestInvalid, "a malformed profile header or path segment"),
+            (SourceProfileNotApplicable, "reject_source_profile"),
+            (
+                OperationNotAuthorized,
+                "producer_for_actor: not the admitted producer",
+            ),
+            (ServiceUnavailable, "the store cannot be reached"),
+            (RuntimeFailure, "a stored record fails to decode"),
+        ];
+        type Documented = &'static [(ProblemCode, &'static str)];
+        let expected: &[(&str, &str, Documented)] = &[
+            (
+                "POST",
+                "/v1/review-requests",
+                &[
+                    (
+                        RequestUnsupportedMediaType,
+                        "StrictJson: not a JSON media type",
+                    ),
+                    (
+                        RequestUnprocessable,
+                        "StrictJson: not a ReviewCreateRequest",
+                    ),
+                    (
+                        IdempotencyKeyReused,
+                        "review_idempotent_response: other request",
+                    ),
+                    (
+                        IdempotencyExpired,
+                        "review_idempotent_response: replay expired",
+                    ),
+                    (
+                        ReviewInitiatorRequired,
+                        "create: the kind excludes its initiator",
+                    ),
+                    (ReviewSubmissionConflict, "reservation holds other content"),
+                    (
+                        ReviewResultExpired,
+                        "recover_review: the resubmitted request expired",
+                    ),
+                    (
+                        WorkItemNotVisible,
+                        "load_request: the reserved request is gone",
+                    ),
+                ],
+            ),
+            (
+                "GET",
+                "/v1/review-requests/{request_id}",
+                &[
+                    (
+                        WorkItemNotVisible,
+                        "load_request_client: not this producer's",
+                    ),
+                    (ReviewResultExpired, "ensure_review_result_retained"),
+                ],
+            ),
+            (
+                "POST",
+                "/v1/review-requests/{request_id}/cancel",
+                &[
+                    (
+                        RequestUnsupportedMediaType,
+                        "StrictJson: not a JSON media type",
+                    ),
+                    (
+                        RequestUnprocessable,
+                        "StrictJson: not a ReviewCancelRequest",
+                    ),
+                    (
+                        IdempotencyKeyReused,
+                        "review_idempotent_response: other request",
+                    ),
+                    (
+                        IdempotencyExpired,
+                        "review_idempotent_response: replay expired",
+                    ),
+                    (WorkItemNotVisible, "load_request: not this producer's"),
+                    (
+                        ReviewResultExpired,
+                        "cancel_review: the settled result expired",
+                    ),
+                ],
+            ),
+            ("GET", "/v1/review-requests/{request_id}/result", &[]),
+            (
+                "GET",
+                "/v1/review-results",
+                &[(
+                    ReviewResultExpired,
+                    "review_result_feed: cursor event erased",
+                )],
+            ),
+        ];
+        for (method, path, specific) in expected {
+            let operation = OPERATION_CONTRACTS
+                .iter()
+                .find(|operation| operation.method == *method && operation.path == *path)
+                .expect("review producer operation");
+            let documented = AUTHENTICATE
+                .iter()
+                .chain(specific.iter())
+                .map(|(code, reason)| {
+                    assert!(!reason.is_empty());
+                    *code
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                operation.problems.iter().copied().collect::<BTreeSet<_>>(),
+                documented,
+                "{method} {path}"
+            );
+            let takes_idempotency_key = *method == "POST";
+            for code in [IdempotencyKeyReused, IdempotencyExpired] {
+                assert_eq!(
+                    operation.problems.contains(&code),
+                    takes_idempotency_key,
+                    "{method} {path}: {code}"
+                );
+            }
+            assert_eq!(
+                operation.problems.contains(&ReviewInitiatorRequired),
+                *method == "POST" && *path == "/v1/review-requests",
+                "{method} {path}"
+            );
         }
     }
 
