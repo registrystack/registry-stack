@@ -1701,9 +1701,10 @@ impl DedicatedApplyConnection {
     /// reshape, the fingerprint comparison, the exact catalog verification,
     /// and the state and ledger rows commit together or not at all, and no
     /// model DDL runs. The old ledger history is dropped; the claim the
-    /// pre-ledger claim table holds is carried into the state row, and every
-    /// open import authority is superseded. A plan runs the same transaction
-    /// to its last check and rolls it back.
+    /// pre-ledger claim table holds is carried into the state row, every
+    /// ingestion run bound to the active revision is rebound to the adopted
+    /// package, and every open import authority is superseded. A plan runs the
+    /// same transaction to its last check and rolls it back.
     pub(crate) async fn adopt_pre_ledger_database(
         &mut self,
         registry: &CompiledRegistry,
@@ -1793,6 +1794,19 @@ impl DedicatedApplyConnection {
                 ))
                 .await?;
         }
+        // Ingestion runs name the revision and fingerprint they were opened
+        // under. Adoption re-identifies the active revision by the package
+        // digest, so a run bound to it is rebound to the adopted package.
+        let pre_ledger_binding = transaction
+            .query_one(
+                "SELECT active_package_revision, schema_fingerprint
+                   FROM registry_internal.registry_state
+                  WHERE singleton",
+                &[],
+            )
+            .await?;
+        let pre_ledger_revision: String = pre_ledger_binding.try_get(0)?;
+        let pre_ledger_fingerprint: String = pre_ledger_binding.try_get(1)?;
         // Flips and request proposals recorded before adoption name the
         // revisions the old ledger ordered; their order outlives that ledger.
         if transaction
@@ -1824,6 +1838,19 @@ impl DedicatedApplyConnection {
             MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
             _ => PostgresKernelError::Connection,
         })?;
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_ingestion_runs
+                    SET package_revision = $3, schema_fingerprint = $4
+                  WHERE package_revision = $1 AND schema_fingerprint = $2",
+                &[
+                    &pre_ledger_revision,
+                    &pre_ledger_fingerprint,
+                    &target.package_digest,
+                    &target.schema_fingerprint,
+                ],
+            )
+            .await?;
         install_history_schema_store(&transaction, runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
