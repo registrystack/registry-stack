@@ -47,7 +47,7 @@ use super::{
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
         is_spatial_candidate_view_sql, map_pattern_database_error, pattern_field_for_constraint,
-        reconcile_compiled_runtime_acl,
+        reconcile_compiled_runtime_acl, retire_spatial_bbox_role, transfer_spatial_candidate_views,
     },
     verify_btree_gist, verify_migration_role, verify_postgis, ConnectionConfig,
     ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
@@ -1554,10 +1554,11 @@ impl DedicatedApplyConnection {
     }
 
     /// Activates a re-apply that changes only the roles the registry serves
-    /// with. The runtime grants, the retirement of the runtime role the
-    /// activation stops serving with, and the activation commit in one
-    /// transaction, so a refused activation leaves the role the ledger still
-    /// names with every grant it serves with.
+    /// with. The move of each spatial candidate view to the serving bbox
+    /// role, the runtime grants, the retirement of the runtime role the
+    /// activation stops serving with and of its bbox role, and the activation
+    /// commit in one transaction, so a refused activation leaves the role the
+    /// ledger still names with every view and grant it serves with.
     pub(crate) async fn activate_role_change(
         &mut self,
         registry: &CompiledRegistry,
@@ -1571,6 +1572,15 @@ impl DedicatedApplyConnection {
         target.validate()?;
         transition.ledger.validate()?;
         let transaction = self.client.transaction().await?;
+        if let Some(retired) = retired_runtime_role {
+            transfer_spatial_candidate_views(
+                &transaction,
+                registry,
+                retired,
+                transition.runtime_role,
+            )
+            .await?;
+        }
         reconcile_runtime_acl_in(
             &transaction,
             registry,
@@ -2633,6 +2643,9 @@ async fn reconcile_runtime_acl_in(
 /// exists holds nothing to revoke. When the retired runtime role is the
 /// migration role, it keeps its ownership and loses only the column
 /// grants it held as the runtime, which the serving runtime role now holds.
+/// The spatial bbox role of the retired runtime role, which no longer owns a
+/// candidate view once the activation moved them, loses every privilege on
+/// the managed schemas either way.
 async fn retire_runtime_role_in(
     transaction: &tokio_postgres::Transaction<'_>,
     retired: &SqlIdentifier,
@@ -2681,6 +2694,7 @@ async fn retire_runtime_role_in(
                 .await?;
         }
     }
+    retire_spatial_bbox_role(transaction, retired, super::catalog::MANAGED_SCHEMAS).await?;
     Ok(())
 }
 

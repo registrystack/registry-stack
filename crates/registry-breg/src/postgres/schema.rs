@@ -485,6 +485,71 @@ async fn execute_spatial_candidate_view_as_bbox(
     Ok(())
 }
 
+/// Moves each spatial candidate view the compiled registry declares from the
+/// bbox role of the runtime role an activation retires to the bbox role of
+/// the runtime role it serves with.
+///
+/// Threat: a candidate view left owned by the retired bbox role keeps
+/// answering with that role's row-security policies and grants, and blocks
+/// the serving bbox role from reconciling its ACL.
+/// Enforcement: the migration role holds each bbox role with SET but not
+/// INHERIT, so it cannot hand a view from one bbox role to another; the view
+/// is dropped as the retired bbox role and created again from its compiled
+/// statement for the serving one, inside the role-change activation's
+/// transaction, before that transaction reconciles the runtime ACL.
+pub(crate) async fn transfer_spatial_candidate_views(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    retired_runtime_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    let retired_bbox_role = spatial_bbox_role(retired_runtime_role);
+    if retired_bbox_role == spatial_bbox_role(runtime_role) {
+        return Ok(());
+    }
+    for statement in &registry.ddl().statements {
+        if !is_spatial_candidate_view_create_sql(&statement.sql) {
+            continue;
+        }
+        let view = spatial_candidate_view_qualified_name(&statement.sql)?;
+        client
+            .batch_execute(&format!(
+                "SET LOCAL ROLE {};
+                 DROP VIEW IF EXISTS {view};
+                 RESET ROLE;",
+                retired_bbox_role.quoted(),
+            ))
+            .await?;
+        execute_spatial_candidate_view_create(client, &statement.sql, runtime_role).await?;
+    }
+    Ok(())
+}
+
+/// Revokes every privilege the bbox role of a retired runtime role holds on
+/// the managed schemas and their tables, sequences, and functions. A bbox
+/// role that does not exist holds nothing to revoke.
+pub(crate) async fn retire_spatial_bbox_role(
+    client: &impl GenericClient,
+    retired_runtime_role: &SqlIdentifier,
+    managed_schemas: &[&str],
+) -> Result<()> {
+    let retired_bbox_role = spatial_bbox_role(retired_runtime_role);
+    if !role_exists(client, &retired_bbox_role).await? {
+        return Ok(());
+    }
+    let schemas = managed_schemas.join(", ");
+    let role = retired_bbox_role.quoted();
+    client
+        .batch_execute(&format!(
+            "REVOKE ALL ON ALL TABLES IN SCHEMA {schemas} FROM {role};
+             REVOKE ALL ON ALL SEQUENCES IN SCHEMA {schemas} FROM {role};
+             REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schemas} FROM {role};
+             REVOKE ALL ON SCHEMA {schemas} FROM {role};"
+        ))
+        .await?;
+    Ok(())
+}
+
 async fn reconcile_spatial_candidate_view_acl(
     client: &impl GenericClient,
     view: &str,
