@@ -85,7 +85,8 @@
   and package the project again before plan and apply.
   `caseworkctl dev` applies in-process on every start, after it rewrites the
   session's operator configuration, so a session retained from an earlier
-  release starts with its database in place.
+  release starts with its database in place. Ctrl+C stops a start whose
+  apply waits on a database lock.
   A session it creates connects the runtime and apply with one database role;
   a session retained from an earlier release keeps its split runtime and
   migration roles, and apply alone grants that runtime role, so both

@@ -1970,7 +1970,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             issuer(&args.docker_bin, &state, &terminate)?;
         }
         ensure_active(&terminate)?;
-        activate_session(&root)?;
+        activate_session(&root, &terminate)?;
         state.migrated = true;
         state.save()?;
         ensure_active(&terminate)?;
@@ -3269,12 +3269,36 @@ fn checked_output(output: NativeOutput, root: &Path, name: &str) -> Result<Vec<u
 /// under an advisory lock, and it is the only step using the migration
 /// credential; the runtime never writes its own configuration. On a split
 /// session apply also grants the runtime role the service tables and only
-/// reads of both ledgers, so no later step may grant it more.
-fn activate_session(root: &Path) -> Result<()> {
-    activation_outcome(
-        crate::project::apply(&root.join("operator.yaml"), None, Vec::new()),
-        root,
-    )
+/// reads of both ledgers, so no later step may grant it more. An apply
+/// waiting on a database lock does not hold the start past a termination
+/// request; stopping the owned database then ends its session.
+fn activate_session(root: &Path, terminate: &AtomicBool) -> Result<()> {
+    let operator = root.join("operator.yaml");
+    let result = until_finished(
+        move || crate::project::apply(&operator, None, Vec::new()),
+        terminate,
+    )?;
+    activation_outcome(result, root)
+}
+
+/// Run in-process work on its own thread and wait for it while the start is
+/// still wanted. On a termination request the start stops waiting, and the
+/// work ends with this process.
+fn until_finished<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    terminate: &AtomicBool,
+) -> Result<T> {
+    let handle = thread::Builder::new()
+        .name("casework-dev-in-process".to_owned())
+        .spawn(work)
+        .context("cannot start in-process local work")?;
+    while !handle.is_finished() {
+        ensure_active(terminate)?;
+        thread::sleep(Duration::from_millis(10));
+    }
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("in-process local work panicked; inspect private logs"))
 }
 
 /// Accept an apply that activated the session package, or that found it

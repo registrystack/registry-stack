@@ -3815,6 +3815,30 @@ fn active_source_revalidation_refuses_rotated_credentials_without_replacement() 
     }
 }
 
+#[test]
+fn a_start_stops_waiting_on_in_process_work_once_termination_is_requested() {
+    let terminate = AtomicBool::new(false);
+    assert_eq!(until_finished(|| 7, &terminate).unwrap(), 7);
+
+    // Work blocked as an apply waiting on a database lock is: only a
+    // released channel would ever let it finish.
+    let (release, blocked) = mpsc::channel::<()>();
+    let started = Instant::now();
+    let error = thread::scope(|scope| {
+        scope.spawn(|| {
+            thread::sleep(Duration::from_millis(50));
+            terminate.store(true, Ordering::Relaxed);
+        });
+        until_finished(move || blocked.recv(), &terminate).unwrap_err()
+    });
+    assert!(
+        error.to_string().contains("local start interrupted"),
+        "{error}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    drop(release);
+}
+
 /// Runs statements, or one query, against the dedicated test database.
 #[cfg(feature = "postgres-test")]
 fn in_test_database<T>(url: &str, work: impl AsyncFnOnce(&tokio_postgres::Client) -> T) -> T {
@@ -3898,7 +3922,7 @@ fn a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime() 
     // The first start activates the package, and a retained restart finds it
     // already active under the same role observation.
     for _ in 0..2 {
-        activate_session(&session_root).unwrap();
+        activate_session(&session_root, &AtomicBool::new(false)).unwrap();
     }
     let writes: Vec<(String, bool)> = in_test_database(&base, async |client| {
         client
