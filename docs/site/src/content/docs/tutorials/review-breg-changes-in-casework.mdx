@@ -230,6 +230,21 @@ context with the caller's delegated credential and the configured source profile
 its stage, queue, assignment, independence, and decision rules. Complete every stage required by
 the policy.
 
+Every Casework call carries two headers, and a source-backed call carries a third:
+
+| Header | Value in this starter | Which calls |
+| --- | --- | --- |
+| `Authorization` | `Bearer` and the caller's token | Every call except `/health` and `/ready`. |
+| `Registry-Casework-Profile` | `staff` for a reviewer; `supervisor` or `administrator` for those roles; `integration-requester` for BReg's producer calls | Every call except `/health` and `/ready`. |
+| `Registry-Source-Profile` | The BReg access profile that lets the reviewer read the change request | Every `/v1/review-tasks` call for a `source` review kind, which is every task in this starter: the list, a task, its `/context`, claim, assignment, draft, and decision. Producer calls to `/v1/review-requests` and `/v1/review-results` refuse it. |
+
+Casework presents the reviewer's own token to BReg under the source profile, so BReg decides what
+that person may read. A task list sent without `Registry-Source-Profile`, whose every task is
+source-backed, is refused with `source-profile.required` instead of returning an empty page. For
+the local `caseworkctl dev` session, `caseworkctl dev token staff` writes an owner-only header file
+that already carries `Authorization` and `Registry-Casework-Profile`; add the source header to it
+with a second `--header`.
+
 The starter's review stage excludes the submitter, so the person who submitted the request cannot
 claim, be assigned, or decide its review. A reviewer either approves or chooses the
 `changes-requested` outcome ("Request changes") with a reason. A send-back reaches BReg as a

@@ -76,8 +76,10 @@ caseworkctl dev token staff tutorial-work/casework
 ```
 
 `dev` returns after Casework is ready and seeds a team serving the `decisions` queue. Token commands
-write owner-only header files. If the report names different ports, use its Casework URL rather than
-the default in the next command.
+write owner-only header files. Each file carries two headers, `Authorization` with a fresh bearer token
+and `Registry-Casework-Profile` with the Casework profile that client is registered with, so the
+`curl --header @file` calls below send both. If the report names different ports, use its Casework URL
+rather than the default in the next command.
 
 ```sh
 casework_url="http://127.0.0.1:${CASEWORKCTL_DEV_CASEWORK_PORT:-8092}"
@@ -95,7 +97,6 @@ The subject is immutable across this round. Its `source`, `type`, and `id` provi
 ```sh
 curl --silent --show-error \
   --header @"$headers/requester.header" \
-  --header 'Registry-Casework-Profile: requester' \
   --header 'Idempotency-Key: tutorial-review-1' \
   --header 'Content-Type: application/json' \
   --data '{"kind":"decision","subject":{"source":"standalone","type":"batch","id":"LIC-2026-0041","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000001"},"requesterReference":"LIC-2026-0041","context":{"strategy":"submitted","snapshot":{"reference":"LIC-2026-0041","summary":"Review licence batch LIC-2026-0041"}}}' \
@@ -126,7 +127,6 @@ List the tasks visible to Staff, then extract the first task identifier and revi
 ```sh
 curl --silent --show-error \
   --header @"$headers/staff.header" \
-  --header 'Registry-Casework-Profile: staff' \
   --output tutorial-work/tasks.json \
   "$casework_url/v1/review-tasks?limit=25"
 task_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/tasks.json"))["items"][0]["taskId"])')"
@@ -138,7 +138,6 @@ Claim requires the revision the list returned and an idempotency key:
 ```sh
 curl --silent --show-error --request POST \
   --header @"$headers/staff.header" \
-  --header 'Registry-Casework-Profile: staff' \
   --header "If-Match: \"$task_revision\"" \
   --header 'Idempotency-Key: tutorial-claim-1' \
   "$casework_url/v1/review-tasks/$task_id/claim"
@@ -149,7 +148,6 @@ Claim advances the task revision by one. Record the configured answer with that 
 ```sh
 curl --silent --show-error --request POST \
   --header @"$headers/staff.header" \
-  --header 'Registry-Casework-Profile: staff' \
   --header 'If-Match: "2"' \
   --header 'Idempotency-Key: tutorial-answer-1' \
   --header 'Content-Type: application/json' \
@@ -177,7 +175,6 @@ Use the producer token and the accepted request identifier:
 ```sh
 curl --silent --show-error \
   --header @"$headers/requester.header" \
-  --header 'Registry-Casework-Profile: requester' \
   --output tutorial-work/result.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/review-requests/$request_id/result"
 python3 -m json.tool tutorial-work/result.json

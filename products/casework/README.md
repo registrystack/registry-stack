@@ -39,6 +39,17 @@ Casework profiles, and a team serving the first review stage queue. The
 Administrator bootstraps that directory through the authenticated directory
 API. A standalone deployment does not start or depend on BReg.
 
+Every authenticated call sends two headers: `Authorization: Bearer <token>`
+and `Registry-Casework-Profile`, naming one access profile the project declares
+(`requester` for the producer here, `staff` for a reviewer). A call on
+source-backed work also sends `Registry-Source-Profile`, naming the source
+access profile under which Casework presents that caller's token: source work
+items, and review tasks whose kind uses `contextStrategy: source`. Producer
+routes and submitted-context review tasks take no source profile. A review-task
+list left empty only because that header is missing is refused with
+`source-profile.required`. `caseworkctl dev token <client>` writes an
+owner-only file carrying the first two headers for `curl --header @file`.
+
 An authenticated producer creates a request at `POST /v1/review-requests` with
 an `Idempotency-Key`. Admission binds the producer's exact issuer and subject,
 source namespace, kind, and optional completion destination. A producer can

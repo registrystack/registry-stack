@@ -265,7 +265,15 @@ def fresh_header(caseworkctl: Path, project: Path, client: str) -> Path:
         raise LoadtestError("caseworkctl dev token reported a header outside the owned session")
     _owner_only_regular(reported, "authorization header")
     value = reported.read_text(encoding="ascii")
-    if not value.startswith("Authorization: Bearer ") or value.count(".") != 2 or not value.endswith("\n"):
+    lines = value.split("\n")
+    # The file carries the bearer line and then the client's Casework profile.
+    if (
+        not value.endswith("\n")
+        or len(lines) != 3
+        or not lines[0].startswith("Authorization: Bearer ")
+        or lines[0].count(".") != 2
+        or not lines[1].startswith("Registry-Casework-Profile: ")
+    ):
         raise LoadtestError("caseworkctl dev token returned a malformed authorization header")
     return reported
 

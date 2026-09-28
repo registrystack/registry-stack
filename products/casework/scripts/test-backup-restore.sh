@@ -198,14 +198,15 @@ expect_status() {
 }
 
 # casework_call METHOD PATH OUTPUT [extra header]... [-- BODY], as staff
-# reading the registry through its reviewer profile.
+# reading the registry through its reviewer profile. The staff header file
+# already carries Registry-Casework-Profile.
 casework_call() {
   local method=$1
   local path=$2
   local output=$3
   shift 3
   http "$method" "$casework_origin$path" "$(casework_header staff)" "$output" \
-    'registry-casework-profile: staff' 'registry-source-profile: reviewer' "$@"
+    'registry-source-profile: reviewer' "$@"
 }
 
 review_tasks() {

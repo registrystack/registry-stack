@@ -36,7 +36,7 @@ seed = importlib.util.module_from_spec(SEED_SPEC)
 SEED_SPEC.loader.exec_module(seed)
 
 EXAMPLE = REPOSITORY / "products/casework/examples/standalone-decision"
-HEADER = "Authorization: Bearer header.payload.signature\n"
+HEADER = "Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\n"
 
 
 class LifecycleStub:
