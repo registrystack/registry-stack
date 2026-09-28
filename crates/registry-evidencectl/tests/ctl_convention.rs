@@ -404,3 +404,21 @@ fn an_undeliverable_report_exits_operational() {
         "the only channel left names the failure: {stderr}"
     );
 }
+
+#[test]
+fn undeliverable_json_help_exits_operational() {
+    let (reader, stdout) = std::io::pipe().expect("stdout pipe");
+    drop(reader);
+    let output = evidencectl()
+        .args(["--format", "json", "--help"])
+        .stdout(stdout)
+        .output()
+        .expect("run help");
+    assert_eq!(
+        output.status.code(),
+        Some(OPERATIONAL_FAILURE),
+        "stderr {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not write the JSON report"));
+}

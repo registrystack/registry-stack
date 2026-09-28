@@ -51,6 +51,24 @@ pub(crate) fn print(command: &str, report: &RunReport) -> std::io::Result<()> {
     stdout.flush()
 }
 
+/// Write the JUnit document for a run that failed before it evaluated
+/// anything: one `setup` suite whose single case carries the failure.
+pub(crate) fn print_setup_failure(command: &str, message: &str) -> std::io::Result<()> {
+    let suites = [Suite {
+        name: "setup".to_owned(),
+        cases: vec![Case {
+            name: format!("evidencectl {command}"),
+            failure: Some(Failure {
+                message: message.to_owned(),
+                detail: None,
+            }),
+        }],
+    }];
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(render_suites(command, &suites).as_bytes())?;
+    stdout.flush()
+}
+
 pub(crate) fn render(command: &str, report: &RunReport) -> String {
     let mut suites = Vec::new();
     let check_failure = (!report.check.passed).then(|| Failure {
@@ -86,6 +104,10 @@ pub(crate) fn render(command: &str, report: &RunReport) -> String {
         });
     }
 
+    render_suites(command, &suites)
+}
+
+fn render_suites(command: &str, suites: &[Suite]) -> String {
     let tests: usize = suites.iter().map(|suite| suite.cases.len()).sum();
     let failures: usize = suites.iter().map(Suite::failures).sum();
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -93,7 +115,7 @@ pub(crate) fn render(command: &str, report: &RunReport) -> String {
         "<testsuites name=\"{}\" tests=\"{tests}\" failures=\"{failures}\" errors=\"0\">\n",
         escape(&format!("evidencectl {command}"))
     ));
-    for suite in &suites {
+    for suite in suites {
         xml.push_str(&format!(
             "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"0\" skipped=\"0\">\n",
             escape(&suite.name),

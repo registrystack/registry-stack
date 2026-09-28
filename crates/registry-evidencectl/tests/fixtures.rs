@@ -1501,3 +1501,30 @@ fn junit_is_refused_outside_fixture_runs() {
         );
     }
 }
+
+/// A run that fails before any fixture is evaluated still hands a CI
+/// collector one failing JUnit document, so the failure is never lost.
+#[test]
+fn junit_reports_a_failure_before_any_fixture_is_evaluated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("no-such-project");
+    let output = evidencectl()
+        .args(["--format", "junit", "fixtures", "run"])
+        .arg(&missing)
+        .output()
+        .expect("run evidencectl");
+    assert_ne!(output.status.code(), Some(0));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.starts_with("<?xml") && stdout.matches("<testsuites").count() == 1,
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("<testsuite name=\"setup\"") && stdout.contains("<failure message="),
+        "{stdout}"
+    );
+    assert!(
+        !stderr_of(&output).is_empty(),
+        "the human summary stays on stderr"
+    );
+}

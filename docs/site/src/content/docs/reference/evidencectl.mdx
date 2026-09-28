@@ -76,7 +76,8 @@ report accepts only `--format human`, and the CLI reference shows which commands
 
 Under `--format json`, a command writes exactly one JSON object on standard output and nothing on
 standard error. The object opens with `ok`, `command`, and `status`, in that order, then carries the
-command's own members. Every key is camelCase. `command` is the command path, such as `check` or
+command's own members. Every member name is camelCase; a map keyed by authored identifiers, such
+as `selectorProfiles`, keeps those identifiers as its keys. `command` is the command path, such as `check` or
 `dev start`, and `status` names what happened, such as `complete`, `incomplete`, `passed`, or
 `ready`. `ok` is `true` exactly when the process exits `0`. A refusal uses the same object with
 `ok: false`, a `diagnostics` array whose entries each name the next step in `suggestedAction`, and
