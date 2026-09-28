@@ -91,6 +91,10 @@ const MIN_RSA_MODULUS_BITS: usize = 2048;
 /// (`RSA_PKCS1_2048_8192_*`); a wider key would sign nothing it can verify.
 const MAX_RSA_MODULUS_BITS: usize = 8192;
 
+/// The widest RSA public exponent aws-lc, behind the platform verifier,
+/// accepts; wider exponents are refused as a denial-of-service guard.
+const MAX_RSA_EXPONENT_BITS: usize = 33;
+
 const RSA_ENCRYPTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 const EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 const PRIME256V1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
@@ -309,10 +313,7 @@ fn rsa_jwk(key: pkcs1::RsaPublicKey<'_>, alg: Option<JwkAlgorithm>) -> Result<Pu
         ),
     };
     let modulus = key.modulus.as_bytes();
-    let modulus_bits = modulus.len() * 8
-        - modulus
-            .first()
-            .map_or(8, |top| top.leading_zeros() as usize);
+    let modulus_bits = bit_length(modulus);
     if modulus_bits < MIN_RSA_MODULUS_BITS {
         bail!(
             "the RSA modulus has {modulus_bits} bits; at least {MIN_RSA_MODULUS_BITS} are required"
@@ -321,6 +322,19 @@ fn rsa_jwk(key: pkcs1::RsaPublicKey<'_>, alg: Option<JwkAlgorithm>) -> Result<Pu
     if modulus_bits > MAX_RSA_MODULUS_BITS {
         bail!(
             "the RSA modulus has {modulus_bits} bits; at most {MAX_RSA_MODULUS_BITS} can be verified"
+        );
+    }
+    if modulus.last().is_some_and(|low| low & 1 == 0) {
+        bail!("the RSA modulus is even, so it is not an RSA modulus");
+    }
+    let exponent = key.public_exponent.as_bytes();
+    let exponent_bits = bit_length(exponent);
+    if exponent.last().is_none_or(|low| low & 1 == 0)
+        || !(2..=MAX_RSA_EXPONENT_BITS).contains(&exponent_bits)
+    {
+        bail!(
+            "the RSA public exponent must be odd, at least 3, and at most \
+             {MAX_RSA_EXPONENT_BITS} bits to be verifiable"
         );
     }
     validate(
@@ -336,6 +350,11 @@ fn rsa_jwk(key: pkcs1::RsaPublicKey<'_>, alg: Option<JwkAlgorithm>) -> Result<Pu
         },
         "RSA",
     )
+}
+
+/// The bit length of a big-endian unsigned integer with no leading zero bytes.
+fn bit_length(bytes: &[u8]) -> usize {
+    (bytes.len() * 8).saturating_sub(bytes.first().map_or(8, |top| top.leading_zeros() as usize))
 }
 
 /// Round-trips the JWK through the platform parser, the same one `jwks` and the
@@ -382,6 +401,14 @@ mod tests {
     }
 
     #[test]
+    fn bit_length_counts_significant_bits() {
+        assert_eq!(bit_length(&[]), 0);
+        assert_eq!(bit_length(&[0x01]), 1);
+        assert_eq!(bit_length(&[0x01, 0x00, 0x01]), 17);
+        assert_eq!(bit_length(&[0xff; 256]), 2048);
+    }
+
+    #[test]
     fn two_public_blocks_are_refused() {
         let block = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n";
         let error = public_jwk_from_pem(&format!("{block}{block}"), None)
@@ -410,5 +437,35 @@ mod tests {
         assert!(short.contains("at least 2048"), "{short}");
         let long = convert(1025).unwrap_err();
         assert!(long.contains("at most 8192"), "{long}");
+    }
+
+    /// aws-lc, behind the platform verifier, accepts only an odd modulus and
+    /// an odd public exponent of at least 3 and at most 33 bits.
+    #[test]
+    fn rsa_components_the_verifier_refuses_are_refused() {
+        let convert = |modulus_tail: u8, exponent: &[u8]| {
+            let mut modulus = vec![0xff; 256];
+            modulus[255] = modulus_tail;
+            let key = pkcs1::RsaPublicKey {
+                modulus: pkcs8::der::asn1::UintRef::new(&modulus).expect("modulus"),
+                public_exponent: pkcs8::der::asn1::UintRef::new(exponent).expect("exponent"),
+            };
+            rsa_jwk(key, Some(JwkAlgorithm::Rs256)).map_err(|error| error.to_string())
+        };
+        assert!(convert(0x01, &[0x01, 0x00, 0x01]).is_ok(), "65537");
+        assert!(convert(0x01, &[0x03]).is_ok(), "3");
+        assert!(
+            convert(0x01, &[0x01, 0xff, 0xff, 0xff, 0xff]).is_ok(),
+            "33 bits"
+        );
+        for (tail, exponent, expected) in [
+            (0x01, &[0x01][..], "public exponent"),
+            (0x01, &[0x01, 0x00, 0x00][..], "public exponent"),
+            (0x01, &[0x03, 0xff, 0xff, 0xff, 0xff][..], "public exponent"),
+            (0x00, &[0x01, 0x00, 0x01][..], "modulus"),
+        ] {
+            let error = convert(tail, exponent).unwrap_err();
+            assert!(error.contains(expected), "{exponent:?}: {error}");
+        }
     }
 }
