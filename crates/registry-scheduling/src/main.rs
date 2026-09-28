@@ -5,9 +5,12 @@
 #[tokio::main]
 async fn main() {
     // Operational logs go to stderr whatever the audit destination is, so a
-    // `stdout` audit destination carries audit entries alone.
+    // `stdout` audit destination carries audit entries alone. `RUST_LOG`
+    // selects verbosity and defaults to `info` when it is unset or invalid.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
     let matches = registry_scheduling::runtime::command().get_matches();

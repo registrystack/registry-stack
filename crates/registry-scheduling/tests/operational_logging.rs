@@ -28,8 +28,9 @@ fn stage_package(root: &Path) -> PathBuf {
     package
 }
 
-#[test]
-fn a_stdout_audit_destination_never_carries_operational_logs() {
+/// Run `scheduling serve` over a `stdout` audit destination with `RUST_LOG`
+/// set to `rust_log`, or removed when it is `None`.
+fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
     let root = canonical_tempdir();
     let package = stage_package(root.path());
     let runtime = serde_json::json!({
@@ -59,11 +60,15 @@ fn a_stdout_audit_destination_never_carries_operational_logs() {
 
     // Serving logs the verified package, then stops at the database, which
     // nothing listens for; no PostgreSQL is needed to see where logs go.
-    let output = Command::new(env!("CARGO_BIN_EXE_scheduling"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_scheduling"));
+    match rust_log {
+        Some(filter) => command.env("RUST_LOG", filter),
+        None => command.env_remove("RUST_LOG"),
+    };
+    command
         .arg("--runtime-config")
         .arg(&runtime_path)
         .arg("serve")
-        .env("RUST_LOG", "info")
         .env(
             "SCHEDULING_TEST_RUNTIME_URL",
             "postgres://scheduling@127.0.0.1:1/scheduling",
@@ -77,7 +82,12 @@ fn a_stdout_audit_destination_never_carries_operational_logs() {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .output()
-        .expect("scheduling runs");
+        .expect("scheduling runs")
+}
+
+#[test]
+fn a_stdout_audit_destination_never_carries_operational_logs() {
+    let output = serve_with_stdout_audit(Some("info"));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -88,5 +98,27 @@ fn a_stdout_audit_destination_never_carries_operational_logs() {
         output.stdout.is_empty(),
         "stdout carried non-audit output: {}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn info_records_reach_stderr_when_rust_log_is_unset() {
+    let output = serve_with_stdout_audit(None);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("verified Scheduling package"),
+        "an info record reaches stderr without RUST_LOG: {stderr}"
+    );
+}
+
+#[test]
+fn an_invalid_rust_log_falls_back_to_info() {
+    let output = serve_with_stdout_audit(Some("=not a filter="));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("verified Scheduling package"),
+        "an info record reaches stderr with an invalid RUST_LOG: {stderr}"
     );
 }
