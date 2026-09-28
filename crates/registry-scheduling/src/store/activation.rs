@@ -615,7 +615,8 @@ async fn grants_current_in(
 
 /// The role mode `role` holds over the activation ledger, or none before
 /// the first apply created it. It is `single` when the role can insert,
-/// update, delete, or truncate ledger or schema history rows, is or holds
+/// update, delete, or truncate ledger or schema history rows, by a table or
+/// a column privilege, is or holds
 /// the ledger's owner, the schema's owner, or `migration_role`, is a
 /// superuser or bypasses row security, or can write the ledger indirectly
 /// as [`split_weakness_in`] describes; `split` otherwise.
@@ -630,9 +631,13 @@ async fn role_mode_in(
     let writes: bool = client
         .query_opt(
             "SELECT has_table_privilege(r.oid, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE') \
+                 OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE') \
                  OR COALESCE(has_table_privilege(r.oid, \
                         to_regclass('scheduling_schema_migrations'), \
                         'INSERT, UPDATE, DELETE, TRUNCATE'), false) \
+                 OR COALESCE(has_any_column_privilege(r.oid, \
+                        to_regclass('scheduling_schema_migrations'), \
+                        'INSERT, UPDATE'), false) \
                  OR pg_has_role(r.oid, c.relowner, 'USAGE') \
                  OR pg_has_role(r.oid, n.nspowner, 'USAGE') \
                  OR COALESCE(pg_has_role(r.oid, m.oid, 'USAGE'), false) \

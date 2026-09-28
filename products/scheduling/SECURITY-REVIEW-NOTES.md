@@ -456,7 +456,8 @@ before the operator could revoke anything on it. When they are one role
 is an ordinary layout. The mode the ledger records is not the comparison of
 user names: after the grants, apply reads what the runtime role can actually
 do to the ledger (a write privilege on the ledger or on
-`scheduling_schema_migrations`, ownership of the ledger or the schema,
+`scheduling_schema_migrations`, a column-level INSERT or UPDATE included,
+ownership of the ledger or the schema,
 membership in the migration role, or a superuser or BYPASSRLS attribute) and
 records `single` if any holds, with the runtime role's name. Startup refuses
 a ledger that recorded `split` for a credential that can now write it, a

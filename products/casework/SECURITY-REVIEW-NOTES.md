@@ -104,7 +104,8 @@ two-person rule enforce it on who can read the migration credential.
 - The role mode is recorded from the runtime role's effective authority after
   the grants, not from whether the two credentials name different roles. The
   runtime role counts as single-role when it is a superuser or bypasses row
-  security, holds any of `INSERT, UPDATE, DELETE` on either ledger, is a member
+  security, holds `DELETE` or `TRUNCATE` on either ledger or `INSERT` or
+  `UPDATE` on either ledger or any of its columns, is a member
   of the ledger's owner or the schema's owner, or is a member of the migration
   role. It counts as single-role too when it can reach the ledger through code
   that runs as the migration role: it owns, or is a member of the owner of,
@@ -205,7 +206,7 @@ holds no lock stronger than a row lock while the runtime works.
   `trigger_and_public_privileges_are_refused_naming_their_revoke`,
   `a_trigger_left_by_a_runtime_role_that_owned_a_table_is_refused_after_reassignment`,
   `a_trigger_on_a_casework_table_refuses_no_single_role_apply`,
-  `schema_ledger_writes_weaken_a_split_activation_until_apply_revokes_them`,
+  `ledger_writes_weaken_a_split_activation_until_apply_revokes_them`,
   `the_known_triggers_are_exactly_the_ones_the_migrations_create` (in
   `activation.rs`),
   `serve_refuses_an_unapplied_database_before_listening_or_writing` (through

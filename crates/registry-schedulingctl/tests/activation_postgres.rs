@@ -937,6 +937,33 @@ async fn a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_ap
     let reapplied = apply(&config).expect("apply reissues the runtime role's grants");
     assert_eq!(reapplied["roleMode"], "split");
     assert_eq!(deployment.ledger_rows().await, 3);
+
+    // A column-level write on either ledger counts the same as a table-level
+    // one, and apply's revoke takes it back with the table's.
+    let mut rows = 3;
+    for grant in [
+        "GRANT UPDATE (package_digest) ON {schema}.scheduling_activations TO {role}",
+        "GRANT INSERT (version) ON {schema}.scheduling_schema_migrations TO {role}",
+    ] {
+        deployment
+            .admin
+            .batch_execute(
+                &grant
+                    .replace("{schema}", &deployment.schema)
+                    .replace("{role}", &runtime_role),
+            )
+            .await
+            .unwrap();
+        let error = startup_refusal(&config).await;
+        assert!(
+            error.contains("records split role mode"),
+            "{grant}: {error}"
+        );
+        let reapplied = apply(&config).expect("apply reissues the runtime role's grants");
+        assert_eq!(reapplied["roleMode"], "split", "{grant}");
+        rows += 1;
+        assert_eq!(deployment.ledger_rows().await, rows);
+    }
     deployment.drop().await;
 }
 

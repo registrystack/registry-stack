@@ -1281,7 +1281,8 @@ async fn unreadable_ledger(transaction: &Transaction<'_>) -> Result<Option<Strin
 /// The authority of `role`, or of this connection's role when none is
 /// given, over the activation ledger. The role is single-role when it can
 /// write the ledger in any way: a superuser or row-security bypass attribute,
-/// an insert, update, or delete privilege on either ledger, membership in
+/// a delete or truncate privilege on either ledger, an insert or update
+/// privilege on either ledger or on any of its columns, membership in
 /// the ledger's or the schema's owner, or, when `role` is named, membership
 /// in this connection's role. It is single-role too when it can reach the
 /// ledger through code that runs as the migration role: it owns, or is a
@@ -1298,11 +1299,13 @@ async fn observe_role(
         .query_opt(
             "SELECT
                r.rolsuper OR r.rolbypassrls
-               OR has_table_privilege(r.oid, c.oid, 'INSERT, UPDATE, DELETE')
+               OR has_table_privilege(r.oid, c.oid, 'DELETE, TRUNCATE')
+               OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE')
                OR pg_has_role(r.oid, c.relowner, 'MEMBER')
                OR pg_has_role(r.oid, n.nspowner, 'MEMBER')
                OR ($1::text IS NOT NULL AND pg_has_role(r.oid, current_user, 'MEMBER'))
-               OR COALESCE(has_table_privilege(r.oid, to_regclass('casework_schema_migrations')::oid, 'INSERT, UPDATE, DELETE'), false)
+               OR COALESCE(has_table_privilege(r.oid, to_regclass('casework_schema_migrations')::oid, 'DELETE, TRUNCATE'), false)
+               OR COALESCE(has_any_column_privilege(r.oid, to_regclass('casework_schema_migrations')::oid, 'INSERT, UPDATE'), false)
                OR has_schema_privilege(r.oid, n.oid, 'CREATE')
                OR EXISTS(
                  SELECT 1 FROM pg_class t
