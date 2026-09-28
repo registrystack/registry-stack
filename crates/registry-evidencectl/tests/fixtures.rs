@@ -54,7 +54,8 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
 ///   `$FAIL_EXPECTED`/`$FAIL_OBSERVED` as the two classes and no parenthetical
 ///   when they are unset;
 /// - when the invocation asked for `--explain-format json`, prints the trace
-///   document with `evaluatedCases` set to `$CASES` (or `null` when unset),
+///   document with `evaluatedCases` set to `$CASES` (or `null` when unset)
+///   and `cases` set to the JSON array in `$STUB_CASES` (or `[]` when unset),
 ///   whether or not the step is the one named by `$FAIL_STEP`, mirroring the
 ///   real binary's own trace, which is emitted on both outcomes;
 /// - otherwise prints the real `evidence evaluate` summary line, with `$CASES`
@@ -108,7 +109,7 @@ fi
 
 if [ "$step" = "${{FAIL_STEP:-}}" ]; then
   if [ "$explain_json" = "true" ]; then
-    printf '{{"passed":false,"evaluatedCases":%s,"cases":[]}}\n' "$cases_json"
+    printf '{{"passed":false,"evaluatedCases":%s,"cases":%s}}\n' "$cases_json" "${{STUB_CASES:-[]}}"
   fi
   printf 'stub failure for %s\n' "$step" >&2
   if [ -n "${{FAIL_CASE:-}}" ]; then
@@ -123,7 +124,7 @@ if [ "$step" = "${{FAIL_STEP:-}}" ]; then
 fi
 
 if [ "$explain_json" = "true" ]; then
-  printf '{{"passed":true,"evaluatedCases":%s,"cases":[]}}\n' "$cases_json"
+  printf '{{"passed":true,"evaluatedCases":%s,"cases":%s}}\n' "$cases_json" "${{STUB_CASES:-[]}}"
   exit 0
 fi
 
@@ -234,7 +235,7 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
     let report: serde_json::Value =
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
     assert_eq!(report["passed"], serde_json::Value::Bool(true));
-    assert_eq!(report["evaluated_cases"], serde_json::json!(3));
+    assert_eq!(report["evaluatedCases"], serde_json::json!(3));
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert_eq!(fixtures.len(), 1);
     assert_eq!(fixtures[0]["path"], "fixtures/a.yaml");
@@ -462,23 +463,23 @@ fn a_failing_fixture_carries_the_case_and_classes_the_binary_named() {
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert_eq!(fixtures[0]["passed"], serde_json::Value::Bool(false));
     assert_eq!(
-        fixtures[0]["failing_case"],
+        fixtures[0]["failingCase"],
         serde_json::json!({
             "id": "positive-mismatch",
             "cause": "stub failure for evaluate:fixtures/a.yaml",
-            "expected_class": "string",
-            "observed_class": "integer",
+            "expectedClass": "string",
+            "observedClass": "integer",
         }),
         "the report must carry what the binary said, not a second opinion"
     );
     // This binary never reported a count for the failing step (`$CASES` is
     // unset), so naming the case must not make the driver invent one.
     assert!(
-        fixtures[0].get("evaluated_cases").is_none(),
+        fixtures[0].get("evaluatedCases").is_none(),
         "a named failing case fabricated a count: {}",
         fixtures[0]
     );
-    assert_eq!(report["evaluated_cases"], serde_json::json!(0));
+    assert_eq!(report["evaluatedCases"], serde_json::json!(0));
 
     // The human mode relays the same line through the captured stderr.
     let human = evidencectl()
@@ -522,7 +523,7 @@ fn a_failing_case_without_classes_carries_no_class_fields() {
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert_eq!(
-        fixtures[0]["failing_case"],
+        fixtures[0]["failingCase"],
         serde_json::json!({
             "id": "expectation-stage",
             "cause": "stub failure for evaluate:fixtures/a.yaml",
@@ -556,7 +557,7 @@ fn an_unstructured_failure_names_no_case() {
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert!(
-        fixtures[0].get("failing_case").is_none(),
+        fixtures[0].get("failingCase").is_none(),
         "an unstructured failure named a case anyway: {}",
         fixtures[0]
     );
@@ -608,9 +609,11 @@ fn json_output_is_one_parseable_document_on_stdout_with_expected_pass_fail_value
         .expect("failing fixture carries stderr")
         .contains("stub failure for evaluate:fixtures/b.yaml"));
 
-    // Human diagnostics belong on stderr in JSON mode, not on stdout.
-    let stderr = stderr_of(&output);
-    assert!(stderr.contains("FAIL: fixtures/b.yaml"), "{stderr}");
+    // Under JSON the report is the whole answer; nothing reaches stderr.
+    assert!(output.stderr.is_empty(), "{}", stderr_of(&output));
+    assert_eq!(report["ok"], serde_json::Value::Bool(false));
+    assert_eq!(report["command"], "fixtures run");
+    assert_eq!(report["status"], "failed");
 }
 
 /// The step counts measure artifacts, and a reader takes the summary line for
@@ -662,11 +665,11 @@ fn the_summary_totals_the_cases_each_fixture_evaluated() {
     assert!(!output.status.success());
     let report: serde_json::Value =
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
-    assert_eq!(report["evaluated_cases"], serde_json::json!(14));
+    assert_eq!(report["evaluatedCases"], serde_json::json!(14));
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
-    assert_eq!(fixtures[0]["evaluated_cases"], serde_json::json!(7));
+    assert_eq!(fixtures[0]["evaluatedCases"], serde_json::json!(7));
     assert_eq!(
-        fixtures[1]["evaluated_cases"],
+        fixtures[1]["evaluatedCases"],
         serde_json::json!(7),
         "a failed fixture must still report the count evidence gave it: {}",
         fixtures[1]
@@ -742,10 +745,9 @@ fn the_global_format_json_flag_keeps_test_stdout_one_json_document() {
     let report: serde_json::Value =
         serde_json::from_str(stdout_lines[0]).expect("parse JSON report");
     assert_eq!(report["passed"], serde_json::Value::Bool(true));
-    assert_eq!(report["evaluated_cases"], serde_json::json!(3));
+    assert_eq!(report["evaluatedCases"], serde_json::json!(3));
 
-    let stderr = String::from_utf8(output.stderr).expect("stderr text");
-    assert!(stderr.contains("PASS: check"), "{stderr}");
+    assert!(output.stderr.is_empty(), "{}", stderr_of(&output));
 }
 
 /// A run whose steps all pass but whose fixtures evaluated nothing is the one
@@ -774,7 +776,7 @@ fn a_run_that_evaluated_no_case_fails_instead_of_reporting_success() {
     let report: serde_json::Value =
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
     assert_eq!(report["passed"], serde_json::Value::Bool(false));
-    assert_eq!(report["evaluated_cases"], serde_json::json!(0));
+    assert_eq!(report["evaluatedCases"], serde_json::json!(0));
 
     // The verdict comes from the empty count, not from a failing step: every
     // step this run took passed, which is exactly what makes it misleading.
@@ -787,11 +789,16 @@ fn a_run_that_evaluated_no_case_fails_instead_of_reporting_success() {
         "{report}"
     );
 
-    let stderr = stderr_of(&output);
-    assert!(stderr.contains("no case was evaluated"), "{stderr}");
+    assert!(output.stderr.is_empty(), "{}", stderr_of(&output));
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidencectl.fixtures.no-case"
+    );
     assert!(
-        stderr.contains("declare"),
-        "the failure must name what to do about it: {stderr}"
+        report["diagnostics"][0]["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("Declare")),
+        "the failure must name what to do about it: {report}"
     );
 }
 
@@ -1387,4 +1394,110 @@ fn target_new_local_outside_a_project_refuses_before_writing_key_material() {
         !root.join("targets").exists(),
         "a refused target new created a target parent: {stderr}"
     );
+}
+
+/// A CI system reads the JUnit document alone, so it must carry one test case
+/// per case the runtime traced, the failing one marked with what the binary
+/// said, while the human summary moves to stderr.
+#[test]
+fn junit_output_carries_one_testcase_per_traced_case_on_stdout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml", "fixtures/b.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["--format", "junit", "fixtures", "run"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "2")
+        .env("STUB_CASES", r#"[{"id":"positive"},{"id":"negative"}]"#)
+        .env("FAIL_STEP", "evaluate:fixtures/b.yaml")
+        .env("FAIL_CASE", "negative")
+        .output()
+        .expect("run evidencectl");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            r#"<testsuites name="evidencectl fixtures run" tests="5" failures="1" errors="0">"#
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(r#"<testcase classname="fixtures/a.yaml" name="negative"/>"#),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(r#"<testcase classname="fixtures/b.yaml" name="negative">"#)
+            && stdout.contains(r#"<failure message="stub failure for evaluate:fixtures/b.yaml">"#),
+        "{stdout}"
+    );
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("FAIL: fixtures/b.yaml"), "{stderr}");
+}
+
+/// A run that evaluated nothing exits non-zero, and a CI system reading only
+/// the JUnit document must not see it as green.
+#[test]
+fn junit_output_fails_a_run_that_evaluated_no_case() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["--format", "junit", "fixtures", "run"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "0")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains(r#"failures="1" errors="0">"#)
+            && stdout.contains(r#"<failure message="no case was evaluated"#),
+        "{stdout}"
+    );
+}
+
+/// JUnit describes test runs; every other command refuses it as a usage
+/// error that names the formats it does offer.
+#[test]
+fn junit_is_refused_outside_fixture_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    for arguments in [
+        vec!["--format", "junit", "check"],
+        vec!["--format", "junit", "fixtures", "run", "--json"],
+    ] {
+        let output = evidencectl()
+            .args(&arguments)
+            .arg(&project)
+            .output()
+            .expect("run evidencectl");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "{arguments:?}: {}",
+            stdout_of(&output)
+        );
+        let stderr = stderr_of(&output);
+        assert!(
+            stderr.contains("evidencectl.format.unsupported") && stderr.contains("--format human"),
+            "{arguments:?}: {stderr}"
+        );
+    }
 }

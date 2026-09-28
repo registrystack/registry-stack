@@ -249,8 +249,17 @@ struct StopArgs {
 
 #[derive(Debug, Args)]
 struct CleanArgs {
-    #[arg(long, default_value = ".", hide = true)]
+    /// Project root. Defaults to the current directory.
+    #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(
+        long = "project",
+        value_name = "PROJECT",
+        hide = true,
+        conflicts_with = "project"
+    )]
+    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -258,6 +267,53 @@ struct StartArgs {
     /// Project root. Defaults to the current directory.
     #[arg(default_value = ".")]
     project: PathBuf,
+    /// Name prefix for the local issuer container, so parallel jobs on one
+    /// host can tell their containers apart: lowercase letters, digits, and
+    /// inner hyphens, starting with a letter, at most 32 characters.
+    #[arg(
+        long,
+        value_name = "PREFIX",
+        default_value = DEFAULT_NAME_PREFIX,
+        value_parser = parse_name_prefix
+    )]
+    name_prefix: String,
+}
+
+/// The container name prefix a session uses unless `--name-prefix` selects
+/// another.
+const DEFAULT_NAME_PREFIX: &str = "evidence-dev";
+/// The longest accepted `--name-prefix`, which keeps the full container name
+/// well inside the container runtime's name limit.
+const MAX_NAME_PREFIX_BYTES: usize = 32;
+
+fn default_name_prefix() -> String {
+    DEFAULT_NAME_PREFIX.to_owned()
+}
+
+fn valid_name_prefix(prefix: &str) -> bool {
+    let bytes = prefix.as_bytes();
+    (1..=MAX_NAME_PREFIX_BYTES).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[bytes.len() - 1] != b'-'
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn parse_name_prefix(prefix: &str) -> std::result::Result<String, String> {
+    if valid_name_prefix(prefix) {
+        Ok(prefix.to_owned())
+    } else {
+        Err(format!(
+            "use 1 to {MAX_NAME_PREFIX_BYTES} lowercase letters, digits, and inner hyphens, \
+             starting with a letter, such as `ci-4711`"
+        ))
+    }
+}
+
+/// The ownership label of one session's issuer container.
+fn issuer_label(name_prefix: &str, issuer_session_id: &str) -> String {
+    format!("{name_prefix}-{}", &issuer_session_id[..12])
 }
 
 #[derive(Debug, Args)]
@@ -303,6 +359,8 @@ struct DevState {
     evidence_origin: String,
     issuer_origin: String,
     issuer_session_id: String,
+    #[serde(default = "default_name_prefix")]
+    name_prefix: String,
     #[serde(default)]
     issuer_project: Option<PathBuf>,
     #[serde(default)]
@@ -517,6 +575,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
                     requested_resource: args.resource.as_deref(),
+                    name_prefix: &start.name_prefix,
                 },
                 format,
             )
@@ -529,7 +588,10 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 .unwrap_or_else(|| Path::new("."));
             stop_dev(project, format)
         }
-        Some(DevAction::Clean(clean)) => clean_dev(&clean.project, format),
+        Some(DevAction::Clean(clean)) => clean_dev(
+            clean.legacy_project.as_ref().unwrap_or(&clean.project),
+            format,
+        ),
         Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
         Some(DevAction::Grant(args)) => approved_grant(args, format),
         None => {
@@ -572,6 +634,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
                     requested_resource: args.resource.as_deref(),
+                    name_prefix: DEFAULT_NAME_PREFIX,
                 },
                 format,
             )
@@ -950,10 +1013,11 @@ fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
             "Wrote approved task authorization header to {}",
             output.header_file.display()
         ),
-        OutputFormat::Json => println!(
-            "{}",
-            json!({"operation":"dev-grant","status":"ready","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at})
-        ),
+        OutputFormat::Json => crate::print_report(&crate::report::success(
+            "dev grant",
+            "ready",
+            json!({"headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1009,10 +1073,11 @@ fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<
     replace_private_file(&output, &header)?;
     match format {
         OutputFormat::Human => println!("Wrote fresh authorization header to {}", output.display()),
-        OutputFormat::Json => println!(
-            "{}",
-            json!({"operation":"dev-token","status":"ready","headerFile":output})
-        ),
+        OutputFormat::Json => crate::print_report(&crate::report::success(
+            "dev token",
+            "ready",
+            json!({"headerFile":output}),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1125,7 +1190,7 @@ fn unregistered_client_refusal() -> anyhow::Error {
         code: "evidence.dev.client-unregistered",
         path: "$".to_owned(),
         message: "The named client is not registered with the ready local session.".to_owned(),
-        suggested_action: "List the registered clients with `evidencectl access client list --project <dir>`, request the token for one of those, and retry."
+        suggested_action: "From the project directory, list the registered clients with `evidencectl access client list`, request the token for one of those, and retry."
             .to_owned(),
     }
     .into()
@@ -1258,7 +1323,8 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
         && state
             .issuer_session_id
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        && valid_name_prefix(&state.name_prefix);
     let questions_are_closed = !state.questions.is_empty()
         && state.questions.len() <= 128
         && state.questions.iter().all(valid_question_state)
@@ -1714,6 +1780,7 @@ struct DevStartSelection<'a> {
     target: Option<&'a Path>,
     issuer_project: Option<&'a Path>,
     requested_resource: Option<&'a str>,
+    name_prefix: &'a str,
 }
 
 fn start_detached(
@@ -1729,6 +1796,7 @@ fn start_detached(
         target,
         issuer_project,
         requested_resource,
+        name_prefix,
     } = selection;
     let project = canonical_project(project)?;
     refuse_unservable_project(&project)?;
@@ -1807,6 +1875,7 @@ fn start_detached(
             target,
             owner.as_ref(),
             resource,
+            name_prefix,
             format,
         )
     });
@@ -2172,10 +2241,11 @@ fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     remove_completed_dev_root(&project, &dev_root)?;
     match format {
         OutputFormat::Human => println!("Removed stopped local Evidence state"),
-        OutputFormat::Json => println!(
-            "{}",
-            json!({"operation":"dev-clean","status":"removed","project":project})
-        ),
+        OutputFormat::Json => crate::print_report(&crate::report::success(
+            "dev clean",
+            "removed",
+            json!({"project":project}),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2194,6 +2264,7 @@ fn prepare_and_start(
     target: Option<&Path>,
     owner: Option<&BorrowedIssuer>,
     resource: &str,
+    name_prefix: &str,
     format: OutputFormat,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
@@ -2361,7 +2432,7 @@ fn prepare_and_start(
     let mut random = [0_u8; 24];
     getrandom::fill(&mut random)?;
     let issuer_session_id = hex::encode(random);
-    let issuer_label = format!("evidence-dev-{}", &issuer_session_id[..12]);
+    let issuer_label = issuer_label(name_prefix, &issuer_session_id);
     if let Some(owner) = owner {
         verify_borrowed_registrations(
             owner,
@@ -2393,6 +2464,7 @@ fn prepare_and_start(
         evidence_origin: evidence_origin.clone(),
         issuer_origin: issuer_origin.clone(),
         issuer_session_id,
+        name_prefix: name_prefix.to_owned(),
         issuer_project: owner.map(|owner| owner.project.clone()),
         issuer_owner: owner.map(|owner| owner.owner.clone()),
         token_url: token_url.clone(),
@@ -2451,18 +2523,17 @@ fn prepare_and_start(
             println!("Evidence ready at {evidence_origin}");
             println!("Issuer ready at {issuer_origin}");
         }
-        OutputFormat::Json => println!(
-            "{}",
+        OutputFormat::Json => crate::print_report(&crate::report::success(
+            "dev start",
+            "ready",
             json!({
-                "operation": "dev-start",
-                "status": "ready",
                 "project": project,
                 "evidenceOrigin": evidence_origin,
                 "issuer": issuer_origin,
                 "tokenEndpoint": token_url,
                 "proofBoundary": "both retained local services reached readiness"
-            })
-        ),
+            }),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2503,7 +2574,7 @@ fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
             message: "The local development session is not active; nothing was stopped."
                 .to_owned(),
             suggested_action:
-                "Restart it with `evidencectl dev start <project>`, or remove a completed stopped session with `evidencectl dev clean --project <dir>`."
+                "Restart it with `evidencectl dev start <project>`, or remove a completed stopped session with `evidencectl dev clean <project>`."
                     .to_owned(),
         }
         .into());
@@ -2528,10 +2599,11 @@ fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     }
     match format {
         OutputFormat::Human => println!("Local Evidence stopped"),
-        OutputFormat::Json => println!(
-            "{}",
-            json!({"operation":"dev-stop","status":"stopped","project":project})
-        ),
+        OutputFormat::Json => crate::print_report(&crate::report::success(
+            "dev stop",
+            "stopped",
+            json!({"project":project}),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2661,7 +2733,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     injected_supervisor_failure("after-socket")?;
 
     let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
-    let issuer_label = format!("evidence-dev-{}", &state.issuer_session_id[..12]);
+    let issuer_label = issuer_label(&state.name_prefix, &state.issuer_session_id);
     let issuer_root = dev_root.join("generated/issuer");
     let issuer_session = registry_thunderid_tooling::container::Session {
         label: &issuer_label,
@@ -3438,6 +3510,65 @@ mod tests {
     use crate::authoring::CompiledProject;
 
     #[test]
+    fn the_issuer_container_label_carries_the_selected_name_prefix() {
+        let session = "0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            issuer_label(DEFAULT_NAME_PREFIX, session),
+            "evidence-dev-0123456789ab"
+        );
+        assert_eq!(issuer_label("ci-4711", session), "ci-4711-0123456789ab");
+    }
+
+    #[test]
+    fn a_name_prefix_is_a_short_lowercase_container_name_segment() {
+        for accepted in [
+            "ci",
+            "ci-4711",
+            "job7",
+            "a",
+            &"a".repeat(MAX_NAME_PREFIX_BYTES),
+        ] {
+            assert_eq!(parse_name_prefix(accepted).as_deref(), Ok(accepted));
+        }
+        for refused in [
+            "",
+            "CI",
+            "7job",
+            "-ci",
+            "ci-",
+            "ci_job",
+            "ci.job",
+            "ci job",
+            "ci/job",
+            &"a".repeat(MAX_NAME_PREFIX_BYTES + 1),
+        ] {
+            let error = parse_name_prefix(refused).expect_err(refused);
+            assert!(error.contains("lowercase"), "{refused}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_retained_state_without_a_name_prefix_keeps_the_default() {
+        let state: serde_json::Value = serde_json::json!({
+            "schema": STATE_SCHEMA,
+            "status": "stopped",
+            "project": "/project",
+            "runtimePath": "/project/.evidence/dev/runtime.yaml",
+            "evidenceOrigin": "http://127.0.0.1:8080",
+            "issuerOrigin": "http://127.0.0.1:8081",
+            "issuerSessionId": "0123456789abcdef0123456789abcdef0123456789abcdef",
+            "tokenUrl": "http://127.0.0.1:8081/oauth2/token",
+            "accessTokenAudience": "urn:example:audience",
+            "caller": null,
+            "accessPolicies": [],
+            "questions": [],
+            "failure": null,
+        });
+        let state: DevState = serde_json::from_value(state).expect("a retained state still reads");
+        assert_eq!(state.name_prefix, DEFAULT_NAME_PREFIX);
+    }
+
+    #[test]
     fn retained_resource_must_match_explicit_restart_resource() {
         let growers = "urn:seed-demo:evidence:growers";
         let laboratory = "urn:seed-demo:evidence:laboratory";
@@ -3783,6 +3914,7 @@ requirements:
             evidence_origin: local_origin(8080),
             issuer_origin: local_origin(8081),
             issuer_session_id: "0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            name_prefix: DEFAULT_NAME_PREFIX.to_owned(),
             issuer_project: None,
             issuer_owner: None,
             token_url: format!("{}/oauth2/token", local_origin(8081)),

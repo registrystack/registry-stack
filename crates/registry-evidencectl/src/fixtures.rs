@@ -31,8 +31,16 @@ pub struct RunArgs {
     /// This command accepts either shape: an editable project holding
     /// questions/ and sources/, or a deployment project holding runtime.yaml
     /// beside bundle/.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(
+        long = "project",
+        value_name = "PROJECT",
+        hide = true,
+        conflicts_with = "project"
+    )]
+    pub legacy_project: Option<PathBuf>,
 
     /// Path to the evidence binary; defaults to `evidence` on PATH.
     #[arg(long)]
@@ -58,6 +66,15 @@ pub struct RunArgs {
     #[arg(long)]
     pub json: bool,
 
+    /// Write a JUnit XML report on standard output and the human summary on
+    /// standard error. Selected with the global `--format junit`.
+    #[arg(skip)]
+    pub junit: bool,
+
+    /// The command path the JSON report names.
+    #[arg(skip = "fixtures run")]
+    pub command: &'static str,
+
     /// Ask `evidence` for each structured value-free evaluation diagnostic and
     /// relay it without interpreting Evidence semantics.
     #[arg(long)]
@@ -73,6 +90,9 @@ struct StepOutcome {
     evaluated_cases: Option<usize>,
     trace: Option<JsonValue>,
     failing_case: Option<FailingCase>,
+    /// Each case the structured trace named, kept for the JUnit report after
+    /// the trace itself is dropped from a run that did not ask to see it.
+    cases: Vec<crate::junit::CaseResult>,
 }
 
 /// The structured failing-case line `evidence` prints on stderr when a run
@@ -81,9 +101,10 @@ struct StepOutcome {
 /// `absent` classes stay absent: a side of the comparison that reached no
 /// value is reported as exactly that, and no count is invented beside it.
 #[derive(Debug, Serialize)]
-struct FailingCase {
-    id: String,
-    cause: String,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FailingCase {
+    pub(crate) id: String,
+    pub(crate) cause: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,18 +112,19 @@ struct FailingCase {
 }
 
 #[derive(Debug, Serialize)]
-struct CheckReport {
-    passed: bool,
+pub(crate) struct CheckReport {
+    pub(crate) passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stderr: Option<String>,
+    pub(crate) stderr: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct FixtureReport {
-    path: String,
-    passed: bool,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FixtureReport {
+    pub(crate) path: String,
+    pub(crate) passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stderr: Option<String>,
+    pub(crate) stderr: Option<String>,
     /// Absent only when `evidence` itself reported no count, whether or not
     /// the fixture passed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,32 +132,54 @@ struct FixtureReport {
     /// The case the binary named on stderr when this fixture failed, parsed
     /// from the structured line it promises and never invented here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    failing_case: Option<FailingCase>,
+    pub(crate) failing_case: Option<FailingCase>,
     /// What `evidence evaluate --explain` printed, verbatim, and only when a
     /// trace was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     trace: Option<JsonValue>,
+    /// The cases the structured trace named, for the JUnit report.
+    #[serde(skip)]
+    pub(crate) cases: Vec<crate::junit::CaseResult>,
 }
 
 #[derive(Debug, Serialize)]
-struct RunReport {
-    operation: &'static str,
-    #[serde(rename = "proofBoundary")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RunReport {
     proof_boundary: &'static str,
-    check: CheckReport,
-    fixtures: Vec<FixtureReport>,
-    passed: bool,
+    pub(crate) check: CheckReport,
+    pub(crate) fixtures: Vec<FixtureReport>,
+    pub(crate) passed: bool,
     /// The cases every fixture in this run evaluated, summed.
     ///
     /// The step counts above measure artifacts, which a reader mistakes for
     /// coverage: a project with four fixture files reports the same `5 passed`
     /// whether those files hold four cases or forty.
-    evaluated_cases: usize,
+    pub(crate) evaluated_cases: usize,
+    /// Why a run whose every step passed still failed, with the next step.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<JsonValue>,
+}
+
+/// The refusal for a run that evaluated no case at all.
+fn no_case_diagnostic() -> JsonValue {
+    serde_json::json!({
+        "severity": "error",
+        "code": "evidencectl.fixtures.no-case",
+        "artifact": "fixtures",
+        "path": "$.evaluatedCases",
+        "message": "No case was evaluated, so this run proves nothing.",
+        "suggestedAction": "Declare at least one case in every fixture the project references, then rerun evidencectl fixtures run <project>.",
+    })
 }
 
 pub fn run(command: FixturesCommand) -> Result<ExitCode> {
     match command {
-        FixturesCommand::Run(args) => run_fixtures(args),
+        FixturesCommand::Run(mut args) => {
+            if let Some(project) = args.legacy_project.take() {
+                args.project = project;
+            }
+            run_fixtures(args)
+        }
     }
 }
 
@@ -225,6 +269,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 evaluated_cases: outcome.evaluated_cases,
                 failing_case: outcome.failing_case,
                 trace: outcome.trace,
+                cases: outcome.cases,
             });
         }
     }
@@ -236,10 +281,9 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     // A run that evaluated nothing has proven nothing. Every step passing is
     // exactly how such a run reads as one that exercised the deployment, so
     // the empty count is a verdict of its own rather than a footnote.
-    let overall_passed =
-        check_passed && fixtures.iter().all(|fixture| fixture.passed) && evaluated_cases > 0;
+    let steps_passed = check_passed && fixtures.iter().all(|fixture| fixture.passed);
+    let overall_passed = steps_passed && evaluated_cases > 0;
     let report = RunReport {
-        operation: "test",
         proof_boundary:
             "offline synthetic fixture evaluation; no live dependency readiness was checked",
         check: CheckReport {
@@ -249,12 +293,23 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         fixtures,
         passed: overall_passed,
         evaluated_cases,
+        diagnostics: if steps_passed && evaluated_cases == 0 {
+            vec![no_case_diagnostic()]
+        } else {
+            Vec::new()
+        },
     };
 
     if args.json {
+        let members = serde_json::to_value(&report).context("failed to encode the JSON report")?;
+        crate::print_report(&if overall_passed {
+            crate::report::success(args.command, "passed", members)
+        } else {
+            crate::report::refused(args.command, "failed", members)
+        });
+    } else if args.junit {
         print_diagnostics(&report, true);
-        let encoded = serde_json::to_string(&report).context("failed to encode the JSON report")?;
-        println!("{encoded}");
+        crate::junit::print(args.command, &report)?;
     } else {
         print_diagnostics(&report, false);
     }
@@ -262,7 +317,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     Ok(if overall_passed {
         ExitCode::SUCCESS
     } else {
-        ExitCode::FAILURE
+        ExitCode::from(crate::report::DOMAIN_REFUSAL_EXIT)
     })
 }
 
@@ -388,6 +443,7 @@ impl FixtureTarget {
                 )
             }
         };
+        outcome.cases = crate::junit::case_results(outcome.trace.as_ref());
         if !explain {
             outcome.trace = None;
         }
@@ -510,6 +566,7 @@ fn run_evidence_step(
                 stderr: None,
                 trace,
                 failing_case: None,
+                cases: Vec::new(),
             }
         }
         Ok(output) => {
@@ -523,6 +580,7 @@ fn run_evidence_step(
                 trace,
                 failing_case: stderr.lines().find_map(parse_failing_case),
                 stderr: Some(stderr),
+                cases: Vec::new(),
             }
         }
         Err(error) => StepOutcome {
@@ -531,6 +589,7 @@ fn run_evidence_step(
             evaluated_cases: None,
             trace: None,
             failing_case: None,
+            cases: Vec::new(),
         },
     }
 }
@@ -614,8 +673,10 @@ fn evaluated_cases(stdout: &str) -> Option<usize> {
 
 /// Print one line per step and a summary line.
 ///
-/// In JSON mode this goes to stderr, keeping stdout reserved for the single
-/// JSON document; in human mode it is the entire report and goes to stdout.
+/// With a JUnit report this goes to stderr, keeping stdout reserved for the
+/// XML document; in human mode it is the entire report and goes to stdout.
+/// Under `--format json` nothing is printed here: the JSON report carries the
+/// same steps.
 fn print_diagnostics(report: &RunReport, to_stderr: bool) {
     let mut lines = Vec::new();
     lines.push(step_line("check", report.check.passed));

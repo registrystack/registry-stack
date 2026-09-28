@@ -75,8 +75,21 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     fixture.generate_evidence_keys();
     let (evidence_port, issuer_port) = unused_port_pair();
 
-    let started = fixture.dev_start(&evidence, &docker, evidence_port, issuer_port);
+    let name_prefix = format!("evidence-gate-{}", std::process::id());
+    let started =
+        fixture.dev_start_named(&evidence, &docker, evidence_port, issuer_port, &name_prefix);
     assert_success(&started, "issuer-backed dev start");
+    let containers = Command::new(&docker)
+        .args(["ps", "--format", "{{.Names}}", "--filter"])
+        .arg(format!("name=thunderid-{name_prefix}-"))
+        .output()
+        .expect("list issuer containers");
+    assert_success(&containers, "docker ps");
+    assert_eq!(
+        String::from_utf8_lossy(&containers.stdout).lines().count(),
+        1,
+        "the issuer container carries the selected name prefix"
+    );
     let stdout = String::from_utf8_lossy(&started.stdout);
     assert!(
         stdout.contains(&format!(
@@ -92,6 +105,7 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     let state = read_json(&fixture.root.join(".evidence/dev/state.json"));
     assert_eq!(state["schema"], "registry.evidencectl.dev-state/v6");
     assert_eq!(state["status"], "ready");
+    assert_eq!(state["namePrefix"], name_prefix);
     assert_eq!(
         state["issuerOrigin"],
         format!("http://127.0.0.1:{issuer_port}")
@@ -627,6 +641,30 @@ impl Project {
         evidencectl()
             .args(["dev", "--detach", "--project"])
             .arg(&self.root)
+            .arg("--evidence-bin")
+            .arg(evidence)
+            .arg("--docker-bin")
+            .arg(docker)
+            .args(["--evidence-port", &evidence_port.to_string()])
+            .args(["--issuer-port", &issuer_port.to_string()])
+            .arg("--ready-timeout-seconds")
+            .arg("120")
+            .output()
+            .expect("dev start")
+    }
+
+    fn dev_start_named(
+        &self,
+        evidence: &Path,
+        docker: &Path,
+        evidence_port: u16,
+        issuer_port: u16,
+        name_prefix: &str,
+    ) -> Output {
+        evidencectl()
+            .args(["dev", "start"])
+            .arg(&self.root)
+            .args(["--name-prefix", name_prefix])
             .arg("--evidence-bin")
             .arg(evidence)
             .arg("--docker-bin")

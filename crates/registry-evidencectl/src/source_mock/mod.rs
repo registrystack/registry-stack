@@ -58,7 +58,7 @@ pub struct ServeArgs {
     /// Materialized mock configuration whose checked body bytes are authoritative.
     #[arg(
         long,
-        conflicts_with_all = ["openapi", "project", "operation", "seed", "as_of", "explain"]
+        conflicts_with_all = ["openapi", "project", "legacy_project", "operation", "seed", "as_of", "explain"]
     )]
     config: Option<PathBuf>,
 
@@ -66,8 +66,11 @@ pub struct ServeArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, conflicts_with_all = ["openapi", "config"])]
+    #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
+    legacy_project: Option<PathBuf>,
 
     /// Narrow ephemeral discovery to one `METHOD /path/template` operation.
     #[arg(long)]
@@ -103,6 +106,7 @@ pub struct GenerateArgs {
             "openapi",
             "output",
             "project",
+            "legacy_project",
             "seed",
             "as_of"
         ]
@@ -117,8 +121,11 @@ pub struct GenerateArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, conflicts_with_all = ["openapi", "config"])]
+    #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
+    legacy_project: Option<PathBuf>,
 
     /// Select one `METHOD /path/template` operation.
     #[arg(long)]
@@ -155,15 +162,27 @@ pub struct CheckArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, conflicts_with = "config")]
+    #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "config"])]
+    legacy_project: Option<PathBuf>,
 }
 
 pub fn run(command: MockCommand) -> Result<ExitCode> {
     match command {
-        MockCommand::Serve(args) => serve(args),
-        MockCommand::Generate(args) => generate(args),
-        MockCommand::Check(args) => check(args),
+        MockCommand::Serve(mut args) => {
+            args.project = args.legacy_project.take().or(args.project);
+            serve(args)
+        }
+        MockCommand::Generate(mut args) => {
+            args.project = args.legacy_project.take().or(args.project);
+            generate(args)
+        }
+        MockCommand::Check(mut args) => {
+            args.project = args.legacy_project.take().or(args.project);
+            check(args)
+        }
     }
 }
 

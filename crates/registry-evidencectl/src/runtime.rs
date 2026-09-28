@@ -69,8 +69,6 @@ pub(crate) struct DoctorArgs {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorReport<'a> {
-    operation: &'static str,
-    status: &'static str,
     runtime_config: &'a std::path::Path,
     proof_boundary: &'static str,
     diagnostics: Vec<Diagnostic>,
@@ -100,6 +98,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         return crate::doctor::run(crate::doctor::DoctorArgs {
             project,
             json: args.json || format == OutputFormat::Json,
+            command: "doctor",
         });
     }
     let runtime_config = args.runtime_config.expect("runtime selection was checked");
@@ -159,14 +158,16 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
 
     if dependency.status.success() {
         let report = DoctorReport {
-            operation: "doctor",
-            status: "ready",
             runtime_config: &runtime_config,
             proof_boundary: proof_boundary(args.without_audit_lock),
             diagnostics: Vec::new(),
         };
         match format {
-            OutputFormat::Json => println!("{}", serde_json::to_string(&report)?),
+            OutputFormat::Json => crate::print_report(&crate::report::success(
+                "doctor",
+                "ready",
+                serde_json::to_value(&report)?,
+            )),
             OutputFormat::Human => {
                 print!("{}", String::from_utf8_lossy(&dependency.stdout));
                 println!(
@@ -349,8 +350,6 @@ fn render_refusal(
         .trim()
         .to_owned();
     let report = DoctorReport {
-        operation: "doctor",
-        status,
         runtime_config,
         proof_boundary: LOCKED_PROOF_BOUNDARY,
         diagnostics: vec![Diagnostic {
@@ -367,7 +366,11 @@ fn render_refusal(
         }],
     };
     match format {
-        OutputFormat::Json => println!("{}", serde_json::to_string(&report)?),
+        OutputFormat::Json => crate::print_report(&crate::report::refused(
+            "doctor",
+            status,
+            serde_json::to_value(&report)?,
+        )),
         OutputFormat::Human => {
             eprintln!(
                 "Evidence runtime dependency preflight refused {}",

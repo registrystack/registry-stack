@@ -492,19 +492,16 @@ fn run_keypair_impl(
                 println!("wrote {}", public_path.display());
                 println!("kid: {}", keypair.kid);
             }
-            OutputFormat::Json => println!(
-                "{}",
-                crate::command_report(
-                    command,
-                    json!({
-                        "kid": keypair.kid,
-                        "files": [
-                            private_path.display().to_string(),
-                            public_path.display().to_string(),
-                        ],
-                    })
-                )
-            ),
+            OutputFormat::Json => crate::print_report(&crate::command_report(
+                command,
+                json!({
+                    "kid": keypair.kid,
+                    "files": [
+                        private_path.display().to_string(),
+                        public_path.display().to_string(),
+                    ],
+                }),
+            )),
         }
     }
 
@@ -532,13 +529,10 @@ fn run_secret_impl(args: &SecretArgs, report: GenerationReport) -> Result<ExitCo
     if let GenerationReport::Command(command, format) = report {
         match format {
             OutputFormat::Human => println!("wrote {}", args.output.display()),
-            OutputFormat::Json => println!(
-                "{}",
-                crate::command_report(
-                    command,
-                    json!({"files": [args.output.display().to_string()]})
-                )
-            ),
+            OutputFormat::Json => crate::print_report(&crate::command_report(
+                command,
+                json!({"files": [args.output.display().to_string()]}),
+            )),
         }
     }
 
@@ -574,13 +568,10 @@ fn run_token(args: &TokenArgs, format: OutputFormat) -> Result<ExitCode> {
 
     match format {
         OutputFormat::Human => println!("wrote {}", args.output.display()),
-        OutputFormat::Json => println!(
-            "{}",
-            crate::command_report(
-                "keygen token",
-                json!({"files": [args.output.display().to_string()]})
-            )
-        ),
+        OutputFormat::Json => crate::print_report(&crate::command_report(
+            "keygen token",
+            json!({"files": [args.output.display().to_string()]}),
+        )),
     }
 
     Ok(ExitCode::SUCCESS)
