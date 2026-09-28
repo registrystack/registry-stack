@@ -10,15 +10,23 @@
   names `/<n>`, `/<n>/op`, `/<n>/path`, or `/<n>/value`; a batch body names
   `/items`, `/changeContext`, `/items/<n>` and its fixed members, and the
   create and patch forms under them; a malformed `Idempotency-Key` names the
-  header; and a `query.invalid` refusal names the parameter, such as
-  `$select`. An unknown and a withheld name answer the same problem and are
+  header, and so does an `If-Match` header sent on a batch; and a
+  `query.invalid` refusal names the parameter, such as `$select`, including
+  the first read query option sent to a revision route, which takes none.
+  An unknown and a withheld name answer the same problem and are
   never echoed. A client that rejects an unfamiliar problem member accepts
   `fieldPath` on `request.invalid` and `query.invalid`; the Rust, Node.js,
   and Python BReg clients do in this release, and a client that pins exact
   problem bodies drops `fieldPath` before comparing.
-- A write whose body names a field the grant withholds is refused before its
-  transaction opens, exactly like one naming an unknown field, where a patch
-  `test` of a withheld field was refused only after the record was read.
+- BREAKING: a JSON Patch `test` of a field the grant does not let the caller
+  read answers `400 request.invalid` at `/<n>/path` before the record is
+  read, exactly like a `test` of an unknown field. It was refused only after
+  the record was read, so a missing record answered
+  `404 resource.not_found` and a stale `If-Match` answered
+  `412 precondition.failed` first. Test only fields the grant lists in
+  `readableFields` (`GET /v1/registry?accessProfile=<id>`), and handle a
+  `400` on such a patch as a malformed document, not as a missing record or
+  a stale revision.
 
 - A read path answers when the caller's profile holds no permission entry
   for the path's target entity. It returns the records the path grant and

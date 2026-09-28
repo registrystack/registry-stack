@@ -19,8 +19,13 @@ pub const MAX_FIELD_PATH_CHARS: usize = 256;
 /// The fixed query parameter names a `query.invalid` refusal may name.
 pub use crate::query::QUERY_PARAMETERS;
 
-/// The only header a `request.invalid` refusal names.
+/// The header a `request.invalid` refusal names when it is missing or
+/// malformed.
 pub const IDEMPOTENCY_KEY_HEADER: &str = "Idempotency-Key";
+
+/// The header a batch `request.invalid` refusal names when a caller sends it:
+/// each batch item carries its own `ifMatch` instead.
+pub const IF_MATCH_HEADER: &str = "If-Match";
 
 /// One member of a JSON Patch operation object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

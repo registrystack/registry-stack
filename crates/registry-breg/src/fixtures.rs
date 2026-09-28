@@ -4083,7 +4083,8 @@ fn assert_response(
                         step.problem_bindings.request_field_paths.contains(path)
                             || step.problem_bindings.record_request_locations
                                 && (crate::problem_location::is_record_request_location(path)
-                                    || path == crate::problem_location::IDEMPOTENCY_KEY_HEADER)
+                                    || path == crate::problem_location::IDEMPOTENCY_KEY_HEADER
+                                    || path == crate::problem_location::IF_MATCH_HEADER)
                     })
                 {
                     return Err(FixtureError::ExpectationMismatch);

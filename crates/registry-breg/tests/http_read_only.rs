@@ -3226,7 +3226,29 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
     )
     .await;
     assert_eq!(extra_query.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(extra_query).await["code"], "query.invalid");
+    let extra_query = body_json(extra_query).await;
+    assert_eq!(extra_query["code"], "query.invalid");
+    // A revision route takes no read query option; the first one sent, in a
+    // fixed order, is named.
+    assert_eq!(extra_query["fieldPath"], "$top");
+    assert_eq!(revisions.calls.load(Ordering::SeqCst), 0);
+
+    // A query string that is not `name=value` pairs has no single parameter
+    // at fault, so it names none.
+    let malformed_query = send_to(
+        &app,
+        Method::GET,
+        &format!("{list_path}?accessProfile=caseworker&$top"),
+        Some(caseworker_claims("case-management")),
+    )
+    .await;
+    assert_eq!(malformed_query.status(), StatusCode::BAD_REQUEST);
+    let malformed_query = body_json(malformed_query).await;
+    assert_eq!(malformed_query["code"], "query.invalid");
+    assert!(
+        malformed_query.get("fieldPath").is_none(),
+        "{malformed_query}"
+    );
     assert_eq!(revisions.calls.load(Ordering::SeqCst), 0);
 
     let list = send_to(
