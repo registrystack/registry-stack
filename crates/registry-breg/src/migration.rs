@@ -135,6 +135,16 @@ pub enum MigrationError {
     /// registry state; the finding names the statement that removes it.
     #[error("{0}")]
     RuntimeWriteAuthority(crate::postgres::RuntimeWriteAuthority),
+    /// Refused before the retry changed anything: the unfinished activation
+    /// of this package was started with other database roles. Only the role
+    /// mode and the runtime role name cross this boundary.
+    #[error(
+        "the unfinished activation of this package was started with {role_mode} database roles and runtime role `{runtime_role}`; rerun the apply with the database roles it started with, or assess it with `bregctl migration reconcile`"
+    )]
+    ResumeRolesDiffer {
+        role_mode: String,
+        runtime_role: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -1121,15 +1131,25 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         return Err(MigrationError::ApplyFailed);
     }
     // A retry of the same target resumes the activation its first attempt
-    // recorded; any other apply is a fresh activation.
+    // recorded, with the roles that attempt started with; any other apply is
+    // a fresh activation.
     let mut resumes_activation_id = None;
     ledger.activation_id = match connection
         .in_flight_activation(request.package.package_digest())
         .await
     {
-        Ok(Some(activation_id)) => {
-            resumes_activation_id = Some(activation_id.hyphenated().to_string());
-            activation_id
+        Ok(Some(activation)) => {
+            if activation.role_mode != ledger.role_mode.as_str()
+                || activation.runtime_role != ledger.runtime_role
+            {
+                let _ = connection.release().await;
+                return Err(MigrationError::ResumeRolesDiffer {
+                    role_mode: activation.role_mode,
+                    runtime_role: activation.runtime_role,
+                });
+            }
+            resumes_activation_id = Some(activation.activation_id.hyphenated().to_string());
+            activation.activation_id
         }
         Ok(None) => uuid::Uuid::new_v4(),
         Err(error) => {
