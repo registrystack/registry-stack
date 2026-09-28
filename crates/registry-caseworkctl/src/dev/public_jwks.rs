@@ -130,12 +130,8 @@ mod tests {
             &serde_json::to_vec(&serde_json::json!({"keys":[public]})).unwrap(),
         )
         .unwrap();
-        let port = TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let server = Server::start(port, &file).unwrap();
+        let (server, port) = start_on_a_free_port(&file);
+        assert!(!server.is_finished());
         for (method, path, expected) in [
             ("GET", "/oauth2/jwks", "200 OK"),
             ("POST", "/oauth2/jwks", "404 Not Found"),
@@ -156,13 +152,40 @@ mod tests {
             }
         }
         drop(server);
-        probe(port).unwrap();
+        assert_nothing_listens(port);
         private::replace(
             &file,
             b"{\"keys\":[{\"kty\":\"EC\",\"d\":\"private-canary\"}]}",
         )
         .unwrap();
         assert!(Server::start(port, &file).is_err());
-        probe(port).unwrap();
+        assert_nothing_listens(port);
+    }
+
+    /// Another test can take a port between choosing it and binding it, so a
+    /// refused bind picks a new port rather than failing this test.
+    fn start_on_a_free_port(file: &Path) -> (Server, u16) {
+        for _ in 0..16 {
+            let port = TcpListener::bind(("127.0.0.1", 0))
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            if let Ok(server) = Server::start(port, file) {
+                return (server, port);
+            }
+        }
+        panic!("no free port for the public JWKS listener");
+    }
+
+    /// The kernel completes a handshake for any listening socket, accepted or
+    /// not, so a refused connect proves the listener is closed. Rebinding the
+    /// port would instead race every other socket on the host for it: an
+    /// outgoing connection that draws the same ephemeral port makes the bind
+    /// fail although this listener was released.
+    fn assert_nothing_listens(port: u16) {
+        let error = TcpStream::connect(("127.0.0.1", port))
+            .expect_err("the public JWKS listener still accepts connections");
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
     }
 }
