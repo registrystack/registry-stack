@@ -1577,33 +1577,35 @@ impl DedicatedApplyConnection {
             ));
         }
         let transaction = self.client.transaction().await?;
-        install_registry_state_schema(&transaction, runtime_role).await?;
-        let changed = transaction
-            .execute(
-                "INSERT INTO registry_internal.registry_state (
-                     singleton, package_id, database_id, active_package_digest,
-                     active_activation_id, schema_fingerprint,
-                     maintenance_status, maintenance_target_package_digest
-                 ) VALUES (true, $1, $2, $3, $4, $5, 'applying', $3)
-                 ON CONFLICT (singleton) DO NOTHING",
-                &[
-                    &target.package_id,
-                    &target.database_id,
-                    &target.package_digest,
-                    &target.activation_uuid()?,
-                    &target.schema_fingerprint,
-                ],
-            )
-            .await?;
-        if changed == 1 {
-            crate::instance_claim::record_if_unclaimed(&transaction).await?;
-            record_started(&transaction, ledger).await?;
-        } else {
-            verify_initial_resumable_state(&transaction, target).await?;
-            verify_resumable(&transaction, ledger).await?;
-        }
+        begin_initial_in(&transaction, target, ledger, runtime_role).await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Runs every check and write [`Self::begin_initial_package`] runs, in
+    /// one transaction it rolls back, so a plan reports what the begin would
+    /// refuse and leaves the database as it was.
+    pub(crate) async fn rehearse_initial_package(
+        &mut self,
+        target: &ExpectedRegistryIdentity,
+        ledger: &MigrationLedgerEntry,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        ledger.validate()?;
+        if ledger.plan_kind != ActivationPlanKind::Initial
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+        {
+            return Err(PostgresKernelError::Configuration(
+                "initial package and migration ledger differ",
+            ));
+        }
+        let transaction = self.client.transaction().await?;
+        let rehearsed = begin_initial_in(&transaction, target, ledger, runtime_role).await;
+        transaction.rollback().await?;
+        rehearsed
     }
 
     /// The kernel state shape this database holds.
@@ -1670,13 +1672,15 @@ impl DedicatedApplyConnection {
     /// and the state and ledger rows commit together or not at all, and no
     /// model DDL runs. The old ledger history is dropped; the claim the
     /// pre-ledger claim table holds is carried into the state row, and every
-    /// open import authority is superseded.
+    /// open import authority is superseded. A plan runs the same transaction
+    /// to its last check and rolls it back.
     pub(crate) async fn adopt_pre_ledger_database(
         &mut self,
         registry: &CompiledRegistry,
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
         acknowledge_retired_audit_discard: bool,
+        end: TransactionEnd,
     ) -> Result<Vec<Value>> {
         let MaintenanceTransition {
             ledger,
@@ -1859,7 +1863,10 @@ impl DedicatedApplyConnection {
             runtime_role,
         )
         .await?;
-        transaction.commit().await?;
+        match end {
+            TransactionEnd::Commit => transaction.commit().await?,
+            TransactionEnd::RollBack => transaction.rollback().await?,
+        }
         Ok(superseded)
     }
 
@@ -1905,45 +1912,62 @@ impl DedicatedApplyConnection {
             ));
         }
         let transaction = self.client.transaction().await?;
-        // Refuse before maintenance or ledger state can start: otherwise a
-        // successor could add new flip rows while an erase lifecycle is using
-        // the current durable flip manifest for crash-resumable correlation.
-        verify_history_coverage_can_begin_successor(&transaction).await?;
-        verify_retained_webhook_delivery_bindings(
+        begin_successor_in(
             &transaction,
+            current,
+            target,
+            ledger,
             event_destination_compatibility_inventory,
         )
         .await?;
-        let changed = transaction
-            .execute(
-                "UPDATE registry_internal.registry_state
-                 SET maintenance_status = 'applying', maintenance_target_package_digest = $1,
-                     updated_at = transaction_timestamp()
-                 WHERE singleton
-                   AND maintenance_status = 'ready'
-                   AND package_id = $2
-                   AND database_id = $3
-                   AND active_package_digest = $4
-                   AND active_activation_id = $5
-                   AND schema_fingerprint = $6",
-                &[
-                    &target.package_digest,
-                    &current.package_id,
-                    &current.database_id,
-                    &current.package_digest,
-                    &current.activation_uuid()?,
-                    &current.schema_fingerprint,
-                ],
-            )
-            .await?;
-        if changed == 1 {
-            record_started(&transaction, ledger).await?;
-        } else {
-            verify_successor_resumable_state(&transaction, current, target).await?;
-            verify_resumable(&transaction, ledger).await?;
-        }
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Runs every check and write [`Self::reconcile_successor_control_plane`]
+    /// and [`Self::begin_successor_package`] run, in one transaction it rolls
+    /// back, so a plan reports what the begin would refuse and leaves the
+    /// database as it was.
+    pub(crate) async fn rehearse_successor_package(
+        &mut self,
+        current: &ExpectedRegistryIdentity,
+        target: &ExpectedRegistryIdentity,
+        ledger: &MigrationLedgerEntry,
+        event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        current.validate()?;
+        target.validate()?;
+        ledger.validate()?;
+        if ledger.plan_kind != ActivationPlanKind::Successor
+            || ledger.predecessor_package_digest.as_deref() != Some(current.package_digest.as_str())
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+            || target.activation_id == current.activation_id
+        {
+            return Err(PostgresKernelError::Configuration(
+                "successor package and migration ledger differ",
+            ));
+        }
+        let transaction = self.client.transaction().await?;
+        let rehearsed = async {
+            install_registry_state_schema(&transaction, runtime_role).await?;
+            install_history_schema_store(&transaction, runtime_role)
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            begin_successor_in(
+                &transaction,
+                current,
+                target,
+                ledger,
+                event_destination_compatibility_inventory,
+            )
+            .await
+        }
+        .await;
+        transaction.rollback().await?;
+        rehearsed
     }
 
     /// Records maintenance in its own committed transaction while retaining
@@ -2574,6 +2598,97 @@ async fn verify_complete_history_coverage(
         .unwrap_or(false)
     {
         return Err(PostgresKernelError::HistoryCoverageIncomplete);
+    }
+    Ok(())
+}
+
+/// How a transaction that carries an activation's checks ends: committed by
+/// an apply, or rolled back by a plan once every check has passed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransactionEnd {
+    Commit,
+    RollBack,
+}
+
+/// The begin of an initial activation, inside the caller's transaction.
+async fn begin_initial_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    install_registry_state_schema(transaction, runtime_role).await?;
+    let changed = transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_state (
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint,
+                 maintenance_status, maintenance_target_package_digest
+             ) VALUES (true, $1, $2, $3, $4, $5, 'applying', $3)
+             ON CONFLICT (singleton) DO NOTHING",
+            &[
+                &target.package_id,
+                &target.database_id,
+                &target.package_digest,
+                &target.activation_uuid()?,
+                &target.schema_fingerprint,
+            ],
+        )
+        .await?;
+    if changed == 1 {
+        crate::instance_claim::record_if_unclaimed(transaction).await?;
+        record_started(transaction, ledger).await?;
+    } else {
+        verify_initial_resumable_state(transaction, target).await?;
+        verify_resumable(transaction, ledger).await?;
+    }
+    Ok(())
+}
+
+/// The begin of a successor activation, inside the caller's transaction.
+async fn begin_successor_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    current: &ExpectedRegistryIdentity,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
+) -> Result<()> {
+    // Refuse before maintenance or ledger state can start: otherwise a
+    // successor could add new flip rows while an erase lifecycle is using
+    // the current durable flip manifest for crash-resumable correlation.
+    verify_history_coverage_can_begin_successor(transaction).await?;
+    verify_retained_webhook_delivery_bindings(
+        transaction,
+        event_destination_compatibility_inventory,
+    )
+    .await?;
+    let changed = transaction
+        .execute(
+            "UPDATE registry_internal.registry_state
+             SET maintenance_status = 'applying', maintenance_target_package_digest = $1,
+                 updated_at = transaction_timestamp()
+             WHERE singleton
+               AND maintenance_status = 'ready'
+               AND package_id = $2
+               AND database_id = $3
+               AND active_package_digest = $4
+               AND active_activation_id = $5
+               AND schema_fingerprint = $6",
+            &[
+                &target.package_digest,
+                &current.package_id,
+                &current.database_id,
+                &current.package_digest,
+                &current.activation_uuid()?,
+                &current.schema_fingerprint,
+            ],
+        )
+        .await?;
+    if changed == 1 {
+        record_started(transaction, ledger).await?;
+    } else {
+        verify_successor_resumable_state(transaction, current, target).await?;
+        verify_resumable(transaction, ledger).await?;
     }
     Ok(())
 }
@@ -3757,6 +3872,151 @@ impl Drop for DedicatedApplyConnection {
             self.connection_task.abort();
         }
     }
+}
+
+/// The activation state the database records, as `bregctl status` reports
+/// it: the singleton state row and every ledger entry in apply order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecordedActivationStatus {
+    pub snapshot: MaintenanceSnapshot,
+    pub ledger: Vec<RecordedLedgerEntry>,
+}
+
+/// One activation ledger entry, without its checksums, artifact bindings,
+/// backup references, or operator reference hash.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecordedLedgerEntry {
+    pub activation_id: String,
+    pub apply_order: i64,
+    pub package_digest: String,
+    pub predecessor_package_digest: Option<String>,
+    pub registry_revision: String,
+    pub plan_kind: String,
+    pub migration_kind: String,
+    pub outcome: String,
+    pub role_mode: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub applied_at: Option<String>,
+}
+
+/// The outcome of reading the activation state without the apply lock.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ActivationStatusRead {
+    /// No package was ever applied.
+    Uninitialized,
+    /// A release before the activation ledger installed the database.
+    PreLedger,
+    Recorded(RecordedActivationStatus),
+}
+
+/// Reads the activation state as the migration role in one read-only
+/// repeatable-read transaction. It takes no apply lock, so it answers while
+/// an apply holds that lock, and it writes nothing.
+pub(crate) async fn read_activation_status(
+    config: &ConnectionConfig,
+    migration_role: &SqlIdentifier,
+    statement_timeout: Duration,
+) -> Result<ActivationStatusRead> {
+    validate_timeout(
+        statement_timeout,
+        MAX_VERIFIED_DDL_STATEMENT_TIMEOUT,
+        "status statement timeout must be between 1 millisecond and 1 hour",
+    )?;
+    let (mut client, connection_task) = connect_dedicated(config).await?;
+    let result = async {
+        verify_migration_role(&client, migration_role).await?;
+        client
+            .execute(
+                "SELECT pg_catalog.set_config('search_path',
+                         'pg_catalog, registry_internal, registry_data, pg_temp', false)",
+                &[],
+            )
+            .await?;
+        set_session_timeout(&client, "statement_timeout", statement_timeout).await?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()
+            .await?;
+        let status = read_activation_status_in(&transaction).await?;
+        transaction.rollback().await?;
+        Ok(status)
+    }
+    .await;
+    connection_task.abort();
+    result
+}
+
+async fn read_activation_status_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<ActivationStatusRead> {
+    match registry_state_shape(transaction).await? {
+        RegistryStateShape::Absent => return Ok(ActivationStatusRead::Uninitialized),
+        RegistryStateShape::PreLedger => return Ok(ActivationStatusRead::PreLedger),
+        RegistryStateShape::Ledger => {}
+    }
+    let Some(row) = transaction
+        .query_opt(
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint,
+                    maintenance_status, maintenance_target_package_digest
+             FROM registry_internal.registry_state
+             WHERE singleton",
+            &[],
+        )
+        .await?
+    else {
+        return Ok(ActivationStatusRead::Uninitialized);
+    };
+    let snapshot = MaintenanceSnapshot {
+        identity: ExpectedRegistryIdentity {
+            package_id: row.try_get(0)?,
+            database_id: row.try_get(1)?,
+            package_digest: row.try_get(2)?,
+            activation_id: row.try_get(3)?,
+            schema_fingerprint: row.try_get(4)?,
+        },
+        maintenance_status: row.try_get(5)?,
+        maintenance_target_package_digest: row.try_get(6)?,
+    };
+    let rows = transaction
+        .query(
+            "SELECT activation_id::text, apply_order, package_digest,
+                    predecessor_package_digest, registry_revision, plan_kind,
+                    migration_kind, outcome, role_mode,
+                    to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+             FROM registry_internal.registry_migrations
+             ORDER BY apply_order",
+            &[],
+        )
+        .await?;
+    let ledger = rows
+        .iter()
+        .map(|row| {
+            Ok(RecordedLedgerEntry {
+                activation_id: row.try_get(0)?,
+                apply_order: row.try_get(1)?,
+                package_digest: row.try_get(2)?,
+                predecessor_package_digest: row.try_get(3)?,
+                registry_revision: row.try_get(4)?,
+                plan_kind: row.try_get(5)?,
+                migration_kind: row.try_get(6)?,
+                outcome: row.try_get(7)?,
+                role_mode: row.try_get(8)?,
+                started_at: row.try_get(9)?,
+                completed_at: row.try_get(10)?,
+                applied_at: row.try_get(11)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ActivationStatusRead::Recorded(RecordedActivationStatus {
+        snapshot,
+        ledger,
+    }))
 }
 
 async fn connect_dedicated(config: &ConnectionConfig) -> Result<(Client, JoinHandle<()>)> {

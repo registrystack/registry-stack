@@ -641,6 +641,13 @@ impl VerifiedPackage {
     pub fn package_digest(&self) -> &str {
         &self.package_digest
     }
+
+    /// The value-minimized summary of the steps this package's plan runs,
+    /// as `bregctl migration explain` reports it.
+    #[cfg(feature = "tooling")]
+    pub fn migration_summary(&self) -> Result<MigrationInspectionSummary> {
+        migration_inspection_summary(&self.manifest, self.reviewed_migration_plan.as_ref())
+    }
 }
 
 /// Value-free failures. Paths, source values, SQL, key material, signatures,

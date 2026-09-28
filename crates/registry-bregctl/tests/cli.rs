@@ -4825,6 +4825,131 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
 }
 
 #[test]
+fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() {
+    let help = bregctl(&["--help"]);
+    let rendered = String::from_utf8(help.stdout).expect("top-level help is UTF-8");
+    for available in ["plan", "status"] {
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_start().starts_with(available)),
+            "{rendered}"
+        );
+    }
+    let plan_help = bregctl(&["plan", "--help"]);
+    let plan_help = String::from_utf8(plan_help.stdout).expect("plan help is UTF-8");
+    for required in [
+        "--runtime-config <ABSOLUTE_FILE>",
+        "--package <ABSOLUTE_DIRECTORY>",
+        "--backup <BINDING_PATH=BINDING_FILE>",
+    ] {
+        assert!(plan_help.contains(required), "{plan_help}");
+    }
+    for refused in ["--initial", "--operator-reference", "--acknowledge"] {
+        assert!(!plan_help.contains(refused), "{plan_help}");
+    }
+    let status_help = bregctl(&["status", "--help"]);
+    let status_help = String::from_utf8(status_help.stdout).expect("status help is UTF-8");
+    assert!(status_help.contains("--runtime-config <ABSOLUTE_FILE>"));
+    assert!(!status_help.contains("--package"));
+
+    let relative = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        PACKAGE_VALUE_CANARY,
+        "--package",
+        PACKAGE_VALUE_CANARY,
+    ]);
+    assert_eq!(relative.status.code(), Some(1), "{relative:?}");
+    let report = json_stdout(&relative);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "plan");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "apply.runtime_config.path_invalid"
+    );
+    assert!(!String::from_utf8_lossy(&relative.stdout).contains(PACKAGE_VALUE_CANARY));
+
+    let relative = bregctl(&[
+        "--format",
+        "json",
+        "status",
+        "--runtime-config",
+        PACKAGE_VALUE_CANARY,
+    ]);
+    assert_eq!(relative.status.code(), Some(1), "{relative:?}");
+    let report = json_stdout(&relative);
+    assert_eq!(report["command"], "status");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "status.runtime_config.path_invalid"
+    );
+
+    // Both commands are read-only, yet each needs the migration credential
+    // the runtime file names; this fixture's is never opened, and the
+    // refusal names the fix and stays value free.
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let planned = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+    ]);
+    let status = bregctl(&[
+        "--format",
+        "json",
+        "status",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+    ]);
+    for (output, command, code) in [
+        (&planned, "plan", "apply.database_configuration.refused"),
+        (&status, "status", "status.database_configuration.refused"),
+    ] {
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let report = json_stdout(output);
+        assert_eq!(report["command"], command);
+        assert_eq!(report["diagnostics"][0]["code"], code);
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        for forbidden in [
+            path(&fixture.runtime_config),
+            path(&fixture.package),
+            VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+        ] {
+            assert!(!rendered.contains(forbidden), "{rendered}");
+        }
+    }
+
+    let malformed_backup = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+        "--backup",
+        PACKAGE_VALUE_CANARY,
+    ]);
+    assert_eq!(
+        malformed_backup.status.code(),
+        Some(1),
+        "{malformed_backup:?}"
+    );
+    assert_eq!(
+        json_stdout(&malformed_backup)["diagnostics"][0]["code"],
+        "apply.backup_evidence.refused"
+    );
+}
+
+#[test]
 fn apply_refuses_a_stale_shared_envelope_before_database_authority() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
     fs::write(fixture.package.join("SHA256SUMS"), b"stale\n").expect("shared sum file is replaced");

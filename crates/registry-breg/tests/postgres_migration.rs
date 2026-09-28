@@ -16,9 +16,10 @@ use registry_breg::field_encryption_backfill::{
     FieldEncryptionBackfillTimeouts,
 };
 use registry_breg::migration::{
-    apply_verified_package, bind_active_package, read_recorded_registry_state,
-    ActivationDeployment, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
-    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
+    read_recorded_registry_state, ActivationDeployment, ActivationPlan,
+    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, PlannedActivation,
     RecordedRegistryState, ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
@@ -2458,6 +2459,364 @@ async fn real_postgres_adoption_refuses_a_database_the_ledger_already_records() 
     );
     assert_eq!(ledger_roles(&database).await.len(), 1);
     database.cleanup().await;
+}
+
+/// Threat: an operator previewing an activation could change the database
+/// the preview describes, or be told an activation would pass that apply
+/// refuses. Enforcement: a plan runs apply's own checks inside transactions
+/// it rolls back and never opens the activation audit, so every activation
+/// kind reports what apply would do and the ledger, the maintenance state,
+/// the catalog, and the audit are unchanged afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_plan_reports_each_pending_activation_and_writes_nothing() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+    let base = compile_variant(Variant::Base);
+    let initial_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &initial_fingerprint);
+
+    let first = plan(
+        &database,
+        &initial,
+        ApplyPrecondition::InitialActivation,
+        false,
+    )
+    .await
+    .expect("the first package plans");
+    assert_eq!(first.activation, PlannedActivation::Initial);
+    assert!(first.activation.is_pending());
+    assert_eq!(first.role_mode, "split");
+    assert_eq!(first.resumes_activation_id, None);
+    assert!(first.checks.contains(&"uninitializedDatabase"));
+    assert_eq!(
+        registry_state_table(&database).await,
+        None,
+        "planning the first package installs nothing"
+    );
+    assert!(database.activation_audit_entries().is_empty());
+
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the planned first package activates");
+    let before = plan_durable_state(&database).await;
+
+    let unchanged = plan(
+        &database,
+        &initial,
+        ApplyPrecondition::RoleChange { current: &active },
+        false,
+    )
+    .await
+    .expect("the active package plans");
+    assert_eq!(unchanged.activation, PlannedActivation::AlreadyActive);
+    assert!(!unchanged.activation.is_pending());
+
+    let single = plan(
+        &database,
+        &initial,
+        ApplyPrecondition::RoleChange { current: &active },
+        true,
+    )
+    .await
+    .expect("serving with one role plans");
+    assert_eq!(single.activation, PlannedActivation::RoleChange);
+    assert_eq!(single.role_mode, "single");
+
+    let candidate = compile_variant(Variant::BatchAddedRequired);
+    let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
+    let source = added_required_source(
+        "add-required-plan",
+        &active,
+        &base,
+        &candidate,
+        &target_fingerprint,
+        0,
+    );
+    let successor = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::BatchAddedRequired,
+        &target_fingerprint,
+        source,
+    );
+    let planned = plan(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        false,
+    )
+    .await
+    .expect("the successor plans");
+    assert_eq!(planned.activation, PlannedActivation::Successor);
+    assert!(planned.checks.contains(&"historyCoverage"));
+    assert_eq!(
+        plan_durable_state(&database).await,
+        before,
+        "no plan changed the ledger, the state, the catalog, or the audit"
+    );
+
+    let activated = apply(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the planned successor activates");
+    assert_eq!(activated.package_digest, successor.package_digest());
+    database.cleanup().await;
+}
+
+/// A plan refuses what apply refuses, with the same value-free error, and
+/// leaves the database as it found it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_plan_refuses_what_apply_refuses_and_changes_nothing() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let table = first_model_table(&database).await;
+    let runtime = database.runtime_role.as_str();
+    database
+        .admin
+        .batch_execute(&format!("ALTER TABLE {table} OWNER TO {runtime}"))
+        .await
+        .expect("the administrator hands a model table to the runtime role");
+    let before = plan_durable_state(&database).await;
+
+    let refusal = plan(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &initial },
+        false,
+    )
+    .await
+    .expect_err("a runtime role that owns a model table is refused");
+    assert!(
+        matches!(refusal, MigrationError::RuntimeWriteAuthority(_)),
+        "{refusal:?}"
+    );
+    assert_eq!(plan_durable_state(&database).await, before);
+    database.cleanup().await;
+}
+
+/// A plan over a database a release before the activation ledger installed
+/// reports the adoption apply would record, and leaves the pre-ledger kernel
+/// in place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_plan_reports_an_adoption_and_leaves_the_pre_ledger_kernel() {
+    let (database, package) = initial_package_database().await;
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+    let audit = database.activation_audit_entries().len();
+
+    let planned = plan(&database, &package, ApplyPrecondition::Adoption, false)
+        .await
+        .expect("the pre-ledger database plans an adoption");
+    assert_eq!(planned.activation, PlannedActivation::Adoption);
+    assert!(planned.checks.contains(&"adoptionFingerprint"));
+    assert_pre_ledger_kernel(&database).await;
+    assert_eq!(database.activation_audit_entries().len(), audit);
+
+    assert_eq!(
+        read_activation_status(
+            &database.migration_config,
+            &database.migration_role,
+            timeouts()
+        )
+        .await
+        .expect_err("status refuses a pre-ledger database"),
+        MigrationError::PreLedgerDatabase
+    );
+    database.cleanup().await;
+}
+
+/// Status reads the active identity and every ledger entry in apply order as
+/// the migration role, and answers while another session holds the apply
+/// lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_status_reads_the_ledger_without_the_apply_lock() {
+    let (database, package) = initial_package_database().await;
+    assert_eq!(
+        read_activation_status(
+            &database.migration_config,
+            &database.migration_role,
+            timeouts()
+        )
+        .await
+        .expect("a never-activated database reads"),
+        None
+    );
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+    let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::RoleChange { current: &initial },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        timeouts(),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("serving with one role is its own activation");
+
+    let lock_key = registry_breg::postgres::RegistryLockKey::derive(&package.manifest().package_id)
+        .expect("the lock key derives");
+    database
+        .admin
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("another session holds the apply lock");
+    let status = read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        timeouts(),
+    )
+    .await
+    .expect("status reads")
+    .expect("the database is activated");
+    database
+        .admin
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the apply lock releases");
+
+    assert_eq!(status.identity, single);
+    assert_eq!(status.maintenance_status, "ready");
+    assert_eq!(status.maintenance_target_package_digest, None);
+    assert_eq!(status.ledger.len(), 2);
+    let entries = status
+        .ledger
+        .iter()
+        .map(|entry| {
+            (
+                entry.activation_id.as_str(),
+                entry.apply_order,
+                entry.plan_kind.as_str(),
+                entry.outcome.as_str(),
+                entry.role_mode.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        vec![
+            (
+                initial.activation_id.as_str(),
+                1,
+                "initial",
+                "applied",
+                "split"
+            ),
+            (
+                single.activation_id.as_str(),
+                2,
+                "successor",
+                "applied",
+                "single"
+            ),
+        ]
+    );
+    let active = status.active_entry().expect("the active entry is recorded");
+    assert_eq!(active.package_digest, package.package_digest());
+    assert_eq!(active.registry_revision, package.registry().revision());
+    assert!(active.applied_at.is_some());
+    OffsetDateTime::parse(&active.started_at, &Rfc3339).expect("started_at is RFC 3339");
+    database.cleanup().await;
+}
+
+async fn plan(
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+    precondition: ApplyPrecondition<'_>,
+    single_role: bool,
+) -> registry_breg::migration::Result<ActivationPlan> {
+    let runtime_role = if single_role {
+        &database.migration_role
+    } else {
+        &database.runtime_role
+    };
+    plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        package,
+        deployment(),
+        precondition,
+        ApplyRoles::new(&database.migration_role, runtime_role),
+        timeouts(),
+    ))
+    .await
+}
+
+fn timeouts() -> ApplyTimeouts {
+    ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+        .expect("test timeouts are bounded")
+}
+
+async fn registry_state_table(database: &TestDatabase) -> Option<String> {
+    database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("the catalog reads")
+        .get(0)
+}
+
+/// What a plan must leave as it found it: the ledger, the state row, the
+/// managed relations and their owners and privileges, and the activation
+/// audit.
+async fn plan_durable_state(
+    database: &TestDatabase,
+) -> (
+    Vec<(String, String, String)>,
+    Vec<String>,
+    Vec<String>,
+    usize,
+) {
+    let state = database
+        .admin
+        .query_one(
+            "SELECT row_to_json(state)::text FROM registry_internal.registry_state AS state",
+            &[],
+        )
+        .await
+        .expect("the state row reads")
+        .get::<_, String>(0);
+    let catalog = database
+        .admin
+        .query(
+            "SELECT format('%s.%s %s %s %s', namespace.nspname, class.relname, class.relkind,
+                           pg_catalog.pg_get_userbyid(class.relowner),
+                           COALESCE(class.relacl::text, ''))
+             FROM pg_catalog.pg_class AS class
+             JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+             WHERE namespace.nspname IN ('registry_internal', 'registry_data')
+             ORDER BY 1",
+            &[],
+        )
+        .await
+        .expect("the catalog reads")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    (
+        ledger_snapshot(database).await,
+        vec![state],
+        catalog,
+        database.activation_audit_entries().len(),
+    )
 }
 
 /// Rewrite the kernel tables of an activated database into the shapes the
