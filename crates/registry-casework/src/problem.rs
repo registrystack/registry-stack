@@ -520,19 +520,18 @@ const REVIEW_TASK: &[ProblemCode] = &[
 ];
 const REVIEW_HISTORY: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
     ProblemCode::OperationNotAuthorized,
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewTaskNotHeld,
+    ProblemCode::ReviewResultExpired,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceBadGateway,
     ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::WorkItemNotVisible,
+    ProblemCode::WorkItemSourceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
 const REVIEW_KIND_READ: &[ProblemCode] = &[
@@ -1930,5 +1929,48 @@ mod tests {
             .find(|operation| operation.method == "GET" && operation.path == "/v1/work-items/next")
             .expect("next-item operation");
         assert_eq!(next.success_statuses, &[200]);
+    }
+
+    /// Review history reads a page of retained events and, for a
+    /// source-backed review, preflights the caller's current source view; it
+    /// holds no task, so it lists the refusals of that read and no other.
+    #[test]
+    fn review_history_lists_the_problems_its_read_returns() {
+        use ProblemCode::*;
+        let history = OPERATION_CONTRACTS
+            .iter()
+            .find(|operation| {
+                operation.method == "GET"
+                    && operation.path == "/v1/review-requests/{request_id}/history"
+            })
+            .expect("review history operation");
+        assert_eq!(
+            history.problems.iter().copied().collect::<BTreeSet<_>>(),
+            [
+                // authenticate, the requester or reviewer access checks, and
+                // a source view that no longer matches the pinned binding
+                AuthenticationRefused,
+                OperationNotAuthorized,
+                ProfileNotAuthorized,
+                ProfileNotHuman,
+                // a malformed path, query, or profile header
+                RequestInvalid,
+                // page_limit
+                RequestLimitOutOfRange,
+                // ensure_review_result_retained and an erased cursor event
+                ReviewResultExpired,
+                // preflight_review_record_source
+                SourceProfileNotApplicable,
+                SourceProfileRequired,
+                SourceBadGateway,
+                WorkItemSourceUnavailable,
+                // load_request_by_id
+                WorkItemNotVisible,
+                ServiceUnavailable,
+                RuntimeFailure,
+            ]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+        );
     }
 }
