@@ -190,3 +190,11 @@ updates:
       docker-images:
         patterns:
           - "*"
+    # The release builder's Rust version must equal rust-toolchain.toml, so a
+    # rust tag bump moves by hand together with that pin (issue #1525).
+    # Digest refreshes of the pinned tag are still proposed.
+    ignore:
+      - dependency-name: "rust"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
