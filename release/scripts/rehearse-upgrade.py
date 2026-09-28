@@ -1331,12 +1331,14 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
 
 
 # ---------------------------------------------------------------------------
-# Casework: migrate, bootstrap, write review work, upgrade, compare.
+# Casework: migrate, bootstrap, write review work, upgrade and apply, compare.
 
 
 CASEWORK_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
 CASEWORK_AUDIENCE = "urn:upgrade-rehearsal:casework"
 CASEWORK_KID = "upgrade-rehearsal-rsa"
+CASEWORK_DATABASE_ID = "upgrade-rehearsal-casework"
+CASEWORK_OPERATOR_REFERENCE = "upgrade-rehearsal"
 CASEWORK_ACTORS = {
     "administrator": ("upgrade-rehearsal-admin", "casework:admin", True),
     "staff": ("upgrade-rehearsal-staff", "casework:staff", True),
@@ -1436,6 +1438,24 @@ class Casework:
         dump_yaml(self.runtime, runtime)
         self.package = rebuilt
         return True
+
+    def activate(self, side: Side) -> dict[str, Any]:
+        """Name the database in runtime.yaml, then plan and apply with the
+        migration credential, the upgrade step the Casework changelog names.
+        The first apply on a database an earlier release migrated adopts it:
+        it applies the pending migrations, grants the runtime role, and
+        records the first activation. Returns the apply report."""
+        runtime = load_yaml(self.runtime)
+        runtime.setdefault("identity", {})["databaseId"] = CASEWORK_DATABASE_ID
+        dump_yaml(self.runtime, runtime)
+        config = ["--runtime-config", str(self.runtime)]
+        planned = side.run_json("caseworkctl", "--format", "json", "plan", *config)
+        if planned.get("changesPending") is not True:
+            raise RehearsalError("caseworkctl plan reported nothing pending, so the first "
+                                 "apply would not adopt the database the previous release "
+                                 "migrated")
+        return side.run_json("caseworkctl", "--format", "json", "apply", *config,
+                             "--operator-reference", CASEWORK_OPERATOR_REFERENCE)
 
     def call(self, actor: str, method: str, path: str, body: Any = None,
              headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
@@ -1547,8 +1567,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     archived = archive_audit_tables(postgres, "casework", before_counts, work / "audit-table-archive")
     archived_files = archive_audit_files(casework.audit, "casework.ndjson", work / "audit-archive")
     repackaged = casework.repackage(new)
-    new.run("casework", *runtime, "migrate")
-    casework.grant_existing()
+    activation = casework.activate(new)
     losses = row_count_losses(before_counts, postgres.row_counts("casework"), archived)
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
     try:
@@ -1567,6 +1586,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         "auditFilesArchived": archived_files,
         "archivedAuditTables": archived,
         "repackaged": repackaged,
+        "activationId": activation["activationId"],
         "viewDifferences": differences,
         "rowLosses": losses,
     }
