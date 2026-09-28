@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise an externally signed candidate through the ordinary BREG CLI and HTTP API."""
+"""Exercise a tested candidate package through the ordinary BREG CLI and HTTP API."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import yaml
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("project", "report", "receipt", "runtime", "credentials", "bregctl", "breg", "signer", "secrets", "output"):
+    for name in ("project", "report", "receipt", "runtime", "credentials", "bregctl", "breg", "secrets", "output"):
         parser.add_argument(f"--{name}", required=True, type=Path)
     args = parser.parse_args()
     output = args.output
@@ -45,8 +45,6 @@ def main() -> None:
     invalid = subprocess.run([
         str(args.bregctl), "--format", "json", "test", str(invalid_project),
         "--runtime-config", str(args.runtime), "--credentials", str(args.credentials),
-        "--database-id", runtime["identity"]["databaseId"],
-        "--signature-threshold", "1", "--signature-key-id", "change-request-example-package-key",
         "--output", str(output / "invalid-pattern-receipt.json"),
     ], capture_output=True, text=True, check=False)
     (output / "invalid-pattern-report.json").write_text(invalid.stdout, encoding="utf-8")
@@ -59,26 +57,13 @@ def main() -> None:
         raise SystemExit("invalid native pattern did not produce its field-addressed schema-test diagnostic")
 
     package_output = output / "candidate"
-    package_args = [
-        "package", str(args.project),
-        "--database-id", runtime["identity"]["databaseId"],
+    cli(
+        "package", "package", str(args.project),
         "--schema-fingerprint", test_report["schemaFingerprint"],
         "--test-receipt", str(args.receipt),
-        "--signature-threshold", "1",
-        "--signature-key-id", "change-request-example-package-key",
         "--output", str(package_output),
-    ]
-    pending = cli("package-awaiting", *package_args)
-    if pending.get("state") != "awaiting_signatures":
-        raise SystemExit("candidate did not stop at the external signature boundary")
-    signature = subprocess.run([
-        "openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(args.signer),
-        "-in", str(package_output / "signing-input.json"),
-    ], capture_output=True, check=True).stdout
-    signatures = output / "signatures.json"
-    signatures.write_text(json.dumps({"signatures": [{"keyId": "change-request-example-package-key", "signatureHex": signature.hex()}]}), encoding="utf-8")
-    published = cli("package-signed", *package_args, "--signatures", str(signatures))
-    runtime["package"].update(root=str(package_output / "package"), activeRevision=published["packageRevision"], activeSequence=1)
+    )
+    runtime["package"]["root"] = str(package_output / "package")
     # A transient loopback listener serves only this synthetic acceptance journey.
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -183,7 +168,7 @@ def main() -> None:
             except subprocess.TimeoutExpired:
                 server.kill()
                 server.wait()
-    print("person registration invalid-pattern schema test, signed-package apply, verify, metadata, HTTP calculation, optional inputs, GET, replay and refusal recovery passed")
+    print("person registration invalid-pattern schema test, package apply, verify, metadata, HTTP calculation, optional inputs, GET, replay and refusal recovery passed")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a real Evidence-backed schema test, external package signing and live BREG journey."""
+"""Run a real Evidence-backed schema test, package and live BREG journey."""
 from __future__ import annotations
 
 import argparse
@@ -17,10 +17,9 @@ import yaml
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("project", "test-runtime", "runtime", "credentials", "bregctl", "breg", "signer", "secrets", "output"):
+    for name in ("project", "test-runtime", "runtime", "credentials", "bregctl", "breg", "secrets", "output"):
         parser.add_argument(f"--{name}", required=True, type=Path)
     parser.add_argument("--requests", type=Path, help="Synthetic provider source request log for call-count assertions")
-    parser.add_argument("--signature-key-id", default="change-request-example-package-key")
     args = parser.parse_args()
     output = args.output
     output.mkdir(mode=0o700)
@@ -36,25 +35,13 @@ def main() -> None:
     cli("check", "check", str(args.project))
     receipt_path = output / "schema-test-receipt.json"
     test = cli("schema-test", "test", str(args.project), "--runtime-config", str(args.test_runtime),
-               "--credentials", str(args.credentials), "--database-id", runtime["identity"]["databaseId"],
-               "--signature-threshold", "1", "--signature-key-id", args.signature_key_id,
-               "--output", str(receipt_path))
+               "--credentials", str(args.credentials), "--output", str(receipt_path))
     if "farmer-evidence-registration" not in test.get("successfulJourneyIds", []):
         raise SystemExit("schema test did not attest the complete farmer journey")
     candidate = output / "candidate"
-    package_args = ["package", str(args.project), "--database-id", runtime["identity"]["databaseId"],
-                    "--schema-fingerprint", test["schemaFingerprint"], "--test-receipt", str(receipt_path),
-                    "--signature-threshold", "1", "--signature-key-id", args.signature_key_id,
-                    "--output", str(candidate)]
-    pending = cli("package-awaiting", *package_args)
-    if pending.get("state") != "awaiting_signatures":
-        raise SystemExit("package did not require its external signature")
-    signature = subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(args.signer),
-                                "-in", str(candidate / "signing-input.json")], capture_output=True, check=True).stdout
-    signatures = output / "signatures.json"
-    signatures.write_text(json.dumps({"signatures": [{"keyId": args.signature_key_id, "signatureHex": signature.hex()}]}))
-    signed = cli("package-signed", *package_args, "--signatures", str(signatures))
-    runtime["package"].update(root=str(candidate / "package"), activeRevision=signed["packageRevision"], activeSequence=1)
+    cli("package", "package", str(args.project), "--schema-fingerprint", test["schemaFingerprint"],
+        "--test-receipt", str(receipt_path), "--output", str(candidate))
+    runtime["package"]["root"] = str(candidate / "package")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -150,7 +137,7 @@ def main() -> None:
             except subprocess.TimeoutExpired:
                 server.kill()
                 server.wait()
-    print("farmer real Evidence schema-test, external signing, activation, HTTP registration, GET, refusal, replay and retention passed")
+    print("farmer real Evidence schema-test, package, activation, HTTP registration, GET, refusal, replay and retention passed")
 
 
 if __name__ == "__main__":

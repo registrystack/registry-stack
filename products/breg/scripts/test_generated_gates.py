@@ -117,6 +117,32 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertNotIn("BREG_TEST_DATABASE_URL=", script)
         self.assertNotIn("Authorization: Bearer", script)
 
+    def test_example_workflows_publish_unsigned_packages(self) -> None:
+        product = SCRIPT_DIR.parent
+        workflows = [
+            SCRIPT_DIR / "test-historical-workflow.sh",
+            SCRIPT_DIR / "test-change-request-examples.sh",
+            product / "acceptance/person-registration-rhai/tests/live_registration.py",
+            product / "acceptance/farmer-landholding-evidence/tests/live_registration.py",
+            product / "acceptance/farmer-landholding-evidence/tests/run-live.py",
+        ]
+        for workflow in workflows:
+            source = workflow.read_text(encoding="utf-8")
+            for retired in (
+                "--signatures",
+                "--signature-threshold",
+                "--signature-key-id",
+                "--database-id",
+                "--baseline-runtime-config",
+                "signing-input.json",
+                "trustAnchorPath",
+                "activeRevision",
+                "activeSequence",
+                "compilerSourceRevision",
+            ):
+                with self.subTest(workflow=workflow.name, retired=retired):
+                    self.assertNotIn(retired, source)
+
     def test_adopter_workflow_uses_public_binaries_database_and_recovery(self) -> None:
         adopter_gate = (SCRIPT_DIR / "test-adopter-workflow.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", adopter_gate)
@@ -164,8 +190,6 @@ class GeneratedGateTests(unittest.TestCase):
             "--production",
             "compare-generated-tree.py",
             "schemaFingerprint",
-            "signing-input.json",
-            "--signatures",
             "missing-migration-url",
             "apply.database_configuration.refused",
             "author refusal changed the production database state",
