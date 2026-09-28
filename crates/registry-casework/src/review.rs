@@ -484,12 +484,6 @@ impl CaseworkService {
             scan_cursor = Some(next_cursor);
             continuation = Some(next_cursor);
         }
-        // An empty page caused only by the absent Registry-Source-Profile
-        // header is refused, so a first-time caller learns which header to
-        // send. A page that lists anything keeps its submitted-context tasks.
-        if items.is_empty() && skipped_without_source_profile {
-            return Err(ReviewRuntimeError::SourceProfileRequired);
-        }
         let full = items.len() > limit;
         let next_cursor = if full {
             Some(items[limit - 1].task_id)
@@ -501,6 +495,13 @@ impl CaseworkService {
         } else {
             None
         };
+        // A final empty page caused only by the absent Registry-Source-Profile
+        // header is refused, so a first-time caller learns which header to
+        // send. A page that lists anything keeps its submitted-context tasks,
+        // and a page emptied by an exhausted budget keeps its continuation.
+        if items.is_empty() && skipped_without_source_profile && next_cursor.is_none() {
+            return Err(ReviewRuntimeError::SourceProfileRequired);
+        }
         // A page that stopped before it filled says why, so a caller does not
         // read a short page as the end of the inbox.
         let status = if full || next_cursor.is_none() {
