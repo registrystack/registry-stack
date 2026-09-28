@@ -570,6 +570,41 @@ fn each_start_packages_the_authored_project_the_runtime_verifies() {
 }
 
 #[test]
+fn a_session_connects_the_runtime_and_apply_with_one_database_credential() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let state = session(&project);
+    let session_root = state.root();
+    fs::create_dir_all(session_root.join("database")).unwrap();
+    fs::create_dir_all(session_root.join("secrets")).unwrap();
+    for directory in [
+        project.join(".casework"),
+        session_root.clone(),
+        session_root.join("database"),
+        session_root.join("secrets"),
+    ] {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    config::database_credentials(&session_root, &state).unwrap();
+
+    let runtime = fs::read_to_string(session_root.join("secrets/runtime-database-url")).unwrap();
+    let migration =
+        fs::read_to_string(session_root.join("secrets/migration-database-url")).unwrap();
+    assert_eq!(runtime, migration);
+    assert!(
+        runtime.starts_with(&format!("postgresql://{MIGRATION_ROLE}:")),
+        "the session connects as its one database role"
+    );
+    assert!(!session_root.join("database/runtime-password").exists());
+    assert!(!split_roles(&session_root));
+    fs::write(session_root.join("database/runtime-password"), "retained").unwrap();
+    assert!(
+        split_roles(&session_root),
+        "a retained split session keeps its roles"
+    );
+}
+
+#[test]
 fn generated_operator_config_loads_through_the_runtime_contract() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());

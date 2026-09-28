@@ -47,8 +47,10 @@
   `caseworkctl plan` and `caseworkctl apply` once with the new binaries
   before starting the runtime. The first apply on a database an earlier
   release migrated adopts it: it applies the pending migrations and records
-  the first activation. `caseworkctl dev` applies in-process on every start
-  and keeps its split runtime and migration roles.
+  the first activation. `caseworkctl dev` applies in-process on every start.
+  A session it creates connects the runtime and apply with one database role;
+  a session retained from an earlier release keeps its split runtime and
+  migration roles.
 
 ## v0.35.0 - 2026-09-28
 
