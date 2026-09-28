@@ -46,6 +46,7 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
 pub(crate) enum ApplyLifecycleActivation {
     Initial,
     Successor,
+    RoleChange,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -159,9 +160,6 @@ pub(crate) fn run(
                 ))
                 .map_err(ApplyLifecycleError::Apply)?
                 .ok_or(ApplyLifecycleError::Uninitialized)?;
-            if target.package_digest() == recorded.identity.package_digest {
-                return Err(ApplyLifecycleError::Apply(MigrationError::AlreadyActive));
-            }
             bind_active_package(
                 &recorded.identity,
                 current_package.package_digest(),
@@ -181,11 +179,17 @@ pub(crate) fn run(
             DestructiveBackupEvidence::new(backup.binding_path.as_str(), &backup.local_path)
         })
         .collect::<Vec<_>>();
-    let precondition = current_identity
+    // Applying the active package again is a role change: the library
+    // refuses it as already active when the configured roles are the ones
+    // the active activation serves with.
+    let role_change = current_identity
         .as_ref()
-        .map_or(ApplyPrecondition::InitialActivation, |current| {
-            ApplyPrecondition::Successor { current }
-        });
+        .is_some_and(|current| current.package_digest == target.package_digest());
+    let precondition = match current_identity.as_ref() {
+        None => ApplyPrecondition::InitialActivation,
+        Some(current) if role_change => ApplyPrecondition::RoleChange { current },
+        Some(current) => ApplyPrecondition::Successor { current },
+    };
     let mut apply = ApplyVerifiedPackageRequest::new(
         &connection,
         &target,
@@ -226,6 +230,8 @@ pub(crate) fn run(
         activation_id: activated.activation_id,
         activation: if request.initial {
             ApplyLifecycleActivation::Initial
+        } else if role_change {
+            ApplyLifecycleActivation::RoleChange
         } else {
             ApplyLifecycleActivation::Successor
         },

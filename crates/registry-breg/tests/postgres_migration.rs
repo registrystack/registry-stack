@@ -1564,6 +1564,150 @@ async fn real_postgres_a_refused_operator_reference_leaves_the_database_unactiva
     assert!(database.activation_audit_entries().is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+
+    let unchanged = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &initial },
+    )
+    .await
+    .expect_err("the same roles leave nothing to activate");
+    assert!(matches!(unchanged, MigrationError::AlreadyActive));
+    assert_eq!(ledger_roles(&database).await.len(), 1);
+
+    let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::RoleChange { current: &initial },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("serving with one role is its own activation");
+    assert_eq!(single.package_digest, initial.package_digest);
+    assert_ne!(single.activation_id, initial.activation_id);
+    assert_eq!(
+        retired_role_privileges(&database, database.runtime_role.as_str()).await,
+        0,
+        "the runtime role the activation retired keeps no privilege"
+    );
+
+    let split = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &single },
+    )
+    .await
+    .expect("serving with a separate runtime role again is its own activation");
+    assert_ne!(split.activation_id, single.activation_id);
+
+    let digest = package.package_digest().to_owned();
+    assert_eq!(
+        ledger_roles(&database).await,
+        vec![
+            (
+                initial.activation_id.clone(),
+                "initial".to_owned(),
+                "compiled_additive".to_owned(),
+                None,
+                "split".to_owned(),
+                database.runtime_role.as_str().to_owned(),
+            ),
+            (
+                single.activation_id.clone(),
+                "successor".to_owned(),
+                "metadata_only".to_owned(),
+                Some(digest.clone()),
+                "single".to_owned(),
+                database.migration_role.as_str().to_owned(),
+            ),
+            (
+                split.activation_id.clone(),
+                "successor".to_owned(),
+                "metadata_only".to_owned(),
+                Some(digest),
+                "split".to_owned(),
+                database.runtime_role.as_str().to_owned(),
+            ),
+        ]
+    );
+    let state = read_recorded_registry_state(
+        &database.migration_config,
+        &package.manifest().package_id,
+        &database.migration_role,
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+    )
+    .await
+    .expect("the recorded state reads")
+    .expect("the database is activated");
+    assert_eq!(state.identity, split);
+}
+
+async fn ledger_roles(
+    database: &TestDatabase,
+) -> Vec<(String, String, String, Option<String>, String, String)> {
+    database
+        .admin
+        .query(
+            "SELECT activation_id::text, plan_kind, migration_kind, predecessor_package_digest,
+                    role_mode, runtime_role
+             FROM registry_internal.registry_migrations
+             WHERE outcome = 'applied'
+             ORDER BY apply_order",
+            &[],
+        )
+        .await
+        .expect("the ledger reads")
+        .into_iter()
+        .map(|row| {
+            (
+                row.get(0),
+                row.get(1),
+                row.get(2),
+                row.get(3),
+                row.get(4),
+                row.get(5),
+            )
+        })
+        .collect()
+}
+
+async fn retired_role_privileges(database: &TestDatabase, role: &str) -> i64 {
+    database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM pg_class AS class
+                  JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+                  CROSS JOIN LATERAL aclexplode(class.relacl) AS acl
+                  WHERE namespace.nspname LIKE 'registry\\_%'
+                    AND acl.grantee = to_regrole($1))
+               + (SELECT count(*) FROM pg_namespace AS namespace
+                  CROSS JOIN LATERAL aclexplode(namespace.nspacl) AS acl
+                  WHERE namespace.nspname LIKE 'registry\\_%'
+                    AND acl.grantee = to_regrole($1))
+               + (SELECT count(*) FROM pg_proc AS function
+                  JOIN pg_namespace AS namespace ON namespace.oid = function.pronamespace
+                  CROSS JOIN LATERAL aclexplode(function.proacl) AS acl
+                  WHERE namespace.nspname LIKE 'registry\\_%'
+                    AND acl.grantee = to_regrole($1))",
+            &[&role],
+        )
+        .await
+        .expect("the catalog reads")
+        .get(0)
+}
+
 async fn initial_package_database() -> (TestDatabase, VerifiedPackage) {
     let database = TestDatabase::create(1).await;
     database

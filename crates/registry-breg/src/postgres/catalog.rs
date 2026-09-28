@@ -17,7 +17,7 @@ use super::{
     PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
 };
 
-const MANAGED_SCHEMAS: &[&str] = &[
+pub(super) const MANAGED_SCHEMAS: &[&str] = &[
     "registry_internal",
     "registry_data",
     "registry_source",

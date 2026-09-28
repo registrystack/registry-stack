@@ -1726,6 +1726,7 @@ struct AttachmentCleanupSuccessReport {
 enum ApplyActivation {
     Initial,
     Successor,
+    RoleChange,
 }
 
 #[derive(Serialize)]
@@ -4342,6 +4343,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         activation: match outcome.activation {
             ApplyLifecycleActivation::Initial => ApplyActivation::Initial,
             ApplyLifecycleActivation::Successor => ApplyActivation::Successor,
+            ApplyLifecycleActivation::RoleChange => ApplyActivation::RoleChange,
         },
         package_digest: outcome.package_digest,
         schema_fingerprint: outcome.schema_fingerprint,
@@ -4915,7 +4917,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                         diagnostic(
                             "apply.package.already_active",
                             "package",
-                            "the database already runs this package, so there is nothing to apply; run `bregctl status` to see the active package. Nothing was changed",
+                            "the database already runs this package with the configured database roles, so there is nothing to apply; run `bregctl status` to see the active package. Nothing was changed",
                         ),
                         DiagnosticArtifact::PackageActivation,
                         SuggestedAction::CorrectPackageBuild,
@@ -11614,6 +11616,9 @@ fn write_apply_success(
             match report.activation {
                 ApplyActivation::Initial => "Activated the first package on this registry.",
                 ApplyActivation::Successor => "Activated the package over its predecessor.",
+                ApplyActivation::RoleChange => {
+                    "Activated the active package again with the configured database roles."
+                }
             },
             &[
                 (
@@ -11621,6 +11626,7 @@ fn write_apply_success(
                     match report.activation {
                         ApplyActivation::Initial => "initial",
                         ApplyActivation::Successor => "successor",
+                        ApplyActivation::RoleChange => "role_change",
                     }
                     .to_owned(),
                 ),
