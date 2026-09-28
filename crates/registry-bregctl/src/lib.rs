@@ -6153,12 +6153,18 @@ fn validator_reason(error: &clap::Error) -> Option<String> {
     (!reason.is_empty() && !repeats).then_some(reason)
 }
 
+/// Options whose values bregctl records only as a keyed hash.
+const HASHED_VALUE_OPTIONS: [&str; 2] = ["--operator-reference", "--reason"];
+
 /// The name of the argument clap refused, without any value. A declared
 /// argument is named as clap renders its definition. An unknown argument is
 /// the operator's own token, so it is named only when it has the shape of a
 /// long option, only up to any `=`, and never when it sits where an option
 /// expects its value, since `--operator-reference --change-42` refuses the
-/// value itself as an unknown argument.
+/// value itself as an unknown argument. Nor is it named on a command line
+/// that passes an option recorded only as a keyed hash, since an unquoted
+/// `--operator-reference change --private-42` refuses a continuation of that
+/// value.
 fn refused_argument(error: &clap::Error, arguments: &[OsString]) -> Option<String> {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
     let names = match error.get(ContextKind::InvalidArg)? {
@@ -6178,13 +6184,29 @@ fn refused_argument(error: &clap::Error, arguments: &[OsString]) -> Option<Strin
                             || character.is_ascii_digit()
                             || character == '-'
                     });
-                (shaped && !follows_a_value_option(option, arguments)).then(|| option.to_owned())
+                (shaped
+                    && !follows_a_value_option(option, arguments)
+                    && !passes_a_hashed_value(arguments))
+                .then(|| option.to_owned())
             } else {
                 Some(name.to_owned())
             }
         })
         .collect::<Vec<_>>();
     (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// Whether the command line passes an option whose value is recorded only as a
+/// keyed hash, in either the separate or the attached form.
+fn passes_a_hashed_value(arguments: &[OsString]) -> bool {
+    arguments
+        .iter()
+        .filter_map(|argument| argument.to_str())
+        .any(|token| {
+            HASHED_VALUE_OPTIONS
+                .iter()
+                .any(|option| token.split('=').next() == Some(option))
+        })
 }
 
 /// Whether a token starting with `option` directly follows an option that
