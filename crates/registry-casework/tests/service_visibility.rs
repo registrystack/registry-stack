@@ -63,6 +63,8 @@ enum CallerRead {
     Unavailable,
     Delayed(Duration),
     MovedBinding,
+    MovedGeneration,
+    AdapterBindingMoved,
 }
 
 struct ActiveCallerRead {
@@ -528,6 +530,17 @@ impl SourceAdapter for MockSource {
                     .push(OperationName::parse("approve").expect("approve operation"));
                 Ok(view)
             }
+            Some(CallerRead::MovedGeneration) => {
+                let mut view = Self::visible(subject, "moved-generation");
+                view.binding.generation = "generation-2".into();
+                view.display_reference = Some("REF-MOVED".into());
+                view.permitted_operations
+                    .push(OperationName::parse("approve").expect("approve operation"));
+                Ok(view)
+            }
+            // The source disclosed the subject to this caller, then the
+            // adapter found the served contract moved.
+            Some(CallerRead::AdapterBindingMoved) => Err(SourceAdapterError::BindingMoved),
             None => Err(SourceAdapterError::Concealed),
         }
     }
@@ -1498,36 +1511,47 @@ async fn unreconciled_binding_movement_keeps_reads_without_actions() {
             .await,
         Err(ServiceError::BindingMoved)
     ));
+    // A plain read of one item across a moved generation returns the
+    // retained occurrence without actions; the inbox still refuses.
+    let opened = fixture
+        .service
+        .open_source_item(
+            &fixture.staff,
+            moved_item,
+            "reader",
+            "moved-generation-token",
+        )
+        .await
+        .expect("a moved generation keeps the item readable");
+    assert_eq!(opened.binding, binding());
+    assert!(opened.actions.is_empty());
+    assert!(opened.routing_copy.is_none());
+    fixture
+        .service
+        .source_history(
+            &fixture.staff,
+            moved_item,
+            "reader",
+            "moved-generation-token",
+            10,
+            None,
+        )
+        .await
+        .expect("a moved generation keeps the history readable");
+    fixture
+        .service
+        .work_item_clocks(
+            &fixture.staff,
+            moved_item,
+            "reader",
+            "moved-generation-token",
+        )
+        .await
+        .expect("a moved generation keeps the clocks readable");
     assert!(matches!(
         fixture
             .service
-            .open_source_item(
-                &fixture.staff,
-                moved_item,
-                "reader",
-                "moved-generation-token"
-            )
-            .await,
-        Err(ServiceError::BindingMoved)
-    ));
-    assert!(matches!(
-        fixture
-            .service
-            .source_history(
-                &fixture.staff,
-                moved_item,
-                "reader",
-                "moved-generation-token",
-                10,
-                None,
-            )
-            .await,
-        Err(ServiceError::BindingMoved)
-    ));
-    assert!(matches!(
-        fixture
-            .service
-            .work_item_clocks(
+            .caller_item(
                 &fixture.staff,
                 moved_item,
                 "reader",
@@ -2703,6 +2727,147 @@ async fn the_source_profile_header_alone_selects_the_profile_to_decide_and_recov
     assert_eq!(
         response_body(response).await["code"],
         "work-item.not-visible"
+    );
+}
+
+#[tokio::test]
+async fn a_plain_read_across_a_binding_move_returns_the_retained_item_without_actions() {
+    let _database = DATABASE.lock().await;
+    let moved_generation = Uuid::from_u128(1_030);
+    let adapter_moved = Uuid::from_u128(1_031);
+    let concealed = Uuid::from_u128(1_032);
+    let superseded = Uuid::from_u128(1_033);
+    let source = MockSource::with_reads([
+        (moved_generation, CallerRead::MovedGeneration),
+        (adapter_moved, CallerRead::AdapterBindingMoved),
+        (concealed, CallerRead::Concealed),
+        (superseded, CallerRead::MovedGeneration),
+    ]);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    let moved_generation_item = add_item(&fixture.service, moved_generation, None).await;
+    let adapter_moved_item = add_item(&fixture.service, adapter_moved, None).await;
+    let concealed_item = add_item(&fixture.service, concealed, None).await;
+    let superseded_item = add_item(&fixture.service, superseded, None).await;
+    let mut superseding_binding = binding();
+    superseding_binding.version = "2".into();
+    fixture
+        .service
+        .store()
+        .apply_observation(
+            &AuthoritativeObservation {
+                display_reference: None,
+                submitted_at: None,
+                stage_entered_at: None,
+                review_timing: None,
+                routing_context: None,
+                subject: SubjectRef {
+                    source_id: SOURCE_ID.into(),
+                    kind: ENTITY.into(),
+                    id: superseded.to_string(),
+                },
+                occurrence_key: "review:1".into(),
+                ordered_revision: 2,
+                binding: superseding_binding,
+                representation_etag: "\"request-2\"".into(),
+                occurrence_kind: OccurrenceKind::Review,
+                stage: Some("review".into()),
+                state: OccurrenceState::Superseded,
+                remaining_actions: Vec::new(),
+            },
+            QUEUE,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .item(superseded_item)
+            .await
+            .unwrap()
+            .state,
+        OccurrenceState::Superseded
+    );
+    let configured_project = project(policy(10, 1_000));
+    let app = router(HttpState {
+        service: fixture.service.clone(),
+        authenticator: Arc::new(authenticator(&configured_project)),
+        project: Arc::new(configured_project),
+    });
+    let read = |path: String| {
+        app.clone().oneshot(authenticated_request(
+            "GET",
+            &path,
+            &access_token("staff"),
+            "staff",
+            serde_json::Value::Null,
+            &[(SOURCE_PROFILE_HEADER, "reader")],
+        ))
+    };
+
+    for (item_id, display_reference) in [
+        (moved_generation_item, Some("REF-MOVED")),
+        (adapter_moved_item, None),
+    ] {
+        let response = read(format!("/v1/work-items/{item_id}")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{item_id}");
+        let item = response_body(response).await;
+        assert_eq!(item["actions"], json!([]), "{item_id}");
+        assert!(item
+            .get("routingCopy")
+            .is_none_or(serde_json::Value::is_null));
+        assert_eq!(
+            item.get("displayReference")
+                .and_then(serde_json::Value::as_str),
+            display_reference,
+            "{item_id}"
+        );
+        assert_eq!(item["binding"]["generation"], binding().generation);
+        let history = read(format!("/v1/work-items/{item_id}/history"))
+            .await
+            .unwrap();
+        assert_eq!(history.status(), StatusCode::OK, "{item_id}");
+
+        // A mutation still refuses the moved binding.
+        let claim = app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/work-items/{item_id}/claim"),
+                &access_token("staff"),
+                "staff",
+                serde_json::Value::Null,
+                &[
+                    (SOURCE_PROFILE_HEADER, "reader"),
+                    (IF_MATCH_HEADER, "\"1\""),
+                    (IDEMPOTENCY_KEY_HEADER, "moved-claim"),
+                ],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(claim.status(), StatusCode::CONFLICT, "{item_id}");
+        assert_eq!(
+            response_body(claim).await["code"],
+            "work-item.proposal-changed"
+        );
+    }
+
+    // Current source visibility still gates the read.
+    let hidden = read(format!("/v1/work-items/{concealed_item}"))
+        .await
+        .unwrap();
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response_body(hidden).await["code"], "work-item.not-visible");
+
+    // A superseded occurrence sends the caller to its replacement.
+    let replaced = read(format!("/v1/work-items/{superseded_item}"))
+        .await
+        .unwrap();
+    assert_eq!(replaced.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_body(replaced).await["code"],
+        "work-item.superseded"
     );
 }
 
