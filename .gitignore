@@ -21,6 +21,8 @@ __pycache__/
 /products/evidence/.first-curl/
 /products/evidence/.sd-jwt-vc-demo/
 .breg-history.*/
+.breg-restore.*/
+.casework-restore.*/
 
 # Working directory created by the Base Registry Engine tutorials
 /tutorial-work/
