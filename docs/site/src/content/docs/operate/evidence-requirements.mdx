@@ -93,6 +93,50 @@ traffic on readiness. Metrics are off until you open a second, private-address l
     rotation, and retention", "Listener placement", and "Startup and readiness";
     crates/registry-evidence/src/audit.rs. */}
 
+## Changing a published question
+
+A deployment serves exactly one revision of each question. The bundle configures each requirement
+URI once, and every assertion for it carries that requirement's `configurationRevision`, which a
+relying party pins in its verification policy. Editing the requirement, its source, one of its
+selector profiles, an authority grant that names it, or any script, schema, codelist, or fixture it
+reaches moves that revision. From the moment the new candidate serves, assertions carry the new
+revision and fail verification under the old pin. No window exists in which the same deployment
+answers under both revisions, so decide what kind of change it is before you build the candidate.
+
+**A semantic change mints a new requirement URI.** When the change alters what an answer means,
+such as a different rule, threshold, concept, source of record, or disclosure, publish the new
+question under a new requirement URI, for example `urn:example:requirements:adult-status:v2` beside
+`...:v1`. Relying parties then choose when to move. Keep the old requirement in the bundle, with its
+own grants, for an announced transition period, and remove it in a later candidate once that period
+ends. A revision covers only what its own requirement reaches, so adding the new requirement leaves
+the old one's revision alone, unless the two share a source, selector profile, or artifact that you
+also edit. Both requirements are enabled together, so review the bundle as one disclosure surface
+before the new one serves.
+
+**A clarifying change is a re-pin event.** When the answer keeps its meaning, such as a corrected
+script that returns the same answers, a tighter schema, or a moved source endpoint, keep the
+requirement URI. The revision still moves, so every relying party that pinned the requirement
+has to re-pin it. Announce the change before you activate the candidate: tell each relying party
+that consumes the requirement what changes, why its meaning does not, and when the new revision
+will serve, and leave a notice window long enough for them to review it. At the announced time,
+activate the candidate. Relying parties read the new `configurationRevision` through authenticated
+discovery at `GET /v1/evidence-definitions`, not from refused requests, and update their pins.
+
+If you cannot tell which kind of change it is, treat it as semantic. A new URI costs a transition
+period. A meaning change shipped as a clarification leaves a relying party accepting answers it
+never reviewed.
+
+Some edits move no requirement's revision at all: publishing, activating, retiring, or revoking a
+signing key; revoking an identity-provider key; and changing runtime-only paths or listeners. They
+change what relying parties trust or where the process runs, not what an answer means. The
+[signing-key rotation](../../tutorials/rotate-evidence-signing-keys/) and
+[verifier trust](../../tutorials/manage-evidence-verifier-trust/) procedures cover them.
+
+{/* Evidence: crates/registry-evidence/src/bundle.rs compute_requirement_revisions canonical_projection;
+    products/evidence/OPERATOR-CONTRACT.md, "Discovery of available evidence";
+    products/evidence/reference/request-adapter/deployment-projects/CONFIG.md configurationRevision;
+    products/evidence/contracts/security-invariant-matrix.yaml V1-I03. */}
+
 ## Capacity
 
 No throughput or latency figure is part of the Version 1 contract. The cost that shapes throughput
