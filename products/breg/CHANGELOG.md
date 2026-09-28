@@ -272,6 +272,14 @@
   two projects that differ only in their package identity compile to the same
   one.
 
+- BREAKING: a Registry Casework BReg source pins the `registryRevision` it
+  was imported from, and Casework startup refuses a pin the registry no
+  longer serves. After upgrading BReg, run `caseworkctl check PROJECT
+  --against-breg-package DIR --source-id ID`, repin with `caseworkctl source
+  add BREG_PROJECT --project PROJECT --source-id ID --apply`, then package,
+  plan, and apply the Casework project once. See
+  `products/casework/CHANGELOG.md`.
+
 - BREAKING: a package is environment neutral and unsigned. One package built
   by `bregctl package` is the unit an operator promotes through every
   environment, and its identity is its package digest, the SHA-256 of its
