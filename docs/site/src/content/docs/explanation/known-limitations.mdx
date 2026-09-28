@@ -111,7 +111,7 @@ The table describes the release roster from `v0.31.0`. Registry Mint was publish
 ## Base Registry Engine limits
 
 Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
-signed package an operator activates deliberately. What it asks of a deployment is in
+package an operator activates deliberately. What it asks of a deployment is in
 [What you need to run Base Registry Engine](../../operate/breg-requirements/); what follows is what
 the product does not do.
 
@@ -124,8 +124,8 @@ the product does not do.
   operation with no idempotent replay, such as creating an ingestion run, answers unavailable
   without its result when its response entry is refused; the caller recovers by listing the
   committed state.
-- Every production change is a signed package: a one-line access widening goes through `check`,
-  `test` against a schema-test database, `package`, external signing, and `apply`. No runtime
+- Every production change is a package: a one-line access widening goes through `check`,
+  `test` against a schema-test database, `package`, and `apply`. No runtime
   administration API edits access rules, record shapes, or webhook destinations, and nothing hot
   reloads.
 - No backup, and no restore: no command takes or restores one. Recovery from an activation that

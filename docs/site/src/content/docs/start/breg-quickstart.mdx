@@ -18,8 +18,7 @@ permit, or an asset exists only when the active package declares it.
 A [registry project](../../reference/glossary/#registry-project) is a directory of YAML files that
 declares the entities, fields, relationships, access profiles, change requests, and events one
 registry exposes. A [package](../../reference/glossary/#package) is the compiled and verified form
-of one project: `bregctl` builds it, `breg` serves it, and a production package carries detached
-signatures from keys the deployment trusts. An
+of one project: `bregctl` builds it, and `breg` serves it. An
 [access profile](../../reference/glossary/#access-profile) is a named grant inside the project that
 states what a token must carry and which operations, fields, and rows the caller may reach.
 
@@ -69,7 +68,7 @@ token. It lists the tools it needs and runs on the platforms in
 [platform support](../../explanation/known-limitations/#platform-support).
 
 The local path keeps authentication, access profiles, row boundaries, and audit active. It is not a
-substitute for production package signing, operated database roles, TLS to the database,
+substitute for production package review, operated database roles, TLS to the database,
 migration review, or secret custody; those arrive in the deploy phase.
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start(); crates/registry-bregctl/src/lib.rs, init_files();

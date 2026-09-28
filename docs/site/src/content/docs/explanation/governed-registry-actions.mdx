@@ -83,7 +83,7 @@ fixed-effect action rejects explicit null instead.
 `evidence::resolve(capability_id, subjects)` inside `handle(ctx)`. Version 1 input-only actions keep
 their existing path. The project declares each provider under `evidenceProviders` with an `id`, a
 reviewed client `contracts` file, and `subjectResolution: trusted-provider-exact-selector`; the
-imported contract becomes part of the signed package closure, so compilation and explanation need no
+imported contract becomes part of the package closure, so compilation and explanation need no
 network. Each action's `evidence` entries then select a local `id`, that provider, an exact
 requirement URI, the subject role and profile, the output handles the script may read, and
 `maximumObservationAgeSeconds`.

@@ -29,7 +29,7 @@ up these alongside every database backup, on the same schedule:
 - The PostgreSQL database, with `pg_dump` before every activation, as
   [Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database)
   describes.
-- The signed package directory, its trust anchor, the runtime file, and the secret files it
+- The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.
 - The field-encryption key when the project encrypts a field: the Transit key, or the local
   data-key file. The database holds only a wrapped key or an identifier, so losing the custodian's
