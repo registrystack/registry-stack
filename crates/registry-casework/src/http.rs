@@ -47,6 +47,7 @@ tokio::task_local! {
 }
 
 const MAXIMUM_PAGE_SIZE: usize = 100;
+const MAXIMUM_ABSENCE_PAGE_SIZE: usize = 1_000;
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -528,7 +529,7 @@ async fn review_result_feed(
     Ok(Json(
         state
             .service
-            .review_result_feed(&actor, query.cursor, query.limit.unwrap_or(25))
+            .review_result_feed(&actor, query.cursor, page_limit(&state, query.limit)?)
             .await
             .map_err(HttpError::from)?,
     ))
@@ -714,7 +715,7 @@ async fn review_history(
                 source_profile_id,
                 token,
                 query.cursor,
-                query.limit.unwrap_or(25),
+                page_limit(&state, query.limit)?,
             )
             .await?,
     ))
@@ -1279,7 +1280,11 @@ async fn absences(
             .service
             .absences_page(
                 &actor,
-                query.limit.unwrap_or(1_000),
+                bounded_limit(
+                    query.limit,
+                    MAXIMUM_ABSENCE_PAGE_SIZE,
+                    MAXIMUM_ABSENCE_PAGE_SIZE,
+                )?,
                 query.cursor.as_deref(),
             )
             .await?,
@@ -1691,11 +1696,25 @@ fn reject_source_profile(headers: &HeaderMap) -> Result<(), HttpError> {
 }
 
 fn page_limit(state: &HttpState, requested: Option<usize>) -> Result<usize, HttpError> {
-    let limit = requested.unwrap_or(state.service.inbox_policy().default_page_size);
-    (1..=MAXIMUM_PAGE_SIZE)
+    bounded_limit(
+        requested,
+        state.service.inbox_policy().default_page_size,
+        MAXIMUM_PAGE_SIZE,
+    )
+}
+
+/// A zero or over-maximum `limit` is refused with the closed problem whose
+/// detail names the parameter and each accepted range.
+fn bounded_limit(
+    requested: Option<usize>,
+    default: usize,
+    maximum: usize,
+) -> Result<usize, HttpError> {
+    let limit = requested.unwrap_or(default);
+    (1..=maximum)
         .contains(&limit)
         .then_some(limit)
-        .ok_or(HttpError::Invalid)
+        .ok_or(HttpError::LimitOutOfRange)
 }
 
 fn idempotency_key(headers: &HeaderMap) -> Result<&str, HttpError> {
@@ -1775,6 +1794,7 @@ pub enum HttpError {
     IdempotencyKeyReused,
     NotOffered,
     Invalid,
+    LimitOutOfRange,
     ServiceUnavailable,
     SourceNotFound,
     SourceProfileNotApplicable,
@@ -1940,6 +1960,7 @@ impl HttpError {
             Self::IdempotencyKeyReused => ProblemCode::IdempotencyKeyReused,
             Self::NotOffered => ProblemCode::WorkItemNotOffered,
             Self::Invalid => ProblemCode::RequestInvalid,
+            Self::LimitOutOfRange => ProblemCode::RequestLimitOutOfRange,
             Self::ServiceUnavailable => ProblemCode::ServiceUnavailable,
             Self::SourceNotFound => ProblemCode::SourceNotFound,
             Self::SourceProfileNotApplicable => ProblemCode::SourceProfileNotApplicable,

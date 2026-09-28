@@ -454,6 +454,11 @@ pub struct ReviewTaskPage {
     pub items: Vec<ReviewerTask>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<Uuid>,
+    /// Whether the page stopped early: `budget_exhausted` when the source-read
+    /// budget, candidate scan, or page deadline ran out before the page
+    /// filled, and `source_unavailable` when a bound source did not answer in
+    /// time. Either comes with a `nextCursor` to continue from.
+    pub status: crate::PageStatus,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

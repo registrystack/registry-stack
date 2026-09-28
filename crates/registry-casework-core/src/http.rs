@@ -30,6 +30,7 @@ pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
 pub const PROFILE_NOT_HUMAN_PROBLEM: &str = "profile.not-human";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
 pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
+pub const REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM: &str = "request.limit-out-of-range";
 pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
 pub const REQUEST_NOT_FOUND_PROBLEM: &str = "request.not-found";
 pub const REQUEST_REASON_UNSUPPORTED_PROBLEM: &str = "request.reason-unsupported";

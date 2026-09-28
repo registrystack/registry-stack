@@ -232,6 +232,16 @@ function uncertaintyAccountability(entry: HistoryEntry): string | undefined {
 }
 void uncertaintyAccountability
 
+void client.reviewTasks(token, profile, { limit: 25 }).then((page) => {
+  const status: 'complete' | 'budget_exhausted' | 'source_unavailable' = page.value.status
+  void status
+})
+function pageLimit(error: CaseworkClientError): boolean {
+  const code: CaseworkProblemCode | undefined = error.code
+  return code === 'request.limit-out-of-range'
+}
+void pageLimit
+
 function recoveryReference(error: CaseworkClientError): string | undefined {
   const code: CaseworkProblemCode | undefined = error.code
   return code === 'work-item.recovery-pending' ? error.originalAttemptId : undefined

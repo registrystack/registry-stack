@@ -621,6 +621,7 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "profile.not-human",
     "request.body-too-large",
     "request.invalid",
+    "request.limit-out-of-range",
     "request.method-not-allowed",
     "request.not-found",
     "request.reason-unsupported",
@@ -810,6 +811,7 @@ class _ReviewTaskPageOptional(TypedDict, total=False):
     nextCursor: Uuid
 class ReviewTaskPage(_ReviewTaskPageOptional):
     items: list[ReviewerTask]
+    status: PageStatus
 ReviewSourceBindingStatus: TypeAlias = Literal["current", "binding_changed"]
 class _ReviewSourceProjectionOptional(TypedDict, total=False):
     displayReference: str
