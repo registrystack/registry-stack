@@ -594,6 +594,7 @@ async fn real_postgres_refuses_the_active_package_again_and_binds_only_the_recor
         RecordedRegistryState {
             identity: active.clone(),
             ready: true,
+            activation_applied: true,
         }
     );
     bind_active_package(&recorded.identity, initial.package_digest(), deployment())

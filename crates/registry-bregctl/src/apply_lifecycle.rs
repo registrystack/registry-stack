@@ -10,7 +10,7 @@ use registry_breg::migration::{
     plan_verified_package, read_activation_status, read_recorded_registry_state,
     successor_plan_is_empty, ActivationDeployment, ActivationPlan, ActivationStatus,
     AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, RecordedRegistryState,
 };
 use registry_breg::package::{
     load_package, MigrationInspectionSummary, PackageError, VerifiedPredecessorPackage,
@@ -172,6 +172,21 @@ impl DatabaseAccess {
     }
 }
 
+/// Whether a plan reports the package as the database's first activation:
+/// the database was never activated, or its initial activation is
+/// unfinished, which the next `apply --initial` resumes. A database a
+/// release before the activation ledger installed is adopted instead.
+fn plans_initial_activation(
+    recorded: Result<Option<RecordedRegistryState>, MigrationError>,
+) -> Result<bool, ApplyLifecycleError> {
+    match recorded {
+        Ok(None) => Ok(true),
+        Ok(Some(recorded)) => Ok(!recorded.activation_applied),
+        Err(MigrationError::PreLedgerDatabase) => Ok(false),
+        Err(error) => Err(ApplyLifecycleError::Apply(error)),
+    }
+}
+
 fn execute(
     request: ApplyLifecycleRequest<'_>,
     mode: LifecycleMode,
@@ -217,11 +232,7 @@ fn execute(
                 config.database().roles().migration(),
                 resolved.timeouts,
             ));
-            let initial = match recorded {
-                Ok(None) => true,
-                Ok(Some(_)) | Err(MigrationError::PreLedgerDatabase) => false,
-                Err(error) => return Err(ApplyLifecycleError::Apply(error)),
-            };
+            let initial = plans_initial_activation(recorded)?;
             access = Some(resolved);
             initial
         }
@@ -486,6 +497,34 @@ mod tests {
         ] {
             assert!(parse_backup_arguments(&[refused.to_owned()]).is_err());
         }
+    }
+
+    #[test]
+    fn a_plan_is_initial_until_the_ledger_records_an_applied_activation() {
+        let recorded = |activation_applied| {
+            Ok(Some(RecordedRegistryState {
+                identity: registry_breg::postgres::ExpectedRegistryIdentity {
+                    package_id: "registry".to_owned(),
+                    database_id: "database".to_owned(),
+                    package_digest: "sha256:package".to_owned(),
+                    activation_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+                    schema_fingerprint: "sha256:schema".to_owned(),
+                },
+                ready: false,
+                activation_applied,
+            }))
+        };
+        assert!(plans_initial_activation(Ok(None)).expect("never activated"));
+        assert!(plans_initial_activation(recorded(false)).expect("unfinished initial"));
+        assert!(!plans_initial_activation(recorded(true)).expect("activated"));
+        assert!(
+            !plans_initial_activation(Err(MigrationError::PreLedgerDatabase))
+                .expect("a pre-ledger database is adopted")
+        );
+        assert!(matches!(
+            plans_initial_activation(Err(MigrationError::ApplyFailed)),
+            Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed))
+        ));
     }
 
     #[test]
