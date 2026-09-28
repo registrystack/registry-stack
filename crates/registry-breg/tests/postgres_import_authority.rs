@@ -675,7 +675,7 @@ async fn an_open_authority_admits_a_run_that_names_it() {
     let authority = harness.open("widget", "loader", 10, &[]).await;
     assert_eq!(authority.status, ImportAuthorityStatus::Open);
     assert_eq!(
-        authority.activation_revision,
+        authority.activation_id.to_string(),
         registry_breg::postgres::test_activation_id(PACKAGE_REVISION)
     );
     let run_id = harness
@@ -838,7 +838,7 @@ async fn a_successor_package_supersedes_an_open_authority() {
         .await
         .expect("a new authority opens under the successor");
     assert_eq!(
-        reopened.activation_revision,
+        reopened.activation_id.to_string(),
         registry_breg::postgres::test_activation_id(SUCCESSOR_REVISION)
     );
 }
@@ -1001,8 +1001,8 @@ async fn the_runtime_role_cannot_open_close_or_reopen_an_authority() {
         .execute(
             "INSERT INTO registry_internal.registry_import_authorities
                  (authority_id, entity_id, profile_id, operation, max_items,
-                  activation_revision, expires_at, operator_reference, reason_reference)
-             VALUES ($1, 'gadget', 'loader', 'create', 5, 'package-import-1',
+                  activation_id, expires_at, operator_reference, reason_reference)
+             VALUES ($1, 'gadget', 'loader', 'create', 5, gen_random_uuid(),
                      now() + interval '1 day', 'r', 'r')",
             &[&Uuid::new_v4()],
         )

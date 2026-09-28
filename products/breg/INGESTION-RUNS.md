@@ -45,7 +45,7 @@ A profile holding the `import` operation drives the same runs, create only:
 `import` mounts no item route and no batch route, so an ingestion run is the
 only path an import grant can write through. Creating an import run also
 requires the entity's open import authority for that profile. The authority
-must be unexpired, opened under the active package revision, hold remaining
+must be unexpired, opened under the active activation, hold remaining
 volume that covers the run's whole announced item count, and, when it pins
 input digests, list the run's input digest. The input digest is the label the
 caller announces for its source and the run records; the server never

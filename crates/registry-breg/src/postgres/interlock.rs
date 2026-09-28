@@ -1779,13 +1779,15 @@ impl DedicatedApplyConnection {
     /// Atomically records the immutable applied-ledger outcome and makes the
     /// exact package digest and its activation ready only after closed
     /// catalog, RLS, ACL, ownership, and schema-fingerprint verification
-    /// succeeds.
+    /// succeeds. Answers the supersession record of every import authority
+    /// the activation retired, which the caller appends to the audit once
+    /// the activation has committed.
     pub(crate) async fn activate_verified_package(
         &mut self,
         current: Option<&ExpectedRegistryIdentity>,
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
-    ) -> Result<()> {
+    ) -> Result<Vec<Value>> {
         let MaintenanceTransition {
             ledger,
             expected_catalog,
@@ -1871,8 +1873,19 @@ impl DedicatedApplyConnection {
         if changed != 1 {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
+        // A model change retires every grant an operator opened under the
+        // activation it replaces, so the transaction that makes the target
+        // active also supersedes every open import authority.
+        let mut superseded = Vec::new();
+        crate::import_authority::supersede_every_open(
+            &transaction,
+            &mut superseded,
+            &target.activation_id,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
-        Ok(())
+        Ok(superseded)
     }
 
     /// Activates the target only after exact package-catalog verification in

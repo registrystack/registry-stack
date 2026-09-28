@@ -1551,6 +1551,7 @@ fn request<'a>(
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
+        database.activation_audit(),
     )
 }
 

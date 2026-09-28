@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, read_recorded_registry_state,
@@ -28,6 +29,7 @@ pub(crate) enum ApplyLifecycleError {
     TimeoutConfiguration,
     BackupArgument,
     Runtime,
+    Audit,
     Apply(MigrationError),
 }
 
@@ -161,6 +163,9 @@ pub(crate) fn run(
         }
     };
 
+    let audit = runtime
+        .block_on(RegistryAudit::open_companion(&config))
+        .map_err(|_| ApplyLifecycleError::Audit)?;
     let backup_evidence = backup_arguments
         .iter()
         .map(|backup| {
@@ -182,6 +187,7 @@ pub(crate) fn run(
             config.database().roles().runtime(),
         ),
         timeouts,
+        audit,
     )
     .with_destructive_backup_evidence(&backup_evidence)
     .with_event_destination_compatibility_inventory(&event_destination_compatibility)

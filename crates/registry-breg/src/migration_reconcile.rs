@@ -212,7 +212,8 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
             | MigrationError::ActiveRequestProposals
             | MigrationError::BackupEvidence
-            | MigrationError::RetiredAuditRowsPresent => Self::Unavailable,
+            | MigrationError::RetiredAuditRowsPresent
+            | MigrationError::ActivationAuditIncomplete => Self::Unavailable,
         }
     }
 }
@@ -377,16 +378,37 @@ async fn reconcile_under_lock(
                     },
                 )
                 .await;
-            if let Err(error) = transition {
-                let landed =
-                    transition_landed(connection, |snapshot| snapshot.identity == *target).await;
-                if landed != Some(true) {
-                    respond_unlanded(&mut attempt, request, target, ledger, "completed", landed)
+            let superseded = match transition {
+                Ok(superseded) => superseded,
+                Err(error) => {
+                    let landed =
+                        transition_landed(connection, |snapshot| snapshot.identity == *target)
+                            .await;
+                    if landed != Some(true) {
+                        respond_unlanded(
+                            &mut attempt,
+                            request,
+                            target,
+                            ledger,
+                            "completed",
+                            landed,
+                        )
                         .await;
-                    return Err(error.into());
+                        return Err(error.into());
+                    }
+                    // The completion committed but its answer was lost, and
+                    // with it the records of the import authorities it
+                    // superseded. Their rows still say so.
+                    tracing::error!(
+                        "the completed activation superseded open import authorities whose audit records were lost; `bregctl import-authority list` shows them"
+                    );
+                    Vec::new()
                 }
-            }
+            };
             append_after_commit(request.audit, entry).await?;
+            crate::import_authority::append_transitions(request.audit, superseded)
+                .await
+                .map_err(|_| ReconcileError::Unavailable)?;
         }
         ReconcileOutcome::Revertible => {
             let entry = audit_entry(request, target, ledger, "reverted", &report)?;
