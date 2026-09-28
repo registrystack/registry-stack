@@ -20,6 +20,9 @@ pub enum RateLimitError {
     Configuration,
     #[error("request rate exceeded")]
     RequestExceeded,
+    /// The cost is larger than the burst, so no amount of waiting admits it.
+    #[error("request cost exceeds the burst")]
+    CostExceedsBurst,
     #[error("failed-selector rate exceeded")]
     FailedSelectorExceeded,
     #[error("rate-limit capacity is unavailable")]
@@ -69,13 +72,22 @@ impl EvidenceRateLimiter {
     /// A batch release issues one credential per presented holder key, so it
     /// costs the deployment what that many single-credential requests cost. A
     /// cost of zero would make a request free, so it is charged as one.
+    ///
+    /// A cost above the burst is refused as [`RateLimitError::CostExceedsBurst`]
+    /// before any bucket is touched. Refill stops at the burst, so such a cost
+    /// could never be admitted, and reporting it as an ordinary rate limit
+    /// would tell the caller to retry a request no wait can admit.
     pub async fn check_request_cost(
         &self,
         principal_pseudonym: &str,
         cost: u32,
     ) -> Result<(), RateLimitError> {
         validate_pseudonym_key(principal_pseudonym)?;
-        let cost = f64::from(cost.max(1));
+        let cost = cost.max(1);
+        if cost > self.config.burst_per_principal {
+            return Err(RateLimitError::CostExceedsBurst);
+        }
+        let cost = f64::from(cost);
         let now = Instant::now();
         let mut buckets = self.requests.lock().await;
         prune_buckets(&mut buckets, now);
@@ -260,17 +272,61 @@ mod tests {
         })
         .expect("limiter builds");
 
+        limiter
+            .check_request("batch-principal")
+            .await
+            .expect("the first token is available");
         assert_eq!(
-            limiter.check_request_cost("batch-principal", 4).await,
+            limiter.check_request_cost("batch-principal", 3).await,
             Err(RateLimitError::RequestExceeded)
         );
         limiter
-            .check_request_cost("batch-principal", 3)
+            .check_request_cost("batch-principal", 2)
             .await
-            .expect("a refused four-item admission consumed no partial tokens");
+            .expect("a refused three-item admission consumed no partial tokens");
         assert_eq!(
             limiter.check_request("batch-principal").await,
             Err(RateLimitError::RequestExceeded)
+        );
+    }
+
+    /// A cost above the burst can never be admitted: refill stops at the
+    /// burst, so a caller told to retry would be refused forever. It is refused
+    /// as its own outcome, before any bucket is created or charged.
+    #[tokio::test]
+    async fn a_cost_above_the_burst_is_refused_as_impossible_and_charges_nothing() {
+        let limiter = EvidenceRateLimiter::new(RateLimitConfig {
+            requests_per_principal_per_minute: 60,
+            burst_per_principal: 3,
+            failed_selector_attempts_per_principal_authority_per_minute: 2,
+        })
+        .expect("limiter builds");
+
+        assert_eq!(
+            limiter.check_request_cost("batch-principal", 4).await,
+            Err(RateLimitError::CostExceedsBurst)
+        );
+        assert_eq!(
+            limiter.tracked_key_count().await,
+            0,
+            "an impossible cost creates no tracked key"
+        );
+
+        // A full bucket later still refuses the same cost the same way: it is
+        // not a question of waiting.
+        limiter
+            .check_request_cost("batch-principal", 3)
+            .await
+            .expect("the whole burst is still available");
+        assert_eq!(
+            limiter.check_request_cost("batch-principal", 4).await,
+            Err(RateLimitError::CostExceedsBurst)
+        );
+        assert_eq!(
+            limiter
+                .check_request_cost("batch-principal", u32::MAX)
+                .await,
+            Err(RateLimitError::CostExceedsBurst)
         );
     }
 

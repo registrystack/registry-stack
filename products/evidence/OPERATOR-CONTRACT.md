@@ -327,6 +327,13 @@ gateway responsibility.
 `POST /v1/evidence/batch` charges the request bucket once with cost equal to
 its complete item count. The debit is atomic: capacity for all items is
 reserved or the whole request returns `evidence.rate_limited` and charges nothing.
+A bucket never holds more than `burstPerPrincipal` tokens, so a batch with more
+items than the burst, or a holder-bound release presenting more holder keys
+than the burst, can never be admitted however long the caller waits. Evidence
+refuses it as `evidence.invalid_request`, with no `Retry-After`, and charges
+nothing, rather than returning a rate limit that invites a retry which cannot
+succeed. Set `burstPerPrincipal` to at least the largest batch a caller is
+expected to send.
 Authentication occurs once and all items use one evaluation instant. Every
 item is validated and authorized before any credential is resolved or source
 is contacted.

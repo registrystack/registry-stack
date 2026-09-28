@@ -3383,6 +3383,72 @@ async fn request_batch_authenticates_once_and_atomically_charges_the_complete_it
         .is_empty());
 }
 
+/// A batch costs one token per item, and a principal's bucket never holds
+/// more than `burstPerPrincipal` tokens. A batch larger than the burst can
+/// therefore never be admitted however long its caller waits, so it is refused
+/// as an invalid request, without a retry hint and without charging anything,
+/// rather than as a rate limit that invites a retry which cannot succeed.
+#[tokio::test]
+async fn request_batch_larger_than_the_burst_is_refused_without_a_retry_hint() {
+    let server = MockServer::start().await;
+    let mut ceilings = FixtureCeilings::deployment_defaults();
+    ceilings.requests_per_principal_per_minute = 60;
+    ceilings.burst_per_principal = 2;
+    let prepared = prepare_fixture(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &ceilings,
+    );
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime with a two-token principal bucket initializes"),
+    );
+    let mut three_items = adult_request_batch(3);
+    three_items.purpose = "fixture-routing".to_owned();
+
+    let refused = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-above-burst",
+            &access_token(None),
+            &three_items,
+        )
+        .await
+        .expect_err("three items can never fit a two-token bucket");
+    assert_eq!(refused.problem(), ProblemCode::MalformedRequest);
+    assert_eq!(refused.category(), "request-cost");
+
+    // Nothing was charged: the whole burst still admits a batch that fits.
+    let mut two_items = adult_request_batch(2);
+    two_items.purpose = "fixture-routing".to_owned();
+    let admitted = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-at-burst",
+            &access_token(None),
+            &two_items,
+        )
+        .await
+        .expect_err("authorization refusal follows the complete two-token admission");
+    assert_eq!(admitted.problem(), ProblemCode::NotAuthorized);
+
+    // Over HTTP the refusal carries no Retry-After, because no wait admits it.
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&three_items)
+        .await;
+    assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(response.json::<Value>()["code"], "evidence.invalid_request");
+    assert!(response.maybe_header("retry-after").is_none());
+    assert!(server
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .is_empty());
+}
+
 #[tokio::test]
 async fn request_batch_sequential_fallback_serves_all_four_coequal_definitions() {
     let fixture = acceptance_runtime().await;
