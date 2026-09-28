@@ -693,9 +693,14 @@ changed.
 
 **Tests.** `a_grant_that_lapses_before_the_commit_never_books` now pins the
 edge's observation inside the grant and every later observation past it, so
-it proves the post-lock re-check refuses rather than the entry check, and
-`every_mutation_rechecks_expiry_after_its_writes` does the same on all six
-paths (SCHEDULING-SEC-03).
+it proves the post-lock re-check refuses rather than the entry check.
+`every_mutation_rechecks_expiry_after_its_writes` (SCHEDULING-SEC-03) keeps
+the edge's observation and the post-lock re-check before the writes inside
+the grant, plus a confirmation's hold-liveness read between them, and moves
+only the next observation past it: the re-check after the writes,
+immediately before `COMMIT`. On all six paths it asserts that observation is
+the last one and the one that refuses, and that every business write rolls
+back, so removing that re-check fails the test.
 `the_suite_reads_the_wall_clock_only_to_pin_it_and_to_sign_tokens` fails
 the suite if a test derives an instant from the wall clock again. All are in
 `crates/registry-scheduling/tests/postgres_commitments.rs`.
