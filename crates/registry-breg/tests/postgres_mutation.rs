@@ -2703,6 +2703,71 @@ async fn record_and_query_refusals_name_only_fixed_members_and_admitted_fields()
     )
     .await;
     assert_request_invalid_at(&batch_patch, Some("/items/0/patch/0/path"));
+    let batch_operation = problem(
+        batch(
+            "located-batch-operation",
+            json!({"items":[item, {"operation":"delete","data":{}}]}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&batch_operation, Some("/items/1/operation"));
+    let batch_context = problem(
+        batch(
+            "located-batch-context",
+            json!({"items":[item],"changeContext":7}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&batch_context, Some("/changeContext"));
+    for (key, body) in [
+        ("located-batch-no-items", json!({})),
+        ("located-batch-items-type", json!({"items":{}})),
+        ("located-batch-empty", json!({"items":[]})),
+        (
+            "located-batch-over",
+            json!({"items":[item, item, item, item, item]}),
+        ),
+    ] {
+        let refused = problem(batch(key, body).await).await;
+        assert_request_invalid_at(&refused, Some("/items"));
+    }
+
+    // A required field the grant withholds is missing from every body this
+    // profile can send; naming it would disclose it, so the refusal stops at
+    // `/data` like an unknown member.
+    let drafter = api_claims("case-drafting", Some("zone-a"));
+    let withheld_required = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets?accessProfile=drafter",
+            Some(drafter.clone()),
+            &json_headers("located-withheld-required"),
+            serde_json::to_vec(&json!({"data":{"jurisdiction":"zone-a","label":"H"}})).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&withheld_required, Some("/data"));
+    assert!(!String::from_utf8_lossy(&withheld_required.1).contains("quantity"));
+    let drafter_unknown = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets?accessProfile=drafter",
+            Some(drafter),
+            &json_headers("located-drafter-unknown"),
+            serde_json::to_vec(&json!({"data":{
+                "jurisdiction":"zone-a","label":"H","noSuchField":"x"
+            }}))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_identical_problems(&withheld_required, &drafter_unknown);
 
     let query = |uri: &'static str| {
         let app = app.clone();
@@ -2877,6 +2942,15 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["secret"],
               "filterableFields":["secret"],
               "sortableFields":["secret"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"drafter","principalClaim":"registry_principal",
+            "requiredPurposes":["case-drafting"],
+            "permissions":[{
+              "entity":"widget","operations":["create","get"],
+              "readableFields":["jurisdiction","label"],
+              "writableFields":["jurisdiction","label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           }]
