@@ -611,8 +611,9 @@ pub(crate) async fn record_started(
 /// Accepts only the exact interrupted or failed activation, started with the
 /// same roles. An applied or reverted row is immutable through this library
 /// and therefore cannot be resumed or cleared. The resumed attempt's operator
-/// reference replaces the one the row recorded, so the ledger names the
-/// reference of the attempt that the audit records applying it.
+/// reference and backup references replace the ones the row recorded, so the
+/// ledger names the reference of the attempt that the audit records applying
+/// it and the backup that attempt was verified against.
 pub(crate) async fn verify_resumable(
     client: &impl GenericClient,
     entry: &MigrationLedgerEntry,
@@ -676,10 +677,15 @@ pub(crate) async fn verify_resumable(
     let changed = client
         .execute(
             "UPDATE registry_internal.registry_migrations
-             SET operator_reference_hash = $2
+             SET operator_reference_hash = $2,
+                 backup_references = $3::text::jsonb
              WHERE activation_id = $1
                AND outcome IN ('applying', 'failed')",
-            &[&entry.activation_id, &entry.operator_reference_hash],
+            &[
+                &entry.activation_id,
+                &entry.operator_reference_hash,
+                &entry.backup_references_json(),
+            ],
         )
         .await?;
     if changed != 1 {
