@@ -21,6 +21,9 @@ pub(crate) enum ActiveRegistryError {
     Unavailable,
     /// The database records no activated registry for this package id.
     Uninitialized,
+    /// The database was installed by a release before the activation ledger
+    /// and has not been adopted into it.
+    PreLedger,
     /// The database records a different database id than the runtime
     /// configuration names.
     DatabaseMismatch,
@@ -67,7 +70,10 @@ pub(crate) fn recorded_identity_for_digest(
             config.database().roles().migration(),
             timeouts,
         ))
-        .map_err(|_| ActiveRegistryError::Unavailable)?
+        .map_err(|error| match error {
+            MigrationError::PreLedgerDatabase => ActiveRegistryError::PreLedger,
+            _ => ActiveRegistryError::Unavailable,
+        })?
         .ok_or(ActiveRegistryError::Uninitialized)?;
     let identity = config.identity();
     bind_active_package(

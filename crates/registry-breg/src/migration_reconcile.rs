@@ -188,6 +188,7 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
+            | PostgresKernelError::AdoptionFingerprintMismatch { .. }
             | PostgresKernelError::RegistryUnavailable
             | PostgresKernelError::HistoryCoverageIncomplete
             | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
@@ -198,7 +199,10 @@ impl From<PostgresKernelError> for ReconcileError {
 impl From<MigrationError> for ReconcileError {
     fn from(error: MigrationError) -> Self {
         match error {
-            MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
+            MigrationError::PackageBinding
+            | MigrationError::EmptyPlan
+            | MigrationError::AdoptionNotReady
+            | MigrationError::AdoptionFingerprintMismatch { .. } => Self::PackageBinding,
             MigrationError::ApplyFailed
             | MigrationError::StatementFailed(_)
             | MigrationError::ActivePackageMismatch
@@ -213,7 +217,8 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActiveRequestProposals
             | MigrationError::BackupEvidence
             | MigrationError::RetiredAuditRowsPresent
-            | MigrationError::ActivationAuditIncomplete => Self::Unavailable,
+            | MigrationError::ActivationAuditIncomplete
+            | MigrationError::PreLedgerDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
         }
     }

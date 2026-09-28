@@ -1668,6 +1668,21 @@ pub async fn managed_schema_fingerprint(
     .await
 }
 
+/// The fingerprint of the live managed catalog, with no check of it against
+/// an expected catalog: what a refusal names when the catalog is not the one
+/// a package declares.
+pub(crate) async fn live_schema_fingerprint(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+) -> Result<String> {
+    fingerprint_catalog(
+        client,
+        runtime_role,
+        CatalogFingerprintVersion::NamedTableColumns,
+    )
+    .await
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum CatalogFingerprintVersion {
     LegacyPhysicalColumns,

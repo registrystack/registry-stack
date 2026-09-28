@@ -42,6 +42,23 @@
     recorded identity, and `bregctl instance-claim` refuses a package root the
     runtime `package.expectedDigest` does not pin before it connects.
 
+- BREAKING: a database a release before the activation ledger installed is
+  adopted into the ledger once, by `bregctl apply --package DIR` without
+  `--initial`, where DIR and `package.root` both name the deployed project
+  packaged with this release's `bregctl package`. Under the apply lock and in
+  one transaction the kernel tables take this release's shapes, the live
+  managed schema fingerprint must equal the package's `schemaFingerprint`,
+  and the adoption becomes ledger row 1 with plan kind `adopted`; no model
+  DDL runs, and `bregctl apply` reports the activation `adopted`. The ledger
+  history of the release that installed the database is dropped. The
+  instance claim that release recorded is kept, and every open import
+  authority is superseded. A fingerprint mismatch is refused as
+  `apply.adoption.fingerprint_mismatch`, naming both fingerprints, and a
+  database that release left in maintenance as `apply.adoption.not_ready`;
+  either refusal changes nothing. Any other apply of a pre-ledger database is
+  refused as `apply.database.pre_ledger`, naming `bregctl apply --package
+  DIR`.
+
 - `bregctl apply` of the active package under other configured database
   roles, such as a separate runtime role in place of one role for both, is its
   own activation: it records a ledger row with the same package digest and the

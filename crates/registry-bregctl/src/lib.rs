@@ -1727,6 +1727,7 @@ enum ApplyActivation {
     Initial,
     Successor,
     RoleChange,
+    Adopted,
 }
 
 #[derive(Serialize)]
@@ -4344,6 +4345,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
             ApplyLifecycleActivation::Initial => ApplyActivation::Initial,
             ApplyLifecycleActivation::Successor => ApplyActivation::Successor,
             ApplyLifecycleActivation::RoleChange => ApplyActivation::RoleChange,
+            ApplyLifecycleActivation::Adopted => ApplyActivation::Adopted,
         },
         package_digest: outcome.package_digest,
         schema_fingerprint: outcome.schema_fingerprint,
@@ -4994,6 +4996,37 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::ResolveActiveRequestProposals,
             ),
+            registry_breg::migration::MigrationError::PreLedgerDatabase => (
+                "apply.database.pre_ledger",
+                "database",
+                "the database was installed by a release before the activation ledger: build the deployed project with this release's `bregctl package`, set package.root to that package directory, and run `bregctl apply --package DIR` without --initial once to adopt the database into the ledger. Nothing was changed",
+                DiagnosticArtifact::PackageActivation,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            registry_breg::migration::MigrationError::AdoptionNotReady => (
+                "apply.adoption.not_ready",
+                "database",
+                "the release that installed the database left an activation in maintenance, so it cannot be adopted: finish that activation with the release that started it, retrying its apply or running its `bregctl migration reconcile`, then run `bregctl apply --package DIR` with this release again. Nothing was changed",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::ReconcileFailedMigration,
+            ),
+            registry_breg::migration::MigrationError::AdoptionFingerprintMismatch {
+                live,
+                package,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "apply.adoption.fingerprint_mismatch",
+                        "package",
+                        &format!(
+                            "the live managed schema fingerprint {live} differs from the package's {package}, so the package does not describe the database it would adopt: rebuild the package from the project that is deployed, with this release's `bregctl package`, and apply it again. Nothing was changed"
+                        ),
+                    ),
+                    DiagnosticArtifact::VerifiedPackage,
+                    SuggestedAction::CorrectPackageBuild,
+                );
+            }
             registry_breg::migration::MigrationError::RetiredAuditRowsPresent => (
                 "apply.audit.retired_rows_present",
                 "database",
@@ -5420,6 +5453,13 @@ fn active_registry_failure(
             "the database records no activated registry for this package; run `bregctl apply --initial` first",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ActiveRegistryError::PreLedger => (
+            "pre_ledger",
+            "database",
+            "the database was installed by a release before the activation ledger; run `bregctl apply --package DIR` once to adopt it into the ledger, then rerun the command",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ActiveRegistryError::DatabaseMismatch => (
             "database_mismatch",
@@ -11619,6 +11659,9 @@ fn write_apply_success(
                 ApplyActivation::RoleChange => {
                     "Activated the active package again with the configured database roles."
                 }
+                ApplyActivation::Adopted => {
+                    "Adopted the database into the activation ledger as it stands; the ledger history of the release that installed it was dropped."
+                }
             },
             &[
                 (
@@ -11627,6 +11670,7 @@ fn write_apply_success(
                         ApplyActivation::Initial => "initial",
                         ApplyActivation::Successor => "successor",
                         ApplyActivation::RoleChange => "role_change",
+                        ApplyActivation::Adopted => "adopted",
                     }
                     .to_owned(),
                 ),
@@ -14934,6 +14978,27 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             "apply.package.refused",
             "package",
             "bregctl package --baseline-package",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::PreLedgerDatabase),
+            "apply.database.pre_ledger",
+            "database",
+            "bregctl apply --package",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::AdoptionNotReady),
+            "apply.adoption.not_ready",
+            "database",
+            "bregctl migration reconcile",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::AdoptionFingerprintMismatch {
+                live: "sha256:live".to_owned(),
+                package: "sha256:package".to_owned(),
+            }),
+            "apply.adoption.fingerprint_mismatch",
+            "package",
+            "bregctl package",
         ),
     ] {
         let report = apply_lifecycle_failure(error);

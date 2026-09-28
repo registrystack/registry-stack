@@ -229,6 +229,10 @@ pub enum PostgresKernelError {
     /// caller has not acknowledged discarding.
     #[error("a retired audit table still carries unacknowledged rows")]
     RetiredAuditRowsPresent,
+    /// The live managed catalog of an adopted database is not the catalog
+    /// the adopting package declares. Only the live fingerprint is retained.
+    #[error("the live managed schema fingerprint differs from the adopting package")]
+    AdoptionFingerprintMismatch { live: String },
     /// PostgreSQL refused a migration statement. Only the SQLSTATE and the
     /// object names the server reported are retained.
     #[error("PostgreSQL refused a migration statement: {0}")]

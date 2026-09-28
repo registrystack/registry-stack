@@ -1713,6 +1713,327 @@ async fn real_postgres_an_activation_keeps_a_claim_that_names_another_database()
     );
 }
 
+/// The first apply on a database a release before the activation ledger
+/// kept adopts it as it stands: one ledger row, no model DDL, the claim
+/// carried over, and every open import authority superseded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activation() {
+    let (database, package) = initial_package_database().await;
+    let installed = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    let authority_id = open_raw_import_authority(&database, &installed.activation_id).await;
+    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+    let model_tables = model_table_oids(&database).await;
+
+    let adopted = apply(&database, &package, ApplyPrecondition::Adoption)
+        .await
+        .expect("the pre-ledger database is adopted");
+
+    assert_eq!(adopted.package_digest, package.package_digest());
+    assert_eq!(
+        adopted.schema_fingerprint,
+        package.manifest().schema_fingerprint
+    );
+    assert_ne!(adopted.activation_id, installed.activation_id);
+    assert_eq!(
+        ledger_roles(&database).await,
+        vec![(
+            adopted.activation_id.clone(),
+            "adopted".to_owned(),
+            "metadata_only".to_owned(),
+            None,
+            "split".to_owned(),
+            database.runtime_role.as_str().to_owned(),
+        )],
+        "the old ledger history is dropped and adoption is the first activation"
+    );
+    assert_eq!(activation_at(&database, 1).await, adopted.activation_id);
+    assert_ready_target(&database, &adopted).await;
+    assert_eq!(
+        recorded_claim(&database).await,
+        (Some(live_database_oid(&database).await), 2),
+        "the claim the pre-ledger table held is carried over"
+    );
+    assert_eq!(
+        import_authority_status(&database, authority_id).await,
+        ("superseded".to_owned(), true)
+    );
+    let records = import_authority_records(&database, authority_id);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["transition"], "superseded");
+    assert_eq!(records[0]["activationId"], adopted.activation_id);
+    assert_eq!(
+        model_table_oids(&database).await,
+        model_tables,
+        "adoption runs no model DDL"
+    );
+    let retained: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_history_schemas
+              WHERE package_revision = $1",
+            &[&adopted.activation_id],
+        )
+        .await
+        .expect("the history descriptors read")
+        .get(0);
+    assert_eq!(retained, 1, "the runtime's history descriptor is retained");
+    let state = recorded_state(&database, &package)
+        .await
+        .expect("the adopted state reads")
+        .expect("the adopted database is activated");
+    assert_eq!(state.identity, adopted);
+    database.cleanup().await;
+}
+
+/// A package whose schema fingerprint is not the live catalog's is refused
+/// and the reshape rolls back, so the database is still the one the deployed
+/// release kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_adoption_refuses_a_package_whose_fingerprint_differs_and_changes_nothing() {
+    let (database, package) = initial_package_database().await;
+    let candidate = compile_variant(Variant::BatchAddedRequired);
+    let candidate_fingerprint = initial_fingerprint(&database, &candidate).await;
+    let other = prepare_and_load_initial_variant(
+        Variant::BatchAddedRequired,
+        &candidate,
+        &candidate_fingerprint,
+    );
+    let installed = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    let authority_id = open_raw_import_authority(&database, &installed.activation_id).await;
+    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+
+    let refused = apply(&database, &other, ApplyPrecondition::Adoption)
+        .await
+        .expect_err("a package of another catalog is refused");
+
+    assert_eq!(
+        refused,
+        MigrationError::AdoptionFingerprintMismatch {
+            live: package.manifest().schema_fingerprint.clone(),
+            package: candidate_fingerprint,
+        }
+    );
+    assert_pre_ledger_kernel(&database).await;
+    assert_eq!(
+        import_authority_status(&database, authority_id).await,
+        ("open".to_owned(), false)
+    );
+    database.cleanup().await;
+}
+
+/// Adoption needs the deployed release to have left maintenance ready: a
+/// failed or unfinished apply is that release's to finish.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_adoption_refuses_a_database_left_in_maintenance() {
+    let (database, package) = initial_package_database().await;
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    downgrade_to_pre_ledger_kernel(&database, "failed").await;
+
+    let refused = apply(&database, &package, ApplyPrecondition::Adoption)
+        .await
+        .expect_err("a database left in maintenance is refused");
+
+    assert_eq!(refused, MigrationError::AdoptionNotReady);
+    assert_pre_ledger_kernel(&database).await;
+    database.cleanup().await;
+}
+
+/// A pre-ledger database is refused by every read and apply that is not an
+/// adoption, naming adoption as the next step, and nothing is changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_pre_ledger_database_is_refused_until_it_is_adopted() {
+    let (database, package) = initial_package_database().await;
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+
+    assert_eq!(
+        recorded_state(&database, &package)
+            .await
+            .expect_err("the recorded state is refused"),
+        MigrationError::PreLedgerDatabase
+    );
+    assert_eq!(
+        apply(&database, &package, ApplyPrecondition::InitialActivation)
+            .await
+            .expect_err("an initial activation is refused"),
+        MigrationError::PreLedgerDatabase
+    );
+    assert_pre_ledger_kernel(&database).await;
+    database.cleanup().await;
+}
+
+/// Adoption applies only to a pre-ledger database: one the ledger already
+/// records is refused before anything changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_adoption_refuses_a_database_the_ledger_already_records() {
+    let (database, package) = initial_package_database().await;
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+
+    assert_eq!(
+        apply(&database, &package, ApplyPrecondition::Adoption)
+            .await
+            .expect_err("a ledger database is not adopted"),
+        MigrationError::PackageBinding
+    );
+    assert_eq!(ledger_roles(&database).await.len(), 1);
+    database.cleanup().await;
+}
+
+/// Rewrite the kernel tables of an activated database into the shapes the
+/// release before the activation ledger kept, as an in-place upgrade finds
+/// them: the state row names a package revision, the claim lives in its own
+/// table, the ledger is keyed by revision, and import authorities name the
+/// revision they were opened under.
+async fn downgrade_to_pre_ledger_kernel(database: &TestDatabase, maintenance: &str) {
+    let target = (maintenance != "ready").then_some("pre-ledger-target-revision");
+    let target = target.map_or_else(|| "NULL".to_owned(), |revision| format!("'{revision}'"));
+    let migration = format!("\"{}\"", database.migration_role.as_str());
+    let runtime = format!("\"{}\"", database.runtime_role.as_str());
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP TABLE registry_internal.registry_migration_steps;
+             DROP TABLE registry_internal.registry_migrations;
+             CREATE TABLE registry_internal.registry_migrations (
+                 target_package_revision text PRIMARY KEY,
+                 source_package_revision text,
+                 package_sequence bigint NOT NULL,
+                 plan_kind text NOT NULL,
+                 outcome text NOT NULL
+             );
+             INSERT INTO registry_internal.registry_migrations
+                 VALUES ('pre-ledger-revision', NULL, 1, 'compiled_additive', 'applied');
+             CREATE TABLE registry_internal.registry_migration_steps (
+                 target_package_revision text NOT NULL,
+                 step_id text NOT NULL,
+                 PRIMARY KEY (target_package_revision, step_id)
+             );
+             CREATE TABLE registry_internal.registry_instance_claim (
+                 singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+                 system_identifier bigint,
+                 database_oid oid NOT NULL,
+                 epoch bigint NOT NULL DEFAULT 1 CHECK (epoch >= 1),
+                 claimed_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+             );
+             INSERT INTO registry_internal.registry_instance_claim
+                 SELECT true, system_identifier, database_oid, 2, claimed_at
+                   FROM registry_internal.registry_state;
+             ALTER TABLE registry_internal.registry_state RENAME TO registry_state_ledger;
+             CREATE TABLE registry_internal.registry_state (
+                 singleton boolean PRIMARY KEY DEFAULT true
+                     CONSTRAINT registry_state_singleton_true CHECK (singleton),
+                 environment text NOT NULL
+                     CONSTRAINT registry_state_environment_nonempty CHECK (environment <> ''),
+                 package_id text NOT NULL
+                     CONSTRAINT registry_state_package_id_nonempty CHECK (package_id <> ''),
+                 instance_id text NOT NULL
+                     CONSTRAINT registry_state_instance_id_nonempty CHECK (instance_id <> ''),
+                 database_id text NOT NULL
+                     CONSTRAINT registry_state_database_id_nonempty CHECK (database_id <> ''),
+                 active_package_revision text NOT NULL
+                     CONSTRAINT registry_state_package_revision_nonempty
+                     CHECK (active_package_revision <> ''),
+                 schema_fingerprint text NOT NULL
+                     CONSTRAINT registry_state_schema_fingerprint_nonempty
+                     CHECK (schema_fingerprint <> ''),
+                 package_sequence bigint NOT NULL
+                     CONSTRAINT registry_state_package_sequence_nonnegative
+                     CHECK (package_sequence >= 0),
+                 maintenance_status text NOT NULL
+                     CONSTRAINT registry_state_maintenance_status_closed
+                     CHECK (maintenance_status IN ('ready', 'applying', 'failed')),
+                 maintenance_target_revision text,
+                 CONSTRAINT registry_state_maintenance_target_consistent CHECK (
+                     (maintenance_status = 'ready' AND maintenance_target_revision IS NULL)
+                     OR (maintenance_status IN ('applying', 'failed')
+                         AND maintenance_target_revision IS NOT NULL)
+                 ),
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+             );
+             INSERT INTO registry_internal.registry_state (
+                 singleton, environment, package_id, instance_id, database_id,
+                 active_package_revision, schema_fingerprint, package_sequence,
+                 maintenance_status, maintenance_target_revision
+             )
+             SELECT true, '{ENVIRONMENT}', package_id, '{INSTANCE}', database_id,
+                    'pre-ledger-revision', schema_fingerprint, 1, '{maintenance}', {target}
+               FROM registry_internal.registry_state_ledger;
+             DROP TABLE registry_internal.registry_state_ledger;
+             UPDATE registry_internal.registry_history_schemas
+                SET package_revision = 'pre-ledger-revision';
+             ALTER TABLE registry_internal.registry_import_authorities
+                 RENAME COLUMN activation_id TO activation_revision;
+             ALTER TABLE registry_internal.registry_import_authorities
+                 ALTER COLUMN activation_revision TYPE text;
+             UPDATE registry_internal.registry_import_authorities
+                SET activation_revision = 'pre-ledger-revision';
+             ALTER TABLE registry_internal.registry_import_authorities
+                 ADD CHECK (activation_revision <> '');
+             ALTER TABLE registry_internal.registry_state OWNER TO {migration};
+             ALTER TABLE registry_internal.registry_instance_claim OWNER TO {migration};
+             ALTER TABLE registry_internal.registry_migrations OWNER TO {migration};
+             ALTER TABLE registry_internal.registry_migration_steps OWNER TO {migration};
+             GRANT SELECT ON registry_internal.registry_state,
+                 registry_internal.registry_instance_claim,
+                 registry_internal.registry_migrations,
+                 registry_internal.registry_migration_steps TO {runtime};",
+        ))
+        .await
+        .expect("the administrator rewrites the kernel into its pre-ledger shape");
+}
+
+/// The kernel still has the shape the deployed release kept.
+async fn assert_pre_ledger_kernel(database: &TestDatabase) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT active_package_revision FROM registry_internal.registry_state),
+                 to_regclass('registry_internal.registry_instance_claim') IS NOT NULL,
+                 (SELECT count(*) FROM registry_internal.registry_migrations
+                   WHERE target_package_revision = 'pre-ledger-revision'),
+                 (SELECT format_type(atttypid, atttypmod) FROM pg_attribute
+                   WHERE attrelid = 'registry_internal.registry_import_authorities'::regclass
+                     AND attname = 'activation_revision')",
+            &[],
+        )
+        .await
+        .expect("the pre-ledger kernel reads");
+    assert_eq!(row.get::<_, String>(0), "pre-ledger-revision");
+    assert!(row.get::<_, bool>(1));
+    assert_eq!(row.get::<_, i64>(2), 1);
+    assert_eq!(row.get::<_, String>(3), "text");
+}
+
+/// The model tables, by oid, so a test can tell no DDL replaced them.
+async fn model_table_oids(database: &TestDatabase) -> Vec<(String, i64)> {
+    database
+        .admin
+        .query(
+            "SELECT class.relname::text, class.oid::bigint
+               FROM pg_class AS class
+               JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+              WHERE namespace.nspname = 'registry_data' AND class.relkind = 'r'
+              ORDER BY 1",
+            &[],
+        )
+        .await
+        .expect("the model tables read")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
 async fn recorded_claim(database: &TestDatabase) -> (Option<i64>, i64) {
     let row = database
         .admin
