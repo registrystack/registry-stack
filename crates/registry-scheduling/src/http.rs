@@ -186,7 +186,11 @@ async fn list_services(
     Ok(Json(
         state
             .service
-            .list_services(page.cursor.as_deref(), page.limit, Utc::now())
+            .list_services(
+                page.cursor.as_deref(),
+                page.limit,
+                state.store.observed_now(),
+            )
             .await?,
     ))
 }
@@ -203,7 +207,11 @@ async fn list_offerings(
     Ok(Json(
         state
             .service
-            .list_offerings(page.cursor.as_deref(), page.limit, Utc::now())
+            .list_offerings(
+                page.cursor.as_deref(),
+                page.limit,
+                state.store.observed_now(),
+            )
             .await?,
     ))
 }
@@ -220,7 +228,11 @@ async fn list_resources(
     Ok(Json(
         state
             .service
-            .list_resources(page.cursor.as_deref(), page.limit, Utc::now())
+            .list_resources(
+                page.cursor.as_deref(),
+                page.limit,
+                state.store.observed_now(),
+            )
             .await?,
     ))
 }
@@ -237,7 +249,11 @@ async fn list_locations(
     Ok(Json(
         state
             .service
-            .list_locations(page.cursor.as_deref(), page.limit, Utc::now())
+            .list_locations(
+                page.cursor.as_deref(),
+                page.limit,
+                state.store.observed_now(),
+            )
             .await?,
     ))
 }
@@ -261,7 +277,7 @@ async fn availability(
                 query.end,
                 query.cursor.as_deref(),
                 query.limit,
-                Utc::now(),
+                state.store.observed_now(),
             )
             .await?,
     ))
@@ -277,7 +293,7 @@ async fn explain(
     Ok(Json(
         state
             .service
-            .explain(&query.offering, query.start, Utc::now())
+            .explain(&query.offering, query.start, state.store.observed_now())
             .await?,
     ))
 }
@@ -292,7 +308,7 @@ async fn create_hold(
     bounded_admission(&request)?;
     let answer = state
         .service
-        .create_hold(&caller, key, &request, Utc::now())
+        .create_hold(&caller, key, &request, state.store.observed_now())
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(hold) => (StatusCode::CREATED, Json(hold)).into_response(),
@@ -311,7 +327,7 @@ async fn release_hold(
     let caller = authenticate_mutate(&state, &headers).await?;
     let answer = state
         .service
-        .release_hold(&caller, hold_id, Utc::now())
+        .release_hold(&caller, hold_id, state.store.observed_now())
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(()) => StatusCode::NO_CONTENT.into_response(),
@@ -334,7 +350,7 @@ async fn create_appointment(
     }
     let answer = state
         .service
-        .create_appointment(&caller, key, &request, Utc::now())
+        .create_appointment(&caller, key, &request, state.store.observed_now())
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(appointment) => {
@@ -372,7 +388,13 @@ async fn reschedule_appointment(
     bounded_admission(&request.admission)?;
     let answer = state
         .service
-        .reschedule_appointment(&caller, appointment_id, key, &request, Utc::now())
+        .reschedule_appointment(
+            &caller,
+            appointment_id,
+            key,
+            &request,
+            state.store.observed_now(),
+        )
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(appointment) => {
@@ -396,7 +418,13 @@ async fn cancel_appointment(
     bounded_reason(request.reason.as_deref())?;
     let answer = state
         .service
-        .cancel_appointment(&caller, appointment_id, key, &request, Utc::now())
+        .cancel_appointment(
+            &caller,
+            appointment_id,
+            key,
+            &request,
+            state.store.observed_now(),
+        )
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(appointment) => {
@@ -431,7 +459,7 @@ async fn appointment_history(
                 appointment_id,
                 page.cursor.as_deref(),
                 page.limit,
-                Utc::now(),
+                state.store.observed_now(),
             )
             .await?,
     ))

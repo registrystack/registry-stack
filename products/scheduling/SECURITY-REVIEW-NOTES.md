@@ -655,6 +655,51 @@ plus the TTL. `a_grant_that_lapses_before_the_commit_never_books` and
 pin that a lapsed grant commits nothing on every path, the hold included, all
 in `crates/registry-scheduling/tests/postgres_commitments.rs`.
 
+## One clock for the edge, the store, and the workers
+
+The change `test(scheduling): pin the commitment suite to one clock` moved
+the HTTP edge's request instant, and the reminder dispatch, hold-expiry, and
+retention passes, from reading the system clock directly to reading the
+store's clock, the one the in-transaction re-checks already read. Production
+still observes the system clock through it, so no deployment changes
+behaviour. It is recorded here because the request instant is what the
+capacity transaction first judges a task grant's expiry against, before the
+post-lock re-check, so the change touches how grant expiry is decided at the
+door.
+
+**Threat.** A clock the edge and the store read separately lets a test pin
+one without the other, and lets a later change feed the two different times
+by accident; a grant judged current at the edge against one clock and
+re-checked against another is harder to reason about than one judged twice
+against the same clock. The commitment suite also derived its slots,
+windows, ranges, and expiries from the wall clock against a test opening
+that closes at 23:30 UTC, a latent time-of-day failure of the kind that took
+out the merge queue in the arrival-window tests.
+
+**What still reads the system clock.** The OIDC verifier judges the access
+token's `iat` and `exp` against the system clock, and `auth.rs` judges the
+grant's `registry_grant_exp` against it before the service runs, as before;
+the pin cannot reach either. Hook delivery runs on PostgreSQL's
+`transaction_timestamp()`, and the records-swap occupancy checks read
+PostgreSQL `now()`; neither changed. The pin is a `postgres-test` setter
+(`PostgresStore::pin_clock`), absent from every production build.
+
+**Why a grant still cannot book past its expiry.** The edge's system-clock
+check, the capacity transaction's entry check against the request instant,
+and the post-lock re-check against a fresh observation all still run, in
+that order, on every commitment. In production the second and third read the
+same system clock they read before; only the path by which they reach it
+changed.
+
+**Tests.** `a_grant_that_lapses_before_the_commit_never_books` now pins the
+edge's observation inside the grant and every later observation past it, so
+it proves the post-lock re-check refuses rather than the entry check, and
+`every_mutation_rechecks_expiry_after_its_writes` does the same on all six
+paths (SCHEDULING-SEC-03).
+`the_suite_reads_the_wall_clock_only_to_pin_it_and_to_sign_tokens` fails
+the suite if a test derives an instant from the wall clock again. All are in
+`crates/registry-scheduling/tests/postgres_commitments.rs`.
+
 ## Known deferrals
 
 The matrix records four deferrals with their compensating controls.

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Read each request's `now`, and the hold-expiry, retention, and reminder
+  dispatch passes' `now`, from the same clock the capacity transaction
+  re-checks grants against. Production still reads the system clock, so
+  deployments see no change.
 - Start a hold's time to live when its capacity transaction decides, after
   the supply and per-caller locks, instead of when the request arrived. A
   hold created under lock contention now carries the whole configured
