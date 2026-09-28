@@ -45,11 +45,11 @@ With the native binaries on PATH, create the target and import the export:
 evidencectl target new ./targets/configured --settings ./targets/local/settings.yaml \
   --signing-public-key ./secrets/signing-p256-public.jwk.json
 evidencectl source import ../exports/registry-status --project . --target ./targets/configured
-evidencectl fixtures run --project . --target ./targets/configured
+evidencectl fixtures run . --target ./targets/configured
 evidencectl test . --target ./targets/configured
 ```
 
-`evidencectl source add ./registry --project ./evidence` connects a stopped
+`evidencectl source add ./registry ./evidence` connects a stopped
 registry in one guided operation instead, previewing the proposed source
 authority and performing it with `--apply`. It runs the matching `bregctl` for
 the registry side, so it needs both projects on one machine and a `bregctl`
@@ -59,7 +59,7 @@ the export above; the `default-starter/` and `named-starter/` inputs take the
 guided path.
 
 After BReg dev has published the dedicated source credentials, rehearse both live
-services with `evidencectl dev --project . --target ./targets/configured --detach`.
+services with `evidencectl dev start . --target ./targets/configured`.
 This starts Evidence and a separate stock caller issuer using generated local authority;
 it reuses the target's source connections and outbound TLS settings. The target's
 caller authentication and service identity remain the explicit build settings.

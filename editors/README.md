@@ -29,7 +29,7 @@ Project setup and editor installation are separate operations. Refresh a
 project's version-matched schema settings with its adopter CLI:
 
 ```console
-evidencectl tooling editor --project /path/to/evidence-project
+evidencectl tooling editor /path/to/evidence-project
 relayctl tooling editor /path/to/relay-v2-project
 ```
 
@@ -69,7 +69,7 @@ Project setup and schema refresh use `evidencectl`:
 
 ```console
 evidencectl new /path/to/evidence-project
-evidencectl tooling editor --project /path/to/evidence-project
+evidencectl tooling editor /path/to/evidence-project
 ```
 
 `evidencectl tooling editor` writes project-local, version-matched YAML schema

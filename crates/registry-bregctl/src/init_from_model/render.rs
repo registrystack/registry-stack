@@ -1229,7 +1229,7 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "\nThis model-derived project declares no lookup grant or selector profile. To add \
-         Evidence later, stop the retained session and run `evidencectl source add . --project ../evidence` \
+         Evidence later, stop the retained session and run `evidencectl source add . ../evidence` \
          to select the existing unique identifier, readable facts, explicit row scope, and a \
          dedicated client. `bregctl dev prepare-source` previews and prepares that bounded \
          policy successor; the next `bregctl dev` activates it while retaining records."
@@ -2047,6 +2047,19 @@ mod tests {
             .join(" ");
         assert!(!comments.contains("registry assigns"));
         assert!(comments.contains("the caller supplies"), "{comments}");
+    }
+
+    /// The guidance names the `evidencectl source add` spelling `--help`
+    /// documents: the Evidence project is positional, after the registry.
+    #[test]
+    fn the_readme_adds_evidence_with_the_positional_project_spelling() {
+        let (plan, _) = starter_plan("household");
+        let text = readme(&plan);
+        assert!(
+            text.contains("`evidencectl source add . ../evidence`"),
+            "{text}"
+        );
+        assert!(!text.contains("--project"), "{text}");
     }
 
     #[test]

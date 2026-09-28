@@ -54,7 +54,7 @@ or client. Stop normally, then add a source through guided local setup:
 
 ```sh
 bregctl dev stop ./registry
-evidencectl source add ./registry --project ./evidence
+evidencectl source add ./registry ./evidence
 ```
 
 Select the entity, existing required unique scalar selector, readable facts, and
@@ -140,8 +140,8 @@ evidencectl source update ./exports/registry-status-next --project ./evidence
 The optional [source export contract](../evidence/reference/authoring-projects/SOURCE-EXPORT.md)
 defines checksums, explicit customization resolutions, shared artifact
 ownership and interrupted-update recovery. Imported files remain ordinary
-authored files. Use `evidencectl source detach registry-status --project
-./evidence` to retain them under your own maintenance.
+authored files. Use `evidencectl source detach registry-status ./evidence`
+to retain them under your own maintenance.
 
 The consumed `behaviorRevision` covers selected fields, selectors, authority
 and reached derived behavior. A reached derived SQL file is fingerprinted as

@@ -315,7 +315,7 @@ const evidenceProduct = productToolset({
   profileVariable: 'EVIDENCE_TUTORIAL_CARGO_PROFILE',
   targetName: 'evidence-tutorial-source',
   sessions: [['evidencectl', '.evidence/dev/control.sock']],
-  stopArgs: (project) => ['dev', 'stop', '--project', project],
+  stopArgs: (project) => ['dev', 'stop', project],
 });
 
 let fhirMock;
