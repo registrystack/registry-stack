@@ -51,12 +51,19 @@ def _target_debug() -> pathlib.Path:
     return pathlib.Path(json.loads(metadata.stdout)["target_directory"]) / "debug"
 
 
-def _preload_cargo_runtime() -> None:
+def cargo_runtime_library() -> str | None:
+    """The AWS-LC FIPS library the extension needs preloaded, or None.
+
+    Only macOS with REGISTRY_CARGO_RUNTIME_LIBRARY_PATH set names one. A child
+    interpreter that imports the extension must preload it as well: System
+    Integrity Protection strips `DYLD_*` from protected executables, so the
+    dynamic loader cannot be relied on to find it there.
+    """
     if platform.system() != "Darwin":
-        return
+        return None
     runtime_directory = os.environ.get("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
     if runtime_directory is None:
-        return
+        return None
     libraries = list(
         pathlib.Path(runtime_directory).glob("libaws_lc_fips*_crypto.dylib")
     )
@@ -65,7 +72,13 @@ def _preload_cargo_runtime() -> None:
             "expected one AWS-LC FIPS runtime library in "
             f"{runtime_directory}, found {len(libraries)}"
         )
-    ctypes.CDLL(str(libraries[0]), mode=ctypes.RTLD_GLOBAL)
+    return str(libraries[0])
+
+
+def _preload_cargo_runtime() -> None:
+    library = cargo_runtime_library()
+    if library is not None:
+        ctypes.CDLL(library, mode=ctypes.RTLD_GLOBAL)
 
 
 def _built_cdylib_path() -> pathlib.Path:
