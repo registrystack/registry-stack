@@ -279,6 +279,32 @@ class CaseworkPackageTest(unittest.TestCase):
             self.assertEqual(load_json(casework.runtime)["package"]["root"],
                              str(casework.package))
 
+    def test_the_new_side_names_the_database_then_plans_and_applies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            casework = self.casework(Path(directory))
+            side = unittest.mock.Mock()
+            side.run_json.side_effect = [{"changesPending": True},
+                                         {"activationId": "activation"}]
+            self.assertEqual(casework.activate(side), {"activationId": "activation"})
+            self.assertEqual(load_json(casework.runtime)["identity"],
+                             {"databaseId": MODULE.CASEWORK_DATABASE_ID})
+            runtime = ["--runtime-config", str(casework.runtime)]
+            self.assertEqual(side.run_json.call_args_list, [
+                unittest.mock.call("caseworkctl", "--format", "json", "plan", *runtime),
+                unittest.mock.call("caseworkctl", "--format", "json", "apply", *runtime,
+                                   "--operator-reference", MODULE.CASEWORK_OPERATOR_REFERENCE),
+            ])
+            side.run.assert_not_called()
+
+    def test_a_plan_with_nothing_pending_is_refused_before_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            casework = self.casework(Path(directory))
+            side = unittest.mock.Mock()
+            side.run_json.return_value = {"changesPending": False}
+            with self.assertRaisesRegex(MODULE.RehearsalError, "adopt"):
+                casework.activate(side)
+            self.assertEqual(side.run_json.call_count, 1)
+
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
