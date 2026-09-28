@@ -226,34 +226,177 @@ fn source_token_config(
 }
 
 fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
-    if !valid_scalar(&binding.reader_profile, 512)
-        || binding.request_timeout_milliseconds == 0
-        || binding.connect_timeout_milliseconds == 0
-        || binding.request_timeout_milliseconds > MAXIMUM_TIMEOUT_MILLISECONDS
-        || binding.connect_timeout_milliseconds > binding.request_timeout_milliseconds
-        || binding.reconciliation_interval_milliseconds
-            < MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
-        || binding.reconciliation_interval_milliseconds
-            > MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
-        || !valid_event_source(&binding.event_source)
-        || [&binding.client_assertion_audience, &binding.resource]
-            .iter()
-            .any(|value| {
-                value
-                    .as_ref()
-                    .is_some_and(|value| !registry_platform_httputil::valid_resource_uri(value))
-            })
-        || binding.scopes.as_ref().is_some_and(|scopes| {
-            scopes.is_empty()
-                || scopes.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES
-                || scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len()
-                || scopes.iter().any(|scope| {
-                    scope.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES
-                        || !registry_platform_httputil::valid_scope_token(scope)
-                })
-        })
+    validate_binding_rules(binding).map_err(|_| SourceAdapterError::Invalid)
+}
+
+/// One rule an authored BReg binding must satisfy.
+///
+/// A rule carries no configured value: [`BindingRule::field`] names the
+/// binding member it constrains and [`BindingRule::reason`] states the rule
+/// and its bound, so a refusal names what to change without echoing what was
+/// written.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BindingRule {
+    /// `readerProfile` is empty, too long, or not a bare scalar.
+    ReaderProfile,
+    /// `requestTimeoutMilliseconds` is zero.
+    RequestTimeoutZero,
+    /// `connectTimeoutMilliseconds` is zero.
+    ConnectTimeoutZero,
+    /// `requestTimeoutMilliseconds` exceeds the adapter's maximum.
+    RequestTimeoutAboveMaximum,
+    /// `connectTimeoutMilliseconds` exceeds `requestTimeoutMilliseconds`.
+    ConnectTimeoutAboveRequestTimeout,
+    /// `reconciliationIntervalMilliseconds` falls outside its range.
+    ReconciliationIntervalOutOfRange,
+    /// `eventSource` is not a Registry Stack registry instance URN.
+    EventSource,
+    /// `clientAssertionAudience` is not a bounded absolute URI.
+    ClientAssertionAudience,
+    /// `resource` is not a bounded absolute URI.
+    Resource,
+    /// `scopes` is present but lists no scope.
+    ScopesEmpty,
+    /// `scopes` lists more scopes than the token client sends.
+    TooManyScopes,
+    /// `scopes` lists one scope more than once.
+    RepeatedScope,
+    /// One of `scopes` is longer than the token client sends.
+    ScopeTooLong,
+    /// One of `scopes` is not an RFC 6749 scope-token.
+    ScopeNotAToken,
+}
+
+impl BindingRule {
+    /// The binding member this rule constrains, as its authored camelCase key.
+    #[must_use]
+    pub const fn field(self) -> &'static str {
+        match self {
+            Self::ReaderProfile => "readerProfile",
+            Self::RequestTimeoutZero
+            | Self::RequestTimeoutAboveMaximum
+            | Self::ConnectTimeoutAboveRequestTimeout => "requestTimeoutMilliseconds",
+            Self::ConnectTimeoutZero => "connectTimeoutMilliseconds",
+            Self::ReconciliationIntervalOutOfRange => "reconciliationIntervalMilliseconds",
+            Self::EventSource => "eventSource",
+            Self::ClientAssertionAudience => "clientAssertionAudience",
+            Self::Resource => "resource",
+            Self::ScopesEmpty
+            | Self::TooManyScopes
+            | Self::RepeatedScope
+            | Self::ScopeTooLong
+            | Self::ScopeNotAToken => "scopes",
+        }
+    }
+
+    /// The rule and its bound, stated without the configured value.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        // Bounds are spelled out because a static reason cannot format a
+        // constant; `binding_rule_reasons_state_the_enforced_bounds` holds
+        // each literal to the constant the check enforces.
+        match self {
+            Self::ReaderProfile => {
+                "readerProfile must be 1 to 512 bytes with no control characters or surrounding whitespace"
+            }
+            Self::RequestTimeoutZero => "requestTimeoutMilliseconds must be greater than zero",
+            Self::ConnectTimeoutZero => "connectTimeoutMilliseconds must be greater than zero",
+            Self::RequestTimeoutAboveMaximum => "requestTimeoutMilliseconds must be at most 300000",
+            Self::ConnectTimeoutAboveRequestTimeout => {
+                "requestTimeoutMilliseconds must be at least connectTimeoutMilliseconds"
+            }
+            Self::ReconciliationIntervalOutOfRange => {
+                "reconciliationIntervalMilliseconds must be between 1000 and 3600000"
+            }
+            Self::EventSource => {
+                "eventSource must have the form urn:registrystack:registry:<package>:instance:<instance>, each segment 1 to 128 ASCII letters, digits, '.', '_', or '-'"
+            }
+            Self::ClientAssertionAudience => {
+                "clientAssertionAudience must be an absolute URI of at most 4096 bytes, written in URI characters with complete percent escapes and no fragment or user information"
+            }
+            Self::Resource => {
+                "resource must be an absolute URI of at most 4096 bytes, written in URI characters with complete percent escapes and no fragment or user information"
+            }
+            Self::ScopesEmpty => "scopes must list at least one scope when present",
+            Self::TooManyScopes => "scopes must list at most 32 scopes",
+            Self::RepeatedScope => "scopes must not repeat a scope",
+            Self::ScopeTooLong => "each entry of scopes must be at most 256 bytes",
+            Self::ScopeNotAToken => "each entry of scopes must be one RFC 6749 scope-token",
+        }
+    }
+}
+
+/// Check one binding against every [`BindingRule`], in a fixed order, and
+/// return the first rule it breaks.
+fn validate_binding_rules(binding: &BregBinding) -> Result<(), BindingRule> {
+    use registry_platform_httputil::{
+        valid_resource_uri, valid_scope_token, MAXIMUM_REQUESTED_SCOPES,
+        MAXIMUM_REQUESTED_SCOPE_BYTES,
+    };
+    let request = binding.request_timeout_milliseconds;
+    let connect = binding.connect_timeout_milliseconds;
+    let interval = binding.reconciliation_interval_milliseconds;
+    let checks = [
+        (
+            valid_scalar(&binding.reader_profile, 512),
+            BindingRule::ReaderProfile,
+        ),
+        (request != 0, BindingRule::RequestTimeoutZero),
+        (connect != 0, BindingRule::ConnectTimeoutZero),
+        (
+            request <= MAXIMUM_TIMEOUT_MILLISECONDS,
+            BindingRule::RequestTimeoutAboveMaximum,
+        ),
+        (
+            connect <= request,
+            BindingRule::ConnectTimeoutAboveRequestTimeout,
+        ),
+        (
+            (MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
+                ..=MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS)
+                .contains(&interval),
+            BindingRule::ReconciliationIntervalOutOfRange,
+        ),
+        (
+            valid_event_source(&binding.event_source),
+            BindingRule::EventSource,
+        ),
+        (
+            binding
+                .client_assertion_audience
+                .as_deref()
+                .is_none_or(valid_resource_uri),
+            BindingRule::ClientAssertionAudience,
+        ),
+        (
+            binding.resource.as_deref().is_none_or(valid_resource_uri),
+            BindingRule::Resource,
+        ),
+    ];
+    if let Some((_, rule)) = checks.into_iter().find(|(holds, _)| !holds) {
+        return Err(rule);
+    }
+    let Some(scopes) = &binding.scopes else {
+        return Ok(());
+    };
+    if scopes.is_empty() {
+        return Err(BindingRule::ScopesEmpty);
+    }
+    if scopes.len() > MAXIMUM_REQUESTED_SCOPES {
+        return Err(BindingRule::TooManyScopes);
+    }
+    if scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len() {
+        return Err(BindingRule::RepeatedScope);
+    }
+    if scopes
+        .iter()
+        .any(|scope| scope.len() > MAXIMUM_REQUESTED_SCOPE_BYTES)
     {
-        return Err(SourceAdapterError::Invalid);
+        return Err(BindingRule::ScopeTooLong);
+    }
+    if !scopes.iter().all(|scope| valid_scope_token(scope)) {
+        return Err(BindingRule::ScopeNotAToken);
     }
     Ok(())
 }
@@ -261,9 +404,10 @@ fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
 /// Validate one authored binding's scalar and bound fields with the same
 /// rules `build_adapter` applies, without resolving secrets or connecting to
 /// BReg. A runtime loads its configuration long before it builds adapters, so
-/// an out-of-range binding is refused at load time through this entry point.
-pub fn validate_binding_input(binding: &BregBinding) -> Result<(), SourceAdapterError> {
-    validate_binding(binding)
+/// an out-of-range binding is refused at load time through this entry point,
+/// naming the first [`BindingRule`] it breaks.
+pub fn validate_binding_input(binding: &BregBinding) -> Result<(), BindingRule> {
+    validate_binding_rules(binding)
 }
 
 fn valid_scalar(value: &str, maximum: usize) -> bool {
@@ -694,6 +838,180 @@ mod tests {
             candidate.reconciliation_interval_milliseconds = refused;
             assert!(validate_binding(&candidate).is_err());
         }
+    }
+
+    #[test]
+    fn each_binding_rule_is_reported_on_its_own() {
+        let scopes = |values: Vec<String>| BregBinding {
+            scopes: Some(values),
+            ..binding()
+        };
+        let cases = [
+            (
+                BindingRule::ReaderProfile,
+                BregBinding {
+                    reader_profile: String::new(),
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ReaderProfile,
+                BregBinding {
+                    reader_profile: "r".repeat(513),
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ReaderProfile,
+                BregBinding {
+                    reader_profile: "casework-reader ".into(),
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::RequestTimeoutZero,
+                BregBinding {
+                    request_timeout_milliseconds: 0,
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ConnectTimeoutZero,
+                BregBinding {
+                    connect_timeout_milliseconds: 0,
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::RequestTimeoutAboveMaximum,
+                BregBinding {
+                    request_timeout_milliseconds: MAXIMUM_TIMEOUT_MILLISECONDS + 1,
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ConnectTimeoutAboveRequestTimeout,
+                BregBinding {
+                    request_timeout_milliseconds: 9_000,
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ReconciliationIntervalOutOfRange,
+                BregBinding {
+                    reconciliation_interval_milliseconds:
+                        MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS - 1,
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ReconciliationIntervalOutOfRange,
+                BregBinding {
+                    reconciliation_interval_milliseconds:
+                        MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS + 1,
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::EventSource,
+                BregBinding {
+                    event_source: "urn:registrystack:registry:package:pilot".into(),
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::EventSource,
+                BregBinding {
+                    event_source: format!(
+                        "urn:registrystack:registry:{}:instance:pilot",
+                        "p".repeat(129)
+                    ),
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::ClientAssertionAudience,
+                BregBinding {
+                    client_assertion_audience: Some("https://issuer.example/#aud".into()),
+                    ..binding()
+                },
+            ),
+            (
+                BindingRule::Resource,
+                BregBinding {
+                    resource: Some(" urn:breg:example".into()),
+                    ..binding()
+                },
+            ),
+            (BindingRule::ScopesEmpty, scopes(vec![])),
+            (
+                BindingRule::TooManyScopes,
+                scopes(
+                    (0..=registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES)
+                        .map(|index| format!("scope-{index}"))
+                        .collect(),
+                ),
+            ),
+            (
+                BindingRule::RepeatedScope,
+                scopes(vec!["casework:read".into(), "casework:read".into()]),
+            ),
+            (
+                BindingRule::ScopeTooLong,
+                scopes(vec!["s".repeat(
+                    registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES + 1,
+                )]),
+            ),
+            (
+                BindingRule::ScopeNotAToken,
+                scopes(vec!["casework read".into()]),
+            ),
+            (BindingRule::ScopeNotAToken, scopes(vec![String::new()])),
+        ];
+        for (rule, candidate) in &cases {
+            assert_eq!(validate_binding_input(candidate), Err(*rule), "{rule:?}");
+            assert!(validate_binding(candidate).is_err(), "{rule:?}");
+            assert!(
+                rule.reason().starts_with(rule.field())
+                    || rule.reason().starts_with("each entry of scopes"),
+                "{rule:?} reason does not lead with its member"
+            );
+        }
+        assert_eq!(validate_binding_input(&binding()), Ok(()));
+    }
+
+    #[test]
+    fn binding_rule_reasons_state_the_enforced_bounds() {
+        let states = |rule: BindingRule, bound: String| {
+            assert!(
+                rule.reason().contains(&bound),
+                "{rule:?} reason does not state {bound}"
+            );
+        };
+        states(
+            BindingRule::RequestTimeoutAboveMaximum,
+            MAXIMUM_TIMEOUT_MILLISECONDS.to_string(),
+        );
+        states(
+            BindingRule::ReconciliationIntervalOutOfRange,
+            format!(
+                "between {MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS} and {MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS}"
+            ),
+        );
+        states(
+            BindingRule::TooManyScopes,
+            format!(
+                "at most {} scopes",
+                registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES
+            ),
+        );
+        states(
+            BindingRule::ScopeTooLong,
+            format!(
+                "at most {} bytes",
+                registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES
+            ),
+        );
     }
 
     #[test]
