@@ -462,16 +462,20 @@ To preview the comparison before the apply, run `caseworkctl plan` against a run
 `package.root` holds the next package. It carries the same refusal, and its report lists the
 conflicts under `effects.pinnedWork.stranded` with the verdict `clear`, `acknowledged`, or
 `refused`. `caseworkctl doctor` repeats the comparison for the active package as its `pinnedWork`
-check.
+check. The `casework` runtime repeats it read-only before it listens, because a process still
+serving the earlier package can admit work after the apply: it refuses to start with the same
+refusal until that work finishes or `package.acknowledgeStrandedWork` names the package it serves.
 
 {/* Evidence: crates/registry-casework/src/pinned_work.rs, stranded_pinned_work(),
     pinned_work_verdict(), and stranded_work_refusal();
     crates/registry-casework/src/activation.rs, evaluate_effects() and PinnedWorkEffect;
     crates/registry-caseworkctl/src/project.rs, doctor_pinned_work();
+    crates/registry-casework/src/runtime.rs, check_pinned_work() and serve_from_path();
     crates/registry-casework/tests/review_postgres.rs,
     activation_preflight_counts_in_flight_reviews_a_package_would_strand();
     crates/registry-casework/tests/activation_postgres.rs,
-    stranded_work_is_refused_until_the_exact_package_is_acknowledged(). */}
+    stranded_work_is_refused_until_the_exact_package_is_acknowledged() and
+    startup_refuses_work_stranded_after_apply_until_the_package_is_acknowledged(). */}
 
 ## Plan, apply, and serve
 

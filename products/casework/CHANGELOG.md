@@ -30,13 +30,15 @@
   logical name for the deployment's database. The first apply records it, and
   every later apply and every startup refuses a database that recorded
   another one without naming either value.
-- BREAKING: the runtime no longer migrates, registers source generations,
-  activates task templates, or checks stranded pinned work at startup. It
-  refuses a database with no activation, a schema other than its own, an
-  active package other than the one it loaded, an unregistered source
-  generation, a database identity other than its own, or a split-role
-  activation whose runtime credential can now write the activation ledger,
-  and each refusal names `caseworkctl plan` then `caseworkctl apply`.
+- BREAKING: the runtime no longer migrates, registers source generations, or
+  activates task templates at startup. It repeats the stranded pinned work
+  comparison read-only, since a process on the earlier package can admit work
+  after the apply, and it refuses a database with no activation, a schema
+  other than its own, an active package other than the one it loaded, an
+  unregistered source generation, a database identity other than its own, or
+  a split-role activation whose runtime credential can now write the
+  activation ledger, and each refusal names `caseworkctl plan` then
+  `caseworkctl apply`.
 - BREAKING: in split-role mode, `caseworkctl plan`, `caseworkctl apply`, and
   startup refuse a runtime role that owns a Casework object, holds CREATE on
   the schema, or holds TRIGGER on a Casework table, and a database where a

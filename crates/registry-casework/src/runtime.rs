@@ -518,6 +518,34 @@ pub async fn check_activation(
     Ok(role_mode)
 }
 
+/// Refuse to serve a package that strands in-flight work pinned under an
+/// earlier package, unless the operator acknowledged that exact package.
+/// `apply` makes the same comparison, but a process still serving the
+/// earlier package may admit work between that apply and this start, so the
+/// runtime repeats it read-only before it serves.
+pub async fn check_pinned_work(
+    store: &PostgresStore,
+    project: &registry_casework_core::CaseworkProject,
+    adapters: &[&dyn SourceAdapter],
+    package_digest: &str,
+    acknowledged: Option<&str>,
+) -> Result<(), RuntimeError> {
+    let conflicts = crate::stranded_pinned_work(store, project, adapters).await?;
+    match crate::pinned_work_verdict(&conflicts, package_digest, acknowledged) {
+        crate::PinnedWorkVerdict::Clear => Ok(()),
+        crate::PinnedWorkVerdict::Acknowledged => {
+            tracing::warn!(
+                stranded = %crate::describe_stranded_work(&conflicts),
+                "serving an acknowledged Casework policy package that strands pinned work"
+            );
+            Ok(())
+        }
+        crate::PinnedWorkVerdict::Refused => Err(RuntimeError::StrandedPinnedWork(
+            crate::stranded_work_refusal(&conflicts, package_digest),
+        )),
+    }
+}
+
 /// Refuse a source whose imported description pins a revision the source no
 /// longer serves. A source that cannot be read now is not refused here: its
 /// reads refuse the same drift once it answers.
@@ -563,6 +591,14 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .collect::<Vec<_>>();
     let role_mode =
         check_activation(&store, config.database_id(), &package_digest, &adapter_refs).await?;
+    check_pinned_work(
+        &store,
+        project,
+        &adapter_refs,
+        &package_digest,
+        config.package.acknowledge_stranded_work.as_deref(),
+    )
+    .await?;
     check_source_revisions(&adapter_refs).await?;
     if role_mode == crate::RoleMode::Single {
         tracing::warn!(
@@ -1451,6 +1487,8 @@ pub enum RuntimeError {
         "the binding of source {0} differs from the one the active package was applied with; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]
     SourceGenerationNotActive(String),
+    #[error("{0}")]
+    StrandedPinnedWork(String),
     /// `fix` names what to do: reassign the objects, revoke the privileges,
     /// or drop the triggers that give the runtime role that authority, or,
     /// when a privilege apply issues or revokes gives it, rerun apply.
