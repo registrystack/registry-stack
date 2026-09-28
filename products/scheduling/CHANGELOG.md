@@ -104,9 +104,11 @@
   - `records apply` reports `command: "records apply"` instead of
     `records-apply`.
 - A command line `schedulingctl` refuses is described by the kind of error
-  and the argument name only, such as `invalid value for
-  --operator-reference`, and names `schedulingctl --help` as the next step.
-  The refused value is never repeated on standard output or standard error.
+  and the argument name, such as `unexpected argument --operator-reference`,
+  or by the argument's own validation reason, such as `--backup must be
+  between 1 and 256 bytes`, and names `schedulingctl --help` as the next
+  step. The refused value is never repeated on standard output or standard
+  error.
 
 ## v0.35.0 - 2026-09-28
 

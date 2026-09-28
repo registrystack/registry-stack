@@ -52,7 +52,10 @@ pub(crate) fn failure(command: &str, exit: u8, diagnostics: Vec<Value>) -> Value
 /// Describe a command line clap refused by the error kind and the argument
 /// name only. Clap's own message is never repeated because it quotes the
 /// rejected token, which may carry an operator value such as a change
-/// reference that is otherwise recorded only as a hash.
+/// reference that is otherwise recorded only as a hash. A value one of our
+/// own parsers refused is described by that parser's reason instead, as
+/// long as the reason does not repeat the value; a reason that does not name
+/// the argument follows it.
 pub(crate) fn usage_message(error: &clap::Error) -> String {
     use clap::error::ErrorKind;
     let argument = refused_argument(error);
@@ -61,7 +64,17 @@ pub(crate) fn usage_message(error: &clap::Error) -> String {
         None => text.to_owned(),
     };
     match error.kind() {
-        ErrorKind::InvalidValue | ErrorKind::ValueValidation => named("invalid value for"),
+        ErrorKind::ValueValidation => {
+            let general = named("invalid value for");
+            match validator_reason(error) {
+                Some(reason) if argument.as_deref().is_none_or(|name| reason.contains(name)) => {
+                    reason
+                }
+                Some(reason) => format!("{general}: {reason}"),
+                None => general,
+            }
+        }
+        ErrorKind::InvalidValue => named("invalid value for"),
         ErrorKind::UnknownArgument => named("unexpected argument"),
         ErrorKind::InvalidSubcommand => "unrecognized subcommand".to_owned(),
         ErrorKind::NoEquals => named("an equals sign is required for"),
@@ -76,6 +89,19 @@ pub(crate) fn usage_message(error: &clap::Error) -> String {
         ErrorKind::InvalidUtf8 => "invalid UTF-8 in the command arguments".to_owned(),
         _ => "invalid command arguments".to_owned(),
     }
+}
+
+/// The reason one of our own value parsers gave, kept only while it does not
+/// repeat the rejected value.
+fn validator_reason(error: &clap::Error) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue};
+    let reason = std::error::Error::source(error)?.to_string();
+    let rejected = match error.get(ContextKind::InvalidValue) {
+        Some(ContextValue::String(value)) => value.as_str(),
+        _ => return None,
+    };
+    let repeats = !rejected.is_empty() && reason.contains(rejected);
+    (!reason.is_empty() && !repeats).then_some(reason)
 }
 
 /// The name of the argument clap refused, without any value. An unknown
@@ -142,6 +168,55 @@ impl Serialize for Ordered<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn validation_error(parser: fn(&str) -> Result<String, String>, value: &str) -> clap::Error {
+        clap::Command::new("ctl")
+            .arg(
+                clap::Arg::new("reference")
+                    .long("reference")
+                    .value_parser(parser),
+            )
+            .try_get_matches_from(["ctl", "--reference", value])
+            .unwrap_err()
+    }
+
+    #[test]
+    fn a_reason_that_does_not_name_the_argument_is_prefixed_with_it() {
+        let port = |value: &str| {
+            clap::Command::new("ctl")
+                .arg(
+                    clap::Arg::new("port")
+                        .long("port")
+                        .value_parser(clap::value_parser!(u16)),
+                )
+                .try_get_matches_from(["ctl", "--port", value])
+                .unwrap_err()
+        };
+        assert_eq!(
+            usage_message(&port("x1")),
+            "invalid value for --port: invalid digit found in string"
+        );
+        assert_eq!(usage_message(&port("70000")), "invalid value for --port");
+    }
+
+    #[test]
+    fn a_validator_reason_is_the_message_unless_it_repeats_the_value() {
+        let empty = validation_error(|_| Err("--reference must not be empty".to_owned()), "");
+        assert_eq!(usage_message(&empty), "--reference must not be empty");
+        let control = validation_error(
+            |_| Err("--reference must not contain control characters".to_owned()),
+            "change\n42",
+        );
+        assert_eq!(
+            usage_message(&control),
+            "--reference must not contain control characters"
+        );
+        let echoing = validation_error(
+            |value| Err(format!("--reference refused {value}")),
+            "sentinel-7f3a9c",
+        );
+        assert_eq!(usage_message(&echoing), "invalid value for --reference");
+    }
 
     #[test]
     fn a_report_opens_with_ok_command_and_status_in_that_order() {
