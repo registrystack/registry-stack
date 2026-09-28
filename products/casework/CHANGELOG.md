@@ -88,7 +88,8 @@
   release starts with its database in place.
   A session it creates connects the runtime and apply with one database role;
   a session retained from an earlier release keeps its split runtime and
-  migration roles.
+  migration roles, and apply alone grants that runtime role, so both
+  activation ledgers stay read-only to it.
 
 ## v0.35.0 - 2026-09-28
 
