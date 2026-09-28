@@ -61,7 +61,9 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         self.scheduling = self.write_shard("scheduling", SCHEDULING)
         self.output = self.root / "dist"
 
-    def write_shard(self, name: str, assets: list[str]) -> Path:
+    def write_shard(
+        self, name: str, assets: list[str], version: str = VERSION
+    ) -> Path:
         root = self.root / name
         bin_dir = root / "bin"
         bin_dir.mkdir(parents=True)
@@ -75,7 +77,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         (root / "RELEASE_BINARY_SHARD").write_text(
             "registry-stack.release-binary-shard.v1\n"
             f"source_sha={SOURCE_SHA}\n"
-            f"version={VERSION}\n"
+            f"version={version}\n"
             f"group={name}\n",
             encoding="utf-8",
         )
@@ -174,6 +176,125 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             ["scheduling-v0.33.0-linux-amd64"], rosters_033["scheduling"]
         )
         self.assertIn("scheduling", dict(images_033))
+
+    def test_operator_tools_join_the_rosters_only_from_v0_36_0(self) -> None:
+        rosters_035, images_035 = MODULE.rosters("0.35.0")
+        self.assertEqual(
+            ["scheduling-v0.35.0-linux-amd64"], rosters_035["scheduling"]
+        )
+        self.assertEqual(
+            [
+                ("discovery", "discovery-v0.35.0-linux-amd64"),
+                ("breg", "breg-v0.35.0-linux-amd64"),
+                ("casework", "casework-v0.35.0-linux-amd64"),
+                ("scheduling", "scheduling-v0.35.0-linux-amd64"),
+                ("evidence", "evidence-v0.35.0-linux-amd64"),
+                ("relay", "relay-v0.35.0-linux-amd64"),
+            ],
+            images_035,
+        )
+        rosters_036, images_036 = MODULE.rosters("0.36.0")
+        self.assertEqual(
+            [
+                "scheduling-v0.36.0-linux-amd64",
+                "schedulingctl-v0.36.0-linux-amd64",
+            ],
+            rosters_036["scheduling"],
+        )
+        self.assertEqual(
+            [
+                ("discovery", "discovery-v0.36.0-linux-amd64"),
+                ("breg", "breg-v0.36.0-linux-amd64"),
+                ("bregctl", "bregctl-v0.36.0-linux-amd64"),
+                ("casework", "casework-v0.36.0-linux-amd64"),
+                ("caseworkctl", "caseworkctl-v0.36.0-linux-amd64"),
+                ("scheduling", "scheduling-v0.36.0-linux-amd64"),
+                ("schedulingctl", "schedulingctl-v0.36.0-linux-amd64"),
+                ("evidence", "evidence-v0.36.0-linux-amd64"),
+                ("relay", "relay-v0.36.0-linux-amd64"),
+            ],
+            images_036,
+        )
+
+    def test_v0_36_0_publishes_schedulingctl_and_stages_each_operator_tool(
+        self,
+    ) -> None:
+        version = "0.36.0"
+        tag = f"v{version}"
+        rosters, images = MODULE.rosters(version)
+        original_root = self.root
+        self.root = original_root / version
+        try:
+            shards = {
+                name: self.write_shard(name, rosters[name], version)
+                for name in ("core", "breg", "casework", "scheduling")
+            }
+        finally:
+            self.root = original_root
+        output = self.root / "dist-036"
+        MODULE.merge(
+            version=version,
+            source_sha=SOURCE_SHA,
+            core=shards["core"],
+            breg=shards["breg"],
+            casework=shards["casework"],
+            scheduling=shards["scheduling"],
+            output=output,
+            builder_image=BUILDER,
+        )
+        final = [
+            f"discovery-{tag}-linux-amd64",
+            f"breg-{tag}-linux-amd64",
+            f"bregctl-{tag}-linux-amd64",
+            f"casework-{tag}-linux-amd64",
+            f"caseworkctl-{tag}-linux-amd64",
+            f"schedulingctl-{tag}-linux-amd64",
+            f"evidence-{tag}-linux-amd64",
+            f"evidencectl-{tag}-linux-amd64",
+            f"evidence-oid4vci-{tag}-linux-amd64",
+            f"registry-manifest-{tag}-linux-amd64",
+            f"relay-{tag}-linux-amd64",
+            f"relayctl-{tag}-linux-amd64",
+        ]
+        bin_dir = output / "bin"
+        self.assertEqual(
+            "".join(
+                f"{digest((bin_dir / name).read_bytes())}  {name}\n" for name in final
+            ),
+            (bin_dir / "SHA256SUMS").read_text(encoding="utf-8"),
+        )
+        self.assertFalse((bin_dir / f"scheduling-{tag}-linux-amd64").exists())
+        image_dir = output / "image-bin"
+        image_order = [
+            "RELEASE_BUILDER_IMAGE",
+            "discovery",
+            "breg",
+            "bregctl",
+            "casework",
+            "caseworkctl",
+            "scheduling",
+            "schedulingctl",
+            "evidence",
+            "relay",
+        ]
+        self.assertEqual(
+            "".join(
+                f"{digest((image_dir / name).read_bytes())}  {name}\n"
+                for name in image_order
+            ),
+            (image_dir / "SHA256SUMS").read_text(encoding="utf-8"),
+        )
+        for image_name, source_name in images:
+            owner = next(
+                name for name, assets in rosters.items() if source_name in assets
+            )
+            self.assertEqual(
+                (shards[owner] / "bin" / source_name).read_bytes(),
+                (image_dir / image_name).read_bytes(),
+            )
+            self.assertEqual(
+                stat.S_IMODE((image_dir / image_name).stat().st_mode), 0o755
+            )
 
     def test_mint_is_retired_only_from_v0_31_0(self) -> None:
         for version in ("0.30.0", "0.30.1"):

@@ -745,6 +745,10 @@ jobs:
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
           BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
         run: products/casework/scripts/check-checkpoint.sh
+      - name: Casework logical backup and restore over a development registry
+        # Builds both runtimes and drives bregctl dev and caseworkctl dev,
+        # whose PostgreSQL containers are separate from the job service.
+        run: products/casework/scripts/test-backup-restore.sh
       - name: Verify the rewritten Evidence deployment loads through the Evidence loader
         # The fixture machinery lives behind postgres-test, but this test needs
         # neither a database nor an issuer. An inexact name filter that selects
@@ -1059,6 +1063,12 @@ jobs:
         env:
           BREG_SKIP_BUILD: "1"
         run: products/breg/scripts/test-promotion.sh
+
+      - name: Base Registry Engine logical backup and restore
+        if: matrix.lane == 'contracts'
+        env:
+          BREG_SKIP_BUILD: "1"
+        run: products/breg/scripts/test-backup-restore.sh
 
       - name: Install cosign
         if: matrix.lane == 'contracts' && needs.changes.outputs.breg_integration == 'true'

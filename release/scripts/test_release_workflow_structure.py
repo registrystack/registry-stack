@@ -634,6 +634,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             '--builder-image "${RELEASE_BUILDER_IMAGE}"',
         ):
             self.assertIn(binding, merge)
+        operator_tools = merge.split(
+            "if (( release_major > 0 || release_minor >= 36 )); then", 1
+        )[1]
+        self.assertIn(
+            '"dist/bin/schedulingctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version',
+            operator_tools,
+        )
+        self.assertIn(
+            "for operator_tool in bregctl caseworkctl schedulingctl; do",
+            operator_tools,
+        )
+        self.assertIn('"dist/image-bin/${operator_tool}" --version', operator_tools)
         assemble_download = next(
             step
             for step in document["jobs"]["assemble"]["steps"]
@@ -668,6 +680,17 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(
             floor_check.get("if"), "matrix.target == 'aarch64-unknown-linux-gnu'"
         )
+        native = step_run(
+            document, "build-platforms", "Build native platform payload once"
+        )
+        schedulingctl = native.split(
+            "if (( release_major > 0 || release_minor >= 36 )); then", 1
+        )[1]
+        self.assertIn("-p registry-schedulingctl --bin schedulingctl", schedulingctl)
+        self.assertIn(
+            'asset="schedulingctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"',
+            schedulingctl,
+        )
         self.assertIn("release/scripts/check-glibc-floor.sh", floor_check["run"])
         upload_index = next(
             index
@@ -683,7 +706,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("macos-14", shards["runs-on"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "bregctl", "casework"],
+            ["core", "breg", "bregctl", "casework", "scheduling"],
             shards["strategy"]["matrix"]["group"],
         )
         checkout = shards["steps"][0]
@@ -722,6 +745,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn('--breg "inputs/${prefix}-breg-${suffix}"', merge)
         self.assertIn('--bregctl "inputs/${prefix}-bregctl-${suffix}"', merge)
         self.assertIn('--casework "inputs/${prefix}-casework-${suffix}"', merge)
+        self.assertIn('--scheduling "inputs/${prefix}-scheduling-${suffix}"', merge)
         self.assertIn(
             'inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
             merge,
@@ -1304,7 +1328,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("macos-14", build["runs-on"])
         self.assertFalse(build["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "bregctl", "casework"],
+            ["core", "breg", "bregctl", "casework", "scheduling"],
             build["strategy"]["matrix"]["group"],
         )
         build_run = step_run(
@@ -1329,13 +1353,14 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in merge["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(4, len(downloads))
+        self.assertEqual(5, len(downloads))
         self.assertEqual(
             {
                 "native-shards/core",
                 "native-shards/breg",
                 "native-shards/bregctl",
                 "native-shards/casework",
+                "native-shards/scheduling",
             },
             {step["with"]["path"] for step in downloads},
         )
@@ -1345,6 +1370,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertIn("release/scripts/merge-release-native-platform-shards.py", merge_run)
         self.assertIn("--purpose review_only", merge_run)
         self.assertIn("--casework native-shards/casework", merge_run)
+        self.assertIn("--scheduling native-shards/scheduling", merge_run)
         self.assertIn("registry-stack.release-native-benchmark.v1", merge_run)
         self.assertIn("purpose=review_only", merge_run)
         self.assertIn("group=merged", merge_run)

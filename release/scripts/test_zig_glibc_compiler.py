@@ -295,7 +295,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "target.mkdir(parents=True, exist_ok=True)\n"
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
-            "'casework', 'caseworkctl', 'scheduling'):\n"
+            "'casework', 'caseworkctl', 'scheduling', 'schedulingctl'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
@@ -324,10 +324,15 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "selected = (core if group in ('all', 'core') else []) + "
             "(breg if group in ('all', 'breg') else []) + "
             "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else []) + "
-            "(['scheduling'] if parsed >= (0, 33, 0) and group in ('all', 'scheduling') else [])\n"
+            "(['scheduling'] if parsed >= (0, 33, 0) and group in ('all', 'scheduling') else []) + "
+            "(['schedulingctl'] if parsed >= (0, 36, 0) and group in ('all', 'scheduling') else [])\n"
             "for name in selected:\n"
-            "    (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
-            "for name in ('discovery', 'breg', 'casework', 'scheduling', 'evidence', 'relay'):\n"
+            "    if name != 'scheduling' or group == 'scheduling':\n"
+            "        (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
+            "images = ['discovery', 'breg', 'casework', 'scheduling', 'evidence', 'relay']\n"
+            "if parsed >= (0, 36, 0):\n"
+            "    images += ['bregctl', 'caseworkctl', 'schedulingctl']\n"
+            "for name in images:\n"
             "    if name in selected:\n"
             "        (image_dir / name).write_text(name + '\\n')\n",
             encoding="utf-8",
@@ -509,6 +514,71 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [call["args"] for call in calls],
         )
 
+    def staged(self) -> tuple[list[str], list[str]]:
+        return (
+            sorted(path.name for path in (self.root / "dist/bin").iterdir()),
+            sorted(path.name for path in (self.root / "dist/image-bin").iterdir()),
+        )
+
+    def test_scheduling_group_builds_schedulingctl_only_from_v0_36(self) -> None:
+        runtime = [
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "registry-scheduling",
+            "--bin",
+            "scheduling",
+        ]
+        tool = [
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "registry-schedulingctl",
+            "--bin",
+            "schedulingctl",
+        ]
+        result, calls = self.run_payload(version="0.35.0", group="scheduling")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([runtime], [call["args"] for call in calls])
+        self.assertEqual(
+            (["scheduling-v0.35.0-linux-amd64"], ["scheduling"]), self.staged()
+        )
+        result, calls = self.run_payload(version="0.36.0", group="scheduling")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([runtime, tool], [call["args"] for call in calls])
+        self.assertEqual(
+            (
+                [
+                    "scheduling-v0.36.0-linux-amd64",
+                    "schedulingctl-v0.36.0-linux-amd64",
+                ],
+                ["scheduling", "schedulingctl"],
+            ),
+            self.staged(),
+        )
+
+    def test_each_image_stages_its_operator_tool_only_from_v0_36(self) -> None:
+        for group, runtime, tool in (
+            ("breg", "breg", "bregctl"),
+            ("casework", "casework", "caseworkctl"),
+            ("scheduling", "scheduling", "schedulingctl"),
+        ):
+            for version, image_bin in (
+                ("0.35.0", [runtime]),
+                ("0.36.0", sorted([runtime, tool])),
+            ):
+                with self.subTest(group=group, version=version):
+                    result, _ = self.run_payload(version=version, group=group)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(image_bin, self.staged()[1])
+                    for name in image_bin:
+                        self.assertEqual(
+                            "fixture binary\n",
+                            (self.root / "dist/image-bin" / name).read_text(),
+                        )
+
     def test_outer_builder_dispatches_each_group_with_canonical_container_paths(
         self,
     ) -> None:
@@ -628,11 +698,45 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertFalse(any(path.name.startswith("breg-") for path in (output / "bin").iterdir()))
 
     def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
+        self.assert_merged_groups_equal_all("0.31.0", ("core", "breg", "casework"))
+
+    def test_v0_36_merged_groups_with_operator_tools_are_equivalent_to_all(
+        self,
+    ) -> None:
+        self.assert_merged_groups_equal_all(
+            "0.36.0", ("core", "breg", "casework", "scheduling")
+        )
+        self.assertIn(
+            "schedulingctl-v0.36.0-linux-amd64",
+            (self.root / "merged-groups/bin/SHA256SUMS").read_text(),
+        )
+        self.assertEqual(
+            [
+                "RELEASE_BUILDER_IMAGE",
+                "discovery",
+                "breg",
+                "bregctl",
+                "casework",
+                "caseworkctl",
+                "scheduling",
+                "schedulingctl",
+                "evidence",
+                "relay",
+            ],
+            [
+                line.split("  ", 1)[1]
+                for line in (self.root / "merged-groups/image-bin/SHA256SUMS")
+                .read_text()
+                .splitlines()
+            ],
+        )
+
+    def assert_merged_groups_equal_all(
+        self, version: str, groups: tuple[str, ...]
+    ) -> None:
         source_sha = "1" * 40
 
-        def build(
-            group: str, version: str = "0.31.0"
-        ) -> subprocess.CompletedProcess[str]:
+        def build(group: str) -> subprocess.CompletedProcess[str]:
             arguments = ["bash", str(self.scripts / BINARY_RECIPE.name)]
             if group != "all":
                 arguments.extend(["--group", group])
@@ -658,7 +762,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         shutil.copytree(self.root / "dist/image-bin", expected / "image-bin")
 
         shards = self.root / "shards"
-        for group in ("core", "breg", "casework"):
+        for group in groups:
             result = build(group)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination = shards / group
@@ -672,15 +776,14 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [
                 str(self.scripts / "merge-release-binary-shards.py"),
                 "--version",
-                "0.31.0",
+                version,
                 "--source-sha",
                 source_sha,
-                "--core",
-                str(shards / "core"),
-                "--breg",
-                str(shards / "breg"),
-                "--casework",
-                str(shards / "casework"),
+                *(
+                    argument
+                    for group in groups
+                    for argument in (f"--{group}", str(shards / group))
+                ),
                 "--output",
                 str(output),
                 "--builder-image",

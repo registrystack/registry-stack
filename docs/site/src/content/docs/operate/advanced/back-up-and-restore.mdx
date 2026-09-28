@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-27"
+last_reviewed: "2026-09-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -16,7 +16,8 @@ together and need a recovery plan that covers all three. Each product restores d
 BReg restores a database and then proves it is the one instance serving the registry, Casework
 restores a database and then catches up from the BReg sources it reads, and Evidence holds no
 database at all. The procedures below link each product's own guide for the details and state
-what a restore does not bring back.
+what a restore does not bring back. Continuous integration restores both BReg and Casework from a
+logical backup and checks these procedures end to end.
 
 ## Know what a database backup leaves out
 
@@ -81,8 +82,18 @@ tell a physical one.
 ### After a logical restore
 
 A copy restored from `pg_dump` carries the instance claim of the database it was dumped from, so
-it refuses to serve: `breg` exits with `the Registry database is not the instance its claim names`,
-`bregctl doctor` reports `startup.instance_claim.mismatch`, and `GET /ready` answers `503`. Follow
+it refuses to serve: `breg` exits at startup with `the Registry database is not the instance its
+claim names`, and `bregctl doctor` reports `startup.instance_claim.mismatch`. A runtime that is
+already serving checks the claim on every readiness probe as well, and answers `GET /ready` with
+`503` once the claim no longer names its database.
+
+Point the restored runtime file at the new database and change nothing else in it. Keep
+`identity.instanceId` in particular: the webhook deliveries pending at the backup point were
+captured under the event source it derives, so while any of them remains, `bregctl doctor` refuses
+a changed value with `startup.instance_id.pending_deliveries` and `breg` refuses to start. Change
+it, if you must, only after those deliveries drain.
+
+Follow
 [Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database) through
 `verify` and `instance-claim status`, then retire the original for good and adopt the copy:
 
@@ -93,8 +104,20 @@ bregctl --format json instance-claim adopt \
 ```
 
 Pass `--acknowledge-original-retired` only once no client can reach the original. Two databases
-serving one registry both accept writes, and nothing can merge their histories afterwards. Adopting
-supersedes every import authority the copy held open, so open again the ones you still need.
+serving one registry both accept writes, and nothing can merge their histories afterwards. Until
+the adopt, `bregctl import-authority list` shows every authority the backup held open as `open`,
+including one you closed after the backup point. Adopting supersedes every import authority the
+copy held open, so open again the ones you still need.
+
+{/* Evidence: products/breg/scripts/test-backup-restore.sh, checkpoints "refusing to serve the
+    restored copy before adoption" (startup.instance_claim.mismatch, the startup refusal, the
+    reopened authority, instance_claim.acknowledgement.required), "adopting the restored copy"
+    (supersededImportAuthorities), and "refusing a restored runtime file that renames the instance
+    while deliveries are pending" (startup.instance_id.pending_deliveries);
+    crates/registry-breg/src/instance_claim.rs, module docs (checked at startup and on every
+    readiness probe); crates/registry-breg/src/startup.rs, verify_instance_claim() and
+    InstanceIdChangedWithPendingDeliveries; crates/registry-bregctl/src/doctor.rs,
+    startup.instance_id.pending_deliveries. */}
 
 ### After a physical restore
 
@@ -133,11 +156,22 @@ Once the copy serves, work through these:
   [What cannot be undone](../../breg-retention/#what-cannot-be-undone).
 - **Webhooks.** Deliveries still pending at the backup point are sent again once the copy serves,
   under the same `Idempotency-Key` they carried the first time, so a receiver that deduplicates by
-  that key accepts each one once. Delivered events are not recalled. Inspect what is pending with
+  that key accepts each one once. Their attempt count is rewound with the rest of the row, so the
+  audit records the same attempt number for each of them twice. Deliveries completed before the backup point are
+  not sent again, and delivered events are not recalled. Inspect what is pending with
   `bregctl webhook list`; see [Inspect and replay deliveries](../../breg-webhooks/#inspect-and-replay-deliveries).
+- **The audit is not rewound.** The runtime audit file and its companion keep every entry the
+  original wrote after the backup point, including the commits and deliveries the restore lost, and
+  the adopted copy appends to the same files. A delivery pending at the backup point is therefore
+  recorded twice, once by each database. The adoption entry in the companion file (operation
+  `breg.instance_claim.adopt`, event `adopted`) marks where the copy's history resumes; record the
+  backup time and the adoption time in the change record so the lost window can be read from the
+  archive. Never restore an older audit file over the live one.
 - **Reviews the authority lost.** When a review environment such as Casework is restored from an
   older backup, BReg reports `result-unknown-to-authority` for each review it submitted after that
-  backup. Recover each with
+  backup. While the review environment is still unreachable, the code is
+  `result-lookup-uncertain` instead, which `resubmit` refuses; it changes once the restored
+  environment answers. Recover each with
   [`bregctl review-recovery resubmit` or `close`](../../breg/#resubmit-or-close-a-review-the-authority-lost).
 
 {/* Evidence: docs/site/src/content/docs/operate/breg-retention.mdx, "Erasure does not reach
@@ -145,7 +179,13 @@ Once the copy serves, work through these:
     ACTION_EVIDENCE_RETENTION_SECONDS; crates/registry-bregctl/src/lib.rs, EvidenceRetentionEraseArgs;
     crates/registry-platform-hooks/src/delivery/service.rs, delivery_idempotency_key() (derived
     from the event, delivery, generation, payload digest, and destination binding digest);
-    crates/registry-breg/src/review_recovery.rs, module docs. */}
+    crates/registry-breg/src/review_recovery.rs, module docs;
+    products/breg/scripts/test-backup-restore.sh, checkpoints "re-sending only the delivery pending
+    at the backup point" (the same idempotency key, no second delivery of delivered work) and
+    "continuing the audit stream in the same files" (the prefix kept, the pending delivery recorded
+    twice, one adoption entry); products/casework/scripts/test-backup-restore.sh, checkpoint
+    "recovering the review the restore lost through the registry" (result-unknown-to-authority,
+    then resubmit). */}
 
 ## Restore Registry Casework
 
@@ -157,17 +197,28 @@ audit key the backup was taken under, and start the runtime. Its schema must mat
 and its activation ledger must name the package the runtime loads; see
 [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
 
+Check the ledger before you start the runtime. On the freshly provisioned database,
+`caseworkctl status` reports no active package and `caseworkctl doctor` refuses with
+`casework.doctor.check-failed`, because no migration has been applied yet. Once `pg_restore` has
+run, `caseworkctl status` reports the same active package and history it reported at the backup
+point, `caseworkctl plan` reports `changesPending: false` with the only refusal
+`casework.activation.already-active` and `databaseIdCheck: matches`, and `caseworkctl doctor`
+passes. Pass each command the restored runtime file with `--runtime-config`.
+
 What comes back and what does not:
 
 - **Source-backed work items are replayed from BReg.** Each source's reconciliation pass
   rediscovers every submitted change request and re-reads every work item the database holds as
   active, so a request applied or cancelled after the backup point settles, and a request
-  submitted after it appears as fresh work.
+  submitted after it appears as fresh work. That fresh work item has a new identifier, not the one
+  the lost item had, so its audit entries carry another item pseudonym.
 - **Everything Casework alone records is at the backup point.** Claims, private drafts, attempts,
   item history, clocks, directory changes, absences, task grants, and every unified review
   (requests, tasks, decisions, and results) are as the backup left them. Later work on them is lost.
 - **The audit file is not rewound.** The live audit file and its shipped archive still hold the
-  entries for the work the restore lost. Keep them; never restore an older audit file over them.
+  entries for the work the restore lost, and the restored runtime appends after them. An item that
+  settled in the lost window settles again after the restore, so its completion is recorded twice
+  under the same item pseudonym. Keep these entries; never restore an older audit file over them.
 
 Reconcile the gap before staff resume work:
 
@@ -184,7 +235,8 @@ Reconcile the gap before staff resume work:
    [settle it](../../casework-retention/#settle-an-uncertain-source-attempt) as applied or not
    applied.
 3. **Check restored review tasks against BReg before anyone decides them.** A review decided after
-   the backup point comes back open in Casework while BReg may already hold its result. No command
+   the backup point comes back as the backup left it, open or held by the reviewer who had claimed
+   it, while BReg may already hold its result and may already have applied the request. No command
    reconciles the two, so read the BReg request's `data.request.review` projection first. Reviews
    BReg submitted after the backup point are unknown to the restored Casework; recover them from
    the BReg side as [Repeat what the backup undid](#repeat-what-the-backup-undid) describes.
@@ -202,7 +254,16 @@ see
     crates/registry-casework/src/audit.rs, published_audit_record() (pseudonymized fields);
     crates/registry-casework/src/runtime.rs, serve_from_path() and check_activation();
     crates/registry-casework/src/activation.rs, evaluate_effects();
-    crates/registry-caseworkctl/src/lib.rs, AttemptCommand. */}
+    crates/registry-caseworkctl/src/lib.rs, AttemptCommand;
+    products/casework/scripts/test-backup-restore.sh, checkpoints "stopping Casework for good and
+    restoring the dump into a fresh database" (status reports no active package, doctor refuses
+    with casework.doctor.check-failed), "checking the restored activation ledger before serving"
+    (status as at the backup point, plan with changesPending false and
+    casework.activation.already-active), "proving Casework-only state is at the backup point"
+    (the decided review held at its backup-point revision), "proving source-backed work is replayed
+    from the registry" (the settled item, the replayed item under a new identifier), and "checking
+    that the audit file continues instead of rewinding" (the lost decision kept, the completion
+    recorded twice). */}
 
 ### Hand over the Casework audit key
 

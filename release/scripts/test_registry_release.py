@@ -2510,6 +2510,25 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
+        for tool in ("bregctl", "caseworkctl", "schedulingctl"):
+            runtime = tool.removesuffix("ctl")
+            self.assertIn(
+                f"cp target/release/{tool} dist/image-bin/{tool}",
+                binary_recipe,
+            )
+            self.assertIn(
+                f"install -m 0755 /workspace/image-bin/{tool} "
+                f"/workspace/runtime-root/usr/local/bin/{tool}",
+                release_dockerfiles[runtime],
+            )
+            self.assertIn(
+                f'ENTRYPOINT ["/usr/local/bin/{runtime}"]',
+                release_dockerfiles[runtime],
+            )
+            self.assertNotIn(
+                f'ENTRYPOINT ["/usr/local/bin/{tool}"]',
+                release_dockerfiles[runtime],
+            )
         for name in ("evidence", "breg", "casework", "scheduling", "relay"):
             self.assertIn(
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
@@ -2567,7 +2586,20 @@ class RegistryReleaseTest(TestCase):
             ],
             copy_instructions,
         )
-        self.assertNotIn("bregctl", dockerfile)
+        # The operator tool is installed beside the runtime when the release
+        # stages it, and nothing else in the image refers to it.
+        self.assertEqual(
+            [
+                "&& if [ -e /workspace/image-bin/bregctl ]; then \\",
+                "install -m 0755 /workspace/image-bin/bregctl "
+                + "/workspace/runtime-root/usr/local/bin/bregctl; \\",
+            ],
+            [
+                line.strip()
+                for line in dockerfile.splitlines()
+                if "bregctl" in line and not line.lstrip().startswith("#")
+            ],
+        )
 
     def test_discovery_runtime_artifact_joins_the_inventory_at_v0_24(self) -> None:
         module = load_registry_release()
@@ -2825,6 +2857,49 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("-p registry-scheduling --bin scheduling", recipe)
         self.assertIn('"scheduling-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(scheduling)", recipe)
+
+    def test_schedulingctl_release_surface_begins_after_published_v0_35(
+        self,
+    ) -> None:
+        module = load_registry_release()
+        published = {
+            name: "0.35.0"
+            for name in module.RELAY_V2_ARTIFACT_INVENTORY
+            | {
+                "relay-installer",
+                "registry-docs",
+                "discovery",
+                "breg",
+                "bregctl",
+                "breg-installer",
+                "casework",
+                "caseworkctl",
+                "casework-installer",
+                "scheduling",
+                "registry-client-node",
+                "registry-client-python",
+            }
+            if name
+            not in {"mint", "evidence-client-node", "evidence-client-python"}
+        }
+        self.assertEqual([], module.artifact_inventory_errors("0.35.0", published))
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.35.0", published | {"schedulingctl": "0.35.0"}
+            ),
+        )
+        future = {name: "0.36.0" for name in published}
+        self.assertNotEqual([], module.artifact_inventory_errors("0.36.0", future))
+        future["schedulingctl"] = "0.36.0"
+        self.assertEqual([], module.artifact_inventory_errors("0.36.0", future))
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-p registry-schedulingctl --bin schedulingctl", recipe)
+        self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
     def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
         module = load_registry_release()
@@ -4362,6 +4437,8 @@ def write_manifest(
         artifacts.pop("mint")
     if version_tuple >= (0, 33, 0):
         artifacts["scheduling"] = version
+    if version_tuple >= (0, 36, 0):
+        artifacts["schedulingctl"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

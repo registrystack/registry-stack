@@ -37,8 +37,12 @@ class FakeCommands:
         grype_db: dict | None = None,
         relative_entrypoint: bool = False,
         omit_executable: bool = False,
+        operator_tools: dict[str, str] | None = None,
+        omit_operator_tool: bool = False,
     ):
         self.calls: list[tuple[list[str], dict]] = []
+        self.operator_tools = operator_tools or {}
+        self.omit_operator_tool = omit_operator_tool
         self.relative_entrypoint = relative_entrypoint
         self.omit_executable = omit_executable
         self.fail_tool = fail_tool
@@ -76,11 +80,15 @@ class FakeCommands:
                 archive.addfile(info)
             if self.omit_executable:
                 return
-            content = f"{name} executable".encode()
-            info = tarfile.TarInfo(f"usr/local/bin/{name}")
-            info.size = len(content)
-            info.mode = 0o755
-            archive.addfile(info, io.BytesIO(content))
+            executables = [name]
+            if name in self.operator_tools and not self.omit_operator_tool:
+                executables.append(self.operator_tools[name])
+            for executable in executables:
+                content = f"{executable} executable".encode()
+                info = tarfile.TarInfo(f"usr/local/bin/{executable}")
+                info.size = len(content)
+                info.mode = 0o755
+                archive.addfile(info, io.BytesIO(content))
 
     def __call__(
         self,
@@ -106,8 +114,17 @@ class FakeCommands:
         stdout = ""
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             stdout = self.revision + "\n"
-        elif len(command) > 1 and "release_candidate.py" in command[1]:
-            stdout = " ".join(self.roster) + "\n"
+        elif len(command) > 2 and "release_candidate.py" in command[1]:
+            if command[2] == "image-names":
+                stdout = " ".join(self.roster) + "\n"
+            elif command[2] == "image-operator-tools" and self.operator_tools:
+                stdout = (
+                    " ".join(
+                        f"{image}={tool}"
+                        for image, tool in sorted(self.operator_tools.items())
+                    )
+                    + "\n"
+                )
         elif command[:2] == ["docker", "port"]:
             stdout = "127.0.0.1:49152\n"
         elif command[:3] == ["crane", "digest", "--insecure"]:
@@ -280,6 +297,121 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
             MODULE.parse_roster(result.stdout),
             ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
         )
+
+    def test_operator_tools_are_parsed_against_the_image_roster(self) -> None:
+        roster = ("breg", "casework", "evidence")
+        self.assertEqual({}, MODULE.parse_operator_tools("", roster))
+        self.assertEqual(
+            {"breg": "bregctl", "casework": "caseworkctl"},
+            MODULE.parse_operator_tools("breg=bregctl casework=caseworkctl\n", roster),
+        )
+        for output in (
+            "breg",
+            "breg=",
+            "=bregctl",
+            "breg=bregctl breg=bregctl",
+            "relay=relayctl",
+            "breg=../bregctl",
+            "breg=breg",
+        ):
+            with self.subTest(output=output):
+                with self.assertRaises(MODULE.EvidenceError):
+                    MODULE.parse_operator_tools(output, roster)
+
+    def test_v0_36_operator_tools_are_owned_by_the_release_roster(self) -> None:
+        for version, expected in (
+            ("0.35.0", {}),
+            (
+                "0.36.0",
+                {
+                    "breg": "bregctl",
+                    "casework": "caseworkctl",
+                    "scheduling": "schedulingctl",
+                },
+            ),
+        ):
+            with self.subTest(version=version):
+                results = [
+                    subprocess.run(
+                        [
+                            "python3",
+                            str(ROOT / "release/scripts/release_candidate.py"),
+                            command,
+                            "--version",
+                            version,
+                        ],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout
+                    for command in ("image-names", "image-operator-tools")
+                ]
+                self.assertEqual(
+                    expected,
+                    MODULE.parse_operator_tools(
+                        results[1], MODULE.parse_roster(results[0])
+                    ),
+                )
+
+    def test_each_operator_tool_gets_its_own_exposure_report(self) -> None:
+        tools = {"breg": "bregctl"}
+        fake = FakeCommands(operator_tools=tools)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                MODULE.collect(self.arguments(output))
+
+            self.assertEqual(
+                sorted(path.name for path in (output / "exposure").iterdir()),
+                sorted(
+                    [f"{name}.json" for name in fake.roster] + ["breg.bregctl.json"]
+                ),
+            )
+            self.assertEqual(
+                {
+                    "content": "bregctl executable",
+                    "executable": "/usr/local/bin/bregctl",
+                    "image": "breg",
+                },
+                json.loads((output / "exposure/breg.bregctl.json").read_text()),
+            )
+            self.assertEqual(
+                {
+                    "content": "breg executable",
+                    "executable": "/usr/local/bin/breg",
+                    "image": "breg",
+                },
+                json.loads((output / "exposure/breg.json").read_text()),
+            )
+            self.assertEqual(
+                [(entry["image"], entry["executable"]) for entry in self.analyzed],
+                [
+                    ("breg", "/usr/local/bin/breg"),
+                    ("breg", "/usr/local/bin/bregctl"),
+                    ("discovery", "/usr/local/bin/discovery"),
+                    ("evidence", "/usr/local/bin/evidence"),
+                    ("relay", "/usr/local/bin/relay"),
+                ],
+            )
+            manifest = json.loads((output / "collection.json").read_text())
+            self.assertNotIn("exposure", manifest)
+
+    def test_missing_operator_tool_never_seals_collection(self) -> None:
+        fake = FakeCommands(operator_tools={"breg": "bregctl"}, omit_operator_tool=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                with self.assertRaisesRegex(
+                    MODULE.EvidenceError,
+                    "ELF exposure report for breg operator tool bregctl failed: "
+                    ".*does not exist",
+                ):
+                    MODULE.collect(self.arguments(output))
+            self.assertFalse((output / "collection.json").exists())
+            self.assertEqual(
+                [path.name for path in (output / "exposure").iterdir()],
+                ["breg.json"],
+            )
 
     def test_collects_every_owned_image_with_exact_daemon_context(self) -> None:
         fake = FakeCommands()

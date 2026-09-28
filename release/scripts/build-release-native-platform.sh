@@ -23,12 +23,13 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 usage() {
-  printf 'usage: %s [--include-casework] --group core|breg|bregctl|casework|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
+  printf 'usage: %s [--include-casework] --group core|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
   exit 2
 }
 
 if [[ "${group}" != core && "${group}" != breg &&
-      "${group}" != bregctl && "${group}" != casework && "${group}" != all ]]; then
+      "${group}" != bregctl && "${group}" != casework &&
+      "${group}" != scheduling && "${group}" != all ]]; then
   usage
 fi
 if [[ "${purpose}" != candidate_input && "${purpose}" != review_only ]]; then
@@ -76,6 +77,12 @@ include_casework=0
 if ((version_major > 0 || version_minor >= 30)) ||
    [[ "${include_casework_override}" -eq 1 ]]; then
   include_casework=1
+fi
+# The Scheduling runtime ships only inside its image; its operator tool is a
+# release binary from 0.36.0.
+include_schedulingctl=0
+if ((version_major > 0 || version_minor >= 36)); then
+  include_schedulingctl=1
 fi
 
 output_parent="$(dirname -- "${output}")"
@@ -197,6 +204,19 @@ build_casework() {
   done
 }
 
+build_scheduling() {
+  if [[ "${include_schedulingctl}" -ne 1 ]]; then
+    return
+  fi
+  "${cargo_bin}" build --release --locked \
+    -p registry-schedulingctl --bin schedulingctl \
+    --target "${target}"
+
+  stage schedulingctl "schedulingctl-${tag}-${asset}"
+  test "$("${staged_executable}" --version)" = \
+    "schedulingctl ${version}"
+}
+
 cd -- "${repo_root}"
 if [[ "${group}" == core || "${group}" == all ]]; then
   build_core
@@ -209,6 +229,9 @@ if [[ "${group}" == bregctl || "${group}" == all ]]; then
 fi
 if [[ "${group}" == casework || "${group}" == all ]]; then
   build_casework
+fi
+if [[ "${group}" == scheduling || "${group}" == all ]]; then
+  build_scheduling
 fi
 rm -rf -- "${temporary}/smoke"
 
@@ -229,6 +252,9 @@ if [[ ("${group}" == bregctl || "${group}" == all) && "${include_breg}" -eq 1 ]]
 fi
 if [[ ("${group}" == casework || "${group}" == all) && "${include_casework}" -eq 1 ]]; then
   assets+=("casework-${tag}-${asset}" "caseworkctl-${tag}-${asset}")
+fi
+if [[ ("${group}" == scheduling || "${group}" == all) && "${include_schedulingctl}" -eq 1 ]]; then
+  assets+=("schedulingctl-${tag}-${asset}")
 fi
 if [[ "${bundle_fips}" -eq 1 ]]; then
   for index in "${!assets[@]}"; do

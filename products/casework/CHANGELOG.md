@@ -124,6 +124,9 @@
   by the argument's own validation reason, such as `--backup must not be
   empty`, and names `caseworkctl --help` as the next step. The refused value
   is never repeated on standard output or standard error.
+- The Casework image carries `caseworkctl` at `/usr/local/bin/caseworkctl`
+  beside the runtime. The entrypoint stays `casework`; run `plan`, `apply`,
+  and `status` from the image by overriding the entrypoint.
 
 ## v0.35.0 - 2026-09-28
 

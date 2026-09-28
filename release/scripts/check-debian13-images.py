@@ -154,6 +154,9 @@ CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]
 # Each entry pins the runtime instructions that bind one HTTP-probed service to
 # its configuration. A service that reads no environment variable declares no
 # `environment` and binds its runtime file through the command instead.
+# A stateful product image also carries its operator tool, so an operator can
+# run it with the image's exact bytes by overriding the entrypoint. The
+# runtime stays the entrypoint.
 HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.discovery"): {
         "binary": "discovery",
@@ -167,16 +170,19 @@ HTTP_PROBE_DOCKERFILES = {
     },
     Path("release/docker/Dockerfile.breg"): {
         "binary": "breg",
+        "tool": "bregctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
         "command": 'CMD ["--runtime-config", "/etc/breg/runtime.yaml"]',
     },
     Path("release/docker/Dockerfile.casework"): {
         "binary": "casework",
+        "tool": "caseworkctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/casework"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-casework/runtime.yaml", "serve"]',
     },
     Path("release/docker/Dockerfile.scheduling"): {
         "binary": "scheduling",
+        "tool": "schedulingctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/scheduling"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-scheduling/runtime.yaml", "serve"]',
     },
@@ -649,6 +655,33 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"fixed {binary} {key}",
                 failures,
             )
+        if f"\n{runtime}".count("\nENTRYPOINT ") != 1:
+            failures.append(
+                f"{relative}: {binary} runtime must declare exactly one ENTRYPOINT"
+            )
+        tool = contract.get("tool")
+        if tool is not None:
+            install = (
+                f"install -m 0755 /workspace/image-bin/{tool} "
+                f"/workspace/runtime-root/usr/local/bin/{tool}"
+            )
+            require(
+                texts[relative],
+                install,
+                relative,
+                f"{tool} operator tool",
+                failures,
+            )
+            if (
+                install in texts[relative]
+                and RUNTIME_ROOT_NORMALIZATION in texts[relative]
+                and texts[relative].index(install)
+                > texts[relative].index(RUNTIME_ROOT_NORMALIZATION)
+            ):
+                failures.append(
+                    f"{relative}: {tool} operator tool must precede timestamp "
+                    "normalization"
+                )
         if "environment" not in contract and "\nENV " in f"\n{runtime}":
             failures.append(
                 f"{relative}: {binary} binds its configuration through the "

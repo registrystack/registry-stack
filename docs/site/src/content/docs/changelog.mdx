@@ -110,6 +110,22 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-schedulingctl/src/report.rs;
     products/casework/contracts/cli/. */}
 
+- `schedulingctl` is published as a release binary for `linux-amd64`, `linux-arm64`, and
+  `macos-arm64`, like `caseworkctl`. The BReg, Casework, and Scheduling images each carry their
+  operator tool beside the runtime, at `/usr/local/bin/bregctl`, `/usr/local/bin/caseworkctl`, and
+  `/usr/local/bin/schedulingctl`, built from the same source. The entrypoint stays the runtime, so a
+  serving container is unchanged; run `plan`, `apply`, and `status` from the image you serve by
+  overriding the entrypoint, or from a Kubernetes Job `command:`. The Scheduling runtime stays an
+  image-only artifact and has no installer. See
+  [Activate from the image](../operate/breg/#activate-from-the-image) and
+  [Run plan, apply, and status from the image](../operate/casework/#run-plan-apply-and-status-from-the-image).
+
+{/* Evidence: release/docker/Dockerfile.breg; release/docker/Dockerfile.casework;
+    release/docker/Dockerfile.scheduling; release/scripts/release_candidate.py,
+    OPERATOR_TOOL_MINIMUM_VERSION and IMAGE_OPERATOR_TOOLS;
+    release/scripts/merge-release-binary-shards.py, OPERATOR_TOOL_VERSION;
+    release/scripts/merge-release-native-platform-shards.py, SCHEDULINGCTL_MINIMUM_VERSION. */}
+
 ## v0.35.0 beta-47
 
 - BREAKING: Base Registry Engine (BReg) gives every `reference` field a btree

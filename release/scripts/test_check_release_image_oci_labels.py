@@ -585,6 +585,12 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 "    echo 'ghcr.io/registrystack/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
                 "  'image inspect '* ) echo 'ghcr.io/registrystack/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
                 "  'port '* ) echo '127.0.0.1:5000' ;;\n"
+                "  'buildx build '* )\n"
+                "    context=\"${!#}\"\n"
+                "    for staged in \"${context}\"/dist/image-bin/*; do\n"
+                "      if [[ -x \"${staged}\" ]]; then printf ' %s' \"${staged##*/}\" >> \"${STAGED_LOG}\"; fi\n"
+                "    done\n"
+                "    printf '\\n' >> \"${STAGED_LOG}\" ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
@@ -609,6 +615,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             environment["DOCKER_LOG"] = str(docker_log)
             environment["DOCKER_STATE"] = str(Path(temporary) / "docker-state")
             environment["CHECKER_LOG"] = str(checker_log)
+            staged_log = Path(temporary) / "staged.log"
+            environment["STAGED_LOG"] = str(staged_log)
 
             result = subprocess.run(
                 [str(SMOKE_SCRIPT)],
@@ -693,6 +701,33 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                         str(ROOT / f"release/docker/Dockerfile.{name}")
                     ),
                 )
+            # Each build sees an executable stand-in for every binary a
+            # release Dockerfile installs, including the operator tools the
+            # stateful product images carry beside their runtime.
+            staged = {
+                tuple(sorted(line.split()))
+                for line in staged_log.read_text(encoding="utf-8").splitlines()
+            }
+            self.assertEqual(
+                {
+                    tuple(
+                        sorted(
+                            (
+                                "relay",
+                                "evidence",
+                                "discovery",
+                                "breg",
+                                "bregctl",
+                                "casework",
+                                "caseworkctl",
+                                "scheduling",
+                                "schedulingctl",
+                            )
+                        )
+                    )
+                },
+                staged,
+            )
             python_calls = read_calls(checker_log)
             inspected_layouts = {
                 call[1]
