@@ -243,7 +243,7 @@ ttf-parser = { version = "0.25" }
 ulid = { version = "3" }
 ureq = { version = "2" }
 url = { version = "2" }
-utoipa = { version = "5" }
+utoipa = { version = "6" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
 zeroize = { version = "1", features = ["derive"] }
