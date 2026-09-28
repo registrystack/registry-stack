@@ -34,9 +34,14 @@ _PACKAGE_SOURCE = (
 )
 
 # Runs inside the assembled layout, and prints what it found as JSON. Each
-# finding answers one claim `__init__.py` makes about itself.
+# finding answers one claim `__init__.py` makes about itself. Any argument names
+# a native library to preload first, as the bootstrap does in this process.
 _PROBE = """
-import importlib, json, pathlib, sys
+import ctypes, importlib, json, pathlib, sys
+
+for library in sys.argv[1:]:
+    ctypes.CDLL(library, mode=ctypes.RTLD_GLOBAL)
+
 import registry_evidence_client as revc
 
 findings = {
@@ -87,8 +92,10 @@ class PackageLayoutTest(unittest.TestCase):
             # Only the assembled layout, so a stray copy elsewhere cannot be
             # what answers the import.
             environment["PYTHONPATH"] = root
+            runtime_library = bootstrap.cargo_runtime_library()
+            preload = [] if runtime_library is None else [runtime_library]
             completed = subprocess.run(
-                [sys.executable, "-c", _PROBE],
+                [sys.executable, "-c", _PROBE, *preload],
                 cwd=root,
                 env=environment,
                 capture_output=True,
