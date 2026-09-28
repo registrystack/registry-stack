@@ -368,6 +368,14 @@ fn format_value_refused(error: &clap::Error) -> bool {
 
 /// Parse process arguments and run one adopter-tooling operation.
 pub fn main_entry() -> ExitCode {
+    let code = run_entry();
+    if REPORT_UNDELIVERED.load(std::sync::atomic::Ordering::Relaxed) {
+        return ExitCode::from(report::OPERATIONAL_FAILURE_EXIT);
+    }
+    code
+}
+
+fn run_entry() -> ExitCode {
     let arguments = normalized_process_args();
     let requested_format = requested_output_format(&arguments);
     if requested_format == OutputFormat::Json && help_requested(&arguments) {
@@ -733,8 +741,14 @@ pub(crate) fn print_report(report: &serde_json::Value) {
         // Standard error stays silent under --format json except when the
         // report itself cannot be delivered.
         eprintln!("evidencectl: could not write the JSON report: {error}");
+        REPORT_UNDELIVERED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
+
+/// Set when a JSON report could not be written, so the process exits in the
+/// operational class whatever the command itself concluded.
+static REPORT_UNDELIVERED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// The full subcommand path a parsed invocation selected, such as
 /// `source mock serve`.

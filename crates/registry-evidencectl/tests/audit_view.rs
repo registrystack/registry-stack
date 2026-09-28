@@ -898,3 +898,22 @@ fn a_read_history_without_an_operation_is_named() {
     );
     assert!(report["diagnostics"][0].get("cause").is_none());
 }
+
+/// A missing runtime executable is an unavailable process, not a refused
+/// input, so it exits in the operational class and names the install step.
+#[test]
+fn an_unavailable_evidence_binary_is_an_operational_failure() {
+    let fixture = Fixture::new();
+    fs::remove_file(&fixture.evidence).expect("remove the evidence binary");
+
+    let output = fixture.show_json();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON refusal");
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.audit.runtime-unavailable"
+    );
+    assert!(report["diagnostics"][0].get("cause").is_none());
+}

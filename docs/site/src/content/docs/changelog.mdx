@@ -25,7 +25,8 @@ relevant product pages on this site rather than duplicating release notes.
   fixture reports use `evaluatedCases`, `failingCase`, `expectedClass`, and
   `observedClass`. An unreadable file or a missing local dev session exits
   `3` instead of `1`. Commands that read one project take it as a positional
-  `<project>`; the former `--project` flag stays accepted but hidden. `test`
+  `<project>`; the former `--project` flag stays accepted but hidden. The
+  `access` commands and `audit show` still act on the current directory. `test`
   and `fixtures run` accept `--format junit`, and `dev start --name-prefix`
   sets the local issuer container name prefix. Update scripts that read
   `operation` or snake_case fixture keys. See

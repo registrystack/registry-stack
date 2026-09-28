@@ -597,16 +597,21 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
         secret_references: secret_references.into_iter().collect(),
     };
     if args.json {
-        let status = if report.missing_public_key_files.is_empty() {
-            "complete"
+        let members = serde_json::to_value(&report).context("encoding target explanation")?;
+        crate::report::print(&if report.missing_public_key_files.is_empty() {
+            crate::report::success("target explain", "complete", members)
         } else {
-            "incomplete"
-        };
-        crate::report::print(&crate::report::success(
-            "target explain",
-            status,
-            serde_json::to_value(&report).context("encoding target explanation")?,
-        ))?;
+            let mut members = members;
+            members["diagnostics"] = serde_json::json!([{
+                "severity": "error",
+                "code": "evidencectl.target.public-key-missing",
+                "artifact": report.target,
+                "path": "$.missingPublicKeyFiles",
+                "message": "The deployment target does not hold every public key its governance references.",
+                "suggestedAction": "Copy each file listed under missingPublicKeyFiles into the deployment target, then rerun evidencectl target explain <target> <project>.",
+            }]);
+            crate::report::refused("target explain", "refused", members)
+        })?;
     } else {
         println!("Target: {}", report.target);
         for fixture in &report.fixture_paths {
@@ -625,7 +630,7 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
     Ok(if report.missing_public_key_files.is_empty() {
         ExitCode::SUCCESS
     } else {
-        ExitCode::FAILURE
+        ExitCode::from(crate::report::DOMAIN_REFUSAL_EXIT)
     })
 }
 

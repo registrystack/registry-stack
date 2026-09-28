@@ -172,6 +172,12 @@ struct ResponseLeaves {
     leaves: Vec<CandidateLeaf>,
 }
 
+/// Whether a run may ask its questions on the terminal. A JSON run never
+/// prompts: its caller reads one report, so every answer comes from a flag.
+pub(crate) fn prompts_allowed(format: OutputFormat) -> bool {
+    format == OutputFormat::Human && interactive::is_interactive()
+}
+
 /// Load the document, pick the operation, resolve its response schema, and
 /// flatten it into candidate leaves. Both a drafting run and a
 /// `--list-pointers` run start here; only the drafting run continues.
@@ -191,7 +197,7 @@ fn resolve_response_leaves(args: &SuggestArgs, notes: &mut Notes) -> Result<Resp
     // settled: the operations come from the document, the leaves from the
     // chosen operation's response schema. So the two refusals happen at the two
     // points where the answer exists, not together at the top.
-    if args.operation.is_none() && !interactive::is_interactive() {
+    if args.operation.is_none() && !prompts_allowed(notes.format) {
         bail!(
             "{}\n\nthis document declares:\n{}",
             missing_flags_message(args),
@@ -265,7 +271,7 @@ pub(crate) fn prepare(args: &SuggestArgs, notes: &mut Notes) -> Result<PreparedS
     } = resolve_response_leaves(args, notes)?;
 
     let selection = if args.selection.is_empty() {
-        if !interactive::is_interactive() {
+        if !prompts_allowed(notes.format) {
             bail!(
                 "{}\n\nthis operation's `{}` `{}` response offers:\n{}",
                 missing_flags_message(args),
@@ -880,6 +886,11 @@ fn missing_flags_message(args: &SuggestArgs) -> String {
 #[cfg(test)]
 mod tests {
     use super::validate_base_url;
+
+    #[test]
+    fn json_runs_never_prompt() {
+        assert!(!super::prompts_allowed(crate::OutputFormat::Json));
+    }
 
     #[test]
     fn explicit_source_origins_accept_https_and_numeric_loopback_http() {

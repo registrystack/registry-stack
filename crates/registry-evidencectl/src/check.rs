@@ -229,6 +229,7 @@ fn check_and_capture_target(
         "packageDigest": package_digest,
         "fixtureProof": false,
         "findings": findings,
+        "diagnostics": [],
         "offline": true,
         "networkAccess": false,
         "fixtureExecution": false,
@@ -244,6 +245,19 @@ fn check_and_capture_target(
         project_snapshot,
         target_documents,
     })
+}
+
+/// The one diagnostic a denied check or explain carries: the findings name
+/// each problem, and this names the next step.
+fn refused_diagnostic(command: &str) -> Value {
+    diagnostic(
+        "error",
+        &format!("evidencectl.{command}.refused"),
+        "project",
+        "$.findings",
+        format!("The selected project has findings that refuse {command}."),
+        &format!("Correct each entry under findings, then rerun evidencectl {command}."),
+    )
 }
 
 /// The report a denied check writes: the passing report's members, with the
@@ -264,6 +278,7 @@ pub(crate) fn refused_check_report(
             "packageDigest": null,
             "fixtureProof": false,
             "findings": findings,
+            "diagnostics": [refused_diagnostic("check")],
             "offline": true,
             "networkAccess": false,
             "fixtureExecution": false,
@@ -289,6 +304,7 @@ pub(crate) fn refused_explain_report(
             "proof": "none",
             "packageDigest": null,
             "findings": findings,
+            "diagnostics": [refused_diagnostic("explain")],
             "questions": [],
             "sources": [],
             "selectors": [],
@@ -373,6 +389,7 @@ fn explain_captured(project: &Path, target: Option<&Path>, checked: CheckOutcome
         "proof": validation["proof"],
         "packageDigest": validation["packageDigest"],
         "findings": validation["findings"],
+        "diagnostics": [],
         "questions": inventory.questions,
         "sources": inventory.sources,
         "selectors": inventory.selectors,

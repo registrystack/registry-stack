@@ -124,6 +124,10 @@ struct DoctorReport {
     /// check: a bundle whose acquisition is well formed still renders here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     acquisition_plans: Vec<AcquisitionPlanReport>,
+    /// The next step when a check failed; each failed check carries its own
+    /// findings.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<serde_json::Value>,
 }
 
 pub fn run(args: DoctorArgs) -> Result<ExitCode> {
@@ -154,11 +158,27 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     checks.push(acquisition);
     let passed = checks.iter().all(|check| check.passed);
     let inspected = checks.iter().map(|check| check.inspected).sum();
+    let diagnostics = if passed {
+        Vec::new()
+    } else {
+        vec![serde_json::json!({
+            "severity": "error",
+            "code": "evidencectl.artifacts.check-failed",
+            "artifact": project.display().to_string(),
+            "path": "$.checks",
+            "message": "At least one deployment artifact check failed.",
+            "suggestedAction": format!(
+                "Correct the findings under each failed check, then rerun evidencectl {}.",
+                args.command
+            ),
+        })]
+    };
     let report = DoctorReport {
         checks,
         passed,
         inspected,
         acquisition_plans,
+        diagnostics,
     };
 
     if args.json {

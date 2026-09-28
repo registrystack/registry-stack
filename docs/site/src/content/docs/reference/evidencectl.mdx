@@ -117,7 +117,9 @@ live startup dependency checks. Every command that reads one project names it as
 `<project>` argument, defaulting to the current directory where the command allows it. The former
 `--project <project>` spelling remains accepted, but hidden, on commands whose project is now
 positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
-the export, and `target new`, whose positional argument is the target, document `--project`. Do
+the export, and `target new`, whose positional argument is the target, document `--project`.
+The `access` commands and `audit show` act on the current directory and take no positional
+project. Do
 not combine a canonical positional project with its former `--project` flag; conflicting old and
 new forms are usage errors.
 Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
@@ -174,7 +176,8 @@ The local issuer container's name starts with `thunderid-<prefix>-`, with the pr
 `evidence-dev` by default. Pass `--name-prefix <prefix>` to `dev start` so parallel jobs on one
 host can tell their containers apart: 1 to 32 lowercase letters, digits, and inner hyphens,
 starting with a letter, such as `ci-4711`. The session records its prefix as `namePrefix` and keeps
-it until `dev clean`.
+it until `dev clean`: a restart without the flag reuses it, and a restart that names a different
+prefix is refused.
 For a nondefault resource, the compiler also derives distinct governed provider, issuer, and
 service identifiers from that resource, so multiple local Evidence services remain separate in
 Discovery.

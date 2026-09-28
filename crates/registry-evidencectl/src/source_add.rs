@@ -160,8 +160,11 @@ pub(crate) fn run(mut args: SourceAddArgs, format: OutputFormat) -> Result<ExitC
         .or_else(|| std::env::var_os("BREGCTL_BIN").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("bregctl"));
     check_public_bregctl(&binary)?;
-    let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
-    let report = configure(args, terminal, &mut |arguments| {
+    // A JSON run writes one report and nothing else: it neither prompts nor
+    // narrates the review on standard error.
+    let human = format == OutputFormat::Human;
+    let terminal = human && std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let report = configure(args, terminal, human, &mut |arguments| {
         let bytes = public_output(&binary, arguments)?;
         let report: Value = serde_json::from_slice(&bytes)
             .map_err(|_| anyhow::anyhow!("BReg returned an invalid public JSON report"))?;
@@ -247,6 +250,7 @@ impl std::error::Error for BregctlVersionMismatch {}
 fn configure(
     args: SourceAddArgs,
     terminal: bool,
+    human: bool,
     invoke: &mut impl FnMut(&[OsString]) -> Result<Value>,
 ) -> Result<Value> {
     let registry = plain_directory(&args.registry, "registry project")?;
@@ -262,7 +266,7 @@ fn configure(
     let inspected = invoke(&base)?;
     let inspection: Inspection = serde_json::from_value(inspected)
         .map_err(|_| anyhow::anyhow!("BReg returned an incomplete source inspection"))?;
-    if inspection.recovered_prior_apply {
+    if human && inspection.recovered_prior_apply {
         eprintln!(
             "Completed previously accepted BReg setup before reviewing these source choices."
         );
@@ -344,21 +348,23 @@ fn configure(
         report["scope"] = json!(scope);
     }
     if !args.apply {
-        eprintln!(
-            "Reviewed a {}.{} lookup for facts [{}], scope {}, and dedicated client {}. No new choices were applied.",
-            selection.entity,
-            selection.selector_field,
-            selection.fields.join(", "),
-            selection.row.as_ref().map_or_else(
-                || "all records in this entity".to_owned(),
-                |row| format!(
-                    "records matching {} and the supplied private value",
-                    row.field
+        if human {
+            eprintln!(
+                "Reviewed a {}.{} lookup for facts [{}], scope {}, and dedicated client {}. No new choices were applied.",
+                selection.entity,
+                selection.selector_field,
+                selection.fields.join(", "),
+                selection.row.as_ref().map_or_else(
+                    || "all records in this entity".to_owned(),
+                    |row| format!(
+                        "records matching {} and the supplied private value",
+                        row.field
+                    ),
                 ),
-            ),
-            selection.client,
-        );
-        eprintln!("{APPLY_REMEDY}");
+                selection.client,
+            );
+            eprintln!("{APPLY_REMEDY}");
+        }
         report["next"] = json!([APPLY_REMEDY]);
         return Ok(report);
     }
@@ -1265,7 +1271,7 @@ mod tests {
         fs::create_dir(&registry).unwrap();
         let project = root.path().join("evidence");
         let mut provider = Provider::new();
-        let first = configure(args(&registry, &project), false, &mut |a| {
+        let first = configure(args(&registry, &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1310,7 +1316,7 @@ mod tests {
         );
         let signing = fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap();
         let target = fs::read(project.join("targets/local/governance.yaml")).unwrap();
-        let second = configure(args(&registry, &project), false, &mut |a| {
+        let second = configure(args(&registry, &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1350,7 +1356,7 @@ mod tests {
         let project = root.path().join("evidence");
         let mut selected = args(root.path(), &project);
         selected.apply = false;
-        let report = configure(selected, false, &mut |a| {
+        let report = configure(selected, false, false, &mut |a| {
             let mut report = provider.invoke(a)?;
             report["recoveredPriorApply"] = json!(!a.iter().any(|arg| arg == "--entity"));
             report["requiresRestart"] = json!(false);
@@ -1364,7 +1370,7 @@ mod tests {
         assert_eq!(provider.calls.len(), 2);
         let mut selected = args(root.path(), &project);
         selected.all_records = false;
-        let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+        let error = configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap_err();
         assert!(error.to_string().contains("--all-records or --row-field"));
         assert!(!project.exists());
         assert!(provider.calls.iter().flatten().all(|arg| arg != "--apply"));
@@ -1381,7 +1387,7 @@ mod tests {
         let mut provider = Provider::new();
         let mut preview = args(root.path(), &project);
         preview.apply = false;
-        let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+        let report = configure(preview, false, false, &mut |a| provider.invoke(a)).unwrap();
         assert_eq!(report["status"], "preview");
         assert_eq!(
             provider.calls.len(),
@@ -1389,7 +1395,7 @@ mod tests {
             "preview needs only inspection and provider preview"
         );
 
-        let error = configure(args(root.path(), &project), false, &mut |a| {
+        let error = configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap_err();
@@ -1435,7 +1441,7 @@ mod tests {
         selected.row_value_file = Some(value_file);
         selected.apply = false;
         let mut provider = Provider::new();
-        let report = configure(selected, false, &mut |a| provider.invoke(a)).unwrap();
+        let report = configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap();
         assert_eq!(
             report["rowScope"],
             json!({"kind":"claim","field":"group","claim":"registry_source_row"})
@@ -1455,13 +1461,13 @@ mod tests {
         let mut provider = Provider::new();
         provider.fail_export_once = true;
         assert!(
-            configure(args(root.path(), &project), false, &mut |a| provider
+            configure(args(root.path(), &project), false, false, &mut |a| provider
                 .invoke(a))
             .is_err()
         );
         assert!(!project.join("sources/registry-name.yaml").exists());
         let signing = fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap();
-        configure(args(root.path(), &project), false, &mut |a| {
+        configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1476,7 +1482,7 @@ mod tests {
         fs::write(&governance, serde_norway::to_string(&document).unwrap()).unwrap();
         let before = fs::read(&governance).unwrap();
         provider.calls.clear();
-        let error = configure(args(root.path(), &project), false, &mut |a| {
+        let error = configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap_err();
@@ -1490,7 +1496,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("evidence");
         let mut provider = Provider::new();
-        configure(args(root.path(), &project), false, &mut |a| {
+        configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1504,7 +1510,7 @@ mod tests {
 
         let mut selected = args(root.path(), &project);
         selected.source_id = Some("registry-other".into());
-        let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+        let error = configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap_err();
         assert!(
             provider
                 .calls
@@ -1527,7 +1533,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("evidence");
         let mut provider = Provider::new();
-        configure(args(root.path(), &project), false, &mut |a| {
+        configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1544,7 +1550,7 @@ mod tests {
             let mut selected = args(root.path(), &project);
             selected.source_id = Some("registry-other".into());
             selected.apply = apply;
-            let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+            let error = configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap_err();
             assert!(error.to_string().contains("connection"));
             assert!(provider
                 .calls
@@ -1563,7 +1569,7 @@ mod tests {
         let mut selected = args(root.path(), &project);
         selected.source_id = Some("registry-other".into());
         selected.connection = "registry-other".into();
-        configure(selected, false, &mut |a| provider.invoke(a)).unwrap();
+        configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap();
         let source: Value = serde_norway::from_slice(
             &fs::read(project.join("sources/registry-other.yaml")).unwrap(),
         )
@@ -1582,7 +1588,7 @@ mod tests {
         let mut preview = args(root.path(), &project);
         preview.source_id = Some("third-source".into());
         preview.apply = false;
-        let error = configure(preview, false, &mut |a| provider.invoke(a)).unwrap_err();
+        let error = configure(preview, false, false, &mut |a| provider.invoke(a)).unwrap_err();
         assert!(error.to_string().contains("connection"));
         assert!(provider
             .calls
@@ -1597,7 +1603,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("evidence");
         let mut provider = Provider::new();
-        configure(args(root.path(), &project), false, &mut |a| {
+        configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1607,7 +1613,7 @@ mod tests {
             provider.calls.clear();
             let mut selected = args(root.path(), &project);
             selected.apply = apply;
-            let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+            let error = configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap_err();
             assert!(error.to_string().contains("choose a fresh --connection"));
             assert!(!format!("{error:#}").contains("different-private-key-canary"));
             assert!(provider
@@ -1632,7 +1638,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let project = root.path().join("evidence");
             let mut provider = Provider::new();
-            configure(args(root.path(), &project), false, &mut |a| {
+            configure(args(root.path(), &project), false, false, &mut |a| {
                 provider.invoke(a)
             })
             .unwrap();
@@ -1649,7 +1655,7 @@ mod tests {
 
             let mut preview = args(root.path(), &project);
             preview.apply = false;
-            let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+            let report = configure(preview, false, false, &mut |a| provider.invoke(a)).unwrap();
             assert_eq!(report["status"], "preview");
             assert!(
                 missing.iter().all(|(path, _)| !path.exists()),
@@ -1661,7 +1667,7 @@ mod tests {
                 .flatten()
                 .all(|argument| argument != "--apply"));
 
-            configure(args(root.path(), &project), false, &mut |a| {
+            configure(args(root.path(), &project), false, false, &mut |a| {
                 provider.invoke(a)
             })
             .unwrap();
@@ -1743,7 +1749,7 @@ mod tests {
         fs::create_dir(&registry).unwrap();
         let project = root.path().join("evidence");
         let mut provider = Provider::new();
-        let error = configure(args(&registry, &project), false, &mut |arguments| {
+        let error = configure(args(&registry, &project), false, false, &mut |arguments| {
             let mut report = provider.invoke(arguments)?;
             if arguments.iter().any(|arg| arg == "prepare-source")
                 && arguments.iter().any(|arg| arg == "--apply")
@@ -1905,7 +1911,7 @@ mod tests {
         };
         assert!(!preview.apply, "source add reviews choices without --apply");
         let mut provider = Provider::new();
-        let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+        let report = configure(preview, false, false, &mut |a| provider.invoke(a)).unwrap();
         assert_eq!(report["status"], "preview");
         assert_eq!(report["next"], json!([APPLY_REMEDY]));
         assert!(APPLY_REMEDY.contains("--apply"));
@@ -1927,7 +1933,7 @@ mod tests {
         ])
         .is_err());
 
-        let applied = configure(args(&registry, &project), false, &mut |a| {
+        let applied = configure(args(&registry, &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
@@ -1971,7 +1977,7 @@ mod tests {
         let mut provider = Provider::new();
         let mut preview = args(&registry, &project);
         preview.apply = false;
-        configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+        configure(preview, false, false, &mut |a| provider.invoke(a)).unwrap();
         assert_eq!(
             provider.calls,
             vec![public("dev", "prepare-source"), prepare.clone()],
@@ -1979,7 +1985,7 @@ mod tests {
         );
 
         provider.calls.clear();
-        configure(args(&registry, &project), false, &mut |a| {
+        configure(args(&registry, &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();

@@ -87,18 +87,20 @@ fn conforming(output: &Output, command: &str, exit: i32, status: &str) -> Value 
     let report: Value = serde_json::from_str(&stdout).expect("one JSON report");
     assert_camel_case(&report, "$");
     if exit != SUCCESS {
-        if let Some(diagnostics) = report.get("diagnostics").and_then(Value::as_array) {
-            for diagnostic in diagnostics {
-                for key in ["severity", "code", "artifact", "path", "message"] {
-                    assert!(diagnostic.get(key).is_some(), "{command}: no {key}");
-                }
-                assert!(
-                    diagnostic["suggestedAction"]
-                        .as_str()
-                        .is_some_and(|action| !action.is_empty()),
-                    "{command}: every refusal names the next step"
-                );
+        let diagnostics = report["diagnostics"]
+            .as_array()
+            .filter(|diagnostics| !diagnostics.is_empty())
+            .unwrap_or_else(|| panic!("{command}: a refusal carries diagnostics: {stdout}"));
+        for diagnostic in diagnostics {
+            for key in ["severity", "code", "artifact", "path", "message"] {
+                assert!(diagnostic.get(key).is_some(), "{command}: no {key}");
             }
+            assert!(
+                diagnostic["suggestedAction"]
+                    .as_str()
+                    .is_some_and(|action| !action.is_empty()),
+                "{command}: every refusal names the next step"
+            );
         }
     }
     report
@@ -374,4 +376,31 @@ fn the_retired_project_flag_still_selects_the_project() {
             .expect("run tooling editor");
         conforming(&output, "tooling editor", SUCCESS, "complete");
     }
+}
+
+#[test]
+fn an_undeliverable_report_exits_operational() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let keys = workspace.path().join("keys");
+    // A pipe whose reader is already gone refuses every write, as a
+    // consumer that went away would.
+    let (reader, stdout) = std::io::pipe().expect("stdout pipe");
+    drop(reader);
+    let output = evidencectl()
+        .args(["--format", "json", "keygen", "signing", "--output-dir"])
+        .arg(&keys)
+        .stdout(stdout)
+        .output()
+        .expect("run keygen");
+    assert_eq!(
+        output.status.code(),
+        Some(OPERATIONAL_FAILURE),
+        "stderr {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not write the JSON report"),
+        "the only channel left names the failure: {stderr}"
+    );
 }

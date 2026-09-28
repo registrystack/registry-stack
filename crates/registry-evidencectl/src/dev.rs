@@ -270,13 +270,10 @@ struct StartArgs {
     /// Name prefix for the local issuer container, so parallel jobs on one
     /// host can tell their containers apart: lowercase letters, digits, and
     /// inner hyphens, starting with a letter, at most 32 characters.
-    #[arg(
-        long,
-        value_name = "PREFIX",
-        default_value = DEFAULT_NAME_PREFIX,
-        value_parser = parse_name_prefix
-    )]
-    name_prefix: String,
+    /// Defaults to `evidence-dev`, or to the prefix a retained session
+    /// already uses.
+    #[arg(long, value_name = "PREFIX", value_parser = parse_name_prefix)]
+    name_prefix: Option<String>,
 }
 
 /// The container name prefix a session uses unless `--name-prefix` selects
@@ -575,7 +572,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
                     requested_resource: args.resource.as_deref(),
-                    name_prefix: &start.name_prefix,
+                    name_prefix: start.name_prefix.as_deref(),
                 },
                 format,
             )
@@ -634,7 +631,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
                     requested_resource: args.resource.as_deref(),
-                    name_prefix: DEFAULT_NAME_PREFIX,
+                    name_prefix: None,
                 },
                 format,
             )
@@ -1780,7 +1777,7 @@ struct DevStartSelection<'a> {
     target: Option<&'a Path>,
     issuer_project: Option<&'a Path>,
     requested_resource: Option<&'a str>,
-    name_prefix: &'a str,
+    name_prefix: Option<&'a str>,
 }
 
 fn start_detached(
@@ -1819,6 +1816,10 @@ fn start_detached(
             .as_ref()
             .map(|state| state.access_token_audience.as_str()),
         requested_resource,
+    )?;
+    let name_prefix = session_name_prefix(
+        name_prefix,
+        prior.as_ref().map(|state| state.name_prefix.as_str()),
     )?;
     let owner_project = issuer_project
         .map(canonical_project)
@@ -1875,7 +1876,7 @@ fn start_detached(
             target,
             owner.as_ref(),
             resource,
-            name_prefix,
+            &name_prefix,
             format,
         )
     });
@@ -1963,6 +1964,30 @@ fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
         }
     }
     refused.into_iter().next()
+}
+
+/// The container name prefix a start uses: the one `--name-prefix` names, else
+/// the one a retained session already uses, else the default. A retained
+/// session keeps its prefix, because its containers are found by that name.
+fn session_name_prefix(requested: Option<&str>, retained: Option<&str>) -> Result<String> {
+    match (requested, retained) {
+        (Some(requested), Some(retained)) if requested != retained => Err(DevRefusal {
+            operational: false,
+            code: "evidence.dev.name-prefix-differs",
+            path: "$".to_owned(),
+            message: format!(
+                "--name-prefix `{requested}` differs from the prefix `{retained}` the retained \
+                 Evidence session uses."
+            ),
+            suggested_action: format!(
+                "Omit --name-prefix to restart the session as `{retained}`, or run \
+                 `evidencectl dev clean <project>` before starting it under another prefix."
+            ),
+        }
+        .into()),
+        (Some(prefix), _) | (None, Some(prefix)) => Ok(prefix.to_owned()),
+        (None, None) => Ok(DEFAULT_NAME_PREFIX.to_owned()),
+    }
 }
 
 fn select_resource<'a>(retained: Option<&'a str>, requested: Option<&'a str>) -> Result<&'a str> {
@@ -3566,6 +3591,30 @@ mod tests {
         });
         let state: DevState = serde_json::from_value(state).expect("a retained state still reads");
         assert_eq!(state.name_prefix, DEFAULT_NAME_PREFIX);
+    }
+
+    #[test]
+    fn a_restart_keeps_the_retained_name_prefix_unless_another_is_named() {
+        assert_eq!(
+            session_name_prefix(None, None).unwrap(),
+            DEFAULT_NAME_PREFIX
+        );
+        assert_eq!(session_name_prefix(Some("ci-job"), None).unwrap(), "ci-job");
+        assert_eq!(session_name_prefix(None, Some("ci-job")).unwrap(), "ci-job");
+        assert_eq!(
+            session_name_prefix(Some("ci-job"), Some("ci-job")).unwrap(),
+            "ci-job"
+        );
+        let refusal = session_name_prefix(Some("other"), Some("ci-job"))
+            .unwrap_err()
+            .downcast::<DevRefusal>()
+            .expect("a named refusal");
+        assert_eq!(refusal.code, "evidence.dev.name-prefix-differs");
+        assert!(
+            refusal.suggested_action.contains("evidencectl dev clean"),
+            "{}",
+            refusal.suggested_action
+        );
     }
 
     #[test]

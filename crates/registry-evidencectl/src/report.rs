@@ -35,7 +35,15 @@ pub(crate) fn success(command: &str, status: &str, members: Value) -> Value {
 
 /// A report whose command ran but whose verdict refused, such as a denied
 /// check or a failing fixture run. The caller exits [`DOMAIN_REFUSAL_EXIT`].
+/// Its members carry a non-empty `diagnostics` array, so a caller reading
+/// only the envelope still finds the next step.
 pub(crate) fn refused(command: &str, status: &str, members: Value) -> Value {
+    assert!(
+        members["diagnostics"]
+            .as_array()
+            .is_some_and(|diagnostics| !diagnostics.is_empty()),
+        "a refused {command} report carries diagnostics"
+    );
     envelope(false, command, status, members)
 }
 
@@ -160,6 +168,23 @@ mod tests {
             assert_eq!(report["status"], status);
             assert_eq!(report["diagnostics"][0]["code"], "x");
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "carries diagnostics")]
+    fn a_refused_report_without_diagnostics_is_a_programming_error() {
+        let _ = refused("check", "refused", json!({"findings": []}));
+    }
+
+    #[test]
+    fn a_refused_report_keeps_the_diagnostics_its_command_supplied() {
+        let report = refused(
+            "fixtures run",
+            "failed",
+            json!({"diagnostics": [{"code": "x", "suggestedAction": "rerun"}]}),
+        );
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["diagnostics"][0]["code"], "x");
     }
 
     #[test]
