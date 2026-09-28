@@ -3814,3 +3814,111 @@ fn active_source_revalidation_refuses_rotated_credentials_without_replacement() 
         assert_eq!(fs::read(path).unwrap(), bytes);
     }
 }
+
+/// Runs statements, or one query, against the dedicated test database.
+#[cfg(feature = "postgres-test")]
+fn in_test_database<T>(url: &str, work: impl AsyncFnOnce(&tokio_postgres::Client) -> T) -> T {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    runtime.block_on(async {
+        let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+            .await
+            .expect("connect dedicated test database");
+        let connection = tokio::spawn(connection);
+        let result = work(&client).await;
+        drop(client);
+        connection
+            .await
+            .expect("test connection task")
+            .expect("test connection");
+        result
+    })
+}
+
+#[cfg(feature = "postgres-test")]
+#[test]
+fn a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime() {
+    let base = std::env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    // A schema and a runtime role of its own, so this test never races a
+    // suite that resets the public schema of the same database.
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let schema = format!("caseworkctl_split_{suffix}");
+    let role = format!("caseworkctl_split_{suffix}");
+    let password = uuid::Uuid::new_v4().simple().to_string();
+    in_test_database(&base, async |client| {
+        client
+            .batch_execute(&format!(
+                "CREATE SCHEMA {schema}; CREATE ROLE {role} LOGIN PASSWORD '{password}'"
+            ))
+            .await
+            .expect("test schema and runtime role");
+    });
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = |url: &str| format!("{url}{separator}options=-csearch_path%3D{schema}");
+    let (_, host) = base
+        .split_once('@')
+        .expect("test URL names its credentials");
+    let migration_url = scoped(&base);
+    let runtime_url = scoped(&format!("postgresql://{role}:{password}@{host}"));
+
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let state = session(&project);
+    let session_root = state.root();
+    for directory in [
+        session_root.clone(),
+        session_root.join("database"),
+        session_root.join("secrets"),
+        session_root.join("audit"),
+    ] {
+        fs::create_dir_all(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    fs::set_permissions(project.join(".casework"), fs::Permissions::from_mode(0o700)).unwrap();
+    for (name, bytes) in [
+        ("secrets/runtime-database-url", runtime_url.as_str()),
+        ("secrets/migration-database-url", migration_url.as_str()),
+        ("secrets/casework-audit-key", &"0".repeat(64)),
+        // The marker a session retained from a split-role release keeps.
+        ("database/runtime-password", password.as_str()),
+    ] {
+        private::create(&session_root.join(name), bytes.as_bytes()).unwrap();
+    }
+    let mut operator = config::operator(&state);
+    operator["database"] = json!({
+        "runtimeUrlRef": "secret:file/runtime-database-url",
+        "migrationUrlRef": "secret:file/migration-database-url",
+        "testOnlyPlaintext": true,
+    });
+    config::write_yaml(&session_root.join("operator.yaml"), &operator).unwrap();
+    package_session(&session_root, &project).unwrap();
+    // The first start activates the package, and a retained restart finds it
+    // already active under the same role observation.
+    for _ in 0..2 {
+        activate_session(&session_root).unwrap();
+    }
+    let writes: Vec<(String, bool)> = in_test_database(&base, async |client| {
+        client
+            .query(
+                "SELECT t, has_any_column_privilege($1, format('%I.%I', $2::text, t), 'INSERT')
+                   OR has_table_privilege($1, format('%I.%I', $2::text, t), 'UPDATE, DELETE, TRUNCATE')
+                 FROM unnest(ARRAY['casework_activations', 'casework_schema_migrations']) AS t",
+                &[&role, &schema],
+            )
+            .await
+            .expect("ledger privileges")
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect()
+    });
+    assert_eq!(
+        writes,
+        vec![
+            ("casework_activations".to_owned(), false),
+            ("casework_schema_migrations".to_owned(), false),
+        ]
+    );
+}

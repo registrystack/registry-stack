@@ -1970,17 +1970,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             issuer(&args.docker_bin, &state, &terminate)?;
         }
         ensure_active(&terminate)?;
-        // Apply the session package on every start so a retained database is
-        // upgraded with the binaries that now own it. Apply runs in one
-        // transaction under an advisory lock, and it is the only step using the
-        // migration credential; the runtime never writes its own configuration.
-        activation_outcome(
-            crate::project::apply(&root.join("operator.yaml"), None, Vec::new()),
-            &root,
-        )?;
-        if split_roles(&root) {
-            grants(&args.docker_bin, &state, &terminate)?;
-        }
+        activate_session(&root)?;
         state.migrated = true;
         state.save()?;
         ensure_active(&terminate)?;
@@ -3274,6 +3264,19 @@ fn checked_output(output: NativeOutput, root: &Path, name: &str) -> Result<Vec<u
     Ok(output.stdout)
 }
 
+/// Apply the session package on every start so a retained database is
+/// upgraded with the binaries that now own it. Apply runs in one transaction
+/// under an advisory lock, and it is the only step using the migration
+/// credential; the runtime never writes its own configuration. On a split
+/// session apply also grants the runtime role the service tables and only
+/// reads of both ledgers, so no later step may grant it more.
+fn activate_session(root: &Path) -> Result<()> {
+    activation_outcome(
+        crate::project::apply(&root.join("operator.yaml"), None, Vec::new()),
+        root,
+    )
+}
+
 /// Accept an apply that activated the session package, or that found it
 /// already active on a retained database, and name any other refusal.
 fn activation_outcome(result: Result<Value>, root: &Path) -> Result<()> {
@@ -3788,14 +3791,6 @@ fn database(docker: &Path, state: &mut State, terminate: &AtomicBool) -> Result<
 /// credentials name.
 fn split_roles(root: &Path) -> bool {
     root.join("database/runtime-password").exists()
-}
-
-/// Grant the runtime role what the just-applied migrations created. Default
-/// privileges cover every later object; this covers the ones already there
-/// when an older session's database is reused.
-fn grants(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
-    sql(docker,state,DATABASE_NAME,format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {RUNTIME_ROLE}; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {RUNTIME_ROLE};").as_bytes(),None,terminate)?;
-    Ok(())
 }
 
 fn sql(
