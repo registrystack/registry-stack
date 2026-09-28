@@ -557,6 +557,12 @@ fn run_entry() -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
+                if junit {
+                    write_junit_setup_failure(
+                        &command_path,
+                        &format!("{} {}", failure.message, failure.suggested_action),
+                    );
+                }
                 write_safe_failure(failure, &command_path, format);
                 return ExitCode::from(failure.exit());
             }
@@ -568,9 +574,7 @@ fn run_entry() -> ExitCode {
                 write_bregctl_version_mismatch(mismatch, format);
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
-            let operational = error
-                .chain()
-                .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
+            let operational = operational_cause(&error);
             let (code, exit) = if operational {
                 (
                     "evidencectl.operational-failure",
@@ -580,6 +584,9 @@ fn run_entry() -> ExitCode {
                 ("evidencectl.domain-refusal", report::DOMAIN_REFUSAL_EXIT)
             };
             let detail = format!("{error:#}");
+            if junit {
+                write_junit_setup_failure(&command_path, &detail);
+            }
             let safe_message = if operational {
                 "Evidence adopter tooling could not complete the requested operation."
             } else {
@@ -605,6 +612,27 @@ fn run_entry() -> ExitCode {
             }
             ExitCode::from(exit)
         }
+    }
+}
+
+/// Whether an unclassified failure came from the environment rather than an
+/// authored input: an I/O error, or a delegated `evidence` or `bregctl` run
+/// that hung or overproduced past its bound.
+fn operational_cause(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some()
+            || cause
+                .downcast_ref::<evidence_binary::DelegatedRunBoundError>()
+                .is_some()
+    })
+}
+
+/// A fixture run that failed before it evaluated anything still writes one
+/// JUnit document, so a CI collector records the failure.
+fn write_junit_setup_failure(command: &str, message: &str) {
+    if let Err(error) = junit::print_setup_failure(command, message) {
+        eprintln!("evidencectl: could not write the JUnit report: {error}");
+        REPORT_UNDELIVERED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -645,13 +673,20 @@ fn help_requested(arguments: &[OsString]) -> bool {
 /// Render the machine-readable command tree `--format json` help publishes,
 /// using the same walker as the offline CLI reference catalog.
 fn write_json_help() -> ExitCode {
+    use std::io::Write as _;
     let catalog = registry_cli_reference::binary_catalog(
         command(),
         registry_platform_buildinfo::DISPLAY_VERSION,
         None,
     );
     match serde_json::to_string(&catalog) {
-        Ok(catalog) => println!("{catalog}"),
+        Ok(catalog) => {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(error) = writeln!(stdout, "{catalog}").and_then(|()| stdout.flush()) {
+                eprintln!("evidencectl: could not write the JSON report: {error}");
+                return ExitCode::from(report::OPERATIONAL_FAILURE_EXIT);
+            }
+        }
         Err(error) => {
             print_report(&report::failure(
                 "help",
@@ -1152,6 +1187,16 @@ fn write_check_report(report: &serde_json::Value, format: OutputFormat) -> anyho
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
+
+    #[test]
+    fn a_bounded_delegated_run_is_an_operational_failure() {
+        let bound = anyhow::Error::new(evidence_binary::DelegatedRunBoundError::for_test())
+            .context("evidence fixtures run");
+        assert!(operational_cause(&bound));
+        assert!(!operational_cause(&anyhow::anyhow!(
+            "authored input refused"
+        )));
+    }
 
     #[test]
     fn public_reference_excludes_the_dev_supervisor() {

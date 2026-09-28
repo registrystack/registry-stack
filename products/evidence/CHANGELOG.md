@@ -5,7 +5,9 @@
 - BREAKING: `evidencectl` follows the shared ctl report and exit contract.
   - Under `--format json` every command writes one object on standard output
     and nothing on standard error. It opens with `ok`, `command`, and
-    `status`, then the command's own members, and every key is camelCase.
+    `status`, then the command's own members, and every member name is
+    camelCase; a map keyed by authored identifiers, such as
+    `selectorProfiles`, keeps those identifiers as its keys.
     The former `operation` member is replaced by `command`. Refusals use the
     same object with `ok: false` and diagnostics that name the next command.
     A command-line error reports `command: "usage"` and `status:

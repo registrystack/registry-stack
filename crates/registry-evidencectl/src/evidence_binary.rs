@@ -57,6 +57,15 @@ impl std::fmt::Display for DelegatedRunBoundError {
 
 impl std::error::Error for DelegatedRunBoundError {}
 
+#[cfg(test)]
+impl DelegatedRunBoundError {
+    pub(crate) fn for_test() -> Self {
+        Self {
+            message: "the delegated run exceeded its bound".to_owned(),
+        }
+    }
+}
+
 /// Resolve an explicit binary, `EVIDENCE_BIN`, or the first executable on
 /// `PATH`, in that order.
 pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {

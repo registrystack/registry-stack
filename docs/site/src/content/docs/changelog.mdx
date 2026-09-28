@@ -20,7 +20,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 - BREAKING: `evidencectl` follows the shared ctl report and exit contract.
   Under `--format json` each command writes one object on standard output
-  opening with `ok`, `command`, and `status`, all keys camelCase, and nothing
+  opening with `ok`, `command`, and `status`, all member names camelCase, and nothing
   on standard error; `command` replaces the former `operation` member, and
   fixture reports use `evaluatedCases`, `failingCase`, `expectedClass`, and
   `observedClass`. An unreadable file or a missing local dev session exits
