@@ -5347,6 +5347,18 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     SuggestedAction::VerifyMigrationAuthority,
                 );
             }
+            registry_breg::migration::MigrationError::ResumeRolesDiffer { .. } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "apply.resume.roles_differ",
+                        "database.roles",
+                        &format!("{error}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                );
+            }
             registry_breg::migration::MigrationError::AdoptionFingerprintMismatch {
                 live,
                 package,
@@ -15643,6 +15655,15 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             "apply.adoption.fingerprint_mismatch",
             "package",
             "bregctl package",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::ResumeRolesDiffer {
+                role_mode: "split".to_owned(),
+                runtime_role: "registry_runtime".to_owned(),
+            }),
+            "apply.resume.roles_differ",
+            "database.roles",
+            "runtime role `registry_runtime`; rerun the apply with the database roles it started with",
         ),
     ] {
         let report = apply_lifecycle_failure(error);

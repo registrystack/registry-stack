@@ -508,23 +508,39 @@ pub(crate) async fn carry_pre_ledger_package_positions(
     Ok(())
 }
 
-/// The activation id of the one open (applying or failed) activation of a
-/// package digest, if any. Read under the apply lock, so a retry of the same
-/// target resumes the activation its first attempt recorded.
+/// The one open (applying or failed) activation of a package digest, with
+/// the roles it was started with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InFlightActivation {
+    pub activation_id: Uuid,
+    pub role_mode: String,
+    pub runtime_role: String,
+}
+
+/// The one open (applying or failed) activation of a package digest, if any.
+/// Read under the apply lock, so a retry of the same target resumes the
+/// activation its first attempt recorded.
 pub(crate) async fn in_flight_activation(
     client: &impl GenericClient,
     package_digest: &str,
-) -> Result<Option<Uuid>> {
+) -> Result<Option<InFlightActivation>> {
     let row = client
         .query_opt(
-            "SELECT activation_id
+            "SELECT activation_id, role_mode, runtime_role
              FROM registry_internal.registry_migrations
              WHERE package_digest = $1
                AND outcome IN ('applying', 'failed')",
             &[&package_digest],
         )
         .await?;
-    Ok(row.map(|row| row.get(0)))
+    row.map(|row| {
+        Ok(InFlightActivation {
+            activation_id: row.try_get(0)?,
+            role_mode: row.try_get(1)?,
+            runtime_role: row.try_get(2)?,
+        })
+    })
+    .transpose()
 }
 
 pub(crate) async fn record_started(
@@ -592,9 +608,11 @@ pub(crate) async fn record_started(
     Ok(())
 }
 
-/// Accepts only the exact interrupted or failed activation. An applied or
-/// reverted row is immutable through this library and therefore cannot be
-/// resumed or cleared.
+/// Accepts only the exact interrupted or failed activation, started with the
+/// same roles. An applied or reverted row is immutable through this library
+/// and therefore cannot be resumed or cleared. The resumed attempt's operator
+/// reference replaces the one the row recorded, so the ledger names the
+/// reference of the attempt that the audit records applying it.
 pub(crate) async fn verify_resumable(
     client: &impl GenericClient,
     entry: &MigrationLedgerEntry,
@@ -614,6 +632,8 @@ pub(crate) async fn verify_resumable(
                AND statement_checksums = $6
                AND artifact_paths = $7
                AND artifact_checksums = $8
+               AND role_mode = $9
+               AND runtime_role = $10
                AND outcome IN ('applying', 'failed')
              FOR UPDATE",
             &[
@@ -625,6 +645,8 @@ pub(crate) async fn verify_resumable(
                 &entry.statement_checksums,
                 &artifact_paths,
                 &artifact_checksums,
+                &entry.role_mode.as_str(),
+                &entry.runtime_role,
             ],
         )
         .await?;
@@ -649,6 +671,18 @@ pub(crate) async fn verify_resumable(
                 && row.get::<_, String>(4) == step.checksum
         });
     if !exact {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    let changed = client
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+             SET operator_reference_hash = $2
+             WHERE activation_id = $1
+               AND outcome IN ('applying', 'failed')",
+            &[&entry.activation_id, &entry.operator_reference_hash],
+        )
+        .await?;
+    if changed != 1 {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())
@@ -886,6 +920,8 @@ pub(crate) async fn record_applied(
          WHERE activation_id = $1
            AND package_digest = $2
            AND predecessor_package_digest IS NOT DISTINCT FROM $3
+           AND role_mode = $4
+           AND runtime_role = $5
            AND outcome IN ('applying', 'failed')
            {closure}"
     );
@@ -896,6 +932,8 @@ pub(crate) async fn record_applied(
                 &entry.activation_id,
                 &entry.package_digest,
                 &entry.predecessor_package_digest,
+                &entry.role_mode.as_str(),
+                &entry.runtime_role,
             ],
         )
         .await?;

@@ -2244,13 +2244,13 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// The activation id a retry of `package_digest` resumes: the open
+    /// The activation a retry of `package_digest` resumes: the open
     /// activation the ledger records for it, if any. A database with no
     /// ledger yet has none.
     pub(crate) async fn in_flight_activation(
         &mut self,
         package_digest: &str,
-    ) -> Result<Option<uuid::Uuid>> {
+    ) -> Result<Option<super::migration_ledger::InFlightActivation>> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         let ledger_exists: bool = self
             .client

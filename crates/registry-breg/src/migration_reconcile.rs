@@ -221,7 +221,9 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActivationAuditUnavailable
             | MigrationError::PreLedgerDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
-            MigrationError::RuntimeWriteAuthority(_) => Self::MigrationAuthority,
+            MigrationError::RuntimeWriteAuthority(_) | MigrationError::ResumeRolesDiffer { .. } => {
+                Self::MigrationAuthority
+            }
         }
     }
 }
@@ -327,6 +329,7 @@ async fn reconcile_under_lock(
     let Some(activation_id) = connection
         .in_flight_activation(&ledger.package_digest)
         .await?
+        .map(|activation| activation.activation_id)
     else {
         report.unresolvable_reason = Some(UNRESOLVABLE_TARGET_DIFFERS);
         return Ok(report);

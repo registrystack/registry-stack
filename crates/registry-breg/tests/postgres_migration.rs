@@ -1539,6 +1539,124 @@ async fn real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash(
     assert!(!row.get::<_, String>(1).contains(REFERENCE));
 }
 
+/// A retry resumes the activation its first attempt recorded. The retry
+/// must serve with the roles that activation records, or the ledger would
+/// name roles the registry does not serve with; its operator reference is
+/// the one the ledger keeps, as the audit of the attempt that applies it does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_resumed_activation_keeps_its_roles_and_records_its_operator_reference() {
+    const FIRST: &str = "change ticket of the interrupted attempt";
+    const RESUMED: &str = "change ticket of the resumed attempt";
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "resumed-roles",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let interrupted = apply_verified_package(
+        request(
+            &database,
+            &package,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_operator_reference(FIRST)
+        .with_fault_for_test(ReviewedMigrationFaultPoint::AfterCommittedChunk(1)),
+    )
+    .await;
+    assert_value_free(interrupted.err(), MigrationError::ApplyFailed);
+    let interrupted_activation = activation_at(&database, 2).await;
+
+    let other_roles = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::Successor { current: &active },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect_err("a retry with other roles does not resume the activation");
+    assert_eq!(
+        other_roles,
+        MigrationError::ResumeRolesDiffer {
+            role_mode: "split".to_owned(),
+            runtime_role: database.runtime_role.as_str().to_owned(),
+        }
+    );
+    assert!(other_roles
+        .to_string()
+        .contains("rerun the apply with the database roles it started with"));
+
+    let resumed = apply_verified_package(
+        request(
+            &database,
+            &package,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_operator_reference(RESUMED),
+    )
+    .await
+    .expect("the retry with the recorded roles resumes the activation");
+    assert_eq!(resumed.activation_id, interrupted_activation);
+    let row = database
+        .admin
+        .query_one(
+            "SELECT operator_reference_hash, role_mode, runtime_role
+             FROM registry_internal.registry_migrations
+             WHERE activation_id = $1::text::uuid AND outcome = 'applied'",
+            &[&interrupted_activation],
+        )
+        .await
+        .expect("the resumed activation's ledger row reads");
+    let applied_audit = activation_audit_records(&database, &interrupted_activation);
+    let applied_response = applied_audit
+        .iter()
+        .rev()
+        .find(|(phase, record)| phase == "response" && record["outcome"] == "applied")
+        .expect("the resumed attempt audits its applied response");
+    let resumed_hash = AuditProfile::production_from_secret_bytes(vec![7; 32].into())
+        .expect("the activation audit key is valid")
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-activation-operator-reference-v1",
+            &interrupted_activation,
+            RESUMED,
+        )
+        .expect("the reference hashes");
+    assert_eq!(row.get::<_, Option<String>>(0), Some(resumed_hash.clone()));
+    assert_eq!(applied_response.1["operatorReference"], resumed_hash);
+    assert_eq!(row.get::<_, String>(1), "split");
+    assert_eq!(row.get::<_, String>(2), database.runtime_role.as_str());
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_refused_operator_reference_leaves_the_database_unactivated() {
     let (database, initial) = initial_package_database().await;
