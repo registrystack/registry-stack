@@ -125,10 +125,10 @@ struct ApplyArgs {
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
     /// Change or ticket reference; recorded only as a keyed hash.
-    #[arg(long, value_name = "TEXT", value_parser = activation::bounded_operator_text)]
+    #[arg(long, value_name = "TEXT", value_parser = activation::parse_operator_reference)]
     operator_reference: Option<String>,
     /// Reference to a backup taken before this apply; repeatable.
-    #[arg(long = "backup", value_name = "REFERENCE", value_parser = activation::bounded_operator_text)]
+    #[arg(long = "backup", value_name = "REFERENCE", value_parser = activation::parse_backup_reference)]
     backups: Vec<String>,
 }
 
@@ -826,6 +826,43 @@ mod tests {
                 assert!(!output.contains(sentinel), "{output}");
                 assert!(output.contains("--operator-reference"), "{output}");
                 assert!(output.contains("--help"), "{output}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_validator_reason_survives_as_the_usage_message() {
+        let refusals: [(&[&str], &str); 2] = [
+            (
+                &["apply", "--runtime-config", "runtime.yaml", "--backup", ""],
+                "--backup must be between 1 and 256 bytes",
+            ),
+            (
+                &[
+                    "apply",
+                    "--runtime-config",
+                    "runtime.yaml",
+                    "--operator-reference",
+                    "change\n42",
+                ],
+                "--operator-reference must not contain control characters",
+            ),
+        ];
+        for (arguments, reason) in refusals {
+            for format in ["human", "json"] {
+                let mut all = vec![OsString::from("schedulingctl"), OsString::from("--format")];
+                all.push(OsString::from(format));
+                all.extend(arguments.iter().map(OsString::from));
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let exit = main_entry_from(all, &mut stdout, &mut stderr);
+                let output = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr)
+                );
+                assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{output}");
+                assert!(output.contains(reason), "{reason}: {output}");
             }
         }
     }

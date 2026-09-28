@@ -39,16 +39,28 @@ const OPERATOR_REFERENCE_CLASS: &str = "scheduling-operator-reference-v1";
 pub(crate) const MAX_OPERATOR_TEXT_BYTES: usize = 256;
 pub(crate) const MAX_BACKUP_REFERENCES: usize = 16;
 
-/// Parse one `--operator-reference` or `--backup` value: non-empty, bounded,
-/// and free of control characters.
-pub(crate) fn bounded_operator_text(value: &str) -> Result<String, String> {
+/// Parse one `--operator-reference` value: non-empty, bounded, and free of
+/// control characters.
+pub(crate) fn parse_operator_reference(value: &str) -> Result<String, String> {
+    bounded_operator_text("--operator-reference", value)
+}
+
+/// Parse one `--backup` value under the same bounds as
+/// `--operator-reference`.
+pub(crate) fn parse_backup_reference(value: &str) -> Result<String, String> {
+    bounded_operator_text("--backup", value)
+}
+
+/// The reasons name the flag and never the value, since a usage error
+/// repeats them.
+fn bounded_operator_text(flag: &str, value: &str) -> Result<String, String> {
     if value.is_empty() || value.len() > MAX_OPERATOR_TEXT_BYTES {
         return Err(format!(
-            "must be between 1 and {MAX_OPERATOR_TEXT_BYTES} bytes"
+            "{flag} must be between 1 and {MAX_OPERATOR_TEXT_BYTES} bytes"
         ));
     }
     if value.chars().any(char::is_control) {
-        return Err("must not contain control characters".to_owned());
+        return Err(format!("{flag} must not contain control characters"));
     }
     Ok(value.to_owned())
 }
@@ -569,10 +581,10 @@ mod tests {
 
     #[test]
     fn operator_text_is_bounded_and_printable() {
-        assert_eq!(bounded_operator_text("change 42").unwrap(), "change 42");
-        assert!(bounded_operator_text("").is_err());
-        assert!(bounded_operator_text(&"x".repeat(MAX_OPERATOR_TEXT_BYTES + 1)).is_err());
-        assert!(bounded_operator_text("line\nbreak").is_err());
+        assert_eq!(parse_operator_reference("change 42").unwrap(), "change 42");
+        assert!(parse_operator_reference("").is_err());
+        assert!(parse_backup_reference(&"x".repeat(MAX_OPERATOR_TEXT_BYTES + 1)).is_err());
+        assert!(parse_backup_reference("line\nbreak").is_err());
     }
 
     #[test]
