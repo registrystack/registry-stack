@@ -11,7 +11,8 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_audit::{
     AuditDestination, AuditEntry, AuditError, AuditKeyHasher, AuditPhase as EntryPhase,
-    AuditProfile, AuditUnavailable, AuditWriter, AuthorizationAuditEvent, AuthorizationOutcome,
+    AuditProfile, AuditSegments, AuditUnavailable, AuditWriter, AuthorizationAuditEvent,
+    AuthorizationOutcome,
 };
 use registry_platform_crypto::canonicalize_json;
 use registry_platform_oidc::ActorKind;
@@ -1440,8 +1441,9 @@ fn last_local_audit_operation_with_bounds(
         return Err(EvidenceAuditError::Configuration);
     }
 
-    let _writer_lock = lock_stopped_audit_file(path)?;
-    let files = local_audit_files(path, bounds.maximum_segments)?;
+    let segments = AuditSegments::new(path);
+    let _writer_lock = lock_stopped_audit_file(&segments)?;
+    let files = local_audit_files(&segments, bounds.maximum_segments)?;
     let mut collector = LocalAuditCollector::new(bounds);
     for (index, file) in files.iter().enumerate() {
         collector.oldest_file = index == 0;
@@ -1452,10 +1454,8 @@ fn last_local_audit_operation_with_bounds(
 
 /// Take the writer's lock, refusing while a writer holds it. The lock is
 /// released when the returned file is dropped.
-fn lock_stopped_audit_file(path: &Path) -> Result<File, AuditError> {
-    let mut lock_path = path.as_os_str().to_os_string();
-    lock_path.push(".lock");
-    let lock_path = PathBuf::from(lock_path);
+fn lock_stopped_audit_file(segments: &AuditSegments) -> Result<File, AuditError> {
+    let lock_path = segments.lock();
     let lock = open_local_audit_file(&lock_path)?;
     match lock.try_lock() {
         Ok(()) => Ok(lock),
@@ -1469,33 +1469,20 @@ fn lock_stopped_audit_file(path: &Path) -> Result<File, AuditError> {
     }
 }
 
-/// The retained sealed files in sequence order, then the active file.
-fn local_audit_files(path: &Path, maximum_files: usize) -> Result<Vec<PathBuf>, AuditError> {
-    let parent = path.parent().ok_or_else(invalid_audit_data)?;
-    let active = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(invalid_audit_data)?;
-    let mut sealed = Vec::new();
-    for entry in std::fs::read_dir(parent).map_err(AuditError::Io)? {
-        let candidate = entry.map_err(AuditError::Io)?.path();
-        let sequence = candidate
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_prefix(active))
-            .and_then(|suffix| suffix.strip_prefix('.'))
-            .filter(|digits| digits.len() == 8 && digits.bytes().all(|byte| byte.is_ascii_digit()))
-            .and_then(|digits| digits.parse::<u64>().ok());
-        if let Some(sequence) = sequence {
-            sealed.push((sequence, candidate));
-            if sealed.len() >= maximum_files {
-                return Err(file_size_error());
-            }
-        }
-    }
-    sealed.sort_unstable_by_key(|(sequence, _)| *sequence);
-    let mut files: Vec<PathBuf> = sealed.into_iter().map(|(_, file)| file).collect();
-    files.push(path.to_path_buf());
+/// The retained sealed files in sequence order, then the active file. The
+/// writer's own namespace decides what is a sealed segment, so a file another
+/// stream owns is never read as this stream's history.
+fn local_audit_files(
+    segments: &AuditSegments,
+    maximum_files: usize,
+) -> Result<Vec<PathBuf>, AuditError> {
+    let maximum_sealed = maximum_files.checked_sub(1).ok_or_else(file_size_error)?;
+    let mut files: Vec<PathBuf> = segments
+        .sealed(maximum_sealed)?
+        .into_iter()
+        .map(|sealed| sealed.path)
+        .collect();
+    files.push(segments.active().to_path_buf());
     Ok(files)
 }
 
@@ -3830,6 +3817,35 @@ mod tests {
         .expect("view serializes");
         assert_eq!(value["operation"], serde_json::json!(operation));
         assert_eq!(value["events"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn local_inspection_skips_another_stream_named_like_a_sealed_segment() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        drop(log);
+        // A stream configured at a sealed-looking name before such paths were
+        // refused has its own lock; it is never this stream's history.
+        let other = directory.path().join("audit.jsonl.00000001");
+        for file in [
+            other.clone(),
+            directory.path().join("audit.jsonl.00000001.lock"),
+        ] {
+            std::fs::write(&file, "not an entry of this stream\n").expect("other stream");
+            std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+                .expect("owner-only");
+        }
+
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("another stream's file is not read"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000001")
+        );
     }
 
     #[tokio::test]
