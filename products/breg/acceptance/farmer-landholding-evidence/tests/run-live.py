@@ -94,18 +94,13 @@ def main() -> None:
         shutil.copyfile(ready["contractsFile"], project / "evidence/farmer-contracts.json")
         shutil.copyfile(ready["tokenFile"], secret_root / "evidence-token")
         shutil.copyfile(ready["jwksFile"], secret_root / "evidence-jwks")
-        config = yaml.safe_load((project / "registry.yaml").read_text())
-        package = config["package"]
         oidc_key, oidc_jwk = key("oidc-signer", "change-request-example-oidc-key")
-        signer, signer_jwk = key("package-signer", "change-request-example-package-key")
         write(secret_root / "oidc-jwks", {"keys": [oidc_jwk]})
         for role, purpose, scope in [("registrar", "land-registration", "registry:landholding:register"), ("reader", "land-registration-audit", "registry:landholding:read")]:
             (secret_root / f"landholding-{role}-token").write_text(token(oidc_key, oidc_jwk["kid"], role, purpose, scope))
         (secret_root / "audit-key").write_text(secrets.token_hex(32))
         (secret_root / "cursor-key").write_text(secrets.token_hex(32))
         database_id = "farmer-evidence-local-db"
-        anchor = root / "trust-anchor.json"
-        write(anchor, {"apiVersion": "registry.registrystack.org/package-trust/v1", "databaseId": database_id, "environment": package["environment"], "instanceId": package["instanceId"], "keys": [{"jwk": signer_jwk, "keyId": signer_jwk["kid"]}], "threshold": 1}, canonical=True)
         for role in (migration, runtime_role):
             sql(admin.path.lstrip("/") or "postgres", f'CREATE ROLE "{role}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD \'{password}\';')
             created_roles.append(role)
@@ -121,10 +116,10 @@ def main() -> None:
                 (secret_root / f"{label}-{index}").write_text(url)
             runtime = {
                 "apiVersion": "registry.registrystack.org/breg-runtime/v1alpha1", "kind": "BRegRuntimeConfig", "listener": {"bind": "127.0.0.1:0"},
-                "identity": {"environment": package["environment"], "instanceId": package["instanceId"], "databaseId": database_id, "databaseInitializationEnvironment": package["environment"]},
+                "identity": {"environment": "acceptance", "instanceId": "farmer-landholding-evidence", "databaseId": database_id, "databaseInitializationEnvironment": "acceptance"},
                 "secretProviders": {"file": {"root": str(secret_root)}},
                 "database": {"runtimeUrlRef": f"secret:file/runtime-{index}", "migrationUrlRef": f"secret:file/migration-{index}", "pool": {"maxSize": 4, "waitTimeoutMilliseconds": 1000, "createTimeoutMilliseconds": 1000, "recycleTimeoutMilliseconds": 1000}, "roles": {"migration": migration, "runtime": runtime_role}},
-                "package": {"root": str(root / "empty-package"), "trustAnchorPath": str(anchor), "compilerSourceRevision": package["sourceRevision"], "activeRevision": "sha256:" + "1" * 64, "activeSequence": 1},
+                "package": {"root": str(root / "empty-package")},
                 "authentication": {"oidc": {"issuer": "https://issuer.example/change-request-example", "audience": "urn:breg:change-request-example", "allowedAlgorithm": "EdDSA", "accessTokenType": "JWT", "scopeClaim": "scope", "scopeSeparator": " ", "allowedClients": ["registry-change-request-example"], "deniedKids": [], "maxTokenLifetimeSeconds": 3600, "leewayMilliseconds": 60000, "jwksCache": {"cacheTtlSeconds": 600, "negativeCacheTtlSeconds": 60, "refreshCooldownSeconds": 30, "maxDocumentBytes": 65536, "requestTimeoutMilliseconds": 5000, "outageToleranceSeconds": 0}, "jwksSource": {"kind": "static", "documentRef": "secret:file/oidc-jwks"}}, "authorityClaims": {"principal": "registry_principal", "purpose": "registry_purpose"}},
                 "audit": {"hashKeyRef": "secret:file/audit-key", "path": str(root / f"audit-{index}" / "audit.jsonl")}, "cursor": {"secretRef": "secret:file/cursor-key", "maxAgeSeconds": 300}, "eventDestinations": {},
                 "evidenceProviders": {"farmer-registry": {"baseUrl": ready["baseUrl"], "trustBindingId": "synthetic-farmer-live", "tokenRef": "secret:file/evidence-token", "trustedJwksRef": "secret:file/evidence-jwks", "revokedKeyIds": []}},
@@ -136,7 +131,7 @@ def main() -> None:
         bindings = [{"journeyId": journey["id"], "stepId": step["id"], "credential": {"type": "bearer", "tokenRef": f'secret:file/{step["accessProfile"]}-token'}} for journey in journeys["journeys"] for step in journey["steps"]]
         credentials = root / "credentials.json"
         write(credentials, {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1", "kind": "SchemaTestCredentials", "bindings": bindings})
-        command = [sys.executable, str(project_source / "tests/live_registration.py"), "--project", str(project), "--test-runtime", str(root / "runtime-0.yaml"), "--runtime", str(root / "runtime-1.yaml"), "--credentials", str(credentials), "--signer", str(signer), "--secrets", str(secret_root), "--output", str(root / "journey"), "--bregctl", str(args.bregctl.resolve()), "--breg", str(args.breg.resolve()), "--requests", ready["requestsFile"]]
+        command = [sys.executable, str(project_source / "tests/live_registration.py"), "--project", str(project), "--test-runtime", str(root / "runtime-0.yaml"), "--runtime", str(root / "runtime-1.yaml"), "--credentials", str(credentials), "--secrets", str(secret_root), "--output", str(root / "journey"), "--bregctl", str(args.bregctl.resolve()), "--breg", str(args.breg.resolve()), "--requests", ready["requestsFile"]]
         subprocess.run(command, env=child_env, check=True)
         # Only committed acquisitions are retained. Inactive and blank refusals
         # cannot silently become an assertion archive.

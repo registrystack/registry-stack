@@ -325,28 +325,6 @@ open(sys.argv[2], "w", encoding="utf-8").write(json.dumps({"keys": [jwk]}, sort_
 PY
 }
 
-write_trust_anchor() {
-  local public_jwk=$1
-  local database_id=$2
-  local package_environment=$3
-  local instance_id=$4
-  local output=$5
-  python3 - "$public_jwk" "$database_id" "$package_environment" "$instance_id" "$output" <<'PY'
-import json
-import sys
-jwk = json.load(open(sys.argv[1], encoding="utf-8"))
-anchor = {
-    "apiVersion": "registry.registrystack.org/package-trust/v1",
-    "databaseId": sys.argv[2],
-    "environment": sys.argv[3],
-    "instanceId": sys.argv[4],
-    "keys": [{"jwk": jwk, "keyId": jwk["kid"]}],
-    "threshold": 1,
-}
-open(sys.argv[5], "w", encoding="utf-8").write(json.dumps(anchor, sort_keys=True, separators=(",", ":")))
-PY
-}
-
 write_jwt() {
   local private_key=$1
   local key_id=$2
@@ -464,24 +442,21 @@ provision_database() {
 render_runtime_config() {
   local output=$1
   local database_id=$2
-  local package_environment=$3
-  local runtime_ref=$4
-  local migration_ref=$5
-  local source_revision=$6
-  local instance_id=$7
-  local migration_role=$8
-  local runtime_role=$9
-  local trust_anchor=${10}
+  local runtime_ref=$3
+  local migration_ref=$4
+  local instance_id=$5
+  local migration_role=$6
+  local runtime_role=$7
   cat >"$output" <<EOF_RUNTIME
 apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:0
 identity:
-  environment: $package_environment
+  environment: acceptance
   instanceId: $instance_id
   databaseId: $database_id
-  databaseInitializationEnvironment: $package_environment
+  databaseInitializationEnvironment: acceptance
 secretProviders:
   file:
     root: $temporary_root/secrets
@@ -498,10 +473,6 @@ database:
     runtime: $runtime_role
 package:
   root: $temporary_root/empty-package-root
-  trustAnchorPath: $trust_anchor
-  compilerSourceRevision: $source_revision
-  activeRevision: sha256:1111111111111111111111111111111111111111111111111111111111111111
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example/change-request-example
@@ -541,31 +512,6 @@ operationalTimeouts:
   migrationLockMilliseconds: 30000
   migrationStatementMilliseconds: 60000
 EOF_RUNTIME
-}
-
-read_project_package_identity() {
-  local project=$1
-  python3 - "$project/registry.yaml" <<'PY'
-import sys
-from pathlib import Path
-try:
-    import yaml
-except ImportError as error:
-    raise SystemExit("PyYAML is required for project package identity extraction") from error
-path = Path(sys.argv[1])
-with path.open(encoding="utf-8") as handle:
-    document = yaml.safe_load(handle)
-if not isinstance(document, dict):
-    raise SystemExit("project registry.yaml is malformed")
-package = document.get("package")
-if not isinstance(package, dict):
-    raise SystemExit("project package block is missing")
-for key in ("environment", "instanceId", "sourceRevision"):
-    value = package.get(key)
-    if not isinstance(value, str) or not value:
-        raise SystemExit(f"project package.{key} is missing")
-    print(value)
-PY
 }
 
 write_credentials_from_project() {
@@ -648,11 +594,9 @@ run_fixture() {
   local database_id=$4
   local runtime_secret=$5
   local migration_secret=$6
-  local package_environment=$7
-  local source_revision=$8
-  local instance_id=$9
-  local credentials=${10}
-  local expected_journeys=${11}
+  local instance_id=$7
+  local credentials=$8
+  local expected_journeys=$9
   local urls
   local migration_url
   local runtime_url
@@ -667,11 +611,9 @@ run_fixture() {
   chmod 600 "$temporary_root/secrets/$runtime_secret" "$temporary_root/secrets/$migration_secret"
 
   provision_database "$database" "$migration_role" "$runtime_role"
-  local trust_anchor="$temporary_root/$fixture_name-trust-anchor.json"
-  write_trust_anchor "$package_public_jwk" "$database_id" "$package_environment" "$instance_id" "$trust_anchor"
   render_runtime_config "$temporary_root/$fixture_name-runtime-test.yaml" \
-    "$database_id" "$package_environment" "secret:file/$runtime_secret" "secret:file/$migration_secret" \
-    "$source_revision" "$instance_id" "$migration_role" "$runtime_role" "$trust_anchor"
+    "$database_id" "secret:file/$runtime_secret" "secret:file/$migration_secret" \
+    "$instance_id" "$migration_role" "$runtime_role"
   if [[ "$mode" == "immediate-actions" && "$fixture_name" == "person-registration-rhai" ]]; then
     # Schema tests capture committed events; delivery to a real receiver is separate.
     printf '%s' '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"$temporary_root/secrets/person-events-key"
@@ -698,9 +640,6 @@ PY_EVENTS
   printf 'running %s fixture: %s\n' "$run_label" "$fixture_name"
   "$bregctl" check "$project_path" >/dev/null
   if ! "$bregctl" --format json test "$project_path" \
-    --database-id "$database_id" \
-    --signature-threshold 1 \
-    --signature-key-id change-request-example-package-key \
     --runtime-config "$temporary_root/$fixture_name-runtime-test.yaml" \
     --credentials "$credentials" \
     --output "$receipt" >"$report"; then
@@ -739,7 +678,7 @@ PY_LIVE
     python3 "$repository_root/products/breg/acceptance/person-registration-rhai/tests/live_registration.py" \
       --project "$project_path" --report "$report" --receipt "$receipt" \
       --runtime "$live_runtime" --credentials "$credentials" --bregctl "$bregctl" --breg "$breg" \
-      --signer "$temporary_root/package-signer.pem" --secrets "$temporary_root/secrets" \
+      --secrets "$temporary_root/secrets" \
       --output "$temporary_root/$fixture_name-live"
   fi
 }
@@ -807,11 +746,8 @@ EOF_SQL
 created_roles+=("$runtime_role" "$migration_role")
 
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
-openssl genpkey -algorithm ED25519 -out "$temporary_root/package-signer.pem" >/dev/null 2>&1
-chmod 600 "$temporary_root/oidc-signer.pem" "$temporary_root/package-signer.pem"
+chmod 600 "$temporary_root/oidc-signer.pem"
 write_public_jwk "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "$temporary_root/oidc-signer.public.jwk"
-write_public_jwk "$temporary_root/package-signer.pem" "change-request-example-package-key" "$temporary_root/package-signer.public.jwk"
-package_public_jwk="$temporary_root/package-signer.public.jwk"
 write_jwks "$temporary_root/oidc-signer.public.jwk" "$temporary_root/secrets/oidc-jwks"
 chmod 600 "$temporary_root/secrets/oidc-jwks"
 
@@ -915,22 +851,8 @@ case "$mode" in
     fi
     ;;
 esac
-asset_package_identity=$(read_project_package_identity "$asset_project")
-household_package_identity=$(read_project_package_identity "$household_project")
-if [[ -n "$rhai_project" ]]; then
-  rhai_package_identity=$(read_project_package_identity "$rhai_project")
-fi
-asset_package_environment=$(printf '%s\n' "$asset_package_identity" | sed -n '1p')
-asset_instance_id=$(printf '%s\n' "$asset_package_identity" | sed -n '2p')
-asset_source_revision=$(printf '%s\n' "$asset_package_identity" | sed -n '3p')
-household_package_environment=$(printf '%s\n' "$household_package_identity" | sed -n '1p')
-household_instance_id=$(printf '%s\n' "$household_package_identity" | sed -n '2p')
-household_source_revision=$(printf '%s\n' "$household_package_identity" | sed -n '3p')
 chmod 600 "$asset_credentials" "$household_credentials"
 if [[ -n "$rhai_project" ]]; then
-  rhai_package_environment=$(printf '%s\n' "$rhai_package_identity" | sed -n '1p')
-  rhai_instance_id=$(printf '%s\n' "$rhai_package_identity" | sed -n '2p')
-  rhai_source_revision=$(printf '%s\n' "$rhai_package_identity" | sed -n '3p')
   chmod 600 "$rhai_credentials"
 fi
 
@@ -948,9 +870,7 @@ run_fixture \
   "$asset_database_id" \
   "$asset_runtime_secret" \
   "$asset_migration_secret" \
-  "$asset_package_environment" \
-  "$asset_source_revision" \
-  "$asset_instance_id" \
+  "$asset_fixture_name" \
   "$asset_credentials" \
   "$asset_expected_journeys"
 
@@ -961,9 +881,7 @@ run_fixture \
   "$household_database_id" \
   "$household_runtime_secret" \
   "$household_migration_secret" \
-  "$household_package_environment" \
-  "$household_source_revision" \
-  "$household_instance_id" \
+  "$household_fixture_name" \
   "$household_credentials" \
   "$household_expected_journeys"
 
@@ -975,9 +893,7 @@ if [[ -n "$rhai_project" ]]; then
     "$rhai_database_id" \
     "$rhai_runtime_secret" \
     "$rhai_migration_secret" \
-    "$rhai_package_environment" \
-    "$rhai_source_revision" \
-    "$rhai_instance_id" \
+    "$rhai_fixture_name" \
     "$rhai_credentials" \
     "$rhai_expected_journeys"
 fi
