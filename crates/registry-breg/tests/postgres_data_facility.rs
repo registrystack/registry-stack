@@ -361,7 +361,7 @@ async fn active_identity(harness: &PilotHarness) -> (String, String) {
         .database
         .admin
         .query_one(
-            "SELECT active_package_revision, schema_fingerprint FROM registry_internal.registry_state",
+            "SELECT active_activation_id::text, schema_fingerprint FROM registry_internal.registry_state",
             &[],
         )
         .await

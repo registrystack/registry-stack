@@ -231,7 +231,7 @@ pub(crate) async fn rebaseline_history_coverage_in_transaction(
     let committed = allocate_coverage_baseline_commit(
         transaction,
         &head,
-        &request.expected.package_revision,
+        &request.expected.activation_id,
         BASELINE_SYSTEM_ORIGIN,
     )
     .await?;
@@ -318,7 +318,7 @@ fn rebaseline_operator_reference(
         .key_hasher()
         .audit_reference_hash(
             "breg-history-rebaseline-operator-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             request.operator_reference,
         )
         .map_err(|_| HistoryRebaselineError::InvalidInput)
@@ -339,7 +339,7 @@ fn history_rebaseline_request_entry(
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
+            "packageRevision": request.expected.activation_id,
             "operatorReference": operator_reference,
         }),
     ))
@@ -358,7 +358,7 @@ pub(crate) fn history_rebaseline_entry(
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
+            "packageRevision": request.expected.activation_id,
             "operatorReference": operator_reference,
             "baselinePosition": outcome.baseline_position,
             "verifiedEntityCount": outcome.verified_entity_count,

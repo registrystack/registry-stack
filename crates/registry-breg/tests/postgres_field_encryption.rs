@@ -320,11 +320,8 @@ async fn boot_encrypted_database() -> BootedDatabase {
         &registry,
         RegistryStateTestIdentity {
             package_id: &manifest.package_id,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: fixture.package.package_digest(),
-            package_sequence: 1,
+            label: fixture.package.package_digest(),
         },
     )
     .await

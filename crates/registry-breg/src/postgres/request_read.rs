@@ -543,7 +543,7 @@ async fn attachment_targets_are_authorized(
             actor_reference: actor.to_owned(),
             contract_fingerprint: proposal.contract_fingerprint().as_str().to_owned(),
             effect_digest: proposal.effect_digest().as_str().to_owned(),
-            active_package_revision: expected.package_revision.clone(),
+            active_package_revision: expected.activation_id.clone(),
             effect_id: effect.id().as_str().to_owned(),
             target_entity_id: target_entity_id.to_owned(),
             target_record_id: target_id,
@@ -658,7 +658,7 @@ async fn attachment_targets_are_authorized(
                     actor_reference: actor.to_owned(),
                     contract_fingerprint: proposal.contract_fingerprint().as_str().to_owned(),
                     effect_digest: proposal.effect_digest().as_str().to_owned(),
-                    active_package_revision: expected.package_revision.clone(),
+                    active_package_revision: expected.activation_id.clone(),
                     effect_id: guard.id.clone(),
                     target_entity_id: guard.entity_id.clone(),
                     target_record_id: guard_id,
@@ -839,7 +839,7 @@ async fn action_links(
         let precondition = request_action_etag(
             audit_profile,
             claims,
-            &expected.package_revision,
+            &expected.activation_id,
             route,
             &record.id,
             record_revision,
@@ -1026,7 +1026,7 @@ async fn pending_for_grant(
         &target_entity.id,
         target_record_id,
         row_boundary_contexts(grant.request_row_boundaries())?,
-        &expected.package_revision,
+        &expected.activation_id,
     )
     .map_err(|_| ReadServiceError::Unavailable)?;
     let filters = presence_filters(request_entity, grant, 3)?;

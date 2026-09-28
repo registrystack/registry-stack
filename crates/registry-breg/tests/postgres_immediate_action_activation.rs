@@ -279,7 +279,7 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
     let changes = compiled_registry_change_set(
         &initial_registry,
         &successor_registry,
-        &active_initial.package_revision,
+        &active_initial.package_digest,
     );
     let action_changes = changes
         .changes
@@ -305,7 +305,7 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
     let successor = publish_and_load(
         build_request_for_project(
             successor_project,
-            Some(active_initial.package_revision.as_str()),
+            Some(active_initial.package_digest.as_str()),
             &fresh_fingerprint,
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new((*initial_registry).clone()),
@@ -416,7 +416,7 @@ async fn prepare_reviewed_successor_package(
     let provisional = publish_and_load(
         build_request(
             variant,
-            Some(active.package_revision.as_str()),
+            Some(active.package_digest.as_str()),
             &active.schema_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new((**prior).clone()),
@@ -424,7 +424,7 @@ async fn prepare_reviewed_successor_package(
                 migrations: vec![metadata_only_source(
                     prior,
                     candidate,
-                    &active.package_revision,
+                    &active.package_digest,
                     &active.schema_fingerprint,
                     &active.schema_fingerprint,
                 )],
@@ -437,7 +437,7 @@ async fn prepare_reviewed_successor_package(
     publish_and_load(
         build_request(
             variant,
-            Some(active.package_revision.as_str()),
+            Some(active.package_digest.as_str()),
             &target_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new((**prior).clone()),
@@ -445,7 +445,7 @@ async fn prepare_reviewed_successor_package(
                 migrations: vec![metadata_only_source(
                     prior,
                     candidate,
-                    &active.package_revision,
+                    &active.package_digest,
                     &active.schema_fingerprint,
                     &target_fingerprint,
                 )],
@@ -736,6 +736,7 @@ fn action_router(
         pool,
         registry.clone(),
         identity.clone(),
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -744,7 +745,7 @@ fn action_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -828,7 +829,7 @@ async fn seed_household(
             ),
             &[
                 &Uuid::parse_str(HOUSEHOLD_ID).expect("household UUID"),
-                &identity.package_revision,
+                &identity.activation_id,
             ],
         )
         .await

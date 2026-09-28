@@ -59,6 +59,18 @@ pub enum StartupError {
     DatabaseConnection,
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// The database holds no registry state: no package was ever applied.
+    #[error(
+        "the Registry database records no activated package; run `bregctl apply --package DIR \
+         --initial` to activate the first package"
+    )]
+    DatabaseUninitialized,
+    /// A release before the activation ledger applied this database.
+    #[error(
+        "the Registry database predates the activation ledger; run `bregctl apply --package DIR` \
+         once to adopt this database into the ledger"
+    )]
+    PreLedgerDatabase,
     /// The database records a database id other than the runtime file's
     /// `identity.databaseId`.
     #[error(
@@ -365,6 +377,12 @@ impl StartupError {
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::DatabaseUninitialized => {
+                "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
+            }
+            Self::PreLedgerDatabase => {
+                "the Registry database predates the activation ledger; run `bregctl apply --package DIR` once to adopt this database into the ledger"
+            }
             Self::DatabaseIdentityMismatch => {
                 "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
             }
@@ -707,11 +725,8 @@ async fn prepare_schema_test_database_with_connection_configs(
         config.database().roles().runtime(),
         candidate.registry(),
         crate::postgres::SchemaTestDatabaseIdentity {
-            environment: config.identity().environment(),
-            instance_id: config.identity().instance_id(),
             database_id: config.identity().database_id(),
-            active_package_revision: &package_digest,
-            active_sequence: 1,
+            package_digest: &package_digest,
         },
     )
     .await
@@ -980,13 +995,9 @@ async fn prepare_database_startup(
         &mut client,
         migration_role,
         runtime_role,
+        StartupPurpose::Serve,
     )
     .await?;
-    // Only the serving runtime checks the claim. Operator tooling opens the
-    // same verified startup and must keep working on a copy, so the copy can
-    // be inspected, verified, and adopted.
-    let pg_client: &Client = &client;
-    verify_instance_claim(pg_client).await?;
     let advisories = inspect_baseline(&client, pool.status().max_size).await;
     drop(client);
     Ok((pool, startup, advisories))
@@ -1129,7 +1140,7 @@ async fn finish_prepared_server(
         None => records,
     });
     let read_identity = ReadRuntimeIdentity {
-        package_revision: expected.package_revision.clone(),
+        package_revision: expected.activation_id.clone(),
         schema_fingerprint: expected.schema_fingerprint.clone(),
     };
     let revisions = PostgresRevisionReadService::new(
@@ -1159,7 +1170,7 @@ async fn finish_prepared_server(
     });
     let hook_handlers = Arc::new(crate::hook_handler::HookHandlerRegistry::new(
         &registry,
-        &expected.package_revision,
+        &expected.activation_id,
     ));
     let webhook_delivery = WebhookDeliveryService::new_with_field_encryption(
         pool.clone(),
@@ -1167,6 +1178,7 @@ async fn finish_prepared_server(
         hook_handlers,
         Arc::clone(&registry),
         expected.clone(),
+        config.identity().instance_id(),
         lock_key,
         config.operational_timeouts().record_lock,
         audit.clone(),
@@ -1238,6 +1250,7 @@ async fn finish_prepared_server(
         pool,
         Arc::clone(&registry),
         expected,
+        config.identity().instance_id(),
         lock_key,
         config.operational_timeouts().record_lock,
         audit,
@@ -1342,17 +1355,15 @@ async fn verify_attachment_storage(
     let ready: bool = tx
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
-         AND package_id=$1 AND environment=$2 AND instance_id=$3 AND database_id=$4
-         AND active_package_revision=$5 AND schema_fingerprint=$6 AND package_sequence=$7
+         AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
+         AND active_activation_id::text=$4 AND schema_fingerprint=$5
          AND maintenance_status='ready')",
             &[
                 &expected.package_id,
-                &expected.environment,
-                &expected.instance_id,
                 &expected.database_id,
-                &expected.package_revision,
+                &expected.package_digest,
+                &expected.activation_id,
                 &expected.schema_fingerprint,
-                &expected.package_sequence,
             ],
         )
         .await
@@ -1364,7 +1375,7 @@ async fn verify_attachment_storage(
     tx.execute(
         "SELECT set_config('registry.active_package_revision', $1, true),
                        set_config('registry.principal', 'breg:startup:attachment-binding', true)",
-        &[&expected.package_revision],
+        &[&expected.activation_id],
     )
     .await
     .map_err(|_| StartupError::AttachmentStorage)?;
@@ -1678,8 +1689,8 @@ pub async fn prepare_startup(
         "bregctl package",
     )
     .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    // Ordering is security-relevant: no database call precedes package closure,
-    // signature, binding, and compiler-derivation verification.
+    // Ordering is security-relevant: no database call precedes package closure
+    // and compiler-derivation verification.
     let package = load_package_with_verified_envelope(package_root, context, &shared)
         .map_err(StartupError::PackageRefused)?;
     prepare_loaded_startup(package, database_id, client, migration_role, runtime_role).await
@@ -1694,7 +1705,26 @@ pub(crate) async fn prepare_loaded_startup(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<VerifiedStartup> {
-    verify_opened_startup(package, database_id, client, migration_role, runtime_role).await
+    verify_opened_startup(
+        package,
+        database_id,
+        client,
+        migration_role,
+        runtime_role,
+        StartupPurpose::Inspect,
+    )
+    .await
+}
+
+/// Who opens the verified startup, which decides whether the instance claim
+/// is checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupPurpose {
+    /// The serving runtime, which refuses a database its claim does not name.
+    Serve,
+    /// Operator tooling, which must keep working on a copy so the copy can be
+    /// inspected, verified, and adopted.
+    Inspect,
 }
 
 async fn verify_opened_startup(
@@ -1703,6 +1733,7 @@ async fn verify_opened_startup(
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
+    purpose: StartupPurpose,
 ) -> Result<VerifiedStartup> {
     let manifest = package.manifest();
     let lock_key =
@@ -1726,6 +1757,21 @@ async fn verify_opened_startup(
         )
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
+    // A database no package was applied to, or one a release before the
+    // activation ledger applied, is named before any check that reads the
+    // state it lacks.
+    match crate::postgres::registry_state_shape(&transaction)
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+    {
+        crate::postgres::RegistryStateShape::Absent => {
+            return Err(StartupError::DatabaseUninitialized)
+        }
+        crate::postgres::RegistryStateShape::PreLedger => {
+            return Err(StartupError::PreLedgerDatabase)
+        }
+        crate::postgres::RegistryStateShape::Ledger => {}
+    }
     verify_configured_runtime_role(&transaction, migration_role, runtime_role)
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
@@ -1733,6 +1779,12 @@ async fn verify_opened_startup(
         crate::postgres::verify_postgis(&transaction, migration_role, runtime_role)
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
+    }
+    // The physical claim is checked before the recorded identity, so a
+    // restored copy is named as a copy whatever package or database id it
+    // records.
+    if purpose == StartupPurpose::Serve {
+        verify_instance_claim(&transaction).await?;
     }
     let expected = recorded_startup_identity(&transaction, &package, database_id).await?;
     verify_catalog_identity_for_catalog(
@@ -1764,8 +1816,8 @@ async fn verify_opened_startup(
 /// package's contract. Enforcement: the recorded database id must equal the
 /// runtime file's `identity.databaseId`, and the recorded active package must
 /// be this package's digest; each mismatch has its own refusal. The recorded
-/// environment, instance, and apply order are the database's own and are
-/// carried unchanged into the expected identity every later check compares.
+/// activation is the database's own and is carried unchanged into the
+/// expected identity every later check compares.
 async fn recorded_startup_identity(
     client: &impl GenericClient,
     package: &VerifiedPackage,
@@ -1773,8 +1825,8 @@ async fn recorded_startup_identity(
 ) -> Result<ExpectedRegistryIdentity> {
     let row = client
         .query_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, package_sequence, maintenance_status
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, maintenance_status
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -1786,23 +1838,21 @@ async fn recorded_startup_identity(
     if row.get::<_, String>(0) != manifest.package_id {
         return Err(StartupError::DatabaseUnready);
     }
-    if row.get::<_, String>(3) != database_id {
+    if row.get::<_, String>(1) != database_id {
         return Err(StartupError::DatabaseIdentityMismatch);
     }
-    if row.get::<_, String>(4) != package.package_digest() {
+    if row.get::<_, String>(2) != package.package_digest() {
         return Err(StartupError::ActivePackageMismatch);
     }
-    if row.get::<_, String>(6) != "ready" {
+    if row.get::<_, String>(4) != "ready" {
         return Err(StartupError::DatabaseUnready);
     }
     Ok(ExpectedRegistryIdentity {
         package_id: manifest.package_id.clone(),
-        environment: row.get(1),
-        instance_id: row.get(2),
         database_id: database_id.to_owned(),
-        package_revision: package.package_digest().to_owned(),
+        package_digest: package.package_digest().to_owned(),
+        activation_id: row.get(3),
         schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: row.get(5),
     })
 }
 

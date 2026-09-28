@@ -156,11 +156,8 @@ pub(super) async fn install(
         registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: "task-instance",
             database_id: "task-database",
-            package_revision: REVISION,
-            package_sequence: 1,
+            label: REVISION,
         },
     )
     .await
@@ -220,6 +217,7 @@ pub(super) fn app_with_clients(
             pool,
             registry.clone(),
             identity.clone(),
+            "task-instance",
             lock,
             Duration::from_secs(2),
             audit,

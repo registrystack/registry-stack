@@ -42,7 +42,6 @@ use tower::Service as _;
 use zeroize::Zeroizing;
 
 const PACKAGE_ID: &str = "spatial-read-registry";
-const INSTANCE_ID: &str = "spatial-read-instance";
 const DATABASE_ID: &str = "spatial-read-database";
 const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-spatial-read-audit";
 
@@ -957,11 +956,8 @@ async fn predicate_free_geojson_works_on_plain_postgresql_without_postgis() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "plain-geojson-package-1",
-            package_sequence: 1,
+            label: "plain-geojson-package-1",
         },
     )
     .await
@@ -1058,11 +1054,8 @@ impl SpatialHarness {
             &catalog,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: INSTANCE_ID,
                 database_id: DATABASE_ID,
-                package_revision: "spatial-read-package-1",
-                package_sequence: 1,
+                label: "spatial-read-package-1",
             },
         )
         .await
@@ -1092,7 +1085,7 @@ impl SpatialHarness {
             fault,
             cursors,
             ReadRuntimeIdentity {
-                package_revision: self.identity.package_revision.clone(),
+                package_revision: self.identity.activation_id.clone(),
                 schema_fingerprint: self.identity.schema_fingerprint.clone(),
             },
         )
@@ -1114,7 +1107,7 @@ impl SpatialHarness {
             Some(query_plan),
             cursors,
             Some(ReadRuntimeIdentity {
-                package_revision: self.identity.package_revision.clone(),
+                package_revision: self.identity.activation_id.clone(),
                 schema_fingerprint: self.identity.schema_fingerprint.clone(),
             }),
         )
@@ -1158,7 +1151,7 @@ fn read_router(
     http_identity: Option<ReadRuntimeIdentity>,
 ) -> axum::Router {
     let read_identity = http_identity.unwrap_or_else(|| ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     });
     let mut records = PostgresRecordReadService::new(

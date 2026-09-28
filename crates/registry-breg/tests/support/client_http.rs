@@ -95,11 +95,8 @@ impl ClientFixture {
             &registry,
             RegistryStateTestIdentity {
                 package_id: registry.registry_id(),
-                environment: "local",
-                instance_id: "client-capability-test",
                 database_id: "client-capability-database",
-                package_revision: "client-capability-package-1",
-                package_sequence: 1,
+                label: "client-capability-package-1",
             },
         )
         .await
@@ -128,6 +125,7 @@ impl ClientFixture {
             pool.clone(),
             registry.clone(),
             identity.clone(),
+            "client-capability-test",
             lock_key,
             Duration::from_secs(2),
             audit.clone(),
@@ -152,7 +150,7 @@ impl ClientFixture {
         let service = HttpService::new(
             registry.clone(),
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision.clone(),
+                package_revision: identity.activation_id.clone(),
                 schema_fingerprint: identity.schema_fingerprint.clone(),
             },
             Arc::new(records),

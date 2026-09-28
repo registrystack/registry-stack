@@ -582,7 +582,7 @@ impl RequestRetentionOperatorService {
             allocate_revision_commit(
                 &transaction,
                 CommitAllocation {
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.activation_id,
                     origin: CommitOrigin::Migration {
                         system_origin: "breg-request-retention-erasure-v1",
                         migration_reference: Some(RETENTION_OPERATION_ID),
@@ -625,7 +625,7 @@ impl RequestRetentionOperatorService {
         let record = |phase: &str, outcome: &str| {
             serde_json::json!({
                 "kind":"attachmentCleanup", "phase":phase, "outcome":outcome,
-                "packageRevision":self.expected.package_revision,
+                "packageRevision":self.expected.activation_id,
                 "actor":"breg:request-retention-operator", "correlation":correlation,
             })
         };
@@ -800,7 +800,7 @@ impl RequestRetentionOperatorService {
     }
 
     pub(crate) fn package_revision(&self) -> &str {
-        &self.expected.package_revision
+        &self.expected.activation_id
     }
 
     pub(crate) fn request_plan(&self, request_entity_id: &str) -> Result<()> {
@@ -845,7 +845,7 @@ impl RequestRetentionOperatorService {
         transaction
             .execute(
                 "SELECT pg_catalog.set_config('registry.active_package_revision', $1, true)",
-                &[&self.expected.package_revision],
+                &[&self.expected.activation_id],
             )
             .await
             .map_err(map_retention_error)?;
@@ -1547,7 +1547,7 @@ fn retention_record_reference(
         .key_hasher()
         .audit_reference_hash(
             "breg-record-v1",
-            &expected.package_revision,
+            &expected.activation_id,
             &scope.request_id.to_string(),
         )
         .map_err(|_| RequestRetentionError::Unavailable)
@@ -1576,7 +1576,7 @@ fn retention_request_entry(
             "entityId": scope.request_entity_id,
             "requestId": correlation.request_id().to_string(),
             "traceId": correlation.trace_id().as_str(),
-            "packageRevision": expected.package_revision,
+            "packageRevision": expected.activation_id,
             "selectedAccessProfile": "operator",
             "purposePresent": false,
             "principalReference": null,
@@ -1626,7 +1626,7 @@ fn retention_terminal_entry(
             operation_id: RETENTION_OPERATION_ID.to_owned(),
             entity_id: Some(scope.request_entity_id.to_owned()),
             action_id: None,
-            package_revision: expected.package_revision.clone(),
+            package_revision: expected.activation_id.clone(),
             selected_access_profile: "operator".to_owned(),
             purpose_present: false,
             principal_reference: None,

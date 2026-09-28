@@ -2411,23 +2411,20 @@ pub async fn begin_record_transaction<'a>(
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     let state = transaction
         .query_typed_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint, maintenance_status
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
         )
         .await?
         .ok_or(PostgresKernelError::RegistryUnavailable)?;
-    let ready = state.get::<_, String>(7) == "ready"
+    let ready = state.get::<_, String>(5) == "ready"
         && state.get::<_, String>(0) == expected.package_id
-        && state.get::<_, String>(1) == expected.environment
-        && state.get::<_, String>(2) == expected.instance_id
-        && state.get::<_, String>(3) == expected.database_id
-        && state.get::<_, String>(4) == expected.package_revision
-        && state.get::<_, String>(5) == expected.schema_fingerprint
-        && state.get::<_, i64>(6) == expected.package_sequence;
+        && state.get::<_, String>(1) == expected.database_id
+        && state.get::<_, String>(2) == expected.package_digest
+        && state.get::<_, String>(3) == expected.activation_id
+        && state.get::<_, String>(4) == expected.schema_fingerprint;
     if !ready {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
@@ -2446,7 +2443,7 @@ pub async fn begin_record_transaction<'a>(
                 (&claims.access_profile, Type::TEXT),
                 (&claims.purpose.as_deref().unwrap_or(""), Type::TEXT),
                 (&claims.canonical_row_boundaries, Type::TEXT),
-                (&expected.package_revision, Type::TEXT),
+                (&expected.activation_id, Type::TEXT),
                 (&recipients, Type::TEXT),
             ],
         )
@@ -2490,23 +2487,20 @@ pub async fn begin_action_transaction<'a>(
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     let state = transaction
         .query_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint, maintenance_status
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
         )
         .await?
         .ok_or(PostgresKernelError::RegistryUnavailable)?;
-    let ready = state.get::<_, String>(7) == "ready"
+    let ready = state.get::<_, String>(5) == "ready"
         && state.get::<_, String>(0) == expected.package_id
-        && state.get::<_, String>(1) == expected.environment
-        && state.get::<_, String>(2) == expected.instance_id
-        && state.get::<_, String>(3) == expected.database_id
-        && state.get::<_, String>(4) == expected.package_revision
-        && state.get::<_, String>(5) == expected.schema_fingerprint
-        && state.get::<_, i64>(6) == expected.package_sequence;
+        && state.get::<_, String>(1) == expected.database_id
+        && state.get::<_, String>(2) == expected.package_digest
+        && state.get::<_, String>(3) == expected.activation_id
+        && state.get::<_, String>(4) == expected.schema_fingerprint;
     if !ready {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
@@ -2523,7 +2517,7 @@ pub async fn begin_action_transaction<'a>(
                 &claims.access_profile(),
                 &claims.purpose().unwrap_or(""),
                 &"[]",
-                &expected.package_revision,
+                &expected.activation_id,
                 // Gated profiles cannot invoke actions, so no action path
                 // evaluates a consent probe.
                 &"[]",

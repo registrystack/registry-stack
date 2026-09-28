@@ -89,7 +89,7 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     let candidate = compile_profile_module(&candidate_bytes);
     let candidate_fingerprint = fresh_fingerprint(&candidate).await;
     let changes =
-        compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_revision);
+        compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_digest);
     assert!(changes.changes.iter().any(|change| {
         change.code == CompiledRegistryChangeCode::FieldAddedOptional
             && change.target.entity_id.as_deref() == Some("asset")
@@ -118,7 +118,7 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
         .expect("the optional field and additive request profile are compiler-applicable");
 
     let next = publish_temporal_policy_package(
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         candidate_fingerprint.clone(),
         candidate_bytes,
         PackageMigrationPlanInput::Successor {
@@ -136,7 +136,10 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     .await
     .expect("automatic successor applies after ACL reconciliation probes the candidate");
     assert_eq!(upgraded.schema_fingerprint, candidate_fingerprint);
-    assert_eq!(upgraded.package_sequence, 2);
+    assert_eq!(
+        ledger_apply_order(&database, &upgraded.activation_id).await,
+        2
+    );
 
     let (migration, task) = database.connect_migration().await;
     assert_eq!(
@@ -150,10 +153,10 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
         candidate_fingerprint
     );
     let state = database.admin.query_one(
-        "SELECT maintenance_status, active_package_revision FROM registry_internal.registry_state WHERE singleton", &[],
+        "SELECT maintenance_status, active_activation_id::text FROM registry_internal.registry_state WHERE singleton", &[],
     ).await.unwrap();
     assert_eq!(state.get::<_, String>(0), "ready");
-    assert_eq!(state.get::<_, String>(1), upgraded.package_revision);
+    assert_eq!(state.get::<_, String>(1), upgraded.activation_id);
     task.abort();
     database.cleanup().await;
 }
@@ -329,7 +332,7 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
     let candidate = compile_profile_module(&candidate_bytes);
     let candidate_fingerprint = fresh_fingerprint(&candidate).await;
     let changes =
-        compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_revision);
+        compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_digest);
     let plan = if matches!(kind, ProfileSuccessor::Reviewed) {
         // Readable-field narrowing changes the query contract and retains its
         // existing review requirement. Exercise that successor path as well.
@@ -339,7 +342,7 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
             prior_schema_fingerprint: active.schema_fingerprint.clone(),
             migrations: vec![metadata_only_review_source(
                 &changes.changes,
-                &active.package_revision,
+                &active.package_digest,
                 &active.schema_fingerprint,
                 &candidate_fingerprint,
             )],
@@ -358,7 +361,7 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
         }
     };
     let next = publish_temporal_policy_package(
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         candidate_fingerprint.clone(),
         candidate_bytes,
         plan,
@@ -422,7 +425,10 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
         );
     }
     assert_eq!(upgraded.schema_fingerprint, candidate_fingerprint);
-    assert_eq!(upgraded.package_sequence, 2);
+    assert_eq!(
+        ledger_apply_order(&database, &upgraded.activation_id).await,
+        2
+    );
     let (migration, task) = database.connect_migration().await;
     assert_eq!(
         managed_schema_fingerprint(
@@ -435,10 +441,10 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
         candidate_fingerprint
     );
     let state = database.admin.query_one(
-        "SELECT maintenance_status, active_package_revision FROM registry_internal.registry_state WHERE singleton", &[],
+        "SELECT maintenance_status, active_activation_id::text FROM registry_internal.registry_state WHERE singleton", &[],
     ).await.unwrap();
     assert_eq!(state.get::<_, String>(0), "ready");
-    assert_eq!(state.get::<_, String>(1), upgraded.package_revision);
+    assert_eq!(state.get::<_, String>(1), upgraded.activation_id);
 
     // Readiness is operational: the retained reader can enter a record
     // transaction under the new package, not merely observe a status string.

@@ -1590,7 +1590,7 @@ struct ApplySuccessReport {
     activation: ApplyActivation,
     package_digest: String,
     schema_fingerprint: String,
-    package_sequence: i64,
+    activation_id: String,
 }
 
 #[derive(Serialize)]
@@ -2650,6 +2650,11 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             ),
             DiagnosticArtifact::InstanceClaim,
             SuggestedAction::VerifyInstanceClaim,
+        ),
+        InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(message)) => (
+            diagnostic("instance_claim.package.refused", "package", &message),
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackageBinding,
         ),
     };
     FailureReport {
@@ -4335,7 +4340,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         },
         package_digest: outcome.package_digest,
         schema_fingerprint: outcome.schema_fingerprint,
-        package_sequence: outcome.package_sequence,
+        activation_id: outcome.activation_id,
     })
 }
 
@@ -11595,7 +11600,7 @@ fn write_apply_success(
                 ),
                 ("package digest", report.package_digest.clone()),
                 ("schema fingerprint", report.schema_fingerprint.clone()),
-                ("package sequence", report.package_sequence.to_string()),
+                ("activation id", report.activation_id.clone()),
             ],
             stdout,
         )
@@ -14825,6 +14830,24 @@ fn apply_reports_a_history_coverage_refusal_with_its_recovery() {
         );
     }
     assert!(!diagnostic.message.contains("reconciliation"));
+}
+
+#[cfg(test)]
+#[test]
+fn an_instance_claim_package_refusal_keeps_the_pin_sentence_it_names() {
+    use registry_breg::instance_claim::InstanceClaimError;
+
+    let sentence = "package.expectedDigest is sha256:a but the package at package.root is sha256:b; deploy the pinned package or update package.expectedDigest";
+    let report = instance_claim_failure(
+        "instance-claim status",
+        InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(sentence.to_owned())),
+    );
+    assert!(!report.ok);
+    assert_eq!(report.command, "instance-claim status");
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "instance_claim.package.refused");
+    assert_eq!(diagnostic.path, "package");
+    assert_eq!(diagnostic.message, sentence);
 }
 
 #[cfg(test)]

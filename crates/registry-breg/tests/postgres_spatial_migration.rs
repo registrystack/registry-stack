@@ -104,7 +104,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     let spatial_package = publish_and_load(
         prepare_package(build_request(
             Variant::WithBbox,
-            Some(&active.package_revision),
+            Some(&active.package_digest),
             &spatial_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new(base.clone()),
@@ -192,7 +192,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     let destructive_package = publish_and_load(
         prepare_package(build_request(
             Variant::WithBboxLegacyRemoved,
-            Some(&spatial_active.package_revision),
+            Some(&spatial_active.package_digest),
             &removed_fingerprint,
             PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new(spatial.clone()),
@@ -220,7 +220,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         .expect("current time formats");
     let backup_binding = ExternalBackupBinding {
         database_id: DATABASE.to_owned(),
-        prior_package_digest: spatial_active.package_revision.clone(),
+        prior_package_digest: spatial_active.package_digest.clone(),
         prior_schema_fingerprint: spatial_active.schema_fingerprint.clone(),
         backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
         sha256: backup_digest,
@@ -456,7 +456,7 @@ fn metadata_only_source_between(
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
 ) -> ReviewedMigrationSource {
-    let change_set = compiled_registry_change_set(previous, candidate, &current.package_revision);
+    let change_set = compiled_registry_change_set(previous, candidate, &current.package_digest);
     let mut covers = change_set
         .changes
         .iter()
@@ -490,7 +490,7 @@ fn metadata_only_source_between(
     };
     let descriptor_bytes = canonical(&descriptor);
     let receipt = MigrationRehearsalReceipt {
-        prior_package_digest: current.package_revision.clone(),
+        prior_package_digest: current.package_digest.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: Vec::new(),
@@ -524,7 +524,7 @@ fn destructive_source_with_recovery_fault(
     candidate: &CompiledRegistry,
     final_fingerprint: &str,
 ) -> ReviewedMigrationSource {
-    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+    let change = compiled_registry_change_set(prior, candidate, &current.package_digest)
         .changes
         .into_iter()
         .find(|change| change.code == CompiledRegistryChangeCode::FieldRemoved)
@@ -627,7 +627,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
     );
     let fixture_bytes = b"{\"fixture\":\"representative\"}\n".to_vec();
     let receipt = MigrationRehearsalReceipt {
-        prior_package_digest: current.package_revision.clone(),
+        prior_package_digest: current.package_digest.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: steps
@@ -730,7 +730,7 @@ async fn seed_existing_site_and_history(
             ),
             &[
                 &SITE_RECORD,
-                &active.package_revision,
+                &active.activation_id,
                 &"SITE-001",
                 &current_location,
                 &"legacy-1",
@@ -755,7 +755,7 @@ async fn seed_existing_site_and_history(
                     &SITE_RECORD,
                     &revision,
                     &predecessor,
-                    &active.package_revision,
+                    &active.activation_id,
                     &format!("records.site.{mutation}"),
                     &mutation,
                     &snapshot,
@@ -1420,7 +1420,7 @@ fn synthetic_backup_sql(
             format!(
                 "('{}'::uuid, 2::bigint, 'active'::text, '{}', 'SITE-{index:03}'::varchar(16), '{{\"type\":\"Point\",\"coordinates\":[100.55,13.76]}}'::jsonb, 'legacy-1'::varchar(16))",
                 record,
-                active.package_revision.replace('\'', "''")
+                active.activation_id.replace('\'', "''")
             )
         })
         .collect::<Vec<_>>()
@@ -1604,13 +1604,14 @@ async fn assert_non_ready_target(
     let row = database
         .admin
         .query_one(
-            "SELECT active_package_revision, maintenance_status, maintenance_target_revision
+            "SELECT active_activation_id::text, maintenance_status,
+                    maintenance_target_package_digest
              FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
         .await
         .expect("maintenance state reads");
-    assert_eq!(row.get::<_, String>(0), active.package_revision);
+    assert_eq!(row.get::<_, String>(0), active.activation_id);
     assert_eq!(row.get::<_, String>(1), expected_status);
     assert_eq!(
         row.get::<_, Option<String>>(2).as_deref(),
@@ -1622,18 +1623,23 @@ async fn assert_ready_target(database: &TestDatabase, expected: &ExpectedRegistr
     let row = database
         .admin
         .query_one(
-            "SELECT active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status, maintenance_target_revision
-             FROM registry_internal.registry_state WHERE singleton",
+            "SELECT state.active_activation_id::text, state.active_package_digest,
+                    state.schema_fingerprint, state.maintenance_status,
+                    state.maintenance_target_package_digest, ledger.outcome
+             FROM registry_internal.registry_state AS state
+             JOIN registry_internal.registry_migrations AS ledger
+               ON ledger.activation_id = state.active_activation_id
+             WHERE state.singleton",
             &[],
         )
         .await
         .expect("ready state reads");
-    assert_eq!(row.get::<_, String>(0), expected.package_revision);
-    assert_eq!(row.get::<_, String>(1), expected.schema_fingerprint);
-    assert_eq!(row.get::<_, i64>(2), expected.package_sequence);
+    assert_eq!(row.get::<_, String>(0), expected.activation_id);
+    assert_eq!(row.get::<_, String>(1), expected.package_digest);
+    assert_eq!(row.get::<_, String>(2), expected.schema_fingerprint);
     assert_eq!(row.get::<_, String>(3), "ready");
     assert_eq!(row.get::<_, Option<String>>(4), None);
+    assert_eq!(row.get::<_, String>(5), "applied");
 }
 
 async fn assert_legacy_column_absent(database: &TestDatabase, prior: &CompiledRegistry) {

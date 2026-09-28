@@ -251,7 +251,7 @@ async fn chunk_envelopes_within_the_request_ceiling_reach_the_service() {
     let run = json!({
         "operation": "create",
         "profileId": "operator",
-        "packageRevision": PACKAGE_REVISION,
+        "packageRevision": registry_breg::postgres::test_package_digest(PACKAGE_REVISION),
         "schemaFingerprint": harness.schema_fingerprint,
         "inputDigest": input_digest,
         "inputLength": line.len(),
@@ -351,11 +351,8 @@ impl ContractHarness {
             &registry,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: "ingestion-contract-instance",
                 database_id: "ingestion-contract-database",
-                package_revision: PACKAGE_REVISION,
-                package_sequence: 1,
+                label: PACKAGE_REVISION,
             },
         )
         .await
@@ -437,6 +434,7 @@ fn build_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "ingestion-contract-instance",
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -445,7 +443,7 @@ fn build_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             records,

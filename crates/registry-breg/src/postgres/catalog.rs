@@ -258,14 +258,6 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
-        for (table, privileges) in crate::instance_claim::INSTANCE_CLAIM_TABLES {
-            catalog.table(
-                &format!("registry_internal.{table}"),
-                privileges.iter().copied(),
-                std::iter::empty::<&str>(),
-                Some((false, false)),
-            );
-        }
         for (table, privileges) in crate::import_authority::IMPORT_AUTHORITY_TABLES {
             let name = format!("registry_internal.{table}");
             catalog.table(
@@ -540,57 +532,69 @@ fn managed_policy_role(role: DdlPolicyRole) -> ManagedPolicyRole {
     }
 }
 
-/// Package and schema identity expected by one loaded runtime.
+/// Package and schema identity expected by one loaded runtime: the registry
+/// package id, the database the runtime identity names, the active package
+/// digest, the activation that made it active, and its schema fingerprint.
+///
+/// The activation id is the scope value every revision, history descriptor,
+/// cursor, and keyed audit hash of the active package is bound to. It is a
+/// canonical lowercase UUID string, so it is written to settings and rows as
+/// it stands.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExpectedRegistryIdentity {
     pub package_id: String,
-    pub environment: String,
-    pub instance_id: String,
     pub database_id: String,
-    pub package_revision: String,
+    pub package_digest: String,
+    pub activation_id: String,
     pub schema_fingerprint: String,
-    pub package_sequence: i64,
 }
 
 impl ExpectedRegistryIdentity {
     pub fn validate(&self) -> Result<()> {
         if self.package_id.is_empty()
-            || self.environment.is_empty()
-            || self.instance_id.is_empty()
             || self.database_id.is_empty()
-            || self.package_revision.is_empty()
+            || self.package_digest.is_empty()
             || self.schema_fingerprint.is_empty()
-            || self.package_sequence < 0
+            || canonical_activation_id(&self.activation_id).is_none()
         {
             return Err(PostgresKernelError::Configuration(
-                "Registry identity fields must be non-empty and sequence must be non-negative",
+                "Registry identity fields must be non-empty and the activation id a canonical UUID",
             ));
         }
         Ok(())
     }
+
+    /// The activation id as a UUID, for binding to its `uuid` columns.
+    pub fn activation_uuid(&self) -> Result<uuid::Uuid> {
+        canonical_activation_id(&self.activation_id).ok_or(PostgresKernelError::Configuration(
+            "Registry activation id must be a canonical UUID",
+        ))
+    }
+}
+
+/// The UUID a canonical, lowercase, hyphenated, non-nil activation id names.
+fn canonical_activation_id(value: &str) -> Option<uuid::Uuid> {
+    let parsed = uuid::Uuid::parse_str(value).ok()?;
+    (!parsed.is_nil() && parsed.hyphenated().to_string() == value).then_some(parsed)
 }
 
 /// Verified identity read from the managed PostgreSQL catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogIdentity {
     pub package_id: String,
-    pub environment: String,
-    pub instance_id: String,
     pub database_id: String,
-    pub package_revision: String,
+    pub package_digest: String,
+    pub activation_id: String,
     pub schema_fingerprint: String,
-    pub package_sequence: i64,
 }
 
 impl CatalogIdentity {
     pub fn validate(&self) -> Result<()> {
         if self.package_id.is_empty()
-            || self.environment.is_empty()
-            || self.instance_id.is_empty()
             || self.database_id.is_empty()
-            || self.package_revision.is_empty()
+            || self.package_digest.is_empty()
             || self.schema_fingerprint.is_empty()
-            || self.package_sequence < 0
+            || canonical_activation_id(&self.activation_id).is_none()
         {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
@@ -598,44 +602,76 @@ impl CatalogIdentity {
     }
 }
 
+/// A Registry state identity a test fixture installs directly. The label
+/// derives both the package digest and the activation id, so one label names
+/// one reproducible activation.
 #[cfg(feature = "postgres-test")]
-struct InitialRegistryState<'a> {
-    package_id: &'a str,
-    environment: &'a str,
-    instance_id: &'a str,
-    database_id: &'a str,
-    package_revision: &'a str,
-    package_sequence: i64,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct RegistryStateTestIdentity<'a> {
+    pub package_id: &'a str,
+    pub database_id: &'a str,
+    pub label: &'a str,
 }
 
 #[cfg(feature = "postgres-test")]
-impl InitialRegistryState<'_> {
+impl RegistryStateTestIdentity<'_> {
     fn validate(&self) -> Result<()> {
-        if self.package_id.is_empty()
-            || self.environment.is_empty()
-            || self.instance_id.is_empty()
-            || self.database_id.is_empty()
-            || self.package_revision.is_empty()
-            || self.package_sequence < 0
-        {
+        if self.package_id.is_empty() || self.database_id.is_empty() || self.label.is_empty() {
             return Err(PostgresKernelError::Configuration(
                 "initial Registry identity is incomplete",
             ));
         }
         Ok(())
     }
+
+    /// The package digest the label names: the label itself when it is
+    /// already a `sha256:` digest, otherwise the digest of its bytes.
+    #[must_use]
+    pub fn package_digest(&self) -> String {
+        test_package_digest(self.label)
+    }
+
+    /// The activation id the label names.
+    #[must_use]
+    pub fn activation_id(&self) -> String {
+        test_activation_id(self.label)
+    }
 }
 
+/// The package digest a test label names: the label itself when it is already
+/// a `sha256:` digest, otherwise the digest of its bytes.
 #[cfg(feature = "postgres-test")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
-pub struct RegistryStateTestIdentity<'a> {
-    pub package_id: &'a str,
-    pub environment: &'a str,
-    pub instance_id: &'a str,
-    pub database_id: &'a str,
-    pub package_revision: &'a str,
-    pub package_sequence: i64,
+#[must_use]
+pub fn test_package_digest(label: &str) -> String {
+    let is_digest = label.len() == 71
+        && label.starts_with("sha256:")
+        && label[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if is_digest {
+        return label.to_owned();
+    }
+    let mut digest = String::from("sha256:");
+    for byte in Sha256::digest(label.as_bytes()) {
+        write!(&mut digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    digest
+}
+
+/// The reproducible activation id a test label names.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+#[must_use]
+pub fn test_activation_id(label: &str) -> String {
+    let digest = Sha256::digest(label.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .hyphenated()
+        .to_string()
 }
 
 /// Installs the minimal internal state and RLS-protected data surface used by
@@ -698,6 +734,50 @@ pub async fn install_kernel_schema(
     Ok(())
 }
 
+/// The kernel state a database holds, read from the system catalogs alone so
+/// a role without privileges on the managed schemas can still tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RegistryStateShape {
+    /// No registry state table: no package was ever applied.
+    Absent,
+    /// The state table a release before the activation ledger created: it
+    /// names its active package by revision and records no activation id.
+    PreLedger,
+    /// The state table the activation ledger keeps.
+    Ledger,
+}
+
+pub(crate) async fn registry_state_shape(
+    client: &impl GenericClient,
+) -> std::result::Result<RegistryStateShape, tokio_postgres::Error> {
+    let row = client
+        .query_one(
+            "SELECT state.oid IS NOT NULL,
+                    EXISTS (
+                        SELECT 1 FROM pg_catalog.pg_attribute attribute
+                         WHERE attribute.attrelid = state.oid
+                           AND attribute.attname = 'active_activation_id'
+                           AND NOT attribute.attisdropped
+                    )
+               FROM (SELECT NULL) AS one
+               LEFT JOIN pg_catalog.pg_class state
+                 ON state.relname = 'registry_state'
+                AND state.relnamespace = (
+                        SELECT oid FROM pg_catalog.pg_namespace
+                         WHERE nspname = 'registry_internal'
+                    )",
+            &[],
+        )
+        .await?;
+    Ok(
+        match (row.try_get::<_, bool>(0)?, row.try_get::<_, bool>(1)?) {
+            (false, _) => RegistryStateShape::Absent,
+            (true, false) => RegistryStateShape::PreLedger,
+            (true, true) => RegistryStateShape::Ledger,
+        },
+    )
+}
+
 pub(crate) async fn install_registry_state_schema(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
@@ -707,27 +787,33 @@ pub(crate) async fn install_registry_state_schema(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_state (
                  singleton boolean PRIMARY KEY DEFAULT true
                      CONSTRAINT registry_state_singleton_true CHECK (singleton),
-                 environment text NOT NULL
-                     CONSTRAINT registry_state_environment_nonempty CHECK (environment <> ''),
                  package_id text NOT NULL
                      CONSTRAINT registry_state_package_id_nonempty CHECK (package_id <> ''),
-                 instance_id text NOT NULL
-                     CONSTRAINT registry_state_instance_id_nonempty CHECK (instance_id <> ''),
                  database_id text NOT NULL
                      CONSTRAINT registry_state_database_id_nonempty CHECK (database_id <> ''),
-                 active_package_revision text NOT NULL
-                     CONSTRAINT registry_state_package_revision_nonempty CHECK (active_package_revision <> ''),
+                 active_package_digest text NOT NULL
+                     CONSTRAINT registry_state_package_digest_nonempty CHECK (active_package_digest <> ''),
+                 active_activation_id uuid NOT NULL,
                  schema_fingerprint text NOT NULL
                      CONSTRAINT registry_state_schema_fingerprint_nonempty CHECK (schema_fingerprint <> ''),
-                 package_sequence bigint NOT NULL
-                     CONSTRAINT registry_state_package_sequence_nonnegative CHECK (package_sequence >= 0),
                  maintenance_status text NOT NULL
                      CONSTRAINT registry_state_maintenance_status_closed
                      CHECK (maintenance_status IN ('ready', 'applying', 'failed')),
-                 maintenance_target_revision text,
+                 maintenance_target_package_digest text,
+                 system_identifier bigint,
+                 database_oid oid,
+                 epoch bigint NOT NULL DEFAULT 0
+                     CONSTRAINT registry_state_epoch_nonnegative CHECK (epoch >= 0),
+                 claimed_at timestamptz,
                  CONSTRAINT registry_state_maintenance_target_consistent CHECK (
-                     (maintenance_status = 'ready' AND maintenance_target_revision IS NULL)
-                     OR (maintenance_status IN ('applying', 'failed') AND maintenance_target_revision IS NOT NULL)
+                     (maintenance_status = 'ready' AND maintenance_target_package_digest IS NULL)
+                     OR (maintenance_status IN ('applying', 'failed')
+                         AND maintenance_target_package_digest IS NOT NULL)
+                 ),
+                 CONSTRAINT registry_state_claim_consistent CHECK (
+                     (database_oid IS NULL AND system_identifier IS NULL
+                         AND claimed_at IS NULL AND epoch = 0)
+                     OR (database_oid IS NOT NULL AND claimed_at IS NOT NULL AND epoch >= 1)
                  ),
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
@@ -843,33 +929,39 @@ pub(crate) async fn install_registry_state_schema(
     Ok(())
 }
 
-/// Initializes a Registry state row against an explicit closed catalog.
+/// Initializes a Registry state row against an explicit closed catalog,
+/// records the applied initial activation in the ledger the way an initial
+/// apply would, and records the physical claim of the database it runs in.
 #[cfg(feature = "postgres-test")]
 async fn initialize_registry_state_for_catalog(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
     expected_catalog: &ExpectedManagedCatalog,
-    initial: &InitialRegistryState<'_>,
+    initial: &RegistryStateTestIdentity<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
     initial.validate()?;
     let schema_fingerprint =
         managed_schema_fingerprint(migration, runtime_role, expected_catalog).await?;
+    let expected = ExpectedRegistryIdentity {
+        package_id: initial.package_id.to_owned(),
+        database_id: initial.database_id.to_owned(),
+        package_digest: initial.package_digest(),
+        activation_id: initial.activation_id(),
+        schema_fingerprint,
+    };
     let changed = migration
         .execute(
             "INSERT INTO registry_internal.registry_state (
-                 singleton, package_id, environment, instance_id, database_id,
-                 active_package_revision, schema_fingerprint, package_sequence,
-                 maintenance_status
-             ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint, maintenance_status
+             ) VALUES (true, $1, $2, $3, $4, $5, 'ready')
              ON CONFLICT (singleton) DO NOTHING",
             &[
-                &initial.package_id,
-                &initial.environment,
-                &initial.instance_id,
-                &initial.database_id,
-                &initial.package_revision,
-                &schema_fingerprint,
-                &initial.package_sequence,
+                &expected.package_id,
+                &expected.database_id,
+                &expected.package_digest,
+                &expected.activation_uuid()?,
+                &expected.schema_fingerprint,
             ],
         )
         .await?;
@@ -878,15 +970,29 @@ async fn initialize_registry_state_for_catalog(
             "Registry state is already initialized",
         ));
     }
-    Ok(ExpectedRegistryIdentity {
-        package_id: initial.package_id.to_owned(),
-        environment: initial.environment.to_owned(),
-        instance_id: initial.instance_id.to_owned(),
-        database_id: initial.database_id.to_owned(),
-        package_revision: initial.package_revision.to_owned(),
-        schema_fingerprint,
-        package_sequence: initial.package_sequence,
-    })
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_migrations (
+                 activation_id, apply_order, package_digest, predecessor_package_digest,
+                 registry_revision, plan_kind, migration_kind, statement_checksums,
+                 artifact_paths, artifact_checksums, outcome, completed_at, applied_at,
+                 role_mode, runtime_role
+             ) VALUES (
+                 $1, 1, $2, NULL, $3, 'initial', 'compiled_additive', ARRAY[$2]::text[],
+                 ARRAY[]::text[], ARRAY[]::text[], 'applied', transaction_timestamp(),
+                 transaction_timestamp(),
+                 CASE WHEN $4 = current_user THEN 'single' ELSE 'split' END, $4
+             )",
+            &[
+                &expected.activation_uuid()?,
+                &expected.package_digest,
+                &initial.label,
+                &runtime_role.as_str(),
+            ],
+        )
+        .await?;
+    crate::instance_claim::record_if_unclaimed(migration).await?;
+    Ok(expected)
 }
 
 /// Test-only helper for integration fixtures that install a compiled catalog
@@ -899,15 +1005,8 @@ pub async fn initialize_registry_state_for_catalog_test(
     expected_catalog: &ExpectedManagedCatalog,
     identity: RegistryStateTestIdentity<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
-    let initial = InitialRegistryState {
-        package_id: identity.package_id,
-        environment: identity.environment,
-        instance_id: identity.instance_id,
-        database_id: identity.database_id,
-        package_revision: identity.package_revision,
-        package_sequence: identity.package_sequence,
-    };
-    initialize_registry_state_for_catalog(migration, runtime_role, expected_catalog, &initial).await
+    initialize_registry_state_for_catalog(migration, runtime_role, expected_catalog, &identity)
+        .await
 }
 
 /// Test-only helper for integration fixtures that install a compiled Registry
@@ -923,25 +1022,17 @@ pub async fn initialize_compiled_registry_state_for_test(
     registry: &CompiledRegistry,
     identity: RegistryStateTestIdentity<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
-    let initial = InitialRegistryState {
-        package_id: identity.package_id,
-        environment: identity.environment,
-        instance_id: identity.instance_id,
-        database_id: identity.database_id,
-        package_revision: identity.package_revision,
-        package_sequence: identity.package_sequence,
-    };
     let expected = initialize_registry_state_for_catalog(
         migration,
         runtime_role,
         &ExpectedManagedCatalog::compiled(registry),
-        &initial,
+        &identity,
     )
     .await?;
     install_empty_history_baseline_for_compiled_registry(
         migration,
         registry,
-        identity.package_revision,
+        &expected.activation_id,
     )
     .await?;
     Ok(expected)
@@ -974,8 +1065,8 @@ pub async fn verify_catalog_identity_for_catalog(
     expected.validate()?;
     let row = client
         .query_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -984,21 +1075,17 @@ pub async fn verify_catalog_identity_for_catalog(
         .ok_or(PostgresKernelError::RegistryUnavailable)?;
     let actual = CatalogIdentity {
         package_id: row.get(0),
-        environment: row.get(1),
-        instance_id: row.get(2),
-        database_id: row.get(3),
-        package_revision: row.get(4),
-        schema_fingerprint: row.get(5),
-        package_sequence: row.get(6),
+        database_id: row.get(1),
+        package_digest: row.get(2),
+        activation_id: row.get(3),
+        schema_fingerprint: row.get(4),
     };
     actual.validate()?;
     if actual.package_id != expected.package_id
-        || actual.environment != expected.environment
-        || actual.instance_id != expected.instance_id
         || actual.database_id != expected.database_id
-        || actual.package_revision != expected.package_revision
+        || actual.package_digest != expected.package_digest
+        || actual.activation_id != expected.activation_id
         || actual.schema_fingerprint != expected.schema_fingerprint
-        || actual.package_sequence != expected.package_sequence
     {
         return Err(PostgresKernelError::RegistryUnavailable);
     }

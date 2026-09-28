@@ -102,11 +102,8 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence: 1,
+            label: verified.package_digest(),
         },
     )
     .await
@@ -225,11 +222,8 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence: 1,
+            label: verified.package_digest(),
         },
     )
     .await
@@ -400,11 +394,8 @@ async fn production_startup_refuses_local_file_field_encryption_custody() {
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence: 1,
+            label: verified.package_digest(),
         },
     )
     .await
@@ -494,11 +485,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence: 1,
+            label: verified.package_digest(),
         },
     )
     .await
@@ -538,7 +526,7 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1
+             SET active_package_digest = $1
              WHERE singleton",
             &[&"sha256:0000000000000000000000000000000000000000000000000000000000000000"],
         )
@@ -549,7 +537,7 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1
+             SET active_package_digest = $1
              WHERE singleton",
             &[&verified.package_digest()],
         )
@@ -609,11 +597,8 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence: 1,
+            label: verified.package_digest(),
         },
     )
     .await
@@ -806,18 +791,14 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     let context = package.context();
     let verified = load_package(&package.root, &context).expect("final package verifies");
     let manifest = verified.manifest();
-    let package_sequence = 1;
-    initialize_registry_state_for_catalog_test(
+    let initialized = initialize_registry_state_for_catalog_test(
         &migration,
         &database.runtime_role,
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &manifest.package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence,
+            label: verified.package_digest(),
         },
     )
     .await
@@ -839,15 +820,7 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     assert_ready(&prepared, StatusCode::OK).await;
 
     let claims = InstanceClaimService::new_for_test(
-        ExpectedRegistryIdentity {
-            package_id: manifest.package_id.clone(),
-            environment: "production".to_owned(),
-            instance_id: INSTANCE.to_owned(),
-            database_id: DATABASE.to_owned(),
-            package_revision: verified.package_digest().to_owned(),
-            schema_fingerprint: manifest.schema_fingerprint.clone(),
-            package_sequence,
-        },
+        initialized,
         ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryLockKey::derive(&manifest.package_id).expect("lock key derives"),
         database.migration_config.clone(),
@@ -884,7 +857,7 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     database
         .admin
         .execute(
-            "UPDATE registry_internal.registry_instance_claim
+            "UPDATE registry_internal.registry_state
                 SET database_oid = 1
               WHERE singleton",
             &[],
@@ -951,6 +924,232 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     }
     idp.stop().await;
     database.cleanup().await;
+}
+
+/// `bregctl instance-claim` reads the package the runtime file pins, so a
+/// package root swapped under an `expectedDigest` pin is refused by the pin,
+/// by name, before any database is reached.
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn instance_claim_refuses_a_package_root_its_expected_digest_does_not_pin() {
+    use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+
+    let database = TestDatabase::create(2).await;
+    let fixture = StartupFixture::new();
+    let deployed = PackageFixture::build(&fixture.root, fingerprint(1));
+    let pinned = PackageFixture::build(&fixture.root, fingerprint(2));
+    let pinned_digest = load_package(&pinned.root, &pinned.context())
+        .expect("pinned package verifies")
+        .package_digest()
+        .to_owned();
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &deployed,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let raw = fs::read_to_string(&config_path).expect("runtime config reads");
+    let root_line = format!("  root: {}\n", deployed.root.display());
+    assert!(
+        raw.contains(&root_line),
+        "the fixture names its package root"
+    );
+    fs::write(
+        &config_path,
+        raw.replace(
+            &root_line,
+            &format!("{root_line}  expectedDigest: {pinned_digest}\n"),
+        ),
+    )
+    .expect("pinned runtime config writes");
+    let before = managed_database_snapshot(&database.admin).await;
+
+    let refusal = InstanceClaimService::from_runtime_config(&config_path)
+        .await
+        .err()
+        .expect("a swapped package root is refused");
+
+    let InstanceClaimError::PackageRefused(message) = refusal else {
+        panic!("the pin refuses the package by name, not as an unavailable claim: {refusal:?}");
+    };
+    assert!(
+        message.contains(&format!("package.expectedDigest is {pinned_digest}")),
+        "{message}"
+    );
+    assert!(message.contains("deploy the pinned package or update package.expectedDigest"));
+    assert_eq!(managed_database_snapshot(&database.admin).await, before);
+    idp.stop().await;
+    database.cleanup().await;
+}
+
+/// A database no package was ever applied to refuses to serve through the
+/// real startup path, names the command that activates the first package,
+/// binds no listener, and writes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn startup_refuses_an_unapplied_database_naming_the_initial_apply_and_writes_nothing() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(2).await;
+    let fixture = StartupFixture::new();
+    let package = PackageFixture::build(&fixture.root, fingerprint(1));
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let before = managed_database_snapshot(&database.admin).await;
+
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+
+    assert_eq!(refusal, Some(StartupError::DatabaseUninitialized));
+    assert!(StartupError::DatabaseUninitialized
+        .to_string()
+        .contains("run `bregctl apply --package DIR --initial`"));
+    assert_eq!(
+        managed_database_snapshot(&database.admin).await,
+        before,
+        "a refused startup writes nothing"
+    );
+    idp.stop().await;
+    database.cleanup().await;
+}
+
+/// A database a release before the activation ledger applied refuses to
+/// serve through the real startup path, names the apply that adopts it,
+/// binds no listener, and writes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn startup_refuses_a_pre_ledger_database_naming_the_adopting_apply_and_writes_nothing() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let fixture = StartupFixture::new();
+    let package = PackageFixture::build(&fixture.root, fingerprint(1));
+    let verified = load_package(&package.root, &package.context()).expect("package verifies");
+    install_pre_ledger_registry_state(
+        &migration,
+        &verified.manifest().package_id,
+        verified.package_digest(),
+    )
+    .await;
+    migration_task.abort();
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let before = managed_database_snapshot(&database.admin).await;
+
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+
+    assert_eq!(refusal, Some(StartupError::PreLedgerDatabase));
+    assert!(StartupError::PreLedgerDatabase
+        .to_string()
+        .contains("run `bregctl apply --package DIR` once to adopt this database into the ledger"));
+    assert_eq!(
+        managed_database_snapshot(&database.admin).await,
+        before,
+        "a refused startup writes nothing"
+    );
+    idp.stop().await;
+    database.cleanup().await;
+}
+
+/// The kernel state table as the release before the activation ledger
+/// created it, with the singleton row it recorded for one activation.
+async fn install_pre_ledger_registry_state(
+    migration: &impl GenericClient,
+    package_id: &str,
+    package_digest: &str,
+) {
+    migration
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_state (
+                 singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+                 environment text NOT NULL,
+                 package_id text NOT NULL,
+                 instance_id text NOT NULL,
+                 database_id text NOT NULL,
+                 active_package_revision text NOT NULL,
+                 schema_fingerprint text NOT NULL,
+                 package_sequence bigint NOT NULL,
+                 maintenance_status text NOT NULL,
+                 maintenance_target_revision text,
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+             )",
+        )
+        .await
+        .expect("pre-ledger state table installs");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_state (
+                 environment, package_id, instance_id, database_id,
+                 active_package_revision, schema_fingerprint, package_sequence,
+                 maintenance_status
+             ) VALUES ('production', $1, $2, $3, $4, $5, 1, 'ready')",
+            &[
+                &package_id,
+                &INSTANCE,
+                &DATABASE,
+                &package_digest,
+                &fingerprint(1),
+            ],
+        )
+        .await
+        .expect("pre-ledger state row records");
+}
+
+/// Every relation in the managed schemas, and every registry state row, as
+/// text an assertion compares before and after a refused command.
+async fn managed_database_snapshot(admin: &impl GenericClient) -> Vec<String> {
+    let mut snapshot: Vec<String> = admin
+        .query(
+            "SELECT n.nspname || '.' || c.relname || ':' || c.relkind::text
+               FROM pg_catalog.pg_class c
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname LIKE 'registry\\_%'
+              ORDER BY 1",
+            &[],
+        )
+        .await
+        .expect("managed relations read")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    let state_exists: bool = admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_state') IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("state table presence reads")
+        .get(0);
+    if state_exists {
+        snapshot.extend(
+            admin
+                .query(
+                    "SELECT row_to_json(state)::text FROM registry_internal.registry_state state",
+                    &[],
+                )
+                .await
+                .expect("state rows read")
+                .into_iter()
+                .map(|row| row.get::<_, String>(0)),
+        );
+    }
+    snapshot
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1110,7 +1309,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
     .await;
 
     let provisional_successor =
-        PackageFixture::build_successor(&fixture.root, fingerprint(2), &initial.package_revision);
+        PackageFixture::build_successor(&fixture.root, fingerprint(2), &initial.package_digest);
     let verified_provisional_successor = load_package(
         &provisional_successor.root,
         &provisional_successor.context(),
@@ -1185,7 +1384,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
     let successor_package = PackageFixture::build_successor(
         &fixture.root,
         successor_fingerprint,
-        &initial.package_revision,
+        &initial.package_digest,
     );
     let verified_successor = load_package(&successor_package.root, &successor_package.context())
         .expect("final successor verifies");
@@ -1202,7 +1401,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
                 quote(&old_entity.physical_table),
                 quote(&old_entity.fields["code"].physical_name),
             ),
-            &[&record_id, &initial.package_revision, &"old-row"],
+            &[&record_id, &initial.activation_id, &"old-row"],
         )
         .await
         .expect("old package row seeds");
@@ -1347,7 +1546,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
             .await
             .expect("exact successor applies after prior work drains")
     };
-    assert_eq!(active.package_revision, verified_successor.package_digest());
+    assert_eq!(active.package_digest, verified_successor.package_digest());
 
     let old_ready = http_get(old_address, "/ready", None)
         .await
@@ -1459,11 +1658,8 @@ async fn audit_and_oidc_failures_refuse_before_listener_bind() {
         &ExpectedManagedCatalog::compiled(verified.registry()),
         RegistryStateTestIdentity {
             package_id: &verified.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE,
             database_id: DATABASE,
-            package_revision: verified.package_digest(),
-            package_sequence: 1,
+            label: verified.package_digest(),
         },
     )
     .await

@@ -304,7 +304,7 @@ impl PostgresRevisionReadService {
             .map(|principal| {
                 key_hasher.audit_reference_hash(
                     "breg-principal-v1",
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     principal,
                 )
             })
@@ -313,20 +313,17 @@ impl PostgresRevisionReadService {
         let record_reference = key_hasher
             .audit_reference_hash(
                 "breg-record-v1",
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &request.record_id,
             )
             .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
         let field_set_reference = field_set_reference(
             self.audit.profile(),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &request.selected_fields,
         )?;
-        let row_boundary_reference = row_boundary_reference(
-            self.audit.profile(),
-            &self.expected.package_revision,
-            claims,
-        )?;
+        let row_boundary_reference =
+            row_boundary_reference(self.audit.profile(), &self.expected.activation_id, claims)?;
         let entry = read_terminal_entry(
             self.audit.profile(),
             ReadTerminalAudit {
@@ -337,7 +334,7 @@ impl PostgresRevisionReadService {
                     operation_id: request.operation_id.clone(),
                     entity_id: Some(plan.entity.id.clone()),
                     action_id: None,
-                    package_revision: self.expected.package_revision.clone(),
+                    package_revision: self.expected.activation_id.clone(),
                     selected_access_profile: claims.access_profile().to_owned(),
                     purpose_present: claims.purpose().is_some(),
                     principal_reference,

@@ -38,7 +38,6 @@ use zeroize::Zeroizing;
 const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-read-audit";
 const SECRET_CANARY: &str = "SECRET-CANARY-MUST-NOT-LEAVE-PROJECTION";
 const PACKAGE_ID: &str = "read-registry";
-const INSTANCE_ID: &str = "read-instance";
 const DATABASE_ID: &str = "read-database";
 const VISIBLE_RECORD: &str = "00000000-0000-4000-8000-000000000001";
 const ALPHA_RECORD: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0001";
@@ -104,11 +103,8 @@ async fn benchmark_audited_record_read(workload: ReadBenchmark) {
         &ExpectedManagedCatalog::compiled(&compiled),
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-read-1",
-            package_sequence: 1,
+            label: "package-read-1",
         },
     )
     .await
@@ -237,11 +233,8 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-read-1",
-            package_sequence: 1,
+            label: "package-read-1",
         },
     )
     .await
@@ -656,11 +649,8 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-read-1",
-            package_sequence: 1,
+            label: "package-read-1",
         },
     )
     .await
@@ -967,11 +957,8 @@ async fn real_postgres_reads_do_not_depend_on_the_database_time_zone() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-read-1",
-            package_sequence: 1,
+            label: "package-read-1",
         },
     )
     .await
@@ -1091,7 +1078,7 @@ fn read_router_with_cursor_codec(
     query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 ) -> axum::Router {
     let read_identity = http_identity.unwrap_or_else(|| ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     });
     let records = PostgresRecordReadService::new(

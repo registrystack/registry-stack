@@ -26,13 +26,14 @@ pub use baseline::{
 pub use catalog::{
     initialize_compiled_registry_state_for_test, initialize_kernel_registry_state_for_test,
     initialize_registry_state_for_catalog_test, legacy_schema_fingerprint_for_test,
-    RegistryStateTestIdentity,
+    test_activation_id, test_package_digest, RegistryStateTestIdentity,
 };
 pub use catalog::{
     install_kernel_schema, kernel_schema_fingerprint, managed_schema_fingerprint,
     verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
+pub(crate) use catalog::{registry_state_shape, RegistryStateShape};
 pub(crate) use config::MAX_POOL_TIMEOUT;
 pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::{
@@ -61,9 +62,10 @@ pub(crate) use interlock::{
     ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
-    statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
-    MigrationLedgerStepKind, MigrationPlanKind,
+    statement_checksum, MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry,
+    MigrationLedgerStep, MigrationLedgerStepKind,
 };
+pub use migration_ledger::{ActivationPlanKind, RoleMode};
 pub use mutation::{
     IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
     IngestionServiceError, PostgresRecordMutationService,

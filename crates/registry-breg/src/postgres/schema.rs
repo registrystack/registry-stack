@@ -596,11 +596,8 @@ async fn current_role_identifier(client: &impl GenericClient) -> Result<SqlIdent
 /// Candidate identity installed into a clean schema-test database.
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub struct SchemaTestDatabaseIdentity<'a> {
-    pub environment: &'a str,
-    pub instance_id: &'a str,
     pub database_id: &'a str,
-    pub active_package_revision: &'a str,
-    pub active_sequence: u64,
+    pub package_digest: &'a str,
 }
 
 /// Opaque capability for the production pre-sign schema-test executor.
@@ -700,49 +697,41 @@ pub async fn prepare_schema_test_database_with_connections(
 ) -> Result<PreparedSchemaTestDatabase> {
     let (mut migration, migration_task) = connect_schema_test(migration_connection).await?;
     verify_migration_role(&migration, migration_role).await?;
+    // The scratch database is its own activation of the candidate, so its
+    // scope values never collide with a deployed activation's.
+    let activation_id = uuid::Uuid::new_v4().hyphenated().to_string();
     let transaction = migration.transaction().await?;
     refuse_existing_managed_objects(&transaction).await?;
     install_compiled_schema(&transaction, registry, runtime_role).await?;
-    retain_descriptor(&transaction, registry, identity.active_package_revision)
+    retain_descriptor(&transaction, registry, &activation_id)
         .await
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-    install_empty_history_baseline_for_compiled_registry(
-        &transaction,
-        registry,
-        identity.active_package_revision,
-    )
-    .await?;
+    install_empty_history_baseline_for_compiled_registry(&transaction, registry, &activation_id)
+        .await?;
 
     let expected_catalog = ExpectedManagedCatalog::compiled(registry);
     let schema_fingerprint =
         managed_schema_fingerprint(&transaction, runtime_role, &expected_catalog).await?;
-    let package_sequence = i64::try_from(identity.active_sequence).map_err(|_| {
-        PostgresKernelError::Configuration("schema-test package sequence is out of range")
-    })?;
     let expected = ExpectedRegistryIdentity {
         package_id: registry.registry_id().to_owned(),
-        environment: identity.environment.to_owned(),
-        instance_id: identity.instance_id.to_owned(),
         database_id: identity.database_id.to_owned(),
-        package_revision: identity.active_package_revision.to_owned(),
+        package_digest: identity.package_digest.to_owned(),
+        activation_id,
         schema_fingerprint,
-        package_sequence,
     };
+    expected.validate()?;
     let inserted = transaction
         .execute(
             "INSERT INTO registry_internal.registry_state (
-                 singleton, package_id, environment, instance_id, database_id,
-                 active_package_revision, schema_fingerprint, package_sequence,
-                 maintenance_status
-             ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')",
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint, maintenance_status
+             ) VALUES (true, $1, $2, $3, $4, $5, 'ready')",
             &[
                 &expected.package_id,
-                &expected.environment,
-                &expected.instance_id,
                 &expected.database_id,
-                &expected.package_revision,
+                &expected.package_digest,
+                &expected.activation_uuid()?,
                 &expected.schema_fingerprint,
-                &expected.package_sequence,
             ],
         )
         .await?;

@@ -230,7 +230,7 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
     // The predecessor baseline an older package yields carries no reference
     // index members, so the successor plan adds them as ordinary indexes.
     let mut baseline =
-        CompiledRegistryMigrationBaseline::from_compiled(&active.package_revision, &registry);
+        CompiledRegistryMigrationBaseline::from_compiled(&active.package_digest, &registry);
     for entity in baseline.entities.values_mut() {
         entity
             .indexes
@@ -245,7 +245,7 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
     let change_set = compiled_registry_change_set_from_baseline(
         &baseline,
         &successor_registry,
-        &active.package_revision,
+        &active.package_digest,
     );
     assert_eq!(
         change_set
@@ -260,7 +260,7 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
     );
     let successor = publish_and_load(
         prepare_package(build_request(
-            Some(&active.package_revision),
+            Some(&active.package_digest),
             &fingerprint,
             PackageMigrationPlanInput::SuccessorFromBaseline {
                 prior_baseline: Box::new(baseline),
@@ -430,7 +430,7 @@ async fn a_selective_reference_filter_uses_the_reference_index() {
     let app = router(Arc::new(HttpService::new(
         registry.clone(),
         ReadRuntimeIdentity {
-            package_revision: active.package_revision.clone(),
+            package_revision: active.activation_id.clone(),
             schema_fingerprint: active.schema_fingerprint.clone(),
         },
         Arc::new(service),
@@ -641,7 +641,7 @@ async fn seed_skewed_assets(
     let asset_table = &asset.physical_table;
     let asset_site = &asset.fields["site"].physical_name;
     let asset_code = &asset.fields["code"].physical_name;
-    let revision = &active.package_revision;
+    let revision = &active.activation_id;
     // The superuser session bypasses row security for bulk synthetic rows.
     database
         .admin

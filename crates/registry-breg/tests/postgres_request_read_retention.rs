@@ -1140,11 +1140,8 @@ async fn install_registry(
         registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: "request-read-retention-instance",
             database_id: "request-read-retention-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -1183,6 +1180,7 @@ fn request_router(
         pool.clone(),
         registry.clone(),
         identity.clone(),
+        "request-read-retention-instance",
         lock_key,
         Duration::from_secs(2),
         audit.clone(),
@@ -1200,7 +1198,7 @@ fn request_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,

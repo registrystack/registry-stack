@@ -227,11 +227,8 @@ async fn setup_with_handler_source(
         &ExpectedManagedCatalog::compiled(&registry),
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: "requirements-instance",
             database_id: "requirements-database",
-            package_revision: "requirements-1",
-            package_sequence: 1,
+            label: "requirements-1",
         },
     )
     .await
@@ -239,7 +236,7 @@ async fn setup_with_handler_source(
     drop(migration);
     task.abort();
     let register = &registry.entities()["register"];
-    database.admin.execute(&format!("INSERT INTO registry_data.{} (record_id, record_revision, record_lifecycle, active_package_revision, {}, {}) VALUES ($1, 1, 'active', $2, 'R-1', true)", q(&register.physical_table), q(&register.fields["register-code"].physical_name), q(&register.fields["active"].physical_name)), &[&Uuid::parse_str(ID).unwrap(), &identity.package_revision]).await.unwrap();
+    database.admin.execute(&format!("INSERT INTO registry_data.{} (record_id, record_revision, record_lifecycle, active_package_revision, {}, {}) VALUES ($1, 1, 'active', $2, 'R-1', true)", q(&register.physical_table), q(&register.fields["register-code"].physical_name), q(&register.fields["active"].physical_name)), &[&Uuid::parse_str(ID).unwrap(), &identity.activation_id]).await.unwrap();
     (database, registry, identity)
 }
 
@@ -283,13 +280,14 @@ fn configured_app(
         cursors.clone(),
     ));
     let read_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let mutations = PostgresRecordMutationService::new_with_event_destinations(
         pool,
         registry.clone(),
         identity,
+        "requirements-instance",
         lock,
         Duration::from_secs(5),
         audit,

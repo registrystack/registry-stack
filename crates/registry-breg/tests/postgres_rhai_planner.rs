@@ -495,12 +495,8 @@ async fn install_staged_registry(
         registry,
         RegistryStateTestIdentity {
             package_id,
-            environment: "local",
-            instance_id: "staged-rhai-test-instance",
             database_id: "staged-rhai-test-database",
-            package_revision:
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            package_sequence: 1,
+            label: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         },
     )
     .await
@@ -548,6 +544,7 @@ fn staged_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "staged-rhai-test-instance",
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -560,7 +557,7 @@ fn staged_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,

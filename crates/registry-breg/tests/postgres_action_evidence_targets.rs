@@ -123,11 +123,8 @@ async fn setup_with_age(
         &ExpectedManagedCatalog::compiled(&registry),
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: "evidence-test",
             database_id: "evidence-test",
-            package_revision: "evidence-1",
-            package_sequence: 1,
+            label: "evidence-1",
         },
     )
     .await
@@ -168,13 +165,14 @@ fn app(
         cursors.clone(),
     ));
     let read_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let mutations = PostgresRecordMutationService::new(
         pool.clone(),
         registry.clone(),
         identity,
+        "evidence-test",
         lock,
         Duration::from_secs(5),
         audit,
@@ -272,7 +270,7 @@ async fn final_local_target_checks_refuse_changes_during_external_wait_even_for_
         let checked = q(&entity.fields["checked"].physical_name);
         database.admin.execute(&format!(
             "INSERT INTO registry_data.{table} (record_id, record_revision, record_lifecycle, active_package_revision, {zone}, {active}, {checked}) VALUES ($1, 1, 'active', $2, 'permitted', true, false)"
-        ), &[&uuid::Uuid::parse_str(TARGET).unwrap(), &identity.package_revision]).await.unwrap();
+        ), &[&uuid::Uuid::parse_str(TARGET).unwrap(), &identity.activation_id]).await.unwrap();
         let (app, _pool) = app(&database, registry.clone(), identity, &provider, None);
         let condition = send(
             app.clone(),

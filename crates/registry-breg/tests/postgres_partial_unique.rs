@@ -15,7 +15,6 @@ use registry_breg::postgres::{
 };
 
 const PACKAGE_ID: &str = "partial-unique-registry";
-const INSTANCE_ID: &str = "partial-unique-instance";
 const DATABASE_ID: &str = "partial-unique-database";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -65,11 +64,8 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
         &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "partial-unique-package-1",
-            package_sequence: 1,
+            label: "partial-unique-package-1",
         },
     )
     .await

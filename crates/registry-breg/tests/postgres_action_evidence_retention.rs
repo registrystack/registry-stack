@@ -58,11 +58,8 @@ async fn install(
         &ExpectedManagedCatalog::compiled(registry),
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: identity,
             database_id: identity,
-            package_revision: "retention-1",
-            package_sequence: 1,
+            label: "retention-1",
         },
     )
     .await
@@ -391,20 +388,26 @@ async fn retention_serializes_activation_and_holds_identity_lock_through_deletio
         database.migration_config.clone(),
     );
     let key = RegistryLockKey::derive(PACKAGE).unwrap().get();
+    let successor_activation = registry_breg::postgres::test_activation_id("retention-2");
+    let successor_digest = registry_breg::postgres::test_package_digest("retention-2");
+    let restore = format!(
+        "UPDATE registry_internal.registry_state SET active_activation_id='{}',maintenance_status='ready',maintenance_target_package_digest=NULL WHERE singleton",
+        registry_breg::postgres::test_activation_id("retention-1")
+    );
     for change in [
-        "UPDATE registry_internal.registry_state SET active_package_revision='successor' WHERE singleton",
-        "UPDATE registry_internal.registry_state SET maintenance_status='failed', maintenance_target_revision='successor' WHERE singleton",
+        format!("UPDATE registry_internal.registry_state SET active_activation_id='{successor_activation}' WHERE singleton"),
+        format!("UPDATE registry_internal.registry_state SET maintenance_status='failed', maintenance_target_package_digest='{successor_digest}' WHERE singleton"),
     ] {
         database.admin.batch_execute("BEGIN").await.unwrap();
         database.admin.execute("SELECT pg_advisory_xact_lock($1)", &[&key]).await.unwrap();
         let task_operator = operator.clone();
         let erase = tokio::spawn(async move { task_operator.erase_expired(cutoff()).await });
         wait_for_lock(&database).await;
-        database.admin.batch_execute(change).await.unwrap();
+        database.admin.batch_execute(&change).await.unwrap();
         database.admin.batch_execute("COMMIT").await.unwrap();
         assert!(erase.await.unwrap().is_err(), "authority must be checked after the activation lock wait");
         assert_eq!(count(&database).await, 1);
-        database.admin.batch_execute("UPDATE registry_internal.registry_state SET active_package_revision='retention-1',maintenance_status='ready',maintenance_target_revision=NULL WHERE singleton").await.unwrap();
+        database.admin.batch_execute(&restore).await.unwrap();
     }
     // Block the DELETE itself, then prove an activation cannot acquire the
     // registry lock while the verified erasure transaction is still running.

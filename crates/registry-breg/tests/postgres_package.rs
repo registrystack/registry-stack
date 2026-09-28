@@ -1152,10 +1152,9 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     )
     .await
     .expect("initial temporal policy package applies");
-    restore_legacy_migration_ledger_metadata_constraints(&database).await;
 
     let add_snapshot = publish_temporal_policy_package(
-        Some(&active_first.package_revision),
+        Some(&active_first.package_digest),
         active_first.schema_fingerprint.clone(),
         temporal_policy_module_bytes(true),
         PackageMigrationPlanInput::Successor {
@@ -1179,7 +1178,7 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     .expect("metadata-only snapshot grant applies");
 
     let remove_snapshot = publish_temporal_policy_package(
-        Some(&active_add.package_revision),
+        Some(&active_add.package_digest),
         active_add.schema_fingerprint.clone(),
         temporal_policy_module_bytes(false),
         PackageMigrationPlanInput::Successor {
@@ -1205,7 +1204,10 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     )
     .await
     .expect("metadata-only snapshot revocation applies");
-    assert_eq!(active_remove.package_sequence, 3);
+    assert_eq!(
+        ledger_apply_order(&database, &active_remove.activation_id).await,
+        3
+    );
     assert_eq!(
         active_remove.schema_fingerprint,
         active_first.schema_fingerprint
@@ -1291,7 +1293,7 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     let change_set = compiled_registry_change_set(
         verified_first.registry(),
         &successor_registry,
-        &active_first.package_revision,
+        &active_first.package_digest,
     );
     assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
     assert!(change_set.changes.iter().any(|change| {
@@ -1300,12 +1302,12 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     }));
     let review = metadata_only_review_source(
         &change_set.changes,
-        &active_first.package_revision,
+        &active_first.package_digest,
         &active_first.schema_fingerprint,
         &active_first.schema_fingerprint,
     );
     let successor = publish_temporal_policy_package(
-        Some(&active_first.package_revision),
+        Some(&active_first.package_digest),
         active_first.schema_fingerprint.clone(),
         successor_module_bytes,
         PackageMigrationPlanInput::ReviewedSuccessor {
@@ -1333,7 +1335,10 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     )
     .await
     .expect("reviewed metadata-only successor applies without dummy SQL");
-    assert_eq!(active_successor.package_sequence, 2);
+    assert_eq!(
+        ledger_apply_order(&database, &active_successor.activation_id).await,
+        2
+    );
     assert_eq!(
         active_successor.schema_fingerprint,
         active_first.schema_fingerprint
@@ -1574,8 +1579,8 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
     .await;
     assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
     let state = registry_state_snapshot(&database.admin).await;
-    assert_eq!(state.7, "failed");
-    assert_eq!(state.8.as_deref(), Some(package.package_digest()));
+    assert_eq!(state.5, "failed");
+    assert_eq!(state.6.as_deref(), Some(package.package_digest()));
     let ledger = migration_ledger_snapshot(&database.admin).await;
     assert_eq!(ledger.len(), 1);
     assert_eq!(ledger[0].0, None);
@@ -1917,7 +1922,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     let blocked_state = database
         .admin
         .query_one(
-            "SELECT maintenance_status, active_package_revision
+            "SELECT maintenance_status, active_package_digest
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -1925,7 +1930,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .await
         .expect("blocked apply leaves state readable");
     assert_eq!(blocked_state.get::<_, String>(0), "ready");
-    assert_eq!(blocked_state.get::<_, String>(1), initial.package_revision);
+    assert_eq!(blocked_state.get::<_, String>(1), initial.package_digest);
     held_record
         .rollback()
         .await
@@ -1997,10 +2002,10 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .expect("DDL blocker rolls back after apply connection interruption");
     ddl_blocker_task.abort();
     let interrupted_state = registry_state_snapshot(&database.admin).await;
-    assert_eq!(interrupted_state.4, initial.package_revision);
-    assert_eq!(interrupted_state.7, "applying");
+    assert_eq!(interrupted_state.2, initial.package_digest);
+    assert_eq!(interrupted_state.5, "applying");
     assert_eq!(
-        interrupted_state.8.as_deref(),
+        interrupted_state.6.as_deref(),
         Some(verified_second.package_digest())
     );
     assert_eq!(
@@ -2046,11 +2051,11 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     )
     .await
     .expect("exact rederived schema statement and activation succeed");
-    assert_eq!(active.package_revision, verified_second.package_digest());
+    assert_eq!(active.package_digest, verified_second.package_digest());
     let activated_state = registry_state_snapshot(&database.admin).await;
     assert_eq!(activated_state.0, active.package_id);
-    assert_eq!(activated_state.2, active.instance_id);
-    assert_eq!(activated_state.3, active.database_id);
+    assert_eq!(activated_state.1, active.database_id);
+    assert_eq!(activated_state.3, active.activation_id);
     let applied_ledger = migration_ledger_snapshot(&database.admin).await;
     assert_eq!(applied_ledger.len(), 2);
     assert_eq!(applied_ledger[0].0, None);
@@ -2059,9 +2064,9 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     assert_eq!(applied_ledger[0].4, "applied");
     assert_eq!(
         applied_ledger[1].0.as_deref(),
-        Some(initial.package_revision.as_str())
+        Some(initial.package_digest.as_str())
     );
-    assert_eq!(applied_ledger[1].1, active.package_revision);
+    assert_eq!(applied_ledger[1].1, active.package_digest);
     assert_eq!(applied_ledger[1].2, 2);
     assert_eq!(applied_ledger[1].4, "applied");
     assert_eq!(
@@ -2137,7 +2142,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1
+             SET active_package_digest = $1
              WHERE singleton",
             &[&wrong_digest],
         )
@@ -2159,15 +2164,15 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1
+             SET active_package_digest = $1
              WHERE singleton",
-            &[&active.package_revision],
+            &[&active.package_digest],
         )
         .await
         .expect("test restores the active revision after schema mismatch proof");
 
     let third = PackageFixture::build(
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         target_schema.clone(),
         PlanChoice::ThirdTable,
     );
@@ -2261,7 +2266,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     );
 
     let wrong_recovery = PackageFixture::build(
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         third_schema.clone(),
         PlanChoice::ThirdTable,
     );
@@ -2282,7 +2287,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     let failed_target = database
         .admin
         .query_one(
-            "SELECT maintenance_status, maintenance_target_revision
+            "SELECT maintenance_status, maintenance_target_package_digest
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -2314,7 +2319,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     )
     .await
     .expect("the exact failed package resumes after operator repair");
-    assert_eq!(recovered.package_revision, verified_third.package_digest());
+    assert_eq!(recovered.package_digest, verified_third.package_digest());
     let recovered_status: String = database
         .admin
         .query_one(
@@ -2472,7 +2477,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     .await;
 
     let second = PackageFixture::build(
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         first_fingerprint,
         PlanChoice::WebhookSecondTable,
     );
@@ -2632,10 +2637,13 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     )
     .await
     .expect("an unrelated additive successor with the exact binding activates");
-    assert_eq!(upgraded.package_sequence, 2);
+    assert_eq!(
+        ledger_apply_order(&database, &upgraded.activation_id).await,
+        2
+    );
     let after_upgrade = registry_state_snapshot(&database.admin).await;
-    assert_eq!(after_upgrade.4, upgraded.package_revision);
-    assert_eq!(after_upgrade.7, "ready");
+    assert_eq!(after_upgrade.3, upgraded.activation_id);
+    assert_eq!(after_upgrade.5, "ready");
 
     let retained = database
         .admin
@@ -2651,7 +2659,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         )
         .await
         .expect("retained pre-upgrade delivery remains queryable");
-    assert_eq!(retained.get::<_, String>(0), active.package_revision);
+    assert_eq!(retained.get::<_, String>(0), active.activation_id);
     assert_eq!(retained.get::<_, String>(1), "neutral-events");
     assert_eq!(retained.get::<_, String>(2), exact_digest);
     assert_eq!(retained.get::<_, String>(3), "pending");
@@ -3080,39 +3088,17 @@ fn package_digest_of(root: &Path) -> String {
         .to_owned()
 }
 
-async fn restore_legacy_migration_ledger_metadata_constraints(database: &TestDatabase) {
+async fn ledger_apply_order(database: &TestDatabase, activation_id: &str) -> i64 {
     database
         .admin
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_plan_kind_closed,
-                 ADD CONSTRAINT registry_migrations_plan_kind_closed
-                     CHECK (plan_kind IN ('compiled_additive', 'reviewed'));
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_checksums_nonempty,
-                 ADD CONSTRAINT registry_migrations_checksums_nonempty
-                     CHECK (
-                         array_ndims(statement_checksums) = 1
-                         AND cardinality(statement_checksums) BETWEEN 1 AND 1024
-                         AND array_position(statement_checksums, '') IS NULL
-                     );
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_artifacts_consistent,
-                 ADD CONSTRAINT registry_migrations_artifacts_consistent CHECK (
-                     COALESCE(array_ndims(artifact_paths), 1) = 1
-                     AND COALESCE(array_ndims(artifact_checksums), 1) = 1
-                     AND cardinality(artifact_paths) = cardinality(artifact_checksums)
-                     AND cardinality(artifact_paths) BETWEEN 0 AND 1024
-                     AND array_position(artifact_paths, '') IS NULL
-                     AND array_position(artifact_checksums, '') IS NULL
-                     AND (
-                         (plan_kind = 'compiled_additive' AND cardinality(artifact_paths) = 0)
-                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
-                     )
-                 );",
+        .query_one(
+            "SELECT apply_order FROM registry_internal.registry_migrations
+             WHERE activation_id = $1::text::uuid",
+            &[&activation_id],
         )
         .await
-        .expect("test restores the previous closed migration-ledger constraints");
+        .expect("the activation has one ledger row")
+        .get(0)
 }
 
 async fn apply_package(
@@ -3190,7 +3176,7 @@ async fn insert_upgrade_webhook_delivery(
                      transaction_timestamp() + interval '7 days')",
             &[
                 &event_id,
-                &active.package_revision,
+                &active.activation_id,
                 &active.schema_fingerprint,
                 &payload,
             ],
@@ -3216,7 +3202,7 @@ async fn insert_upgrade_webhook_delivery(
                 &compiled_delivery_id,
                 &logical_destination_id,
                 &binding_digest,
-                &active.package_revision,
+                &active.activation_id,
                 &active.schema_fingerprint,
                 &data_schema,
                 &retry_delays_ms,
@@ -3416,15 +3402,13 @@ async fn registry_state_snapshot(
     String,
     String,
     String,
-    i64,
-    String,
     Option<String>,
 ) {
     let row = client
         .query_one(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status, maintenance_target_revision
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint,
+                    maintenance_status, maintenance_target_package_digest
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -3439,8 +3423,6 @@ async fn registry_state_snapshot(
         row.get(4),
         row.get(5),
         row.get(6),
-        row.get(7),
-        row.get(8),
     )
 }
 
@@ -3457,10 +3439,10 @@ async fn migration_ledger_snapshot(
 )> {
     client
         .query(
-            "SELECT source_package_revision, target_package_revision, package_sequence,
+            "SELECT predecessor_package_digest, package_digest, apply_order,
                     statement_checksums, outcome, started_at::text, completed_at::text
              FROM registry_internal.registry_migrations
-             ORDER BY package_sequence, target_package_revision",
+             ORDER BY apply_order",
             &[],
         )
         .await

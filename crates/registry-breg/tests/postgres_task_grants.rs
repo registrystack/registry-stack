@@ -285,11 +285,8 @@ async fn install(db: &TestDatabase, registry: &CompiledRegistry) -> ExpectedRegi
         registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: "task-instance",
             database_id: "task-database",
-            package_revision: REVISION,
-            package_sequence: 1,
+            label: REVISION,
         },
     )
     .await
@@ -346,6 +343,7 @@ fn app_with_services(
         pool,
         registry.clone(),
         identity.clone(),
+        "task-instance",
         lock,
         Duration::from_secs(2),
         audit,
@@ -377,7 +375,7 @@ fn app_with_services(
             HttpService::new(
                 registry,
                 ReadRuntimeIdentity {
-                    package_revision: identity.package_revision,
+                    package_revision: identity.activation_id,
                     schema_fingerprint: identity.schema_fingerprint,
                 },
                 reads,
@@ -656,7 +654,11 @@ async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome
         .unwrap()
         .key_hasher();
     let pseudonym = hasher
-        .audit_reference_hash("breg-grant-v1", REVISION, grant)
+        .audit_reference_hash(
+            "breg-grant-v1",
+            &registry_breg::postgres::test_activation_id(REVISION),
+            grant,
+        )
         .unwrap();
     let records = db.audit_records();
     let record = records

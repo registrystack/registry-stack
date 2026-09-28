@@ -13,14 +13,13 @@ use std::time::{Duration, Instant};
 use postgres_harness::TestDatabase;
 use registry_breg::postgres::{
     begin_record_transaction, initialize_kernel_registry_state_for_test, install_kernel_schema,
-    verify_btree_gist, verify_catalog_identity, verify_migration_role, verify_runtime_role,
-    ClaimContext, DedicatedApplyConnection, ExpectedRegistryIdentity, PostgresKernelError,
-    RegistryLockKey, RegistryStateTestIdentity,
+    test_activation_id, test_package_digest, verify_btree_gist, verify_catalog_identity,
+    verify_migration_role, verify_runtime_role, ClaimContext, DedicatedApplyConnection,
+    ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey, RegistryStateTestIdentity,
 };
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000001";
 const PACKAGE_ID: &str = "kernel-registry";
-const INSTANCE_ID: &str = "kernel-instance";
 const DATABASE_ID: &str = "kernel-database";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -154,11 +153,8 @@ async fn benchmark_record_transaction() {
         &database.runtime_role,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-1",
-            package_sequence: 1,
+            label: "package-1",
         },
     )
     .await
@@ -229,11 +225,8 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         &database.runtime_role,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-1",
-            package_sequence: 1,
+            label: "package-1",
         },
     )
     .await
@@ -433,12 +426,10 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
 
     let target = ExpectedRegistryIdentity {
         package_id: initial.package_id.clone(),
-        environment: initial.environment.clone(),
-        instance_id: initial.instance_id.clone(),
         database_id: initial.database_id.clone(),
-        package_revision: "package-2".to_owned(),
+        package_digest: test_package_digest("package-2"),
+        activation_id: test_activation_id("package-2"),
         schema_fingerprint: initial.schema_fingerprint.clone(),
-        package_sequence: 2,
     };
     let mut apply = DedicatedApplyConnection::acquire(
         &database.migration_config,
@@ -448,7 +439,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     .await
     .expect("dedicated migration connection acquires exclusive lock");
     apply
-        .mark_applying(&initial, &target.package_revision)
+        .mark_applying(&initial, &target.package_digest)
         .await
         .expect("maintenance is durably committed while lock remains held");
     let pool_for_blocked_record = pool.clone();
@@ -562,8 +553,8 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     drop(client);
 
     let failed_target = ExpectedRegistryIdentity {
-        package_revision: "package-3".to_owned(),
-        package_sequence: 3,
+        package_digest: test_package_digest("package-3"),
+        activation_id: test_activation_id("package-3"),
         ..target.clone()
     };
     let mut apply = DedicatedApplyConnection::acquire(
@@ -574,7 +565,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     .await
     .expect("second apply obtains the exclusive lock");
     apply
-        .mark_applying(&target, &failed_target.package_revision)
+        .mark_applying(&target, &failed_target.package_digest)
         .await
         .expect("second maintenance transition commits");
     apply

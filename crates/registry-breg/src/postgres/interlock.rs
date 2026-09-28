@@ -35,10 +35,10 @@ use super::{
     catalog::{install_registry_state_schema, verify_managed_catalog, ExpectedManagedCatalog},
     config::ConnectionTls,
     migration_ledger::{
-        migration_phase_state, reconcile_migration_ledger_metadata_only_constraints,
-        record_applied, record_chunk_progress, record_failed, record_postconditions_complete,
-        record_preconditions_complete, record_started, record_step_complete, statement_checksum,
-        step_progress, verify_resumable, MigrationLedgerEntry, MigrationLedgerStep,
+        in_flight_activation, migration_phase_state, record_applied, record_chunk_progress,
+        record_failed, record_postconditions_complete, record_preconditions_complete,
+        record_reverted, record_started, record_step_complete, statement_checksum, step_progress,
+        verify_resumable, ActivationPlanKind, MigrationLedgerEntry, MigrationLedgerStep,
         MigrationLedgerStepKind,
     },
     schema::{
@@ -88,7 +88,7 @@ pub(crate) struct MaintenanceTransition<'a> {
 pub(crate) struct MaintenanceSnapshot {
     pub identity: ExpectedRegistryIdentity,
     pub maintenance_status: String,
-    pub maintenance_target_revision: Option<String>,
+    pub maintenance_target_package_digest: Option<String>,
 }
 
 /// How far a reviewed plan durably progressed for one pinned target.
@@ -1555,9 +1555,9 @@ impl DedicatedApplyConnection {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         target.validate()?;
         ledger.validate()?;
-        if ledger.source_revision.is_some()
-            || ledger.target_revision != target.package_revision
-            || ledger.package_sequence != target.package_sequence
+        if ledger.plan_kind != ActivationPlanKind::Initial
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
         {
             return Err(PostgresKernelError::Configuration(
                 "initial package and migration ledger differ",
@@ -1568,23 +1568,22 @@ impl DedicatedApplyConnection {
         let changed = transaction
             .execute(
                 "INSERT INTO registry_internal.registry_state (
-                     singleton, package_id, environment, instance_id, database_id,
-                     active_package_revision, schema_fingerprint, package_sequence,
-                     maintenance_status, maintenance_target_revision
-                 ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'applying', $5)
+                     singleton, package_id, database_id, active_package_digest,
+                     active_activation_id, schema_fingerprint,
+                     maintenance_status, maintenance_target_package_digest
+                 ) VALUES (true, $1, $2, $3, $4, $5, 'applying', $3)
                  ON CONFLICT (singleton) DO NOTHING",
                 &[
                     &target.package_id,
-                    &target.environment,
-                    &target.instance_id,
                     &target.database_id,
-                    &target.package_revision,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
                     &target.schema_fingerprint,
-                    &target.package_sequence,
                 ],
             )
             .await?;
         if changed == 1 {
+            crate::instance_claim::record_if_unclaimed(&transaction).await?;
             record_started(&transaction, ledger).await?;
         } else {
             verify_initial_resumable_state(&transaction, target).await?;
@@ -1610,7 +1609,7 @@ impl DedicatedApplyConnection {
     }
 
     /// Records or resumes a successor only when the durable source identity,
-    /// exact target, ordered checksums, and package sequence all agree.
+    /// exact target, ordered checksums, and activation all agree.
     pub(crate) async fn begin_successor_package(
         &mut self,
         current: &ExpectedRegistryIdentity,
@@ -1622,10 +1621,11 @@ impl DedicatedApplyConnection {
         current.validate()?;
         target.validate()?;
         ledger.validate()?;
-        if ledger.source_revision.as_deref() != Some(current.package_revision.as_str())
-            || ledger.target_revision != target.package_revision
-            || ledger.package_sequence != target.package_sequence
-            || target.package_sequence <= current.package_sequence
+        if ledger.plan_kind != ActivationPlanKind::Successor
+            || ledger.predecessor_package_digest.as_deref() != Some(current.package_digest.as_str())
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+            || target.activation_id == current.activation_id
         {
             return Err(PostgresKernelError::Configuration(
                 "successor package and migration ledger differ",
@@ -1644,30 +1644,25 @@ impl DedicatedApplyConnection {
         let changed = transaction
             .execute(
                 "UPDATE registry_internal.registry_state
-                 SET maintenance_status = 'applying', maintenance_target_revision = $1,
+                 SET maintenance_status = 'applying', maintenance_target_package_digest = $1,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND maintenance_status = 'ready'
                    AND package_id = $2
-                   AND environment = $3
-                   AND instance_id = $4
-                   AND database_id = $5
-                   AND active_package_revision = $6
-                   AND schema_fingerprint = $7
-                   AND package_sequence = $8",
+                   AND database_id = $3
+                   AND active_package_digest = $4
+                   AND active_activation_id = $5
+                   AND schema_fingerprint = $6",
                 &[
-                    &target.package_revision,
+                    &target.package_digest,
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
                 ],
             )
             .await?;
-        reconcile_migration_ledger_metadata_only_constraints(&transaction).await?;
         if changed == 1 {
             record_started(&transaction, ledger).await?;
         } else {
@@ -1684,38 +1679,34 @@ impl DedicatedApplyConnection {
     pub async fn mark_applying(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        target_revision: &str,
+        target_package_digest: &str,
     ) -> Result<()> {
         current.validate()?;
-        if target_revision.is_empty() || target_revision == current.package_revision {
+        if target_package_digest.is_empty() {
             return Err(PostgresKernelError::Configuration(
-                "apply target revision must be non-empty and different",
+                "apply target package digest must be non-empty",
             ));
         }
         let transaction = self.client.transaction().await?;
         let changed = transaction
             .execute(
                 "UPDATE registry_internal.registry_state
-                 SET maintenance_status = 'applying', maintenance_target_revision = $1,
+                 SET maintenance_status = 'applying', maintenance_target_package_digest = $1,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND maintenance_status = 'ready'
                    AND package_id = $2
-                   AND environment = $3
-                   AND instance_id = $4
-                   AND database_id = $5
-                   AND active_package_revision = $6
-                   AND schema_fingerprint = $7
-                   AND package_sequence = $8",
+                   AND database_id = $3
+                   AND active_package_digest = $4
+                   AND active_activation_id = $5
+                   AND schema_fingerprint = $6",
                 &[
-                    &target_revision,
+                    &target_package_digest,
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
                 ],
             )
             .await?;
@@ -1734,9 +1725,9 @@ impl DedicatedApplyConnection {
     pub(crate) async fn resume_failed(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        target_revision: &str,
+        target_package_digest: &str,
     ) -> Result<()> {
-        validate_failed_resume_request(self.locked, current, target_revision)?;
+        validate_failed_resume_request(self.locked, current, target_package_digest)?;
         let transaction = self.client.transaction().await?;
         let accepted = transaction
             .query_opt(
@@ -1744,24 +1735,20 @@ impl DedicatedApplyConnection {
                  FROM registry_internal.registry_state
                  WHERE singleton
                    AND maintenance_status = 'failed'
-                   AND maintenance_target_revision = $1
+                   AND maintenance_target_package_digest = $1
                    AND package_id = $2
-                   AND environment = $3
-                   AND instance_id = $4
-                   AND database_id = $5
-                   AND active_package_revision = $6
-                   AND schema_fingerprint = $7
-                   AND package_sequence = $8
+                   AND database_id = $3
+                   AND active_package_digest = $4
+                   AND active_activation_id = $5
+                   AND schema_fingerprint = $6
                  FOR UPDATE",
                 &[
-                    &target_revision,
+                    &target_package_digest,
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
                 ],
             )
             .await?;
@@ -1790,8 +1777,9 @@ impl DedicatedApplyConnection {
     }
 
     /// Atomically records the immutable applied-ledger outcome and makes the
-    /// exact signed package identity ready only after closed catalog, RLS, ACL,
-    /// ownership, and schema-fingerprint verification succeeds.
+    /// exact package digest and its activation ready only after closed
+    /// catalog, RLS, ACL, ownership, and schema-fingerprint verification
+    /// succeeds.
     pub(crate) async fn activate_verified_package(
         &mut self,
         current: Option<&ExpectedRegistryIdentity>,
@@ -1829,33 +1817,29 @@ impl DedicatedApplyConnection {
             transaction
                 .execute(
                     "UPDATE registry_internal.registry_state
-                     SET active_package_revision = $1,
-                         schema_fingerprint = $2,
-                         package_sequence = $3,
+                     SET active_package_digest = $1,
+                         active_activation_id = $2,
+                         schema_fingerprint = $3,
                          maintenance_status = 'ready',
-                         maintenance_target_revision = NULL,
+                         maintenance_target_package_digest = NULL,
                          updated_at = transaction_timestamp()
                      WHERE singleton
                        AND package_id = $4
-                       AND environment = $5
-                       AND instance_id = $6
-                       AND database_id = $7
-                       AND active_package_revision = $8
-                       AND schema_fingerprint = $9
-                       AND package_sequence = $10
+                       AND database_id = $5
+                       AND active_package_digest = $6
+                       AND active_activation_id = $7
+                       AND schema_fingerprint = $8
                        AND maintenance_status IN ('applying', 'failed')
-                       AND maintenance_target_revision = $1",
+                       AND maintenance_target_package_digest = $1",
                     &[
-                        &target.package_revision,
+                        &target.package_digest,
+                        &target.activation_uuid()?,
                         &target.schema_fingerprint,
-                        &target.package_sequence,
                         &target.package_id,
-                        &target.environment,
-                        &target.instance_id,
                         &target.database_id,
-                        &current.package_revision,
+                        &current.package_digest,
+                        &current.activation_uuid()?,
                         &current.schema_fingerprint,
-                        &current.package_sequence,
                     ],
                 )
                 .await?
@@ -1864,26 +1848,22 @@ impl DedicatedApplyConnection {
                 .execute(
                     "UPDATE registry_internal.registry_state
                      SET maintenance_status = 'ready',
-                         maintenance_target_revision = NULL,
+                         maintenance_target_package_digest = NULL,
                          updated_at = transaction_timestamp()
                      WHERE singleton
                        AND package_id = $1
-                       AND environment = $2
-                       AND instance_id = $3
-                       AND database_id = $4
-                       AND active_package_revision = $5
-                       AND schema_fingerprint = $6
-                       AND package_sequence = $7
+                       AND database_id = $2
+                       AND active_package_digest = $3
+                       AND active_activation_id = $4
+                       AND schema_fingerprint = $5
                        AND maintenance_status IN ('applying', 'failed')
-                       AND maintenance_target_revision = $5",
+                       AND maintenance_target_package_digest = $3",
                     &[
                         &target.package_id,
-                        &target.environment,
-                        &target.instance_id,
                         &target.database_id,
-                        &target.package_revision,
+                        &target.package_digest,
+                        &target.activation_uuid()?,
                         &target.schema_fingerprint,
-                        &target.package_sequence,
                     ],
                 )
                 .await?
@@ -1919,27 +1899,23 @@ impl DedicatedApplyConnection {
         let changed = transaction
             .execute(
                 "UPDATE registry_internal.registry_state
-                 SET active_package_revision = $1,
-                     schema_fingerprint = $2,
-                     package_sequence = $3,
+                 SET active_package_digest = $1,
+                     active_activation_id = $2,
+                     schema_fingerprint = $3,
                      maintenance_status = 'ready',
-                     maintenance_target_revision = NULL,
+                     maintenance_target_package_digest = NULL,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND package_id = $4
-                   AND environment = $5
-                   AND instance_id = $6
-                   AND database_id = $7
+                   AND database_id = $5
                    AND maintenance_status IN ('applying', 'failed')
-                   AND maintenance_target_revision = $1
-                   AND package_sequence < $3",
+                   AND maintenance_target_package_digest = $1
+                   AND active_activation_id <> $2",
                 &[
-                    &target.package_revision,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
                     &target.schema_fingerprint,
-                    &target.package_sequence,
                     &target.package_id,
-                    &target.environment,
-                    &target.instance_id,
                     &target.database_id,
                 ],
             )
@@ -1988,17 +1964,13 @@ impl DedicatedApplyConnection {
                  SET maintenance_status = 'failed', updated_at = transaction_timestamp()
                  WHERE singleton
                    AND package_id = $1
-                   AND environment = $2
-                   AND instance_id = $3
-                   AND database_id = $4
+                   AND database_id = $2
                    AND maintenance_status IN ('applying', 'failed')
-                   AND maintenance_target_revision = $5",
+                   AND maintenance_target_package_digest = $3",
                 &[
                     &target.package_id,
-                    &target.environment,
-                    &target.instance_id,
                     &target.database_id,
-                    &target.package_revision,
+                    &target.package_digest,
                 ],
             )
             .await?;
@@ -2010,6 +1982,28 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
+    /// The activation id a retry of `package_digest` resumes: the open
+    /// activation the ledger records for it, if any. A database with no
+    /// ledger yet has none.
+    pub(crate) async fn in_flight_activation(
+        &mut self,
+        package_digest: &str,
+    ) -> Result<Option<uuid::Uuid>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let ledger_exists: bool = self
+            .client
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_migrations') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .try_get(0)?;
+        if !ledger_exists {
+            return Ok(None);
+        }
+        in_flight_activation(&self.client, package_digest).await
+    }
+
     /// Reads the durable maintenance state while this session holds the
     /// exclusive apply lock, so a reconciling operator can be told what the
     /// database actually records rather than inferring it from a failure.
@@ -2018,9 +2012,9 @@ impl DedicatedApplyConnection {
         let row = self
             .client
             .query_opt(
-                "SELECT package_id, environment, instance_id, database_id,
-                        active_package_revision, schema_fingerprint, package_sequence,
-                        maintenance_status, maintenance_target_revision
+                "SELECT package_id, database_id, active_package_digest,
+                        active_activation_id::text, schema_fingerprint,
+                        maintenance_status, maintenance_target_package_digest
                  FROM registry_internal.registry_state
                  WHERE singleton",
                 &[],
@@ -2042,15 +2036,13 @@ impl DedicatedApplyConnection {
         Ok(MaintenanceSnapshot {
             identity: ExpectedRegistryIdentity {
                 package_id: row.try_get(0)?,
-                environment: row.try_get(1)?,
-                instance_id: row.try_get(2)?,
-                database_id: row.try_get(3)?,
-                package_revision: row.try_get(4)?,
-                schema_fingerprint: row.try_get(5)?,
-                package_sequence: row.try_get(6)?,
+                database_id: row.try_get(1)?,
+                package_digest: row.try_get(2)?,
+                activation_id: row.try_get(3)?,
+                schema_fingerprint: row.try_get(4)?,
             },
-            maintenance_status: row.try_get(7)?,
-            maintenance_target_revision: row.try_get(8)?,
+            maintenance_status: row.try_get(5)?,
+            maintenance_target_package_digest: row.try_get(6)?,
         })
     }
 
@@ -2117,12 +2109,13 @@ impl DedicatedApplyConnection {
     /// Abandons a pinned maintenance target, after proving in the same
     /// transaction that the live managed catalog is still exactly the active
     /// package's. The active identity is left unchanged and the target's
-    /// ledger row stays durably failed, so an abandoned revision is never
-    /// activated later under the same identity.
+    /// ledger row is closed as reverted, so a later apply of the same package
+    /// is a separate activation with its own id and never resumes the
+    /// abandoned one.
     pub(crate) async fn revert_failed_package(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        target_revision: &str,
+        target_package_digest: &str,
         transition: MaintenanceTransition<'_>,
     ) -> Result<()> {
         let MaintenanceTransition {
@@ -2132,10 +2125,10 @@ impl DedicatedApplyConnection {
             runtime_role,
         } = transition;
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        validate_failed_resume_request(self.locked, current, target_revision)?;
+        validate_failed_resume_request(self.locked, current, target_package_digest)?;
         ledger.validate()?;
-        if ledger.target_revision != target_revision
-            || ledger.source_revision.as_deref() != Some(current.package_revision.as_str())
+        if ledger.package_digest != target_package_digest
+            || ledger.predecessor_package_digest.as_deref() != Some(current.package_digest.as_str())
         {
             return Err(PostgresKernelError::Configuration(
                 "abandoned target and migration ledger differ",
@@ -2154,34 +2147,30 @@ impl DedicatedApplyConnection {
             .execute(
                 "UPDATE registry_internal.registry_state
                  SET maintenance_status = 'ready',
-                     maintenance_target_revision = NULL,
+                     maintenance_target_package_digest = NULL,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND package_id = $1
-                   AND environment = $2
-                   AND instance_id = $3
-                   AND database_id = $4
-                   AND active_package_revision = $5
-                   AND schema_fingerprint = $6
-                   AND package_sequence = $7
+                   AND database_id = $2
+                   AND active_package_digest = $3
+                   AND active_activation_id = $4
+                   AND schema_fingerprint = $5
                    AND maintenance_status IN ('applying', 'failed')
-                   AND maintenance_target_revision = $8",
+                   AND maintenance_target_package_digest = $6",
                 &[
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
-                    &target_revision,
+                    &target_package_digest,
                 ],
             )
             .await?;
         if changed != 1 {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
-        record_failed(&transaction, ledger).await?;
+        record_reverted(&transaction, ledger).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -3288,23 +3277,19 @@ async fn verify_initial_resumable_state(
              FROM registry_internal.registry_state
              WHERE singleton
                AND maintenance_status IN ('applying', 'failed')
-               AND maintenance_target_revision = $1
+               AND maintenance_target_package_digest = $1
                AND package_id = $2
-               AND environment = $3
-               AND instance_id = $4
-               AND database_id = $5
-               AND active_package_revision = $1
-               AND schema_fingerprint = $6
-               AND package_sequence = $7
+               AND database_id = $3
+               AND active_package_digest = $1
+               AND active_activation_id = $4
+               AND schema_fingerprint = $5
              FOR UPDATE",
             &[
-                &target.package_revision,
+                &target.package_digest,
                 &target.package_id,
-                &target.environment,
-                &target.instance_id,
                 &target.database_id,
+                &target.activation_uuid()?,
                 &target.schema_fingerprint,
-                &target.package_sequence,
             ],
         )
         .await?;
@@ -3325,24 +3310,20 @@ async fn verify_successor_resumable_state(
              FROM registry_internal.registry_state
              WHERE singleton
                AND maintenance_status IN ('applying', 'failed')
-               AND maintenance_target_revision = $1
+               AND maintenance_target_package_digest = $1
                AND package_id = $2
-               AND environment = $3
-               AND instance_id = $4
-               AND database_id = $5
-               AND active_package_revision = $6
-               AND schema_fingerprint = $7
-               AND package_sequence = $8
+               AND database_id = $3
+               AND active_package_digest = $4
+               AND active_activation_id = $5
+               AND schema_fingerprint = $6
              FOR UPDATE",
             &[
-                &target.package_revision,
+                &target.package_digest,
                 &current.package_id,
-                &current.environment,
-                &current.instance_id,
                 &current.database_id,
-                &current.package_revision,
+                &current.package_digest,
+                &current.activation_uuid()?,
                 &current.schema_fingerprint,
-                &current.package_sequence,
             ],
         )
         .await?;
@@ -3359,13 +3340,13 @@ fn validate_runtime_acl_reconciliation_request(lock_held: bool) -> Result<()> {
 fn validate_failed_resume_request(
     lock_held: bool,
     current: &ExpectedRegistryIdentity,
-    target_revision: &str,
+    target_package_digest: &str,
 ) -> Result<()> {
     ensure_apply_lock(lock_held)?;
     current.validate()?;
-    if target_revision.is_empty() || target_revision == current.package_revision {
+    if target_package_digest.is_empty() {
         return Err(PostgresKernelError::Configuration(
-            "resume target revision must be non-empty and different",
+            "resume target package digest must be non-empty",
         ));
     }
     Ok(())
@@ -3646,14 +3627,12 @@ mod tests {
         let database = InterlockTestDatabase::create().await;
         let current = ExpectedRegistryIdentity {
             package_id: "package-under-test".to_owned(),
-            environment: "test".to_owned(),
-            instance_id: "instance-under-test".to_owned(),
             database_id: "database-under-test".to_owned(),
-            package_revision: "revision-current".to_owned(),
+            package_digest: format!("sha256:{}", "c".repeat(64)),
+            activation_id: "7b0c2b1e-4a1f-4c55-9f0e-2d5f1c1a9b01".to_owned(),
             schema_fingerprint: "fingerprint-current".to_owned(),
-            package_sequence: 7,
         };
-        let target_revision = "revision-target";
+        let target_revision = &format!("sha256:{}", "d".repeat(64));
         database
             .install_failed_state(&current, target_revision)
             .await;
@@ -3674,7 +3653,7 @@ mod tests {
             Err(PostgresKernelError::RegistryUnavailable)
         ));
         let mut wrong_current = current.clone();
-        wrong_current.package_sequence += 1;
+        wrong_current.activation_id = "7b0c2b1e-4a1f-4c55-9f0e-2d5f1c1a9b02".to_owned();
         assert!(matches!(
             apply.resume_failed(&wrong_current, target_revision).await,
             Err(PostgresKernelError::RegistryUnavailable)
@@ -3847,15 +3826,13 @@ mod tests {
                 .batch_execute(
                     "CREATE TABLE registry_internal.registry_state (
                          singleton boolean PRIMARY KEY CHECK (singleton),
-                         environment text NOT NULL,
                          package_id text NOT NULL,
-                         instance_id text NOT NULL,
                          database_id text NOT NULL,
-                         active_package_revision text NOT NULL,
+                         active_package_digest text NOT NULL,
+                         active_activation_id uuid NOT NULL,
                          schema_fingerprint text NOT NULL,
-                         package_sequence bigint NOT NULL,
                          maintenance_status text NOT NULL,
-                         maintenance_target_revision text,
+                         maintenance_target_package_digest text,
                          updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
                      );",
                 )
@@ -3864,18 +3841,18 @@ mod tests {
             migration
                 .execute(
                     "INSERT INTO registry_internal.registry_state (
-                         singleton, package_id, environment, instance_id, database_id,
-                         active_package_revision, schema_fingerprint, package_sequence,
-                         maintenance_status, maintenance_target_revision
-                     ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'failed', $8)",
+                         singleton, package_id, database_id, active_package_digest,
+                         active_activation_id, schema_fingerprint,
+                         maintenance_status, maintenance_target_package_digest
+                     ) VALUES (true, $1, $2, $3, $4, $5, 'failed', $6)",
                     &[
                         &current.package_id,
-                        &current.environment,
-                        &current.instance_id,
                         &current.database_id,
-                        &current.package_revision,
+                        &current.package_digest,
+                        &current
+                            .activation_uuid()
+                            .expect("the fixture activation id is a canonical UUID"),
                         &current.schema_fingerprint,
-                        &current.package_sequence,
                         &target_revision,
                     ],
                 )
@@ -3893,16 +3870,14 @@ mod tests {
             String,
             String,
             String,
-            i64,
-            String,
             Option<String>,
         ) {
             let row = self
                 .admin
                 .query_one(
-                    "SELECT package_id, environment, instance_id, database_id,
-                            active_package_revision, schema_fingerprint, package_sequence,
-                            maintenance_status, maintenance_target_revision
+                    "SELECT package_id, database_id, active_package_digest,
+                            active_activation_id::text, schema_fingerprint,
+                            maintenance_status, maintenance_target_package_digest
                      FROM registry_internal.registry_state
                      WHERE singleton",
                     &[],
@@ -3917,8 +3892,6 @@ mod tests {
                 row.get(4),
                 row.get(5),
                 row.get(6),
-                row.get(7),
-                row.get(8),
             )
         }
 

@@ -36,9 +36,9 @@ use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
-    RuntimePool,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{WebhookDeliveryError, WebhookDeliveryService, WebhookWorkOutcome};
@@ -476,6 +476,7 @@ async fn setup_with_options(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "hook-proposal-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
@@ -486,12 +487,10 @@ async fn setup_with_options(
     let service = WebhookDeliveryService::new_with_field_encryption(
         pool.clone(),
         Arc::clone(&destinations),
-        Arc::new(HookHandlerRegistry::new(
-            &compiled,
-            &identity.package_revision,
-        )),
+        Arc::new(HookHandlerRegistry::new(&compiled, &identity.activation_id)),
         Arc::new(compiled.clone()),
         identity.clone(),
+        "hook-proposal-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -551,10 +550,11 @@ impl Setup {
             destinations,
             Arc::new(HookHandlerRegistry::new(
                 &self.compiled,
-                &identity.package_revision,
+                &identity.activation_id,
             )),
             Arc::new(self.compiled.clone()),
             identity,
+            "hook-proposal-instance",
             lock_key,
             Duration::from_secs(2),
             self.database.audit(audit_profile),
@@ -574,11 +574,8 @@ impl Setup {
 fn registry_state_test_identity() -> RegistryStateTestIdentity<'static> {
     RegistryStateTestIdentity {
         package_id: "hook-proposal-registry",
-        environment: "local",
-        instance_id: "hook-proposal-instance",
         database_id: "hook-proposal-database",
-        package_revision: PACKAGE_REVISION,
-        package_sequence: 1,
+        label: PACKAGE_REVISION,
     }
 }
 
@@ -1487,18 +1484,18 @@ async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() 
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
 
     let mut successor_identity = setup.identity.clone();
-    successor_identity.package_revision = SUCCESSOR_PACKAGE_REVISION.to_owned();
-    successor_identity.package_sequence += 1;
+    successor_identity.package_digest = test_package_digest(SUCCESSOR_PACKAGE_REVISION);
+    successor_identity.activation_id = test_activation_id(SUCCESSOR_PACKAGE_REVISION);
     let changed = setup
         .database
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1, package_sequence = $2
+             SET active_package_digest = $1, active_activation_id = $2::text::uuid
              WHERE singleton",
             &[
-                &successor_identity.package_revision,
-                &successor_identity.package_sequence,
+                &successor_identity.package_digest,
+                &successor_identity.activation_id,
             ],
         )
         .await

@@ -545,11 +545,8 @@ async fn setup_lock_order_action_registry() -> (
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-action-lock-order",
-            package_sequence: 1,
+            label: "package-action-lock-order",
         },
     )
     .await
@@ -661,7 +658,7 @@ async fn seed_lock_order_records(
             &[
                 &Uuid::parse_str(LOCK_RECORD_X).expect("lock-order X UUID"),
                 &Uuid::parse_str(LOCK_RECORD_Y).expect("lock-order Y UUID"),
-                &identity.package_revision,
+                &identity.activation_id,
                 &"zone-a",
             ],
         )
@@ -900,11 +897,8 @@ async fn setup_wide_action_registry() -> (
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-action-wide-128",
-            package_sequence: 1,
+            label: "package-action-wide-128",
         },
     )
     .await
@@ -1042,7 +1036,7 @@ async fn seed_wide_record(
             ),
             &[
                 &Uuid::parse_str(WIDE_RECORD_ID).expect("wide seed UUID"),
-                &identity.package_revision,
+                &identity.activation_id,
                 &"zone-a",
             ],
         )

@@ -247,7 +247,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .expect("destructive binding path exists");
     let binding = ExternalBackupBinding {
         database_id: DATABASE.to_owned(),
-        prior_package_digest: required_active.package_revision.clone(),
+        prior_package_digest: required_active.package_digest.clone(),
         prior_schema_fingerprint: required_active.schema_fingerprint.clone(),
         backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
         sha256: backup_digest,
@@ -349,7 +349,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         (
             "other-package.json",
             ExternalBackupBinding {
-                prior_package_digest: active.package_revision.clone(),
+                prior_package_digest: active.package_digest.clone(),
                 ..binding.clone()
             },
         ),
@@ -564,7 +564,7 @@ async fn real_postgres_refuses_the_active_package_again_and_binds_only_the_recor
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET maintenance_status = 'failed', maintenance_target_revision = $1
+             SET maintenance_status = 'failed', maintenance_target_package_digest = $1
              WHERE singleton",
             &[&other.package_digest()],
         )
@@ -1090,7 +1090,8 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
         .expect("the missing activation transition completes");
     assert_eq!(completed.outcome, ReconcileOutcome::Completable);
     assert!(completed.executed);
-    let target = target_identity(&package, 2);
+    let mut target = target_identity(&package);
+    target.activation_id = activation_at(&database, 2).await;
     assert_ready_target(&database, &target).await;
     assert_eq!(
         ledger_snapshot(&database)
@@ -1169,7 +1170,8 @@ async fn reconciliation_reverts_a_target_that_reached_no_durable_step() {
             .iter()
             .find(|entry| entry.0 == abandoned.package_digest())
             .map(|entry| entry.2.clone()),
-        Some("failed".to_owned())
+        Some("reverted".to_owned()),
+        "an abandoned target closes as reverted, freeing its digest"
     );
     assert_reconcile_audit_is_minimized(&database, "reverted").await;
 
@@ -1277,7 +1279,7 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
 
     let candidate = compile_variant(Variant::BatchAddedRequired);
     let change_set =
-        compiled_registry_change_set(&base, &candidate, &active.package_revision).changes;
+        compiled_registry_change_set(&base, &candidate, &active.package_digest).changes;
     assert!(
         change_set.iter().any(|change| {
             change.code == CompiledRegistryChangeCode::FieldAddedRequired
@@ -1320,6 +1322,140 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
     database.cleanup().await;
 }
 
+/// Every activation is one ledger row keyed by its own activation id, in the
+/// database's apply order. The registry state names the active package digest
+/// and the activation that made it active, and carries the physical claim the
+/// initial activation recorded; no separate claim table exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+    let base = compile_variant(Variant::Base);
+    let initial_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+    assert_eq!(active.package_digest, initial.package_digest());
+    let initial_activation =
+        Uuid::parse_str(&active.activation_id).expect("the activation id is a UUID");
+
+    let candidate = compile_variant(Variant::BatchAddedRequired);
+    let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
+    let source = added_required_source(
+        "add-required-ledger",
+        &active,
+        &base,
+        &candidate,
+        &target_fingerprint,
+        0,
+    );
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::BatchAddedRequired,
+        &target_fingerprint,
+        source,
+    );
+    let activated = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the successor activates");
+    let successor_activation =
+        Uuid::parse_str(&activated.activation_id).expect("the activation id is a UUID");
+    assert_ne!(initial_activation, successor_activation);
+
+    let rows = database
+        .admin
+        .query(
+            "SELECT activation_id, apply_order, package_digest, predecessor_package_digest,
+                    registry_revision, plan_kind, migration_kind, outcome, role_mode,
+                    runtime_role, operator_reference_hash, backup_references, applied_at IS NOT NULL
+             FROM registry_internal.registry_migrations
+             ORDER BY apply_order",
+            &[],
+        )
+        .await
+        .expect("the ledger reads");
+    assert_eq!(rows.len(), 2);
+    let expected = [
+        (
+            initial_activation,
+            1_i64,
+            initial.package_digest(),
+            None,
+            initial.registry().revision(),
+            "initial",
+            "compiled_additive",
+        ),
+        (
+            successor_activation,
+            2_i64,
+            package.package_digest(),
+            Some(initial.package_digest()),
+            package.registry().revision(),
+            "successor",
+            "reviewed",
+        ),
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.get::<_, Uuid>(0), expected.0);
+        assert_eq!(row.get::<_, i64>(1), expected.1);
+        assert_eq!(row.get::<_, String>(2), expected.2);
+        assert_eq!(row.get::<_, Option<String>>(3).as_deref(), expected.3);
+        assert_eq!(row.get::<_, String>(4), expected.4);
+        assert_eq!(row.get::<_, String>(5), expected.5);
+        assert_eq!(row.get::<_, String>(6), expected.6);
+        assert_eq!(row.get::<_, String>(7), "applied");
+        assert_eq!(row.get::<_, String>(8), "split");
+        assert_eq!(row.get::<_, String>(9), database.runtime_role.as_str());
+        assert_eq!(row.get::<_, Option<String>>(10), None);
+        assert_eq!(row.get::<_, serde_json::Value>(11), serde_json::json!([]));
+        assert!(row.get::<_, bool>(12));
+    }
+
+    let state = database
+        .admin
+        .query_one(
+            "SELECT active_package_digest, active_activation_id, schema_fingerprint,
+                    maintenance_status, maintenance_target_package_digest,
+                    database_oid IS NOT NULL, epoch
+             FROM registry_internal.registry_state WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the registry state reads");
+    assert_eq!(state.get::<_, String>(0), package.package_digest());
+    assert_eq!(state.get::<_, Uuid>(1), successor_activation);
+    assert_eq!(state.get::<_, String>(2), target_fingerprint);
+    assert_eq!(state.get::<_, String>(3), "ready");
+    assert_eq!(state.get::<_, Option<String>>(4), None);
+    assert!(
+        state.get::<_, bool>(5),
+        "the initial activation records the claim"
+    );
+    assert_eq!(state.get::<_, i64>(6), 1);
+    let claim_table: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.to_regclass('registry_internal.registry_instance_claim')::text",
+            &[],
+        )
+        .await
+        .expect("the catalog reads")
+        .get(0);
+    assert_eq!(claim_table, None);
+
+    database.cleanup().await;
+}
+
 /// `bregctl test` rehearses a successor over an empty reproduction of the
 /// verified predecessor schema before it measures the candidate. The rehearsal
 /// accepts the plan activation accepts, refuses the plans activation would
@@ -1338,7 +1474,7 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
     let base = compile_variant(Variant::Base);
     let base_fingerprint = initial_fingerprint(&database, &base).await;
     let initial = prepare_and_load_initial(&base, &base_fingerprint);
-    let active = target_identity(&initial, 1);
+    let active = target_identity(&initial);
     let candidate = compile_variant(Variant::RankRequired);
     // A package's fingerprint is the fresh-install fingerprint of its registry,
     // and activation holds the migrated catalog to it.
@@ -1524,7 +1660,7 @@ async fn real_postgres_rehearsal_refuses_a_predecessor_it_cannot_install() {
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
     let base = compile_variant(Variant::Base);
     let initial = prepare_and_load_initial(&base, fingerprint);
-    let active = target_identity(&initial, 1);
+    let active = target_identity(&initial);
     let candidate = compile_variant(Variant::RankRequired);
     let prepared = prepare_reviewed_candidate(
         &active,
@@ -1566,12 +1702,12 @@ async fn real_postgres_rehearsal_runs_compiler_ddl_around_the_reviewed_steps() {
 
     let base = compile_variant(Variant::Base);
     let base_fingerprint = initial_fingerprint(&database, &base).await;
-    let active = target_identity(&prepare_and_load_initial(&base, &base_fingerprint), 1);
+    let active = target_identity(&prepare_and_load_initial(&base, &base_fingerprint));
     let candidate = compile_variant(Variant::BatchAddedRequired);
     let target_fingerprint = initial_fingerprint(&database, &candidate).await;
     let prepared = prepare_package(build_request(
         Variant::BatchAddedRequired,
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         &target_fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
             prior_registry: Box::new(base.clone()),
@@ -1654,7 +1790,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
         source,
     );
     let predecessor_baseline =
-        CompiledRegistryMigrationBaseline::from_compiled(&active.package_revision, &prior);
+        CompiledRegistryMigrationBaseline::from_compiled(&active.package_digest, &prior);
     let (mut migration, migration_task) = database.connect_migration().await;
     let report = preflight_field_encryption_backfill(
         &mut migration,
@@ -1717,15 +1853,14 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
         .query_one(
             "SELECT
                  (SELECT maintenance_status = 'ready'
-                    AND maintenance_target_revision IS NULL
+                    AND maintenance_target_package_digest IS NULL
                     FROM registry_internal.registry_state WHERE singleton),
                  NOT EXISTS (
                      SELECT 1 FROM registry_internal.registry_migrations
-                      WHERE target_package_revision = $1
+                      WHERE package_digest = $1
                  ),
                  NOT EXISTS (
                      SELECT 1 FROM registry_internal.registry_field_encryption_flips
-                      WHERE boundary_package_revision = $1
                  )",
             &[&package.package_digest()],
         )
@@ -1861,7 +1996,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
                 &request_id,
                 &fingerprint,
                 &serde_json::json!({
-                    "originatingPackage": active.package_revision,
+                    "originatingPackage": active.activation_id,
                     "effects": [],
                     "applicationPreconditions": {"targets": [{
                         "id": "guard-asset",
@@ -1915,7 +2050,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
              WHERE entity_id = 'asset'
                AND package_revision = $1
                AND jsonb_typeof(convert_from(snapshot, 'UTF8')::jsonb -> 'secret') = 'string'",
-            &[&active.package_revision],
+            &[&active.activation_id],
         )
         .await
         .expect("pre-boundary journal revisions read");
@@ -1989,7 +2124,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         source,
     );
     let predecessor_baseline =
-        CompiledRegistryMigrationBaseline::from_compiled(&active.package_revision, &prior);
+        CompiledRegistryMigrationBaseline::from_compiled(&active.package_digest, &prior);
     let (mut migration, migration_task) = database.connect_migration().await;
     let report = preflight_field_encryption_backfill(
         &mut migration,
@@ -2567,7 +2702,7 @@ fn prepare_and_load_reviewed(
 ) -> VerifiedPackage {
     let prepared = prepare_package(build_request(
         variant,
-        Some(&current.package_revision),
+        Some(&current.package_digest),
         fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
             prior_registry: Box::new(prior.clone()),
@@ -2667,7 +2802,7 @@ fn backfill_source_with_steps(
         post,
         rehearsed_rows,
     } = request;
-    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+    let change = compiled_registry_change_set(prior, candidate, &current.package_digest)
         .changes
         .into_iter()
         .find(|change| change.code == CompiledRegistryChangeCode::FieldRequirednessChanged)
@@ -2778,7 +2913,7 @@ fn added_required_source(
     final_fingerprint: &str,
     rehearsed_rows: u64,
 ) -> ReviewedMigrationSource {
-    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+    let change = compiled_registry_change_set(prior, candidate, &current.package_digest)
         .changes
         .into_iter()
         .find(|change| change.code == CompiledRegistryChangeCode::FieldAddedRequired)
@@ -2878,7 +3013,7 @@ fn encrypted_flip_source(request: FlipSourceRequest<'_>) -> ReviewedMigrationSou
         history,
         rehearsed_rows,
     } = request;
-    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+    let change = compiled_registry_change_set(prior, candidate, &current.package_digest)
         .changes
         .into_iter()
         .find(|change| change.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
@@ -3149,7 +3284,7 @@ async fn seed_flip_rows(
     let active_revision: String = database
         .admin
         .query_one(
-            "SELECT active_package_revision
+            "SELECT active_activation_id::text
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -3375,7 +3510,7 @@ async fn assert_flip_journal(database: &TestDatabase, target: &ExpectedRegistryI
              WHERE entity_id = 'asset'
                AND package_revision = $1
                AND convert_from(snapshot, 'UTF8')::jsonb ? 'secret'",
-            &[&target.package_revision, &ENVELOPE_MEMBER_TAG],
+            &[&target.activation_id, &ENVELOPE_MEMBER_TAG],
         )
         .await
         .expect("flip journal reads");
@@ -3412,7 +3547,7 @@ async fn assert_flip_boundary_row(
         )
         .await
         .expect("the flip boundary row exists");
-    assert_eq!(row.get::<_, String>(0), target.package_revision);
+    assert_eq!(row.get::<_, String>(0), target.activation_id);
     assert_eq!(row.get::<_, String>(1), history_choice);
     assert_eq!(row.get::<_, i64>(2), sealed_rows);
     assert_eq!(row.get::<_, i64>(3), sealed_journal_rows);
@@ -3463,7 +3598,7 @@ fn destructive_source_with_recovery_fault(
     final_fingerprint: &str,
     recovery_fault: bool,
 ) -> ReviewedMigrationSource {
-    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+    let change = compiled_registry_change_set(prior, candidate, &current.package_digest)
         .changes
         .into_iter()
         .find(|change| change.code == CompiledRegistryChangeCode::FieldRemoved)
@@ -3577,7 +3712,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
     );
     let fixture_bytes = b"{\"fixture\":\"representative\"}\n".to_vec();
     let receipt = MigrationRehearsalReceipt {
-        prior_package_digest: current.package_revision.clone(),
+        prior_package_digest: current.package_digest.clone(),
         prior_schema_fingerprint: current.schema_fingerprint.clone(),
         plan_sha256: digest(&descriptor_bytes),
         sql_sha256: steps
@@ -3662,7 +3797,7 @@ fn prepare_reviewed_candidate(
 ) -> PreparedPackage {
     prepare_package(build_request(
         Variant::RankRequired,
-        Some(&current.package_revision),
+        Some(&current.package_digest),
         fingerprint,
         PackageMigrationPlanInput::ReviewedSuccessor {
             prior_registry: Box::new(prior.clone()),
@@ -3928,7 +4063,7 @@ async fn seed_backfill_rows(database: &TestDatabase, registry: &CompiledRegistry
     let active_revision: String = database
         .admin
         .query_one(
-            "SELECT active_package_revision
+            "SELECT active_activation_id::text
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -4009,7 +4144,7 @@ fn synthetic_backup_sql(
             format!(
                 "('{}'::uuid, '{}', 'c{index}'::varchar(8), 1::bigint, 'legacy-{index}'::varchar(16))",
                 Uuid::from_u128(index as u128 + 1)
-                , active.package_revision.replace('\'', "''")
+                , active.activation_id.replace('\'', "''")
             )
         })
         .collect::<Vec<_>>()
@@ -4108,7 +4243,7 @@ fn write_synthetic_backup(
         "pattern-binding.json",
         &ExternalBackupBinding {
             database_id: DATABASE.to_owned(),
-            prior_package_digest: current.package_revision.clone(),
+            prior_package_digest: current.package_digest.clone(),
             prior_schema_fingerprint: current.schema_fingerprint.clone(),
             backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
             sha256: digest(bytes),
@@ -4252,7 +4387,12 @@ async fn step_snapshot(
         .query_one(
             "SELECT outcome, checkpoint_record_id, affected_rows
              FROM registry_internal.registry_migration_steps
-             WHERE target_package_revision = $1 AND step_id = $2",
+             WHERE activation_id = (
+                       SELECT activation_id FROM registry_internal.registry_migrations
+                        WHERE package_digest = $1
+                        ORDER BY apply_order DESC LIMIT 1
+                   )
+               AND step_id = $2",
             &[&package.package_digest(), &step_id],
         )
         .await
@@ -4264,9 +4404,9 @@ async fn ledger_snapshot(database: &TestDatabase) -> Vec<(String, String, String
     database
         .admin
         .query(
-            "SELECT target_package_revision, plan_kind, outcome
+            "SELECT package_digest, plan_kind, outcome
              FROM registry_internal.registry_migrations
-             ORDER BY package_sequence",
+             ORDER BY apply_order",
             &[],
         )
         .await
@@ -4285,13 +4425,14 @@ async fn assert_non_ready_target(
     let row = database
         .admin
         .query_one(
-            "SELECT active_package_revision, maintenance_status, maintenance_target_revision
+            "SELECT active_activation_id::text, maintenance_status,
+                    maintenance_target_package_digest
              FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
         .await
         .expect("maintenance state reads");
-    assert_eq!(row.get::<_, String>(0), active.package_revision);
+    assert_eq!(row.get::<_, String>(0), active.activation_id);
     assert_eq!(row.get::<_, String>(1), expected_status);
     assert_eq!(
         row.get::<_, Option<String>>(2).as_deref(),
@@ -4303,18 +4444,23 @@ async fn assert_ready_target(database: &TestDatabase, expected: &ExpectedRegistr
     let row = database
         .admin
         .query_one(
-            "SELECT active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status, maintenance_target_revision
-             FROM registry_internal.registry_state WHERE singleton",
+            "SELECT state.active_activation_id::text, state.active_package_digest,
+                    state.schema_fingerprint, state.maintenance_status,
+                    state.maintenance_target_package_digest, ledger.outcome
+             FROM registry_internal.registry_state AS state
+             JOIN registry_internal.registry_migrations AS ledger
+               ON ledger.activation_id = state.active_activation_id
+             WHERE state.singleton",
             &[],
         )
         .await
         .expect("ready state reads");
-    assert_eq!(row.get::<_, String>(0), expected.package_revision);
-    assert_eq!(row.get::<_, String>(1), expected.schema_fingerprint);
-    assert_eq!(row.get::<_, i64>(2), expected.package_sequence);
+    assert_eq!(row.get::<_, String>(0), expected.activation_id);
+    assert_eq!(row.get::<_, String>(1), expected.package_digest);
+    assert_eq!(row.get::<_, String>(2), expected.schema_fingerprint);
     assert_eq!(row.get::<_, String>(3), "ready");
     assert_eq!(row.get::<_, Option<String>>(4), None);
+    assert_eq!(row.get::<_, String>(5), "applied");
 }
 
 async fn assert_added_required_column(
@@ -4437,19 +4583,32 @@ async fn reconcile(
     .await
 }
 
-/// The identity one package activates to as the database's
-/// `package_sequence`-th package in this test's deployment.
-fn target_identity(package: &VerifiedPackage, package_sequence: i64) -> ExpectedRegistryIdentity {
+/// The identity one package activates to in this test's deployment. The
+/// activation id is a deterministic stand-in; a test that asserts the active
+/// identity replaces it with the id the ledger recorded.
+fn target_identity(package: &VerifiedPackage) -> ExpectedRegistryIdentity {
     let manifest = package.manifest();
     ExpectedRegistryIdentity {
         package_id: manifest.package_id.clone(),
-        environment: ENVIRONMENT.to_owned(),
-        instance_id: INSTANCE.to_owned(),
         database_id: DATABASE.to_owned(),
-        package_revision: package.package_digest().to_owned(),
+        package_digest: package.package_digest().to_owned(),
+        activation_id: registry_breg::postgres::test_activation_id(package.package_digest()),
         schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence,
     }
+}
+
+/// The activation id the ledger recorded at one apply order.
+async fn activation_at(database: &TestDatabase, apply_order: i64) -> String {
+    database
+        .admin
+        .query_one(
+            "SELECT activation_id::text FROM registry_internal.registry_migrations
+             WHERE apply_order = $1",
+            &[&apply_order],
+        )
+        .await
+        .expect("the ledger records that apply order")
+        .get(0)
 }
 
 /// The whole durable maintenance record an assessment must leave untouched:
@@ -4465,9 +4624,11 @@ async fn durable_snapshot(
     let steps = database
         .admin
         .query(
-            "SELECT outcome, checkpoint_record_id, affected_rows
-             FROM registry_internal.registry_migration_steps
-             ORDER BY target_package_revision, step_ordinal",
+            "SELECT step.outcome, step.checkpoint_record_id, step.affected_rows
+             FROM registry_internal.registry_migration_steps AS step
+             JOIN registry_internal.registry_migrations AS ledger
+               ON ledger.activation_id = step.activation_id
+             ORDER BY ledger.apply_order, step.migration_ordinal, step.step_ordinal",
             &[],
         )
         .await
@@ -4483,7 +4644,8 @@ async fn durable_snapshot(
     let state = database
         .admin
         .query_one(
-            "SELECT active_package_revision, maintenance_status, maintenance_target_revision
+            "SELECT active_activation_id::text, maintenance_status,
+                    maintenance_target_package_digest
              FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
@@ -4507,7 +4669,7 @@ async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &s
     for entry in database.audit_entries() {
         let text = entry.to_string();
         assert!(!text.contains(RECONCILE_OPERATOR_CANARY));
-        if entry["schema"] == "breg-migration-reconcile-audit/v2" {
+        if entry["schema"] == "breg-migration-reconcile-audit/v3" {
             assert!(text.contains(&format!("\"action\":\"{action}\"")));
             matched.push(entry);
         }
@@ -4591,13 +4753,13 @@ async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_re
         .admin
         .execute(
             &format!("INSERT INTO registry_data.{table} (record_id, {field}, active_package_revision) VALUES ($1, $2, $3)"),
-            &[&Uuid::from_u128(91), &"invalid", &active.package_revision],
+            &[&Uuid::from_u128(91), &"invalid", &active.activation_id],
         )
         .await
         .unwrap();
     let prepared = prepare_package(build_request(
         Variant::PatternAdded,
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         &added_fp,
         PackageMigrationPlanInput::Successor {
             prior_registry: Box::new(base.clone()),
@@ -4647,7 +4809,7 @@ async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_re
         let id = format!("pattern-{sequence}");
         let backup_bytes = format!(
             "-- Synthetic pattern migration recovery evidence for {}\n",
-            active.package_revision
+            active.package_digest
         )
         .into_bytes();
         let source = pattern_reviewed_source(&id, &active, &prior, &candidate, &target_fp);
@@ -4776,7 +4938,7 @@ fn pattern_reviewed_source(
     final_fingerprint: &str,
 ) -> ReviewedMigrationSource {
     use registry_breg::generated_ddl::field_pattern_constraint_name;
-    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+    let change = compiled_registry_change_set(prior, candidate, &current.package_digest)
         .changes
         .into_iter()
         .find(|change| {
@@ -4929,7 +5091,7 @@ async fn native_patterns_invalid_initial_activation_fails_closed_in_maintenance(
             field_id: "legacy".to_owned(),
         },
     );
-    let row = database.admin.query_one("SELECT maintenance_status, maintenance_target_revision FROM registry_internal.registry_state WHERE singleton", &[]).await.unwrap();
+    let row = database.admin.query_one("SELECT maintenance_status, maintenance_target_package_digest FROM registry_internal.registry_state WHERE singleton", &[]).await.unwrap();
     assert_eq!(row.get::<_, String>(0), "failed");
     assert_eq!(
         row.get::<_, Option<String>>(1).as_deref(),
@@ -5012,7 +5174,7 @@ async fn native_patterns_invalid_successors_report_the_field_for_additive_and_re
         } else {
             let prepared = prepare_package(build_request(
                 Variant::PatternInvalid,
-                Some(&active.package_revision),
+                Some(&active.package_digest),
                 &target_fingerprint,
                 PackageMigrationPlanInput::Successor {
                     prior_registry: Box::new(prior.clone()),

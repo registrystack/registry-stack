@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- BREAKING: the database records every activation, the initial one included,
+  as one row of `registry_internal.registry_migrations`, keyed by a UUID
+  activation id and ordered by `apply_order`. Each row names the package
+  digest, its predecessor digest, the `registryRevision`, the plan and
+  migration kinds, the role mode, and the runtime role.
+  - `registry_internal.registry_state` records the active package digest
+    and the active activation id instead of a package revision, an
+    environment, an instance id, and a package sequence, and holds the
+    instance claim. The `registry_internal.registry_instance_claim` table is
+    gone.
+  - Records, the revision journal, captured outbox and delivery rows, audit
+    entries, and import authorities name the activation that wrote them by
+    its activation id wherever they named a package revision. Webhook event
+    data and ingestion runs keep naming the active package by its digest as
+    `packageRevision`, since a client knows the package it holds, not the
+    activation the database recorded for it.
+  - `bregctl apply` reports `activationId` instead of `packageSequence`.
+  - Reconciliation audits under `breg-migration-reconcile-audit/v3`, naming
+    `packageDigest`, `targetPackageDigest`, and `activationId` instead of
+    `packageRevision`, `targetPackageRevision`, and `packageSequence`.
+  - Webhook events take their `source` from the runtime `identity.instanceId`.
+  - `breg` refuses to start on a database that records no activated package,
+    naming `bregctl apply --package DIR --initial`, and on a database that
+    predates the activation ledger, naming `bregctl apply --package DIR`. It
+    checks the package pin and the physical instance claim before it reads the
+    recorded identity, and `bregctl instance-claim` refuses a package root the
+    runtime `package.expectedDigest` does not pin before it connects.
+
 - `bregctl instance-claim adopt` also runs on a database the instance claim
   already names, as after a point-in-time recovery, a snapshot, or a base
   backup, which keep the claim matching and reopen every import authority

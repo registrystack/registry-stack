@@ -135,6 +135,16 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::DatabaseUninitialized => (
+            "startup.database.uninitialized",
+            "database",
+            "the database records no activated package: run bregctl apply --package DIR --initial to activate the first package",
+        ),
+        StartupError::PreLedgerDatabase => (
+            "startup.database.pre_ledger",
+            "database",
+            "the database predates the activation ledger: run bregctl apply --package DIR once to adopt this database into the ledger",
+        ),
         StartupError::DatabaseIdentityMismatch => (
             "startup.database.identity_mismatch",
             "database",
@@ -273,6 +283,8 @@ mod tests {
             StartupError::PackageRefused(PackageError::Integrity),
             StartupError::DatabaseConnection,
             StartupError::DatabaseUnready,
+            StartupError::DatabaseUninitialized,
+            StartupError::PreLedgerDatabase,
             StartupError::InstanceClaimMismatch,
             StartupError::DatabaseIdentityMismatch,
             StartupError::ActivePackageMismatch,
@@ -378,6 +390,16 @@ mod tests {
             (
                 StartupError::DatabaseUnready,
                 "startup.database.unready",
+                "database",
+            ),
+            (
+                StartupError::DatabaseUninitialized,
+                "startup.database.uninitialized",
+                "database",
+            ),
+            (
+                StartupError::PreLedgerDatabase,
+                "startup.database.pre_ledger",
                 "database",
             ),
             (
