@@ -32,6 +32,10 @@ ARCHIVE_LOCK_SCHEMA = "registry-docs.archive-lock.v1"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+PROMOTE_PUBLISHED_DOCUMENTATION = (
+    "promote each published release (release/OPERATIONS.md, "
+    '"Promote the published documentation")'
+)
 CONVENTIONAL_COMMIT_SUBJECT = re.compile(
     r"^[a-z][a-z0-9-]*(?:\([^()\r\n]+\))?!?: [^\r\n]+$"
 )
@@ -513,7 +517,7 @@ def published_release_selector_errors(
     docsets_data: Any,
     published_releases_path: Path,
 ) -> list[str]:
-    """Check the docs released selector and docsets for publication overclaims.
+    """Check the docs released selector and docsets against publication.
 
     The release manifest's own ``stack.status`` is set by hand while preparing
     the next release, so it says what a human remembered, not what is
@@ -522,11 +526,15 @@ def published_release_selector_errors(
     signal that only moves when a release is actually public is the release
     list this resolver reads.
 
-    Only overclaims fail: a selector naming a release nobody can fetch, and a
+    Overclaims fail: a selector naming a release nobody can fetch, and a
     docset advertising released availability ahead of the newest published
-    release. A selector behind that release is the ordinary transition, since
-    ``release.yml`` dispatches the documentation deployment against the tree
-    it published from and hands that deployment the release to serve.
+    release. A lagging selector fails too, with one exception: the newest
+    docset, while it is still the prepared candidate, may be published ahead
+    of the selector. ``release.yml`` dispatches the documentation deployment
+    against the tree it published from and hands that deployment the release
+    to serve, so that one release is the ordinary transition until it is
+    promoted. Any other published release newer than the selector was never
+    promoted.
     """
 
     try:
@@ -570,7 +578,84 @@ def published_release_selector_errors(
                 f"such release is published; the newest published release is "
                 f"{published_tag}"
             )
+
+    selector_version = docset_tag_version(selector)
+    if selector_version is not None:
+        candidate = prepared_candidate_tag(docsets)
+        lagging = sorted(
+            (
+                tag
+                for tag in published_tags
+                if tag != candidate
+                and (release_version_tuple(tag[1:]) or (-1, -1, -1))
+                > selector_version
+            ),
+            key=lambda tag: release_version_tuple(tag[1:]) or (-1, -1, -1),
+        )
+        if lagging:
+            noun = "release" if len(lagging) == 1 else "releases"
+            errors.append(
+                f"docsets.yaml released selector {selector!r} is behind "
+                f"published {noun} {', '.join(lagging)}; "
+                f"{PROMOTE_PUBLISHED_DOCUMENTATION}"
+            )
     return errors
+
+
+def docset_tag_version(docset_id: Any) -> tuple[int, int, int] | None:
+    if not isinstance(docset_id, str) or SEMVER_TAG.fullmatch(docset_id) is None:
+        return None
+    return release_version_tuple(docset_id[1:])
+
+
+def versioned_docsets_newest_first(
+    docsets: list[Any],
+) -> list[tuple[tuple[int, int, int], dict]]:
+    """Release docsets that were not failed trains, newest first."""
+
+    versioned = []
+    for docset in docsets:
+        if not isinstance(docset, dict) or docset.get("availability") == "failed":
+            continue
+        version = docset_tag_version(docset.get("id"))
+        if version is not None:
+            versioned.append((version, docset))
+    return sorted(versioned, key=lambda item: item[0], reverse=True)
+
+
+def prepared_candidate_tag(docsets: list[Any]) -> str | None:
+    """The newest release docset, while it is still a candidate.
+
+    Release preparation adds one candidate docset ahead of the released
+    selector and never moves the selector, so that docset is the only one
+    allowed ahead of it.
+    """
+
+    versioned = versioned_docsets_newest_first(docsets)
+    if versioned and versioned[0][1].get("availability") == "candidate":
+        return versioned[0][1]["id"]
+    return None
+
+
+def released_selector_lag_errors(docsets: list[Any], selector: Any) -> list[str]:
+    """Allow at most the prepared candidate docset ahead of the selector."""
+
+    selector_version = docset_tag_version(selector)
+    if selector_version is None:
+        return []
+    ahead = [
+        str(docset["id"])
+        for version, docset in reversed(versioned_docsets_newest_first(docsets))
+        if version > selector_version
+    ]
+    if not ahead or ahead == [prepared_candidate_tag(docsets)]:
+        return []
+    noun = "docset" if len(ahead) == 1 else "docsets"
+    return [
+        f"docsets.yaml released selector {selector!r} is behind {noun} "
+        f"{', '.join(ahead)}; only the newest prepared candidate may be ahead "
+        f"of it; {PROMOTE_PUBLISHED_DOCUMENTATION}"
+    ]
 
 
 def validate_docsets(
@@ -763,6 +848,13 @@ def validate_docsets(
                 f"{latest_released_tag!r}, the newest released manifest, "
                 f"not {released_selector!r}"
             )
+
+    errors.extend(
+        released_selector_lag_errors(
+            docsets,
+            docsets_data.get("released") if isinstance(docsets_data, dict) else None,
+        )
+    )
 
     if published_releases_path is not None:
         errors.extend(

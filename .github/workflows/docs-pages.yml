@@ -114,11 +114,13 @@ jobs:
           # indexable flag, and the canonical selector point a reader at. The
           # manifest status the offline gate reads is written by hand, so
           # check those claims against the release list this job already
-          # fetched. Only overclaims fail: a selector naming a release nobody
-          # can fetch, and a docset advertising released availability ahead of
-          # the newest published release. Release preparation never moves the
-          # selector, so it still names the previous release while this job
-          # deploys the release it received above.
+          # fetched. Overclaims fail: a selector naming a release nobody can
+          # fetch, and a docset advertising released availability ahead of the
+          # newest published release. A lagging selector fails too: release
+          # preparation never moves the selector, so it may still name the
+          # previous release while this job deploys the release it received
+          # above, but only that newest candidate docset may be published
+          # ahead of it. Any other newer published release was never promoted.
           release/scripts/registry-release validate-docsets \
             --published-releases "${PUBLISHED_RELEASES}"
 
