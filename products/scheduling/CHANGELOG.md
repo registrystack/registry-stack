@@ -53,7 +53,9 @@
     history, the schema version, and the role mode.
   - In split role mode the runtime role reads the ledger and the schema
     history but cannot write either; it keeps ordinary write access to the
-    product tables. Single role mode is reported by `plan`, `apply`, and
+    product tables. Apply grants it only the `scheduling_*` objects and the
+    platform hook delivery tables Scheduling installs, never another
+    application's objects in a shared schema. Single role mode is reported by `plan`, `apply`, and
     `status`. Each ledger row records the runtime role and the role mode it
     holds after the grants, read from its privileges and memberships.
   - `scheduling serve` writes no activation state. It refuses a database with
@@ -92,7 +94,12 @@
     earlier release migrated is adopted by that first apply, which also
     backfills the retained policy document. With split roles, a trigger an
     operator added to a `scheduling_*` table blocks `plan`, `apply`, and
-    startup until it is dropped.
+    startup until it is dropped. Apply checks that retained hook deliveries
+    stay deliverable before it takes the publication locks, so a delivery an
+    earlier runtime appends to a destination the upgrade rebinds, while the
+    apply runs, is refused at startup instead; stop the earlier runtime, or
+    keep its destination bindings until its deliveries drain, before
+    `schedulingctl apply`.
 - BREAKING: every `schedulingctl --format json` report opens with `ok`,
   `command`, and `status`, in that order, the envelope `evidencectl` writes.
   - `ok` is true exactly when the command exits 0. `status` is the command's
