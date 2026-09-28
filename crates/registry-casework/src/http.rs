@@ -1744,7 +1744,8 @@ fn page_limit(state: &HttpState, requested: Option<usize>) -> Result<usize, Http
     )
 }
 
-/// A zero or over-maximum `limit` is refused with the closed problem whose
+/// A `limit` of zero or a value above the route's maximum (100, or 1000 on
+/// the directory absence list) is refused with the closed problem whose
 /// detail names the parameter and each accepted range.
 fn bounded_limit(
     requested: Option<usize>,
