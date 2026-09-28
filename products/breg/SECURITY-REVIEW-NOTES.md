@@ -712,7 +712,8 @@ carries caller-controlled bytes into responses and logs.
 ### Enforcement and defaults
 
 - `fieldPath` is built only by `RequestLocation`'s constructors and by the
-  fixed `QUERY_PARAMETERS` list and header name. It carries a fixed envelope
+  fixed `QUERY_PARAMETERS` list and header names (`Idempotency-Key`, and
+  `If-Match` on a batch, never the header's value). It carries a fixed envelope
   member, a compiled API name the caller's grant admits for writing, or a
   fixed parameter or header name. Every pointer segment is RFC 6901 escaped
   and the whole pointer is bounded to the schema's 256 characters.
@@ -746,7 +747,9 @@ asserts byte-identical problems, apart from `traceId`, for an unknown and a
 withheld field in a create body, a patch path, a patch `test`, a batch item,
 `$select`, and `$filter`, including a withheld field placed ahead of an
 unknown one, and asserts that no withheld or unknown name appears in any
-body. `crates/registry-breg/tests/postgres_mutation_logical_names.rs` pins
+body. It also refuses a create that omits a required field the grant does
+not let the caller write at `/data`, byte-identical to an unknown field,
+and a batch `If-Match` header at `If-Match`. `crates/registry-breg/tests/postgres_mutation_logical_names.rs` pins
 the kebab-case field id refused at `/data`.
 `crates/registry-breg/src/problem_location.rs` pins the rendered and
 accepted grammar, and

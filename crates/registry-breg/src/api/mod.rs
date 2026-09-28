@@ -1821,7 +1821,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             if valid_idempotency_key(idempotency_key) {
-                invalid_request()
+                unexpected_batch_if_match()
             } else {
                 invalid_idempotency_key()
             },
@@ -4576,8 +4576,10 @@ impl QueryOptions {
         if result.request_history_after_proposal_version.is_some() && result.skiptoken().is_some() {
             return Err(QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER));
         }
-        if !allow_read_query && result.has_any_query_member() {
-            return Err(QueryParseError::Invalid);
+        if !allow_read_query {
+            if let Some(member) = result.first_query_member() {
+                return Err(QueryParseError::InvalidAt(member));
+            }
         }
         Ok(result)
     }
@@ -4687,18 +4689,13 @@ impl QueryOptions {
             })
     }
 
-    fn has_any_query_member(&self) -> bool {
-        self.request_history_after_proposal_version.is_some()
-            || self.parsed.as_of.is_some()
-            || self.skiptoken().is_some()
-            || self.query_options().is_some_and(|options| {
-                options.select.is_some()
-                    || options.filter.is_some()
-                    || options.orderby.is_some()
-                    || options.top.is_some()
-                    || options.count.is_some()
-                    || options.bbox.is_some()
-            })
+    /// The first read query member a route that takes none refuses, in a
+    /// fixed order that never depends on the caller's grants.
+    fn first_query_member(&self) -> Option<&'static str> {
+        if self.select_clause().is_some() {
+            return Some("$select");
+        }
+        self.first_non_projection_member()
     }
 }
 
@@ -5526,7 +5523,19 @@ fn missing_idempotency_key() -> Response {
         "Bad Request",
         "The request is invalid.",
         "request.invalid",
-        "Idempotency-Key",
+        crate::problem_location::IDEMPOTENCY_KEY_HEADER,
+    )
+}
+
+/// A batch refuses an `If-Match` header, because each item carries its own
+/// `ifMatch`. The problem names the fixed header, never its value.
+fn unexpected_batch_if_match() -> Response {
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::BAD_REQUEST,
+        "Bad Request",
+        "The request is invalid.",
+        "request.invalid",
+        crate::problem_location::IF_MATCH_HEADER,
     )
 }
 

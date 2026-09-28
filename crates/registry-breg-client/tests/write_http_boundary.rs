@@ -1620,6 +1620,7 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
         "/items/3/patch/0",
         "/items/3/patch/0/path",
         "Idempotency-Key",
+        "If-Match",
     ]
     .iter()
     .map(|path| response_for(&request_invalid, request_document.clone(), json!(path)))
@@ -1661,6 +1662,7 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
         json!("/items/3/patch/0/from"),
         json!("/items/3/patch/x"),
         json!("idempotency-key"),
+        json!("if-match"),
         json!("$select"),
         json!("data"),
         json!(format!("/items/{}", "1".repeat(300))),
@@ -1674,6 +1676,7 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
         "/0/path",
         "/items/3",
         "Idempotency-Key",
+        "If-Match",
         "$expand",
         "select",
         "fields",

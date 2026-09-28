@@ -835,14 +835,15 @@ of the code. On a record or query refusal it takes one of these forms:
 | Create body | `/data` for a missing `data` member or a field you may not write, known or not; `/data/<apiName>` for a missing required field or a wrong value of a field you may write. |
 | Patch document | `/<n>` for operation `n`, `/<n>/op`, `/<n>/path` for a path outside `/data/` or a field you may not write or read, known or not, and `/<n>/value`. |
 | Batch body | `/items`, `/changeContext`, `/items/<n>`, `/items/<n>/operation`, `/items/<n>/recordId`, `/items/<n>/ifMatch`, `/items/<n>/patch`, and the create and patch forms above under `/items/<n>` and `/items/<n>/patch`. |
-| Header | `Idempotency-Key` when it is missing or malformed. |
-| Query | The parameter: `$select`, `$filter`, `$orderby`, `$top`, `$count`, `$skiptoken`, `bbox`, `accessProfile`, `asOf`, `snapshot`, `validAt`, or `requestHistoryAfterProposalVersion`. |
+| Header | `Idempotency-Key` when it is missing or malformed; `If-Match` when a batch request sends one, because each batch item carries its own `ifMatch`. |
+| Query | The parameter: `$select`, `$filter`, `$orderby`, `$top`, `$count`, `$skiptoken`, `bbox`, `accessProfile`, `asOf`, `snapshot`, `validAt`, or `requestHistoryAfterProposalVersion`. A revision route takes none of them except `accessProfile`, and names the first other one you sent, in a fixed order. |
 
 A name you sent is never echoed: an unknown member or parameter and one your grant withholds stop
 at the same location, so the two answers are identical. A body over its byte bound, a body that is
-not JSON, a member beside `data` or `items`, and a query parameter the API does not define carry
-no `fieldPath`, and neither do lookup bodies, ingestion runs and chunks, attachments, and the
-feature API.
+not JSON, a member beside `data` or `items`, a query parameter the API does not define, and a query
+string that is empty, over 16 KiB, or not `name=value` pairs with valid percent-encoding carry no
+`fieldPath`, and neither do lookup bodies, ingestion runs and chunks, attachments, and the feature
+API.
 
 `type` is the published identifier for the code, and `code` is the same fact in the short form a
 program branches on: the type is the code with each dot read as a path segment, under

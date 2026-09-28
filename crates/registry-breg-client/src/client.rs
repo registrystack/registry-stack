@@ -2525,8 +2525,8 @@ enum BRegProblemPath {
     /// A record write body member: `/data`, `/data/<apiName>`, a JSON Patch
     /// operation member, or a batch item member.
     RecordRequest,
-    /// The `Idempotency-Key` header.
-    IdempotencyKey,
+    /// The `Idempotency-Key` header, or an `If-Match` header a batch refuses.
+    Header,
     /// A fixed query parameter name such as `$select`.
     QueryParameter,
 }
@@ -2539,7 +2539,7 @@ impl BRegProblemPath {
                 code,
                 BRegProblemCode::ActionRefused | BRegProblemCode::RequestInvalid
             ),
-            Self::ActionRequest | Self::RecordRequest | Self::IdempotencyKey => {
+            Self::ActionRequest | Self::RecordRequest | Self::Header => {
                 code == BRegProblemCode::RequestInvalid
             }
             Self::QueryParameter => code == BRegProblemCode::QueryInvalid,
@@ -2609,8 +2609,8 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
     if valid_action_request_problem_path(path) {
         return Some(BRegProblemPath::ActionRequest);
     }
-    if path == "Idempotency-Key" {
-        return Some(BRegProblemPath::IdempotencyKey);
+    if path == "Idempotency-Key" || path == "If-Match" {
+        return Some(BRegProblemPath::Header);
     }
     if BREG_QUERY_PARAMETERS.contains(&path) {
         return Some(BRegProblemPath::QueryParameter);

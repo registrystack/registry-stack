@@ -2721,6 +2721,25 @@ async fn record_and_query_refusals_name_only_fixed_members_and_admitted_fields()
     )
     .await;
     assert_request_invalid_at(&batch_context, Some("/changeContext"));
+    // A batch carries each item's precondition in its body, so an If-Match
+    // header is refused and named.
+    let batch_if_match = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets:batch",
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "located-batch-if-match"),
+                ("if-match", &created.etag),
+            ],
+            serde_json::to_vec(&json!({"items":[item]})).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&batch_if_match, Some("If-Match"));
     for (key, body) in [
         ("located-batch-no-items", json!({})),
         ("located-batch-items-type", json!({"items":{}})),
