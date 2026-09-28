@@ -2415,8 +2415,9 @@ async fn assert_ready(prepared: &PreparedServer, expected: StatusCode) {
 /// executor admits one prepared server at a time, so a directly opened writer
 /// stands in for the serving process here. The check also covers the
 /// `bregctl` sibling destination operator commands append to, not only the
-/// runtime's own destination: a torn final entry there must refuse doctor's
-/// check exactly as one in the runtime's own destination would.
+/// runtime's own destination: doctor's check treats it exactly as it treats
+/// the runtime's own destination, accepting a torn final entry the writer can
+/// move aside and refusing one whose side file already holds other bytes.
 async fn assert_audit_destination_has_one_writer_and_checks_take_none(
     database: &TestDatabase,
     serving_config: &Path,
@@ -2477,20 +2478,44 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
         fs::set_permissions(companion_directory, fs::Permissions::from_mode(0o700))
             .expect("companion audit directory mode is set");
         // The first entry must be in the writer's current envelope format, so
-        // the only defect the check can find is the torn final entry.
+        // the only thing the check can find is the torn final entry.
         let complete_entry = "{\"eventId\":\"5b1b5b8e-6f2b-4c1a-9b7a-6b1b5b8e6f2b\",\"schema\":\"registry.test.audit/v1\",\"time\":\"2024-01-01T00:00:00Z\",\"correlation\":\"bregctl-companion\",\"phase\":\"request\",\"record\":{}}\n";
         fs::write(&companion_path, format!("{complete_entry}{{"))
             .expect("torn companion entry is written");
         fs::set_permissions(&companion_path, fs::Permissions::from_mode(0o600))
             .expect("companion audit file mode is set");
+        // A torn final line is recoverable: the writer moves it to the
+        // `.torn` side file when it opens, so the check accepts it and
+        // changes nothing.
+        check_with_connection_config_for_test(unopened, database.runtime_config.clone())
+            .await
+            .expect("the startup check accepts a recoverable torn companion entry");
+        assert_eq!(
+            fs::read_to_string(&companion_path).expect("companion audit file reads"),
+            format!("{complete_entry}{{"),
+            "the startup check leaves the torn companion entry in place"
+        );
+        let mut torn_line = companion_path.clone().into_os_string();
+        torn_line.push(".torn");
+        let torn_line = PathBuf::from(torn_line);
+        assert!(
+            !torn_line.exists(),
+            "the startup check writes no torn-line side file"
+        );
+        // A side file that already holds other bytes is the only copy of an
+        // earlier torn line, so recovery cannot proceed and the check refuses.
+        fs::write(&torn_line, "earlier").expect("conflicting side file is written");
+        fs::set_permissions(&torn_line, fs::Permissions::from_mode(0o600))
+            .expect("side file mode is set");
         let refusal =
             check_with_connection_config_for_test(unopened, database.runtime_config.clone())
                 .await
                 .err();
         assert!(
-            matches!(&refusal, Some(StartupError::AuditDestination(reason)) if reason.contains("archive it")),
-            "a torn final entry in the bregctl companion destination refuses the startup check and names the recovery: {refusal:?}"
+            matches!(&refusal, Some(StartupError::AuditDestination(reason)) if reason.contains("archive the side file")),
+            "a torn companion entry beside a conflicting side file refuses the startup check and names the recovery: {refusal:?}"
         );
+        fs::remove_file(&torn_line).expect("side file cleanup");
         fs::write(&companion_path, complete_entry).expect("companion entry is completed");
         check_with_connection_config_for_test(unopened, database.runtime_config.clone())
             .await
