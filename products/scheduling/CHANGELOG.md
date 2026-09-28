@@ -38,6 +38,10 @@
     `schedulingctl.activation.applied-unaudited`, naming `schedulingctl
     status`; an audit destination that cannot be written exits 3 with
     `schedulingctl.audit-unavailable`.
+  - `schedulingctl plan` refuses a runtime role that cannot read an existing
+    activation ledger with `schedulingctl.activation.ledger-unreadable`, exit
+    1, naming `schedulingctl apply --runtime-config FILE` with the migration
+    credential to grant it, then `schedulingctl plan --runtime-config FILE`.
   - `schedulingctl status --runtime-config FILE` reads the full activation
     history, the schema version, and the role mode.
   - In split role mode the runtime role reads the ledger and the schema
@@ -75,9 +79,11 @@
   - `schedulingctl records apply` refuses a database no `schedulingctl apply`
     has activated, and one where another package is active.
   - Upgrade: add `identity.databaseId`, then run `schedulingctl apply` once
-    after upgrading, before starting the upgraded runtime; a pre-WP3 database
-    is adopted by that first apply, which also backfills the retained policy
-    document.
+    after upgrading, before starting the upgraded runtime; a database an
+    earlier release migrated is adopted by that first apply, which also
+    backfills the retained policy document. With split roles, a trigger an
+    operator added to a `scheduling_*` table blocks `plan`, `apply`, and
+    startup until it is dropped.
 
 ## v0.35.0 - 2026-09-28
 

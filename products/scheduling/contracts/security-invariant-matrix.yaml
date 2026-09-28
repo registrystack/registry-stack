@@ -589,7 +589,13 @@ invariants:
       SCHEMA (from the grantee it is held through, PUBLIC included), or DROP
       TRIGGER then a rerun of the refused command. Split-mode apply refuses a
       TRIGGER default privilege naming ALTER DEFAULT PRIVILEGES FOR ROLE
-      <migrator> REVOKE TRIGGER ON TABLES FROM <grantee> then a rerun.
+      <migrator> REVOKE TRIGGER ON TABLES FROM <grantee> then a rerun. Plan
+      refuses a runtime role that cannot read the ledger it would compare,
+      without USAGE on its schema or SELECT on scheduling_activations or
+      scheduling_schema_migrations, as
+      schedulingctl.activation.ledger-unreadable naming schedulingctl apply
+      --runtime-config FILE then plan again, rather than read the database
+      as empty.
     partialNote: >-
       In single role mode both credentials are one role that can write the
       ledger; plan, apply, and status report the mode and do not refuse it,
