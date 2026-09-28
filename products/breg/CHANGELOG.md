@@ -335,6 +335,9 @@
     covers a package older than the active one. An empty migration plan is
     refused before database authority, and `migration reconcile` refuses the
     active package as its target before database authority.
+- The BReg image carries `bregctl` at `/usr/local/bin/bregctl` beside the
+  runtime. The entrypoint stays `breg`; run `plan`, `apply`, and `status` from
+  the image by overriding the entrypoint.
 
 ## v0.35.0 - 2026-09-28
 

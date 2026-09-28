@@ -126,6 +126,12 @@
   between 1 and 256 bytes`, and names `schedulingctl --help` as the next
   step. The refused value is never repeated on standard output or standard
   error.
+- `schedulingctl` is published as a release binary for `linux-amd64`,
+  `linux-arm64`, and `macos-arm64`, and the Scheduling image carries it at
+  `/usr/local/bin/schedulingctl` beside the runtime. The entrypoint stays
+  `scheduling`; run `plan`, `apply`, and `status` from the image by
+  overriding the entrypoint. The Scheduling runtime remains an image-only
+  artifact.
 
 ## v0.35.0 - 2026-09-28
 

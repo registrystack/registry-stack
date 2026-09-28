@@ -91,6 +91,36 @@ write the ledger, `single` when it can, through a grant, ownership, membership
 in the migration role, or a superuser attribute. `status` reads the full
 activation history and the role mode the runtime credential holds now.
 
+From v0.36.0 the Scheduling image carries the `schedulingctl` built from the
+same source as its `scheduling`, at `/usr/local/bin/schedulingctl`; the
+entrypoint stays `scheduling`. To run `plan`, `apply`, or `status` with the
+image's exact bytes, override the entrypoint and mount the runtime file, the
+package, and the secret root read-only at the absolute paths the runtime file
+names, and the audit directory writable, because `apply` writes its entries to
+the `schedulingctl` file beside `audit.path`:
+
+```sh
+docker run --rm \
+  --entrypoint /usr/local/bin/schedulingctl \
+  -v /etc/registry-scheduling/runtime.yaml:/etc/registry-scheduling/runtime.yaml:ro \
+  -v /etc/registry-scheduling/package:/etc/registry-scheduling/package:ro \
+  -v /etc/registry-scheduling/operator-secrets:/etc/registry-scheduling/secrets:ro \
+  -v /var/lib/registry-scheduling/audit:/var/lib/registry-scheduling/audit:rw \
+  "$SCHEDULING_IMAGE" \
+  apply --runtime-config /etc/registry-scheduling/runtime.yaml \
+  --operator-reference CHG-1234
+```
+
+Replace the arguments after the image with
+`plan --runtime-config /etc/registry-scheduling/runtime.yaml` or
+`status --runtime-config /etc/registry-scheduling/runtime.yaml` for the other
+two commands. The secret root mounted for `apply` holds the migration
+credential `database.migrationUrlRef` names; keep it out of the serving
+container's. The image runs as UID 65532, and the file secret provider refuses
+a file owned by another user. A Kubernetes Job sets
+`command: ["/usr/local/bin/schedulingctl"]` and puts the subcommand and its
+flags in `args`.
+
 `serve` writes no activation state. It refuses to start when the ledger holds
 no row, when the ledger belongs to another `identity.databaseId`, when the
 verified package is not the active one, or when `package.expectedDigest` names
