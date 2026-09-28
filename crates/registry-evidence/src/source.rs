@@ -3586,16 +3586,16 @@ mod tests {
             .expect("private CA parameters are valid");
         ca_parameters.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let ca_key = rcgen::KeyPair::generate().expect("private CA key generates");
-        let ca_certificate = ca_parameters
-            .self_signed(&ca_key)
-            .expect("private CA certificate generates");
 
         let server_parameters =
             rcgen::CertificateParams::new(vec![server_subject_alt_name.to_owned()])
                 .expect("server certificate parameters are valid");
         let server_key = rcgen::KeyPair::generate().expect("server key generates");
         let server_certificate = server_parameters
-            .signed_by(&server_key, &ca_certificate, &ca_key)
+            .signed_by(
+                &server_key,
+                &rcgen::Issuer::from_params(&ca_parameters, &ca_key),
+            )
             .expect("private CA signs server certificate");
         let private_key = tokio_rustls::rustls::pki_types::PrivateKeyDer::Pkcs8(
             tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(server_key.serialize_der()),

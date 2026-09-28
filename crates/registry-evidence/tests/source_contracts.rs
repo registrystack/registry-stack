@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use chrono::Utc;
-use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use registry_evidence::bundle::{Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::{
     AcquisitionPosture, DeclaredUnresolvedProblem, FixedRequest, HttpMethod, OutboundTlsConfig,
@@ -689,7 +689,7 @@ async fn spawn_private_ca_tls_server(
         .expect("server certificate parameters are valid");
     let server_key = KeyPair::generate().expect("server key generates");
     let server_certificate = server_parameters
-        .signed_by(&server_key, &ca_certificate, &ca_key)
+        .signed_by(&server_key, &Issuer::from_params(&ca_parameters, &ca_key))
         .expect("private CA signs server certificate");
     let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
     let server_config = ServerConfig::builder()
