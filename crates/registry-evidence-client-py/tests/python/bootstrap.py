@@ -14,6 +14,10 @@ run with.
 
 from __future__ import annotations
 
+import ctypes
+import functools
+import json
+import os
 import pathlib
 import platform
 import shutil
@@ -23,10 +27,45 @@ import sys
 _CRATE_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _WORKSPACE_ROOT = _CRATE_ROOT.parents[1]
 _MODULE_NAME = "registry_evidence_client"
-_TARGET_DEBUG = _WORKSPACE_ROOT / "target" / "debug"
-_IMPORT_DIR = _TARGET_DEBUG / "python_module"
 
 _built = False
+
+
+@functools.cache
+def _target_debug() -> pathlib.Path:
+    # Ask Cargo from the directory the build runs in, so CARGO_TARGET_DIR,
+    # CARGO_BUILD_TARGET_DIR, a relative value and the `target` default all
+    # resolve exactly as they did for that build.
+    metadata = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        cwd=_WORKSPACE_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if metadata.returncode != 0:
+        raise RuntimeError(
+            "cargo metadata failed, so the Cargo target directory is unknown:\n"
+            + metadata.stderr
+        )
+    return pathlib.Path(json.loads(metadata.stdout)["target_directory"]) / "debug"
+
+
+def _preload_cargo_runtime() -> None:
+    if platform.system() != "Darwin":
+        return
+    runtime_directory = os.environ.get("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
+    if runtime_directory is None:
+        return
+    libraries = list(
+        pathlib.Path(runtime_directory).glob("libaws_lc_fips*_crypto.dylib")
+    )
+    if len(libraries) != 1:
+        raise RuntimeError(
+            "expected one AWS-LC FIPS runtime library in "
+            f"{runtime_directory}, found {len(libraries)}"
+        )
+    ctypes.CDLL(str(libraries[0]), mode=ctypes.RTLD_GLOBAL)
 
 
 def _built_cdylib_path() -> pathlib.Path:
@@ -41,7 +80,7 @@ def _built_cdylib_path() -> pathlib.Path:
             f"cdylib naming convention for {system!r}; macOS and Linux are "
             f"the only platforms this crate's local test bootstrap supports"
         )
-    return _TARGET_DEBUG / name
+    return _target_debug() / name
 
 
 def ensure_built() -> None:
@@ -81,18 +120,20 @@ def ensure_built() -> None:
             f"has drifted"
         )
 
-    _IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+    _preload_cargo_runtime()
+    import_dir = _target_debug() / "python_module"
+    import_dir.mkdir(parents=True, exist_ok=True)
     # CPython's import machinery accepts a plain `.so` suffix for an
     # extension module on both macOS and Linux, with no ABI or version tag
     # needed: confirmed by importing a module built and renamed exactly this
     # way. The copy (not the original build artifact) is what every test
-    # imports, so the workspace's shared `target/debug/` directory, which
-    # already holds Cargo's own outputs for every crate, never gains a
-    # Python-import-shaped file of its own.
-    imported_path = _IMPORT_DIR / f"{_MODULE_NAME}.so"
+    # imports, so Cargo's shared debug output directory, which already holds
+    # Cargo's own outputs for every crate, never gains a Python-import-shaped
+    # file of its own.
+    imported_path = import_dir / f"{_MODULE_NAME}.so"
     shutil.copyfile(built_path, imported_path)
 
-    if str(_IMPORT_DIR) not in sys.path:
-        sys.path.insert(0, str(_IMPORT_DIR))
+    if str(import_dir) not in sys.path:
+        sys.path.insert(0, str(import_dir))
 
     _built = True
