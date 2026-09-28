@@ -2588,12 +2588,13 @@ struct HttpsReceiver {
 impl HttpsReceiver {
     async fn start() -> Self {
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(vec!["localhost".to_owned()])
                 .expect("loopback TLS certificate generates");
         let certificate_der = cert.der().clone();
         let certificate_pem = pem("CERTIFICATE", certificate_der.as_ref());
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate_der], private_key)
