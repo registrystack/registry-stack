@@ -164,7 +164,7 @@ clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 csv = { version = "1" }
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1"] }
-ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+ed25519-dalek = { version = "3", features = ["pkcs8", "rand_core"] }
 fake = { version = "=4.4.0", default-features = false }
 fs2 = { version = "0.4" }
 futures = { version = "0.3" }
@@ -180,20 +180,20 @@ ipnet = { version = "2" }
 # line parser for the bundled CLI. Every consumer here compiles schemas it
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
 p256 = { version = "0.13", features = ["ecdsa"] }
 pg_query = { version = "=6.2.0", default-features = false }
 pkcs1 = { version = "0.7", features = ["alloc"] }
-pkcs8 = { version = "0.10" }
+pkcs8 = { version = "0.11" }
 proptest = { version = "1" }
 pyo3 = { version = "0.29.1", features = ["abi3-py310"] }
 pyo3-build-config = { version = "0.29.1" }
-rand = { version = "0.9" }
+rand = { version = "0.10" }
 rand_chacha = { version = "0.9" }
-rand_core = { version = "0.6", features = ["std"] }
+rand_core = { version = "0.10", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
 # Pattern evaluation for encrypted fields happens in Rust before sealing, so
 # no regex engine besides this one ever sees the plaintext. The default
@@ -240,7 +240,7 @@ typst-pdf = { version = "0.15.1" }
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 comemo = { version = "0.5" }
 ttf-parser = { version = "0.25" }
-ulid = { version = "1" }
+ulid = { version = "3" }
 ureq = { version = "2" }
 url = { version = "2" }
 utoipa = { version = "5" }

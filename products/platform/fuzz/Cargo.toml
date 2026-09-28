@@ -11,7 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 base64 = { version = "0.23", default-features = false, features = ["std"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 libfuzzer-sys = "0.4"
 registry-platform-authcommon = { path = "../../../crates/registry-platform-authcommon" }
 registry-platform-crypto = { path = "../../../crates/registry-platform-crypto" }
