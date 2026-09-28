@@ -26,8 +26,9 @@
   - Every command that reads one project takes it as a positional
     `<project>`. The former `--project` flag stays accepted but hidden on
     those commands; `source import`, `source diff`, `source update`, and
-    `target new` still document it. `access` and `audit show` still act on
-    the current directory and take no positional project.
+    `target new` still document it. `doctor` keeps its visible `--project`,
+    and `access` and `audit show` still act on the current directory; none
+    of these takes a positional project.
   - `test` and `fixtures run` accept `--format junit`: one JUnit XML document
     on standard output, one test case per traced case, and the human summary
     on standard error. Other commands refuse it as a usage error.
