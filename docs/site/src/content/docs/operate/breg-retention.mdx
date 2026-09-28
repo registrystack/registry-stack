@@ -372,11 +372,13 @@ commit failed and whether the reset committed cannot be read back; read the deli
 replaying it again.
 
 A crash or a killed process can also tear the file's final line itself, leaving it without its
-closing newline. The writer refuses to open a destination in that state, so the next start of the
-runtime, and any `doctor` or `bregctl` companion command checking the same destination (including
-its own sibling audit file), is refused rather than appending after the torn entry. Archive the file
-and restart on a fresh `audit.path`; do not edit the active file to repair it, since that is the same
-external change the writer already treats as a fault (see
+closing newline. The next open of that destination, by the runtime or a `bregctl` companion command
+on its own sibling file, moves the torn bytes to the owner-only side file `<audit.path>.torn`,
+truncates the active file to its last complete line, and logs the side file's path and byte count.
+No acknowledged entry is lost, because an entry is acknowledged only after it is synced. Archive the
+side file with the sealed files and remove it: the writer never overwrites it, so a second torn line
+is refused until the first side file is moved. Do not edit the active file to repair it, since that
+is the same external change the writer already treats as a fault (see
 [Audit retention](../retention-and-persistent-state/#audit-retention)).
 
 A mutation can already be committed when its response entry fails. Use the operation's idempotent
