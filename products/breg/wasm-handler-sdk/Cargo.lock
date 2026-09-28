@@ -1271,6 +1271,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "hickory-net"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2903,6 +2909,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "hex",
  "hickory-resolver",
  "http",
  "ipnet",
@@ -2913,9 +2920,11 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "time",
  "tokio",
+ "tower",
  "url",
  "uuid",
  "zeroize",

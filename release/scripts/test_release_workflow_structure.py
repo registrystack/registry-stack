@@ -2694,8 +2694,8 @@ class MessagingRosterStructureTest(unittest.TestCase):
 
     def test_no_script_or_workflow_carries_its_own_messaging_version(self) -> None:
         scanned = self.scanned_files()
-        self.assertTrue(
-            {ROOT / relative for relative in MESSAGING_ROSTER_CONSUMERS} <= set(scanned)
+        self.assertLessEqual(
+            {ROOT / relative for relative in MESSAGING_ROSTER_CONSUMERS}, set(scanned)
         )
         findings = []
         for path in scanned:

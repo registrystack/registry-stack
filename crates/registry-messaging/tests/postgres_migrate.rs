@@ -249,7 +249,8 @@ fn write_runtime(
 #[tokio::test]
 async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     let isolated = isolated_schema().await;
-    let root = tempfile::tempdir_in("/private/tmp").expect("a runtime directory");
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .expect("a runtime directory");
     let public = free_port();
     let metrics = free_port();
     write_runtime(
@@ -316,7 +317,8 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
 #[tokio::test]
 async fn a_stdout_audit_destination_never_carries_operational_logs() {
     let isolated = isolated_schema().await;
-    let root = tempfile::tempdir_in("/private/tmp").expect("a runtime directory");
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .expect("a runtime directory");
     let public = free_port();
     let metrics = free_port();
     write_runtime(
