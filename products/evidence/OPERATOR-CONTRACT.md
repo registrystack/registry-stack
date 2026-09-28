@@ -332,8 +332,22 @@ items than the burst, or a holder-bound release presenting more holder keys
 than the burst, can never be admitted however long the caller waits. Evidence
 refuses it as `evidence.invalid_request`, with no `Retry-After`, and charges
 nothing, rather than returning a rate limit that invites a retry which cannot
-succeed. Set `burstPerPrincipal` to at least the largest batch a caller is
-expected to send.
+succeed. The caller receives the registered invalid-request body unchanged:
+the frozen problem contract selects its detail by code alone, so the refusal
+names neither the burst nor the batch size.
+
+The largest cost a bundle admits is the larger of two numbers. A request batch
+may carry up to sixteen items for any audience-scoped requirement, whatever a
+source's own `batch.maximumItems` says, because items above that ceiling run
+sequentially rather than being refused. A holder-bound release may carry up to
+`holderBoundBatchMaxSize` holder keys when the bundle serves a holder-bound
+requirement and enables `sd-jwt-vc-batch`. `evidence check` and `evidencectl
+doctor` warn when `burstPerPrincipal` is below that cost, naming both numbers
+and the key. It is a warning rather than a refusal: a burst below the batch
+size is a deliberate way to cap how much one principal may ask for at once,
+at the price of refusing every larger batch. The shipped reference and starter
+configurations set `burstPerPrincipal: 16`; raise it at least that far unless
+the cap is intended.
 Authentication occurs once and all items use one evaluation instant. Every
 item is validated and authorized before any credential is resolved or source
 is contacted.

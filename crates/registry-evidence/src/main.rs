@@ -256,6 +256,12 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 bundle.package_digest(),
                 bundle.config.requirements.len()
             );
+            // A warning, not a refusal: a burst below the largest batch is a
+            // deliberate cap on some deployments. It names configured numbers
+            // and the key to change, never a request value.
+            if let Some(shortfall) = bundle.config.burst_shortfall() {
+                eprintln!("evidence: warning: {shortfall}");
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Evaluate {

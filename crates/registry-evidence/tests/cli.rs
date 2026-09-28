@@ -291,6 +291,59 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
     );
 }
 
+/// Set the staged bundle's `burstPerPrincipal`, whatever it held before.
+fn set_burst(project: &ReferenceProject, burst: u32) {
+    let path = project.root.path().join("bundle/evidence.yaml");
+    let text = fs::read_to_string(&path).expect("read staged bundle");
+    assert!(
+        text.contains("burstPerPrincipal:"),
+        "the staged bundle declares a burst"
+    );
+    let rewritten = text
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("burstPerPrincipal:") {
+                format!("  burstPerPrincipal: {burst}")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&path, rewritten).expect("write staged bundle");
+}
+
+/// A burst below the largest request cost the bundle admits makes some
+/// requests permanently unadmittable. `check` says so, naming both numbers and
+/// the key to change, and still passes: a smaller burst is a legitimate way to
+/// cap batch size, so it is a warning rather than a refusal.
+#[test]
+fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
+    let project = ReferenceProject::stage();
+    set_burst(&project, 10);
+    let below = project.sealed(|runtime| invoke(runtime, &["check"]));
+    assert!(below.status.success(), "a low burst is not a refusal");
+    let stdout = std::str::from_utf8(&below.stdout).expect("stdout is UTF-8");
+    assert!(stdout.ends_with(" passed check (3 requirements)\n"));
+    assert_eq!(
+        std::str::from_utf8(&below.stderr).expect("stderr is UTF-8"),
+        "evidence: warning: rateLimits.burstPerPrincipal is 10, below 16, the largest request \
+         cost this bundle admits: a request batch or holder-bound release that costs more than \
+         the burst is always refused as evidence.invalid_request. Raise \
+         rateLimits.burstPerPrincipal to at least 16 unless capping those requests below 16 is \
+         intended\n"
+    );
+
+    set_burst(&project, 16);
+    let covered = project.sealed(|runtime| invoke(runtime, &["check"]));
+    assert_success(
+        &covered,
+        "Evidence package ",
+        " passed check (3 requirements)\n",
+    );
+}
+
 #[test]
 fn dependency_check_proves_the_real_runtime_boundaries() {
     let key_server = JwksServer::start();
@@ -3450,6 +3503,15 @@ impl Deployment {
             "bundle/evidence.yaml",
             "assuranceProfile: evidence-grade",
             "assuranceProfile: local",
+        );
+        // The acceptance bundles keep the burst of ten the runtime rate-limit
+        // tests rewrite. A staged deployment holds a full request batch, as a
+        // deployment that heeded the burst warning would, so a clean `check`
+        // here still means no diagnostics at all.
+        deployment.replace(
+            "bundle/evidence.yaml",
+            "burstPerPrincipal: 10,",
+            "burstPerPrincipal: 16,",
         );
         let secrets = deployment.path("secrets");
         fs::create_dir(&secrets).expect("create private secret root");

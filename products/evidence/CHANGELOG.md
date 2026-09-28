@@ -50,7 +50,13 @@
   as `evidence.invalid_request` (400) without `Retry-After` and charges
   nothing. It previously returned `evidence.rate_limited` with a retry hint,
   although the bucket never refills past the burst and the retry could never
-  be admitted.
+  be admitted. `evidence check` and `evidencectl doctor` now warn when
+  `rateLimits.burstPerPrincipal` is below the largest request cost the bundle
+  admits (sixteen items for a request batch against any audience-scoped
+  requirement, or `holderBoundBatchMaxSize` for a holder-bound release with
+  `sd-jwt-vc-batch`), naming both numbers and the key. The shipped reference
+  deployment targets, reference deployment projects, BReg Evidence starters,
+  and the `evidencectl` local bundle now set `burstPerPrincipal: 16`.
 - Add: an HTTP source response whose shape drifted from the declared
   projection (a selected container missing or of another JSON type, or a
   selected leaf missing beside a member the projection does not select, which
