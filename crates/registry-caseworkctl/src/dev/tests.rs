@@ -2761,8 +2761,13 @@ fn legacy_issuer_state_and_unsafe_token_clients_are_refused_without_effects() {
 #[test]
 fn a_token_header_file_carries_the_bearer_and_the_registered_profile() {
     assert_eq!(
-        header_file(b"header.payload.signature", "staff").as_slice(),
+        header_file(b"header.payload.signature", Some("staff")).as_slice(),
         b"Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\n"
+    );
+    // An integration client carries no Casework profile.
+    assert_eq!(
+        header_file(b"header.payload.signature", None).as_slice(),
+        b"Authorization: Bearer header.payload.signature\n"
     );
 }
 

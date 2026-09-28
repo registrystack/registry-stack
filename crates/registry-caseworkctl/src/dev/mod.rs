@@ -467,29 +467,31 @@ fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
     {
         bail!("the local development session must be ready before requesting a token");
     }
+    // An integration client has no Casework access profile of its own.
     let profile = state
         .clients
         .iter()
         .find(|registered| registered.id == client)
-        .map(|registered| registered.profile.clone())
-        .context("the client is not registered in the local development session")?;
+        .map(|registered| registered.profile.clone());
     token(&state, client, &AtomicBool::new(false))?;
     let credential = Zeroizing::new(private::read(
         &root.join("secrets").join(format!("{client}-token")),
         65536,
     )?);
     let output = root.join("secrets").join(format!("{client}.header"));
-    private::replace(&output, &header_file(&credential, &profile))?;
+    private::replace(&output, &header_file(&credential, profile.as_deref()))?;
     Ok(json!({"ok":true,"command":"dev token","headerFile":output}))
 }
 
 /// One header per line, so `curl --header @file` sends the bearer credential
-/// and the Casework profile the client was registered with.
-fn header_file(credential: &[u8], profile: &str) -> Zeroizing<Vec<u8>> {
+/// and, for a client bound to a Casework access profile, that profile.
+fn header_file(credential: &[u8], profile: Option<&str>) -> Zeroizing<Vec<u8>> {
     let mut header = Zeroizing::new(b"Authorization: Bearer ".to_vec());
     header.extend_from_slice(credential);
-    header.extend_from_slice(b"\nRegistry-Casework-Profile: ");
-    header.extend_from_slice(profile.as_bytes());
+    if let Some(profile) = profile {
+        header.extend_from_slice(b"\nRegistry-Casework-Profile: ");
+        header.extend_from_slice(profile.as_bytes());
+    }
     header.push(b'\n');
     header
 }
