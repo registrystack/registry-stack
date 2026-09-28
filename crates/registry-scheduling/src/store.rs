@@ -159,6 +159,14 @@ pub enum StoreError {
         "the Scheduling database holds schema version {version}, newer than this release knows; run the Scheduling release that applied it"
     )]
     SchemaNewer { version: i64 },
+    /// The runtime role cannot read the activation ledger its search path
+    /// reaches: it lacks USAGE on the schema, which would otherwise read as
+    /// an empty database, or SELECT on a ledger table, as a rotated runtime
+    /// role does before apply grants it.
+    #[error(
+        "the Scheduling runtime role cannot read the activation ledger in schema {schema}; run `schedulingctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `schedulingctl plan --runtime-config FILE`"
+    )]
+    LedgerUnreadable { schema: String },
     #[error(
         "no Scheduling package has been applied to this database; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
     )]
@@ -274,6 +282,7 @@ impl StoreError {
                 | Self::RoleModeDrift
                 | Self::SplitRoleWeakened(_)
                 | Self::RuntimeGrantsMissing(_)
+                | Self::LedgerUnreadable { .. }
                 | Self::RetainedHookBindings
                 | Self::DeploymentIdentity
                 | Self::PolicyInUse(_)
