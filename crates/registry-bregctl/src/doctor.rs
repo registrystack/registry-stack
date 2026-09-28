@@ -87,6 +87,29 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
+    if let StartupError::InstanceIdChangedWithPendingDeliveries {
+        stored_source,
+        configured_instance_id,
+        pending_deliveries,
+    } = error
+    {
+        let noun = if pending_deliveries == 1 {
+            "delivery was"
+        } else {
+            "deliveries were"
+        };
+        return diagnostic(
+            "startup.instance_id.pending_deliveries",
+            "identity.instanceId",
+            &format!(
+                "{pending_deliveries} pending webhook {noun} captured under event source \
+                 `{stored_source}`, but identity.instanceId `{configured_instance_id}` derives \
+                 another source and the delivery worker would dead-letter them; restore the \
+                 previous identity.instanceId until those deliveries drain, then change it and \
+                 rerun doctor"
+            ),
+        );
+    }
     // The runtime configuration carries its own closed-vocabulary cause; name
     // it the way `bregctl verify` already names it instead of collapsing every
     // configuration mistake into one generic refusal.
@@ -122,7 +145,10 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
         }
-        StartupError::ReviewAuthorityMissing { .. } => unreachable!("handled above"),
+        StartupError::ReviewAuthorityMissing { .. }
+        | StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
+            unreachable!("handled above")
+        }
         StartupError::DatabaseConnection => (
             "startup.database.connection_refused",
             "database",
@@ -382,6 +408,30 @@ mod tests {
             "source request and review-authority workflows",
             "rerun doctor",
             "do not time out",
+        ] {
+            assert!(
+                diagnostic.message.contains(detail),
+                "missing diagnostic detail {detail}: {}",
+                diagnostic.message
+            );
+        }
+    }
+
+    #[test]
+    fn instance_id_change_with_pending_deliveries_names_both_identifiers_and_the_recovery() {
+        let diagnostic = startup_diagnostic(StartupError::InstanceIdChangedWithPendingDeliveries {
+            stored_source: "urn:registrystack:registry:licences:instance:previous".to_owned(),
+            configured_instance_id: "renamed".to_owned(),
+            pending_deliveries: 1,
+        });
+        assert_eq!(diagnostic.code, "startup.instance_id.pending_deliveries");
+        assert_eq!(diagnostic.path, "identity.instanceId");
+        for detail in [
+            "1 pending webhook delivery was",
+            "`urn:registrystack:registry:licences:instance:previous`",
+            "identity.instanceId `renamed`",
+            "dead-letter",
+            "restore the previous identity.instanceId until those deliveries drain",
         ] {
             assert!(
                 diagnostic.message.contains(detail),

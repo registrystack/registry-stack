@@ -369,7 +369,7 @@ configured prefix and never derive their authority from request headers.
 | Section | What it binds |
 | --- | --- |
 | `listener` | The bind address and the optional public origin that generated documents cite. The runtime reads neither peer addresses nor forwarded headers, so client addresses and TLS termination are enforced at your proxy. |
-| `identity` | The environment, instance, and database this file may serve. `environment` must equal `databaseInitializationEnvironment`. The first `apply` records `databaseId` in the database; every later `plan`, `apply`, and startup refuses a file that names another. |
+| `identity` | The environment, instance, and database this file may serve. `environment` must equal `databaseInitializationEnvironment`. The first `apply` records `databaseId` in the database; every later `plan`, `apply`, and startup refuses a file that names another. `instanceId` names the `source` of every webhook event this runtime captures, and the delivery worker dead-letters a stored event whose source names another instance, so startup refuses a changed `instanceId` while pending deliveries were captured under the previous one; keep the previous `instanceId` until they drain, then change it. |
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
 | `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |

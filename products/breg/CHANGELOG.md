@@ -124,6 +124,12 @@
     `maintenanceTargetRevision`, `activePackageRevision`, and
     `targetPackageRevision`.
   - Webhook events take their `source` from the runtime `identity.instanceId`.
+    Startup refuses a changed `identity.instanceId` while pending or leased
+    deliveries were captured under the previous one, naming the stored source
+    and the configured instance id, because the delivery worker would
+    dead-letter each of them. Keep the previous `identity.instanceId` until
+    they drain, then change it. Delivered and dead-lettered work does not
+    hold the change back.
   - `breg` refuses to start on a database that records no activated package,
     naming `bregctl apply --package DIR --initial`, and on a database that
     predates the activation ledger, naming `bregctl apply --package DIR`. It

@@ -127,6 +127,20 @@ pub enum StartupError {
     Authentication,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
+    /// Pending or leased webhook deliveries were captured under an event
+    /// source other than the one `identity.instanceId` derives. The worker
+    /// would refuse each stored envelope and dead-letter it, so startup
+    /// refuses first. Both values are deployment identifiers, not secrets.
+    #[error(
+        "{pending_deliveries} pending webhook deliveries were captured under event source \
+         {stored_source}, but identity.instanceId {configured_instance_id} derives another; \
+         restore the previous identity.instanceId until those deliveries drain, then change it"
+    )]
+    InstanceIdChangedWithPendingDeliveries {
+        stored_source: String,
+        configured_instance_id: String,
+        pending_deliveries: u64,
+    },
     #[error("the Registry retained review bindings were refused")]
     ReviewBindings,
     #[error(
@@ -457,6 +471,9 @@ impl StartupError {
                 "the Registry attachment storage or verification binding was refused"
             }
             Self::EventDestinations => "the Registry event destination bindings were refused",
+            Self::InstanceIdChangedWithPendingDeliveries { .. } => {
+                "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+            }
             Self::FieldEncryption => "the Registry field-encryption key state was refused",
             Self::FieldEncryptionCustody => {
                 "the Registry field-encryption data-key custody was refused"
@@ -1257,6 +1274,8 @@ async fn finish_prepared_server(
         audit.clone(),
         field_encryption.clone(),
     );
+    verify_pending_delivery_source(&pool, &expected.package_id, config.identity().instance_id())
+        .await?;
     webhook_delivery
         .verify_retained_bindings()
         .await
@@ -2029,6 +2048,60 @@ impl DynamicRuntimeReadiness {
         }
         Ok(())
     }
+}
+
+/// Bind retained webhook work to the event source this deployment stamps.
+///
+/// Threat: the delivery worker accepts a stored envelope only when its
+/// `source` equals the source `identity.instanceId` derives, so renaming the
+/// instance while deliveries are pending would dead-letter each of them
+/// silently, one attempt at a time. Enforcement: startup refuses while any
+/// pending or leased delivery with an unexpired payload names another source,
+/// naming the stored source, the configured instance id, and how many wait.
+/// Delivered, dead-lettered, and expired work never reaches the worker again,
+/// so it does not hold the rename back.
+async fn verify_pending_delivery_source(
+    pool: &RuntimePool,
+    package_id: &str,
+    instance_id: &str,
+) -> Result<()> {
+    let expected_source = crate::webhook::delivery_source(package_id, instance_id);
+    let client = pool
+        .get()
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?;
+    let row = client
+        .query_opt(
+            "SELECT left(captured.source, 512), count(*)
+               FROM (
+                   SELECT convert_from(outbox.payload, 'UTF8')::jsonb ->> 'source' AS source
+                     FROM registry_internal.registry_webhook_delivery_state AS state
+                     JOIN registry_internal.registry_outbox AS outbox
+                       ON outbox.event_id = state.event_id
+                    WHERE state.state IN ('pending', 'leased')
+                      AND outbox.payload IS NOT NULL
+                      AND outbox.payload_expires_at > transaction_timestamp()
+               ) AS captured
+              WHERE captured.source IS NOT NULL
+                AND captured.source <> $1
+              GROUP BY captured.source
+              ORDER BY count(*) DESC, captured.source
+              LIMIT 1",
+            &[&expected_source],
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let stored_source: String = row.try_get(0).map_err(|_| StartupError::DatabaseUnready)?;
+    let pending_deliveries: i64 = row.try_get(1).map_err(|_| StartupError::DatabaseUnready)?;
+    Err(StartupError::InstanceIdChangedWithPendingDeliveries {
+        stored_source,
+        configured_instance_id: instance_id.to_owned(),
+        pending_deliveries: u64::try_from(pending_deliveries)
+            .map_err(|_| StartupError::DatabaseUnready)?,
+    })
 }
 
 /// Refuse a database the instance claim does not name, by name.

@@ -186,6 +186,241 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+
+    let fixture = StartupFixture::new();
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let provisional_context = provisional.context();
+    let verified_provisional = load_package(&provisional.root, &provisional_context)
+        .expect("provisional package loads enough to install schema");
+    install_compiled_schema(
+        &migration,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("compiled schema installs");
+    let expected_catalog = ExpectedManagedCatalog::compiled(verified_provisional.registry());
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("compiled schema fingerprints");
+    drop(provisional);
+
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let context = package.context();
+    let verified = load_package(&package.root, &context).expect("final package verifies");
+    let package_id = verified.manifest().package_id.clone();
+    initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryStateTestIdentity {
+            package_id: &package_id,
+            database_id: DATABASE,
+            label: verified.package_digest(),
+        },
+    )
+    .await
+    .expect("Registry state initializes");
+    drop(migration);
+    migration_task.abort();
+
+    let previous_source =
+        format!("urn:registrystack:registry:{package_id}:instance:previous-instance");
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+
+    // Finished work captured under the previous instance never reaches the
+    // worker again, so it does not hold the rename back.
+    insert_captured_delivery(
+        &database,
+        &previous_source,
+        CapturedDeliveryState::Delivered,
+    )
+    .await;
+    insert_captured_delivery(
+        &database,
+        &previous_source,
+        CapturedDeliveryState::DeadLettered,
+    )
+    .await;
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("finished deliveries under another instance do not block startup");
+    drop(prepared);
+
+    insert_captured_delivery(&database, &previous_source, CapturedDeliveryState::Pending).await;
+    assert_eq!(
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err(),
+        Some(StartupError::InstanceIdChangedWithPendingDeliveries {
+            stored_source: previous_source.clone(),
+            configured_instance_id: INSTANCE.to_owned(),
+            pending_deliveries: 1,
+        })
+    );
+    insert_captured_delivery(&database, &previous_source, CapturedDeliveryState::Leased).await;
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err()
+            .expect("a leased delivery under another instance refuses startup");
+    assert_eq!(
+        refusal,
+        StartupError::InstanceIdChangedWithPendingDeliveries {
+            stored_source: previous_source.clone(),
+            configured_instance_id: INSTANCE.to_owned(),
+            pending_deliveries: 2,
+        }
+    );
+    let rendered = refusal.to_string();
+    for detail in [
+        previous_source.as_str(),
+        INSTANCE,
+        "identity.instanceId",
+        "drain",
+    ] {
+        assert!(
+            rendered.contains(detail),
+            "refusal omits {detail}: {rendered}"
+        );
+    }
+
+    // Restoring the previous instance id passes the source check; this
+    // package activates no destination, so the retained binding check that
+    // follows is what refuses the same pending work.
+    let restored_path = fixture.root.join("runtime-restored-instance.yaml");
+    fs::write(
+        &restored_path,
+        fs::read_to_string(&config_path)
+            .expect("runtime config reads")
+            .replace(
+                &format!("instanceId: {INSTANCE}\n"),
+                "instanceId: previous-instance\n",
+            ),
+    )
+    .expect("restored runtime config writes");
+    assert_eq!(
+        prepare_with_connection_config_for_test(&restored_path, database.runtime_config.clone())
+            .await
+            .err(),
+        Some(StartupError::EventDestinations)
+    );
+
+    database.cleanup().await;
+}
+
+#[derive(Clone, Copy)]
+enum CapturedDeliveryState {
+    Pending,
+    Leased,
+    Delivered,
+    DeadLettered,
+}
+
+/// Write one captured webhook delivery whose stored envelope names `source`,
+/// in the given state, as a previous deployment's capture would have left it.
+async fn insert_captured_delivery(
+    database: &TestDatabase,
+    source: &str,
+    state: CapturedDeliveryState,
+) {
+    let event_id = uuid::Uuid::new_v4();
+    let compiled_delivery_id = "events.neutral-record.neutral-created-v1.webhook";
+    let package_revision = "captured-package-revision";
+    let schema_fingerprint = "captured-schema-fingerprint";
+    let payload = serde_json::to_vec(&json!({
+        "specversion": "1.0",
+        "id": event_id.to_string(),
+        "source": source,
+        "type": "neutral-created-v1",
+    }))
+    .expect("captured envelope serializes");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_outbox
+                 (event_id, event_type, trigger, entity_id, record_reference,
+                  record_revision, package_revision, schema_fingerprint, payload,
+                  payload_expires_at)
+             VALUES ($1, 'neutral-created-v1', 'created', 'neutral-record',
+                     'record-reference', 1, $2, $3, $4,
+                     transaction_timestamp() + interval '7 days')",
+            &[&event_id, &package_revision, &schema_fingerprint, &payload],
+        )
+        .await
+        .expect("captured outbox row inserts");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_deliveries
+                 (event_id, compiled_delivery_id, handler_kind, logical_destination_id,
+                  destination_binding_digest, package_revision, schema_fingerprint,
+                  data_schema, classification_ceiling, authentication_profile, delivery_mode,
+                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
+                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
+                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
+                  deployed_maximum_attempts, dead_letter, operator_replay)
+             VALUES ($1, $2, 'url', 'neutral-events', $3, $4, $5,
+                     'https://schemas.example/neutral-created-v1', 'internal',
+                     'hmac_sha256_v1', 'after_commit', 5000, 1000, 8000, 2, 2, $6, 1024,
+                     $7, 4000, 2, 'required', false)",
+            &[
+                &event_id,
+                &compiled_delivery_id,
+                &format!("sha256:{}", "b".repeat(64)),
+                &package_revision,
+                &schema_fingerprint,
+                &vec![1_000_i64],
+                &vec![0_u8; 32],
+            ],
+        )
+        .await
+        .expect("captured delivery inserts");
+    let state_columns = match state {
+        CapturedDeliveryState::Pending => {
+            "'pending', 0, transaction_timestamp(), NULL, NULL, NULL, NULL, NULL"
+        }
+        CapturedDeliveryState::Leased => {
+            "'leased', 1, NULL, transaction_timestamp(),
+             transaction_timestamp() + interval '1 minute', gen_random_uuid(), NULL, NULL"
+        }
+        CapturedDeliveryState::Delivered => {
+            "'delivered', 1, NULL, NULL, NULL, NULL, transaction_timestamp(), NULL"
+        }
+        CapturedDeliveryState::DeadLettered => {
+            "'dead_lettered', 1, NULL, NULL, NULL, NULL, NULL, transaction_timestamp()"
+        }
+    };
+    database
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO registry_internal.registry_webhook_delivery_state
+                     (event_id, compiled_delivery_id, generation, state, attempt,
+                      next_attempt_at, attempt_started_at, lease_expires_at, lease_token,
+                      delivered_at, dead_lettered_at)
+                 VALUES ($1, $2, 1, {state_columns})"
+            ),
+            &[&event_id, &compiled_delivery_id],
+        )
+        .await
+        .expect("captured delivery state inserts");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_binding() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
