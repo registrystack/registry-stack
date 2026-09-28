@@ -85,6 +85,9 @@ fn successor_policy() -> String {
 /// A static key set, so the runtime starts without reaching an issuer.
 const JWKS: &str = r#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#;
 
+/// A fixed, non-secret audit HMAC key for the disposable deployments.
+const AUDIT_HMAC: &str = "0123456789abcdef0123456789abcdef";
+
 fn base_url() -> String {
     std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server")
@@ -216,7 +219,7 @@ impl Deployment {
             jwks_secret: format!("SCHEDULING_ACTIVATION_JWKS_{tag}"),
             roles,
         };
-        std::env::set_var(&deployment.audit_secret, "0123456789abcdef0123456789abcdef");
+        std::env::set_var(&deployment.audit_secret, AUDIT_HMAC);
         std::env::set_var(&deployment.jwks_secret, JWKS);
         deployment
     }
