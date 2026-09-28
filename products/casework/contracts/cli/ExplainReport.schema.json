@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/ExplainReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/ExplainReport.schema.json",
   "title": "ExplainReport",
   "description": "Versioned JSON report emitted by caseworkctl for explain.",
   "oneOf": [
@@ -8,10 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "projectId",
         "policyVersion",
         "requests",
@@ -24,17 +25,20 @@
         "databaseAccess"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "ExplainReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "explain"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "ExplainReport"
         },
         "projectId": {
           "type": "string"
@@ -90,23 +94,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "ExplainReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "explain"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "ExplainReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

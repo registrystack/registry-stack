@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/RetentionEraseReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/RetentionEraseReport.schema.json",
   "title": "RetentionEraseReport",
   "description": "Versioned JSON report emitted by caseworkctl for retention erase.",
   "oneOf": [
@@ -8,26 +8,30 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "project",
         "runtimeConfig",
         "report"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "RetentionEraseReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "retention erase"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "RetentionEraseReport"
         },
         "project": {
           "type": "string"
@@ -44,23 +48,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "RetentionEraseReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "retention erase"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "RetentionEraseReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

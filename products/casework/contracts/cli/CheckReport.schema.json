@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/CheckReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json",
   "title": "CheckReport",
   "description": "Versioned JSON report emitted by caseworkctl for check.",
   "oneOf": [
@@ -8,11 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
         "status",
+        "apiVersion",
+        "kind",
         "project",
         "effective",
         "profile",
@@ -21,12 +21,6 @@
         "databaseAccess"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "CheckReport"
-        },
         "ok": {
           "const": true
         },
@@ -38,6 +32,12 @@
             "complete",
             "incomplete"
           ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "CheckReport"
         },
         "project": {
           "type": "string"
@@ -99,23 +99,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "CheckReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "check"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "CheckReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

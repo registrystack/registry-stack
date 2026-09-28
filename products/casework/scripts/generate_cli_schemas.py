@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 
-API_VERSION = "registry.registrystack.org/caseworkctl/v1alpha2"
+API_VERSION = "registry.registrystack.org/caseworkctl/v1alpha3"
 OUTPUT = Path(__file__).resolve().parents[1] / "contracts" / "cli"
 
 STRING = {"type": "string"}
@@ -494,6 +494,7 @@ REPORTS = {
     },
     "TestReport": {
         "command": "test",
+        "status": "passed",
         "required": [
             "project",
             "authoringStatus",
@@ -636,17 +637,33 @@ DIAGNOSTIC_DEFS = {
 }
 
 
+def status_schema(kind: str, report: dict, ok: bool, carries_report: bool) -> dict:
+    # Every report names what happened. A report that states its own status
+    # keeps it; a refused plan is `refused`; a failure without a report of its
+    # own is named by its exit class.
+    if ok:
+        return report.get("properties", {}).get("status", {"const": report.get("status", "complete")})
+    if carries_report:
+        return {"const": "refused"}
+    if kind == "UsageReport":
+        return {"const": "usage-error"}
+    return {"enum": ["domain-refusal", "operational-failure"]}
+
+
 def object_schema(kind: str, report: dict, ok: bool, carries_report: bool = False) -> dict:
     properties = {
-        "apiVersion": {"const": API_VERSION},
-        "kind": {"const": kind},
         "ok": {"const": ok},
         "command": {"const": report["command"]},
+        "status": status_schema(kind, report, ok, carries_report),
+        "apiVersion": {"const": API_VERSION},
+        "kind": {"const": kind},
     }
-    required = ["apiVersion", "kind", "ok"]
+    required = ["ok", "command", "status", "apiVersion", "kind"]
     if ok or carries_report:
-        properties.update(report.get("properties", {}))
-        required.extend(["command", *report.get("required", [])])
+        properties.update(
+            {name: value for name, value in report.get("properties", {}).items() if name != "status"}
+        )
+        required.extend(name for name in report.get("required", []) if name != "status")
     if not ok:
         properties["diagnostics"] = DIAGNOSTICS
         required.append("diagnostics")
@@ -670,7 +687,7 @@ def schema(kind: str, report: dict) -> dict:
     defs.update(report.get("defs", {}))
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": f"https://registrystack.org/caseworkctl/v1alpha2/{kind}.schema.json",
+        "$id": f"https://registrystack.org/caseworkctl/v1alpha3/{kind}.schema.json",
         "title": kind,
         "description": f"Versioned JSON report emitted by caseworkctl for {report['command']}.",
         "oneOf": variants,

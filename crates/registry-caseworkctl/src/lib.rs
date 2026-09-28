@@ -6,6 +6,7 @@ mod display_schema;
 mod lifecycle;
 mod policy;
 mod project;
+mod report;
 mod source_add;
 
 use anyhow::{Context, Result};
@@ -360,8 +361,8 @@ enum OutputFormat {
 }
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
-const OPERATIONAL_FAILURE_EXIT: u8 = 3;
-const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha2";
+use report::{OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
+const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha3";
 
 pub fn main_entry() -> ExitCode {
     main_entry_from(
@@ -451,7 +452,7 @@ where
         Ok(report) if report_kind == "PlanReport" && report["ok"] == false => {
             // A plan that names a refusal is the evidence and the refusal at
             // once: the report goes to stdout and the exit code signals it.
-            let report = machine_report(format, report_kind, report);
+            let report = machine_report(format, report_kind, report, DOMAIN_REFUSAL_EXIT);
             if format == OutputFormat::Human {
                 let _ = render_human(&report, stdout);
             }
@@ -459,7 +460,7 @@ where
             ExitCode::from(DOMAIN_REFUSAL_EXIT)
         }
         Ok(report) => write_success(
-            &machine_report(format, report_kind, report),
+            &machine_report(format, report_kind, report, 0),
             format,
             stdout,
             stderr,
@@ -471,6 +472,7 @@ where
                         format,
                         report_kind,
                         json!({"ok":false,"diagnostics":diagnostics}),
+                        exit,
                     ),
                     format,
                     stdout,
@@ -484,6 +486,7 @@ where
                         format,
                         report_kind,
                         json!({"ok":false,"command":"check","diagnostics":denied.0}),
+                        DOMAIN_REFUSAL_EXIT,
                     ),
                     format,
                     stdout,
@@ -497,6 +500,7 @@ where
                     format,
                     report_kind,
                     json!({"ok":false,"diagnostics":[diagnostic]}),
+                    exit,
                 ),
                 format,
                 stdout,
@@ -515,11 +519,12 @@ fn write_usage_report(
     stderr: &mut dyn io::Write,
 ) {
     write_failure(
-        &cli_report_envelope(
+        &json_report(
             "UsageReport",
             json!({"ok":false,"command":"usage","diagnostics":[diagnostic(
                 code, "arguments", message, action
             )]}),
+            USAGE_EXIT,
         ),
         OutputFormat::Json,
         stdout,
@@ -564,11 +569,61 @@ fn cli_report_envelope(kind: &'static str, mut report: Value) -> Value {
     report
 }
 
-fn machine_report(format: OutputFormat, kind: &'static str, report: Value) -> Value {
+fn machine_report(format: OutputFormat, kind: &'static str, report: Value, exit: u8) -> Value {
     if format == OutputFormat::Json {
-        cli_report_envelope(kind, report)
+        json_report(kind, report, exit)
     } else {
         report
+    }
+}
+
+/// Complete a command's report into the shared envelope: `ok` agrees with
+/// the exit code, `command` names the command path, and `status` names what
+/// happened. A report that carries its own status keeps it; a plan that
+/// names a refusal is `refused`; a failure without a report of its own is
+/// named by its exit class.
+fn json_report(kind: &'static str, mut report: Value, exit: u8) -> Value {
+    report["ok"] = json!(exit == 0);
+    if report.get("command").is_none() {
+        report["command"] = json!(report_command(kind));
+    }
+    if report.get("status").is_none() {
+        let status = match exit {
+            0 if kind == "TestReport" => "passed",
+            0 => "complete",
+            _ if kind == "PlanReport" && report.get("refusals").is_some() => "refused",
+            exit => report::failure_status(exit),
+        };
+        report["status"] = json!(status);
+    }
+    cli_report_envelope(kind, report)
+}
+
+/// The command path each report kind names, as its schema pins it.
+fn report_command(kind: &str) -> &'static str {
+    match kind {
+        "AttemptSettlementReport" => "attempt settle",
+        "AttemptUncertainMarkingReport" => "attempt mark-uncertain",
+        "CheckReport" => "check",
+        "PlanReport" => "plan",
+        "ApplyReport" => "apply",
+        "StatusReport" => "status",
+        "DoctorReport" => "doctor",
+        "ExplainReport" => "explain",
+        "InitReport" => "init",
+        "LifecycleReport" => "lifecycle",
+        "PackageReport" => "package",
+        "RetentionEraseReport" => "retention erase",
+        "SimulationReport" => "simulate",
+        "SourceAddReport" => "source add",
+        "TestReport" => "test",
+        "DevReport" => "dev",
+        "DevEventsReport" => "dev events",
+        "DevGrantReport" => "dev grant",
+        "DevIdentityReport" => "dev identity",
+        "DevTokenReport" => "dev token",
+        "UsageReport" => "usage",
+        other => unreachable!("{other} is not a caseworkctl report kind"),
     }
 }
 
@@ -1142,9 +1197,7 @@ fn write_success(
     stderr: &mut dyn io::Write,
 ) -> ExitCode {
     let result = match format {
-        OutputFormat::Json => serde_json::to_writer_pretty(&mut *stdout, report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout)),
+        OutputFormat::Json => report::write(report, stdout),
         OutputFormat::Human => render_human(report, stdout),
     };
     if result.is_ok() {
@@ -1162,8 +1215,7 @@ fn write_failure(
     stderr: &mut dyn io::Write,
 ) {
     if format == OutputFormat::Json {
-        let _ = serde_json::to_writer_pretty(&mut *stdout, report);
-        let _ = writeln!(stdout);
+        let _ = report::write(report, stdout);
         return;
     }
     if let Some(diagnostics) = report["diagnostics"].as_array() {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/LifecycleReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/LifecycleReport.schema.json",
   "title": "LifecycleReport",
   "description": "Versioned JSON report emitted by caseworkctl for lifecycle.",
   "oneOf": [
@@ -8,24 +8,28 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "lifecycles"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "LifecycleReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "lifecycle"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "LifecycleReport"
         },
         "lifecycles": {
           "type": "array",
@@ -41,23 +45,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "LifecycleReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "lifecycle"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "LifecycleReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

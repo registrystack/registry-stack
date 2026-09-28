@@ -5,12 +5,23 @@ carries this top-level envelope:
 
 ```json
 {
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha2",
-  "kind": "CheckReport",
   "ok": true,
-  "command": "check"
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "kind": "CheckReport"
 }
 ```
+
+The report opens with `ok`, `command`, and `status`, in that order, as the
+sibling `evidencectl` and `schedulingctl` reports do. `ok` is true exactly when
+the process exits 0. `command` names the command path. `status` names what
+happened: the command's own status where its schema declares one, `passed` for
+a successful `test`, `complete` for any other success, `refused` for a plan
+that names its refusals, and otherwise the exit class of the failure:
+`domain-refusal` (exit 1), `usage-error` (exit 2), or `operational-failure`
+(exit 3). A report that is not ok carries a non-empty `diagnostics` array, and
+each diagnostic names a `suggestedAction`.
 
 `apiVersion` versions the complete CLI surface. `kind` selects one of the
 self-contained draft 2020-12 schemas in this directory. The schemas cover

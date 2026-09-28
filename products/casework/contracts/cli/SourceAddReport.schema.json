@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/SourceAddReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/SourceAddReport.schema.json",
   "title": "SourceAddReport",
   "description": "Versioned JSON report emitted by caseworkctl for source add.",
   "oneOf": [
@@ -8,11 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
         "status",
+        "apiVersion",
+        "kind",
         "sourceId",
         "registry",
         "project",
@@ -26,12 +26,6 @@
         "next"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "SourceAddReport"
-        },
         "ok": {
           "const": true
         },
@@ -43,6 +37,12 @@
             "preview",
             "applied"
           ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "SourceAddReport"
         },
         "sourceId": {
           "type": "string"
@@ -89,23 +89,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "SourceAddReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "source add"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "SourceAddReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

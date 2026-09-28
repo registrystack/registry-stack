@@ -70,9 +70,18 @@
 - BREAKING: `casework migrate` and `caseworkctl db migrate` are removed. Each
   still parses only to refuse with exit 2 and name `caseworkctl plan
   --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`; the
-  `DatabaseMigrationReport` kind is gone, and the `caseworkctl/v1alpha2` wire
+  `DatabaseMigrationReport` kind is gone, and the `caseworkctl/v1alpha3` wire
   contract adds `PlanReport`, `ApplyReport`, and `StatusReport` and the
   `DoctorReport` `roleMode` and `singleRoleStatement` fields.
+- BREAKING: every `caseworkctl --format json` report opens with `ok`,
+  `command`, and `status`, in that order, as `evidencectl` and
+  `schedulingctl` reports do, under `caseworkctl/v1alpha3`. `ok` is true
+  exactly when the exit code is 0, and `command` is present on every report,
+  failures included. `status` keeps a report's own status where it has one,
+  and is otherwise `passed` for a successful `test`, `complete` for another
+  success, `refused` for a plan that names its refusals, and `domain-refusal`,
+  `usage-error`, or `operational-failure` by exit class for a failure without
+  a report of its own.
 - Upgrade: add `identity.databaseId` to `runtime.yaml`, then run
   `caseworkctl plan` and `caseworkctl apply` once with the new binaries
   before starting the runtime. The first apply on a database an earlier
