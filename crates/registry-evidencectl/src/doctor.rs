@@ -55,6 +55,13 @@ const SECRET_REFERENCE_PREFIX: &str = "secret:file/";
 /// than a requirement acquisition kind.
 const GATED_ACQUISITION_CAPABILITIES: [&str; 2] = ["search-then-fetch-set", "source-batch"];
 
+/// The most items one request batch may carry, restated from the published
+/// request-batch contract for the same reason as the vocabulary above.
+const REQUEST_BATCH_MAXIMUM_ITEMS: u64 = 16;
+
+/// The holder-bound release ceiling a bundle that declares none serves.
+const DEFAULT_HOLDER_BOUND_BATCH_SIZE: u64 = 1;
+
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Evidence project directory; defaults to the current directory.
@@ -109,6 +116,10 @@ struct Check {
     note: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     findings: Vec<Finding>,
+    /// What the check would change without refusing it: the runtime accepts
+    /// the artifact, and the operator should still read why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<Finding>,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,9 +167,11 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
         &bundle_config_path,
     );
     checks.push(acquisition);
+    let (rate_limits, burst_warning) = check_rate_limits(project, &bundle, &bundle_config_path);
+    checks.push(rate_limits);
     let passed = checks.iter().all(|check| check.passed);
     let inspected = checks.iter().map(|check| check.inspected).sum();
-    let diagnostics = if passed {
+    let mut diagnostics = if passed {
         Vec::new()
     } else {
         vec![serde_json::json!({
@@ -173,6 +186,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
             ),
         })]
     };
+    diagnostics.extend(burst_warning);
     let report = DoctorReport {
         checks,
         passed,
@@ -769,6 +783,89 @@ fn check_acquisition(
     (run.finish(), plans)
 }
 
+/// The burst against the largest request cost the bundle admits.
+///
+/// Restated from configuration rather than asked of the runtime, because this
+/// walk runs without an `evidence` binary. `evidence check` reports the same
+/// shortfall in the same words. A request batch costs one token per item, up
+/// to the route's item ceiling for any audience-scoped requirement; a source's
+/// own batch ceiling does not bound it, because items above that ceiling run
+/// sequentially. A holder-bound release costs one per holder key, up to the
+/// declared ceiling when the batch container is enabled and a requirement is
+/// holder-bound. Below that cost some requests are never admitted, which can be
+/// a deliberate cap, so it is a warning and the check still passes.
+fn check_rate_limits(
+    project: &Path,
+    bundle: &YamlValue,
+    bundle_config_path: &Path,
+) -> (Check, Option<serde_json::Value>) {
+    let mut run = CheckRun::new("rate limits", project);
+    run.read_declaration();
+    // A missing or malformed burst is a refusal `evidence check` owns; there
+    // is no cost comparison to make without one.
+    let Some(burst) = bundle
+        .get("rateLimits")
+        .and_then(|limits| limits.get("burstPerPrincipal"))
+        .and_then(YamlValue::as_u64)
+    else {
+        return (run.finish(), None);
+    };
+    let requirements = bundle
+        .get("requirements")
+        .and_then(YamlValue::as_sequence)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let holder_bound = |requirement: &YamlValue| {
+        requirement
+            .get("subjectBinding")
+            .and_then(YamlValue::as_str)
+            == Some("holder-bound")
+    };
+    let request_batch = if requirements
+        .iter()
+        .any(|requirement| !holder_bound(requirement))
+    {
+        REQUEST_BATCH_MAXIMUM_ITEMS
+    } else {
+        1
+    };
+    let batch_container = bundle
+        .get("responseFormats")
+        .and_then(YamlValue::as_sequence)
+        .is_some_and(|formats| {
+            formats
+                .iter()
+                .any(|format| format.as_str() == Some("sd-jwt-vc-batch"))
+        });
+    let holder_bound_release = if batch_container && requirements.iter().any(holder_bound) {
+        bundle
+            .get("holderBoundBatchMaxSize")
+            .and_then(YamlValue::as_u64)
+            .unwrap_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE)
+    } else {
+        1
+    };
+    let cost = request_batch.max(holder_bound_release).max(1);
+    if burst >= cost {
+        return (run.finish(), None);
+    }
+    let message = format!(
+        "rateLimits.burstPerPrincipal is {burst}, below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
+    );
+    run.warn(bundle_config_path, message.clone());
+    let diagnostic = serde_json::json!({
+        "severity": "finding",
+        "code": "evidencectl.doctor.burst-below-request-cost",
+        "artifact": run.display(bundle_config_path),
+        "path": "$.rateLimits.burstPerPrincipal",
+        "message": message,
+        "suggestedAction": format!(
+            "Set rateLimits.burstPerPrincipal to at least {cost}, or keep it if refusing larger requests is intended."
+        ),
+    });
+    (run.finish(), Some(diagnostic))
+}
+
 /// One half of the gate, read under the three rules the runtime applies to
 /// both: a list, of names this release defines, each named once.
 ///
@@ -832,6 +929,7 @@ struct CheckRun<'a> {
     inspected: usize,
     note: Option<String>,
     findings: Vec<Finding>,
+    warnings: Vec<Finding>,
 }
 
 impl<'a> CheckRun<'a> {
@@ -842,7 +940,16 @@ impl<'a> CheckRun<'a> {
             inspected: 0,
             note: None,
             findings: Vec::new(),
+            warnings: Vec::new(),
         }
+    }
+
+    /// Record something the runtime accepts but the operator should read.
+    fn warn(&mut self, path: &Path, problem: String) {
+        self.warnings.push(Finding {
+            path: self.display(path),
+            problem,
+        });
     }
 
     /// Record what this check looked at, beside the count of artifacts.
@@ -891,6 +998,7 @@ impl<'a> CheckRun<'a> {
             inspected: self.inspected,
             note: self.note,
             findings: self.findings,
+            warnings: self.warnings,
         }
     }
 }
@@ -1073,7 +1181,11 @@ fn read_yaml(path: &Path) -> Result<YamlValue> {
 fn print_diagnostics(report: &DoctorReport) {
     let mut lines = Vec::new();
     for check in &report.checks {
-        let status = if check.passed { "PASS" } else { "FAIL" };
+        let status = match (check.passed, check.warnings.is_empty()) {
+            (false, _) => "FAIL",
+            (true, false) => "WARN",
+            (true, true) => "PASS",
+        };
         lines.push(format!(
             "{status}: {} ({} inspected)",
             check.name, check.inspected
@@ -1081,7 +1193,7 @@ fn print_diagnostics(report: &DoctorReport) {
         if let Some(note) = &check.note {
             lines.push(format!("    {note}"));
         }
-        for finding in &check.findings {
+        for finding in check.findings.iter().chain(&check.warnings) {
             lines.push(format!("    {}: {}", finding.path, finding.problem));
         }
     }
@@ -1111,7 +1223,26 @@ fn print_diagnostics(report: &DoctorReport) {
 
 #[cfg(test)]
 mod tests {
-    use super::{YamlValue, GATED_ACQUISITION_CAPABILITIES};
+    use super::{YamlValue, GATED_ACQUISITION_CAPABILITIES, REQUEST_BATCH_MAXIMUM_ITEMS};
+
+    /// The rate-limit check restates the request-batch item ceiling; the
+    /// published request-batch schema is the contract both answer to.
+    #[test]
+    fn the_restated_request_batch_ceiling_matches_the_published_contract() {
+        let contract = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/evidence/generated/evidence-request-batch-v1.schema.json"
+        );
+        let schema: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(contract).expect("the published request-batch contract is readable"),
+        )
+        .expect("the published request-batch contract parses");
+        assert_eq!(
+            schema["properties"]["items"]["maxItems"].as_u64(),
+            Some(REQUEST_BATCH_MAXIMUM_ITEMS),
+            "doctor's restated request-batch ceiling drifted from the published contract"
+        );
+    }
 
     /// The Evidence runtime owns this vocabulary and this crate does not link
     /// it, so the restatement above is the one place a new gated kind can be
