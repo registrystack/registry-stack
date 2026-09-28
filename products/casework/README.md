@@ -48,7 +48,8 @@ items, and review tasks whose kind uses `contextStrategy: source`. Producer
 routes and submitted-context review tasks take no source profile. A review-task
 list left empty only because that header is missing is refused with
 `source-profile.required`. `caseworkctl dev token <client>` writes an
-owner-only file carrying the first two headers for `curl --header @file`.
+owner-only file carrying the first two headers for `curl --header @file`, the
+profile line only for a client bound to an access profile.
 
 An authenticated producer creates a request at `POST /v1/review-requests` with
 an `Idempotency-Key`. Admission binds the producer's exact issuer and subject,

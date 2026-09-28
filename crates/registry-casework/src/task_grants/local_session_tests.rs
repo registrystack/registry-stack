@@ -107,9 +107,13 @@ fn read_header(path: &Path) -> String {
         fs::metadata(path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    // A dev token file carries its Registry-Casework-Profile line after the
+    // bearer line; a grant header file carries the bearer line alone.
     fs::read_to_string(path)
         .unwrap()
-        .trim()
+        .lines()
+        .next()
+        .unwrap()
         .strip_prefix("Authorization: Bearer ")
         .unwrap()
         .to_owned()
