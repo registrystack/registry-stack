@@ -682,26 +682,26 @@ if path.suffix != ".dylib":
         for name in expected:
             self.assertEqual(0o644, stat.S_IMODE((merged / "platform" / name).stat().st_mode))
 
-    def test_breg_services_join_the_bregctl_shard_from_v0_35_0(self) -> None:
+    def test_breg_services_join_the_bregctl_shard_from_v0_36_0(self) -> None:
         before, before_output, before_calls = self.build(
-            "bregctl", version="0.34.0", name="services-before"
+            "bregctl", version="0.35.0", name="services-before"
         )
         self.assertEqual(0, before.returncode, before.stderr)
         self.assertEqual([BREGCTL_ARGS], before_calls)
         self.assertEqual(
-            ["bregctl-v0.34.0-macos-arm64.tar.gz"],
+            ["bregctl-v0.35.0-macos-arm64.tar.gz"],
             sorted(path.name for path in (before_output / "platform").iterdir()),
         )
 
-        version = "0.35.0"
+        version = "0.36.0"
         expected = [
-            "bregctl-v0.35.0-macos-arm64.tar.gz",
-            "breg-mcp-v0.35.0-macos-arm64.tar.gz",
-            "breg-review-v0.35.0-macos-arm64.tar.gz",
+            "bregctl-v0.36.0-macos-arm64.tar.gz",
+            "breg-mcp-v0.36.0-macos-arm64.tar.gz",
+            "breg-review-v0.36.0-macos-arm64.tar.gz",
         ]
         self.assertEqual(expected, MODULE.rosters(version)["bregctl"])
         self.assertEqual(
-            ["breg-v0.35.0-macos-arm64.tar.gz"], MODULE.rosters(version)["breg"]
+            ["breg-v0.36.0-macos-arm64.tar.gz"], MODULE.rosters(version)["breg"]
         )
         shards = {}
         for group in ("core", "breg", "bregctl", "casework"):

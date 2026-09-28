@@ -176,22 +176,22 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             ["scheduling-v0.33.0-linux-amd64"], rosters_033["scheduling"]
         )
         self.assertIn("scheduling", dict(images_033))
-        rosters_034, images_034 = MODULE.rosters("0.34.0")
-        self.assertEqual(
-            ["breg-v0.34.0-linux-amd64", "bregctl-v0.34.0-linux-amd64"],
-            rosters_034["breg"],
-        )
-        self.assertNotIn("breg-mcp", dict(images_034))
-        self.assertNotIn("breg-review", dict(images_034))
         rosters_035, images_035 = MODULE.rosters("0.35.0")
         self.assertEqual(
-            [
-                "breg-v0.35.0-linux-amd64",
-                "bregctl-v0.35.0-linux-amd64",
-                "breg-mcp-v0.35.0-linux-amd64",
-                "breg-review-v0.35.0-linux-amd64",
-            ],
+            ["breg-v0.35.0-linux-amd64", "bregctl-v0.35.0-linux-amd64"],
             rosters_035["breg"],
+        )
+        self.assertNotIn("breg-mcp", dict(images_035))
+        self.assertNotIn("breg-review", dict(images_035))
+        rosters_036, images_036 = MODULE.rosters("0.36.0")
+        self.assertEqual(
+            [
+                "breg-v0.36.0-linux-amd64",
+                "bregctl-v0.36.0-linux-amd64",
+                "breg-mcp-v0.36.0-linux-amd64",
+                "breg-review-v0.36.0-linux-amd64",
+            ],
+            rosters_036["breg"],
         )
         self.assertEqual(
             [
@@ -204,17 +204,17 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 "evidence",
                 "relay",
             ],
-            [name for name, _ in images_035],
+            [name for name, _ in images_036],
         )
 
-    def test_breg_services_merge_from_the_breg_shard_from_v0_35_0(self) -> None:
-        version = "0.35.0"
+    def test_breg_services_merge_from_the_breg_shard_from_v0_36_0(self) -> None:
+        version = "0.36.0"
         rosters, images = MODULE.rosters(version)
         shards = {
             name: self.write_shard(name, assets, version)
             for name, assets in rosters.items()
         }
-        output = self.root / "dist-0.35.0"
+        output = self.root / "dist-0.36.0"
         MODULE.merge(
             version=version,
             source_sha=SOURCE_SHA,
@@ -242,7 +242,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 .splitlines()
             ],
         )
-        (shards["breg"] / "bin" / "breg-review-v0.35.0-linux-amd64").unlink()
+        (shards["breg"] / "bin" / "breg-review-v0.36.0-linux-amd64").unlink()
         with self.assertRaisesRegex(MODULE.ShardError, "breg"):
             MODULE.merge(
                 version=version,
@@ -251,7 +251,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 breg=shards["breg"],
                 casework=shards["casework"],
                 scheduling=shards["scheduling"],
-                output=self.root / "dist-0.35.0-incomplete",
+                output=self.root / "dist-0.36.0-incomplete",
                 builder_image=BUILDER,
             )
 

@@ -110,7 +110,7 @@ Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
 `v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.31.0`;
 `scheduling` joins from `v0.33.0`, and `breg-mcp` and `breg-review` join
-from `v0.35.0`. The published `v0.32.0` and older release
+from `v0.36.0`. The published `v0.32.0` and older release
 inventories remain unchanged. After selecting
 the candidate version, derive its exact image roster and verify each final
 destination:
@@ -180,15 +180,15 @@ Verify both identities have the visibility and Actions access documented above,
 and require a reviewed Scheduling advisory baseline before requesting a
 `v0.33.0` or later candidate.
 
-Selecting `v0.35.0` or later also includes the two Base Registry Engine
+Selecting `v0.36.0` or later also includes the two Base Registry Engine
 supporting services, the citizen MCP gateway `breg-mcp` and the citizen review
 page `breg-review`, in both checks. The release source deny-lists the public
 `breg-mcp` and `breg-review` packages while leaving `breg-mcp-candidate` and
 `breg-review-candidate` out of scheduled cleanup until their private package
 identities exist. Provision all four identities, add both candidate names to
 the cleanup allowlist with their matching test, and merge a reviewed advisory
-baseline for each image before requesting a `v0.35.0` or later candidate.
-Until then, a `v0.35.0` rehearsal or candidate stops at the image-onboarding
+baseline for each image before requesting a `v0.36.0` or later candidate.
+Until then, a `v0.36.0` rehearsal or candidate stops at the image-onboarding
 check, as the procedure above intends.
 
 Both service images run as the Distroless `nonroot` user (UID and GID 65532)
