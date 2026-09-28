@@ -546,6 +546,20 @@ impl BregAdapter {
         client: ReadClient<'_>,
         profile: &str,
     ) -> Result<BRegMetadata, SourceAdapterError> {
+        let metadata = self.served_metadata(client, profile).await?;
+        if metadata.registry_revision() != self.config.expected_registry_revision {
+            return Err(SourceAdapterError::BindingMoved);
+        }
+        Ok(metadata)
+    }
+
+    /// The registry contract the source serves, from a peer of the same
+    /// release, before its revision is compared with the pinned one.
+    async fn served_metadata(
+        &self,
+        client: ReadClient<'_>,
+        profile: &str,
+    ) -> Result<BRegMetadata, SourceAdapterError> {
         let (peer_version, contract) = self
             .client(client)
             .registry_contract_and_engine_version(Some(profile))
@@ -571,9 +585,6 @@ impl BregAdapter {
             self.report_success(client);
         }
         self.note_peer_version(peer_version.as_deref().unwrap_or(own));
-        if metadata.registry_revision() != self.config.expected_registry_revision {
-            return Err(SourceAdapterError::BindingMoved);
-        }
         Ok(metadata)
     }
 
@@ -950,6 +961,16 @@ impl SourceAdapter for BregAdapter {
     }
     fn binding_generation(&self) -> &str {
         &self.config.binding_generation
+    }
+
+    async fn source_revision_pin(&self) -> Result<Option<SourceRevisionPin>, SourceAdapterError> {
+        let served = self
+            .served_metadata(ReadClient::SourceReader, &self.config.reader_profile)
+            .await?;
+        Ok(Some(SourceRevisionPin {
+            pinned: self.config.expected_registry_revision.clone(),
+            served: served.registry_revision().to_owned(),
+        }))
     }
 
     fn routing_metadata(&self, entity: &str) -> Option<&RoutingSourceMetadata> {

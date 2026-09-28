@@ -518,6 +518,30 @@ pub async fn check_activation(
     Ok(role_mode)
 }
 
+/// Refuse a source whose imported description pins a revision the source no
+/// longer serves. A source that cannot be read now is not refused here: its
+/// reads refuse the same drift once it answers.
+pub async fn check_source_revisions(adapters: &[&dyn SourceAdapter]) -> Result<(), RuntimeError> {
+    for adapter in adapters {
+        match adapter.source_revision_pin().await {
+            Ok(Some(pin)) if pin.pinned != pin.served => {
+                return Err(RuntimeError::SourceRevisionStale {
+                    source_id: adapter.source_id().to_owned(),
+                    pinned: pin.pinned,
+                    served: pin.served,
+                });
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                source_id = adapter.source_id(),
+                error = %error,
+                "the pinned source revision could not be compared with the source at startup"
+            ),
+        }
+    }
+    Ok(())
+}
+
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let package = config.load_package()?;
@@ -539,6 +563,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .collect::<Vec<_>>();
     let role_mode =
         check_activation(&store, config.database_id(), &package_digest, &adapter_refs).await?;
+    check_source_revisions(&adapter_refs).await?;
     if role_mode == crate::RoleMode::Single {
         tracing::warn!(
             role_mode = role_mode.as_str(),
@@ -847,6 +872,110 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use registry_casework_core::SourceAdapterError;
+
+    struct Pinned(Result<Option<registry_casework_core::SourceRevisionPin>, SourceAdapterError>);
+
+    #[async_trait::async_trait]
+    impl SourceAdapter for Pinned {
+        fn source_id(&self) -> &str {
+            "registry"
+        }
+
+        fn binding_generation(&self) -> &str {
+            "generation"
+        }
+
+        async fn source_revision_pin(
+            &self,
+        ) -> Result<Option<registry_casework_core::SourceRevisionPin>, SourceAdapterError> {
+            self.0.clone()
+        }
+
+        async fn verify_transition(
+            &self,
+            _request: registry_casework_core::EventRequest,
+        ) -> Result<registry_casework_core::TransitionHint, SourceAdapterError> {
+            Err(SourceAdapterError::Invalid)
+        }
+
+        async fn read_authoritative(
+            &self,
+            _subject: &registry_casework_core::SubjectRef,
+        ) -> Result<registry_casework_core::AuthoritativeObservation, SourceAdapterError> {
+            Err(SourceAdapterError::Invalid)
+        }
+
+        async fn discover_active(
+            &self,
+            _cursor: Option<&registry_casework_core::DiscoveryCursor>,
+            _limit: usize,
+        ) -> Result<registry_casework_core::ActiveSubjectsPage, SourceAdapterError> {
+            Err(SourceAdapterError::Invalid)
+        }
+
+        async fn read_for_caller(
+            &self,
+            _subject: &registry_casework_core::SubjectRef,
+            _source_profile_id: &str,
+            _credential: registry_casework_core::EphemeralCredential<'_>,
+        ) -> Result<registry_casework_core::CallerSubjectView, SourceAdapterError> {
+            Err(SourceAdapterError::Invalid)
+        }
+
+        async fn prepare_action(
+            &self,
+            _request: registry_casework_core::PrepareActionRequest<'_>,
+        ) -> Result<registry_casework_core::PreparedSourceAttempt, SourceAdapterError> {
+            Err(SourceAdapterError::Invalid)
+        }
+
+        async fn execute_prepared(
+            &self,
+            _request: registry_casework_core::ExecutePreparedRequest<'_>,
+        ) -> Result<registry_casework_core::SourceReceipt, SourceAdapterError> {
+            Err(SourceAdapterError::Invalid)
+        }
+    }
+
+    fn pin(pinned: &str, served: &str) -> Pinned {
+        Pinned(Ok(Some(registry_casework_core::SourceRevisionPin {
+            pinned: pinned.to_owned(),
+            served: served.to_owned(),
+        })))
+    }
+
+    #[tokio::test]
+    async fn startup_refuses_a_pinned_source_revision_the_source_no_longer_serves() {
+        let stale = pin("sha256:pinned", "sha256:served");
+        let error = check_source_revisions(&[&stale])
+            .await
+            .expect_err("a stale pin is refused");
+        assert!(matches!(
+            &error,
+            RuntimeError::SourceRevisionStale { source_id, pinned, served }
+                if source_id == "registry" && pinned == "sha256:pinned" && served == "sha256:served"
+        ));
+        let message = error.to_string();
+        assert!(
+            message.contains(
+                "`caseworkctl check PROJECT --against-breg-package DIR --source-id registry`"
+            ) && message.contains(
+                "`caseworkctl source add BREG_PROJECT --project PROJECT --source-id registry --apply`"
+            ),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_accepts_a_current_pin_an_unpinned_source_and_an_unreachable_source() {
+        let current = pin("sha256:same", "sha256:same");
+        let unpinned = Pinned(Ok(None));
+        let unreachable = Pinned(Err(SourceAdapterError::Unavailable));
+        check_source_revisions(&[&current, &unpinned, &unreachable])
+            .await
+            .expect("only a pin the source contradicts is refused");
+    }
 
     #[tokio::test]
     async fn review_completion_delivery_is_minimal_authenticated_and_stable_after_lost_ack() {
@@ -1335,6 +1464,14 @@ pub enum RuntimeError {
         "the active Casework package was applied split-role, but the runtime role no longer holds the grants apply issues it; run `caseworkctl apply --runtime-config FILE` to reissue them"
     )]
     RuntimeGrantsMissing,
+    #[error(
+        "source {source_id} pins sourceRevision {pinned}, but the source serves registry revision {served}; run `caseworkctl check PROJECT --against-breg-package DIR --source-id {source_id}` with the BReg package the source serves, repin with `caseworkctl source add BREG_PROJECT --project PROJECT --source-id {source_id} --apply`, then `caseworkctl package PROJECT --output DIRECTORY`, `caseworkctl plan --runtime-config FILE`, and `caseworkctl apply --runtime-config FILE`"
+    )]
+    SourceRevisionStale {
+        source_id: String,
+        pinned: String,
+        served: String,
+    },
     #[error("the Casework audit destination could not be initialized")]
     Audit,
     #[error("the Casework audit destination could not be initialized: {0}")]
