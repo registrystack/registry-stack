@@ -247,9 +247,21 @@ impl SmtpProvider {
         self.attempt_timeout
     }
 
-    /// Make one send attempt and classify it.
+    /// Make one send attempt under the configured timeout and classify it.
     pub async fn send(&self, message: &SmtpMessage<'_>) -> Sent<SmtpAttemptDetail> {
-        let deadline = Instant::now() + self.attempt_timeout;
+        self.send_within(message, self.attempt_timeout).await
+    }
+
+    /// Make one send attempt under `budget` or the configured timeout,
+    /// whichever is shorter, and classify it, the deadline included: running
+    /// out of time before the content was written is transient, during it is
+    /// maybe-sent, and after the relay accepted it the send stays accepted.
+    pub async fn send_within(
+        &self,
+        message: &SmtpMessage<'_>,
+        budget: Duration,
+    ) -> Sent<SmtpAttemptDetail> {
+        let deadline = Instant::now() + budget.min(self.attempt_timeout);
         let sent = self.attempt(message, deadline).await;
         tracing::debug!(
             stage = sent.detail.stage.as_str(),

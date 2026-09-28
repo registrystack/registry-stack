@@ -142,12 +142,12 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// moved worker arrives here, in an order that keeps the journal from
     /// claiming more than the database committed:
     ///
-    /// - An attempt's start is its request, recorded inside the lease
-    ///   transaction immediately before that transaction commits, so it is
-    ///   on record before the request can leave the process and a refusal
-    ///   rolls the lease back. If that commit then fails, the worker records
-    ///   the attempt's `WorkerInterrupted` terminal, so the request is
-    ///   answered and no egress follows.
+    /// - An attempt's start is its direct request, recorded immediately
+    ///   before the lease transaction commits, so it is on record before the
+    ///   request can leave the process and a refusal rolls the lease back. If
+    ///   that commit then fails, the worker records the attempt's
+    ///   `WorkerInterrupted` terminal, so the request is answered and no
+    ///   egress follows.
     /// - A terminal disposition and a payload expiry are recorded only after
     ///   the transaction that made them commits, so an entry never stands
     ///   for a transition that rolled back.

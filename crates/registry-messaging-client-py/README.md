@@ -1,10 +1,11 @@
 # Registry Messaging Python binding
 
-This internal PyO3 binding is assembled into the public
-`registry-stack-client` wheel. Use it through `registry_client.messaging`:
+This internal PyO3 binding is not published. Registry Messaging has not
+joined a release, so the public `registry-stack-client` wheel leaves it out
+until Messaging does. Built on its own, it is used like this:
 
 ```python
-from registry_client import messaging
+import registry_messaging_client as messaging
 
 client = messaging.MessagingClient("https://messaging.example.invalid/")
 receipt = client.submit(

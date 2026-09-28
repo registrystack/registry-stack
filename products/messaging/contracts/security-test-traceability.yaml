@@ -4,8 +4,9 @@ executionStatus: not-recorded
 note: >-
   Every entry names the tests that carry its invariant. A pending invariant
   has no entry until the slice that enforces it adds its tests. Tests under
-  crates/registry-messaging/tests run only with the postgres-test feature and
-  a disposable database. This file records the obligation, not a passing run.
+  crates/registry-messaging/tests and
+  crates/registry-platform-dispatch/tests run only with the postgres-test
+  feature and a disposable database. This file records the obligation, not a passing run.
 entries:
   - id: MESSAGING-SEC-01
     tests:
@@ -26,6 +27,9 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_naming_an_unknown_member_is_refused_and_records_nothing}
   - id: MESSAGING-SEC-03
     tests:
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: aws_inline_credentials_and_invalid_signing_scopes_are_refused}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: aws_authentication_refuses_get_and_non_root_or_extra_header_shapes}
+      - {path: crates/registry-messaging/src/http_provider/aws_tests.rs, name: aws_non_root_non_json_or_missing_action_requests_are_refused_before_connecting}
       - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_resolving_to_loopback_is_refused_before_connecting}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: metadata_private_and_loopback_provider_addresses_are_refused_without_an_allowlist}
@@ -59,6 +63,7 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
   - id: MESSAGING-SEC-06
     tests:
+      - {path: crates/registry-messaging/src/http_provider/aws_tests.rs, name: the_aws_example_classifies_recorded_shape_answers_without_exposing_error_text}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: accepted_idempotency_capability_is_loaded_after_worker_reconstruction}
       - {path: crates/registry-messaging/src/providers/tests.rs, name: the_idempotency_key_follows_the_capability_persisted_at_acceptance}
       - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_cut_off_after_the_message_left_is_maybe_sent}
@@ -70,6 +75,28 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_killed_worker_leaves_its_message_unknown_and_unsent_again}
       - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}
       - {path: crates/registry-messaging-core/src/package.rs, name: retrying_an_uncertain_send_needs_provider_deduplication_or_an_explicit_choice}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_that_spends_its_attempts_maybe_sent_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_spent_by_transient_failures_after_a_maybe_sent_attempt_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_refused_permanently_after_a_maybe_sent_attempt_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_without_a_maybe_sent_attempt_still_fails}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_lapsed_lease_that_cannot_be_recovered_is_quarantined_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_poisoned_retry_after_a_maybe_sent_attempt_is_quarantined_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_past_its_expiry_after_a_maybe_sent_attempt_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_past_its_expiry_without_a_maybe_sent_attempt_expires}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_retrying_after_transient_failures_cancels}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_retrying_after_an_attempt_that_may_have_been_sent_does_not_cancel}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_maybe_sent_answer_with_no_attempt_left_follows_the_job_policy}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_retry_then_hold_job_is_held_unknown_when_later_failures_exhaust_it_after_a_maybe_sent_attempt}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_retry_then_hold_job_is_held_unknown_when_a_later_retry_would_land_after_expiry}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_failure_without_an_earlier_uncertain_attempt_or_under_plain_retry_still_dead_letters}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_retry_then_hold_job_retries_a_maybe_sent_answer_while_attempts_remain}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_maybe_sent_retry_that_would_land_after_expiry_holds_the_job_unknown}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_lapsed_lease_on_a_retry_then_hold_job_with_no_attempt_left_is_unknown}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_lapsed_lease_on_a_retry_then_hold_job_past_its_expiry_is_unknown}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: by_default_a_pending_retry_of_an_attempted_job_is_not_cancelled}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_swept_retry_after_a_maybe_sent_attempt_is_held_unknown_not_expired}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_retry_after_a_maybe_sent_attempt_past_its_policy_expiry_is_held_unknown_at_claim}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: a_never_attempted_or_plainly_retried_job_still_expires}
   - id: MESSAGING-SEC-07
     tests:
       - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: receipt_resolution_waits_for_a_concurrent_reference_assignment}
@@ -98,7 +125,17 @@ entries:
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_terminal_state_is_never_displaced_by_the_other_terminal_state}
   - id: MESSAGING-SEC-08
     tests:
-      - {path: crates/registry-messaging/tests/postgres_package.rs, name: startup_publishes_every_pending_outbox_batch_before_its_start_record}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: aws_credentials_are_explicit_secret_references_and_debug_is_redacted}
+      - {path: crates/registry-messaging/src/http_provider/aws_tests.rs, name: aws_credentials_are_not_in_the_prepare_script_views}
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: startup_opens_the_audit_writer_before_serving}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_audit_request_refusal_records_no_submission}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_post_commit_audit_refusal_replays_one_committed_submission_receipt}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: readiness_fails_when_the_audit_writer_loses_its_destination}
+      - {path: crates/registry-messaging/src/http.rs, name: an_unavailable_submission_has_an_unfinished_audit_fate}
+      - {path: crates/registry-messaging/src/http.rs, name: a_preview_terminal_audit_refusal_returns_no_preview_bytes}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_post_commit_callback_audit_refusal_retries_without_duplicate_history}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: an_audit_request_refusal_erases_nothing}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_post_commit_retention_audit_refusal_leaves_erasure_committed}
       - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: no_contact_content_data_principal_or_credential_reaches_the_journal_or_the_log}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}
@@ -121,5 +158,6 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_runtime_sweep_erases_on_its_interval}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_stop_request_ends_the_run_after_the_batch_in_progress_and_the_next_run_resumes}
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}

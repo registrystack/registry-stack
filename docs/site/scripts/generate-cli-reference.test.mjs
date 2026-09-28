@@ -90,6 +90,22 @@ test('renders one linked page for every nested public command', () => {
   assert.doesNotMatch(pages.get('relayctl.mdx'), /<!--/u);
 });
 
+test('wraps a docset-gated product group of the index in a DocsetProduct region', () => {
+  const index = renderCatalog(fixtureCatalog(), fixtureReviewMetadata()).get('index.mdx');
+  const region = index.match(
+    /\n<DocsetProduct product="registry-messaging">\n([\s\S]*?)\n<\/DocsetProduct>\n/u,
+  );
+  assert.ok(region, 'the Registry Messaging group must sit in a DocsetProduct region');
+  assert.match(region[1], /^## Registry Messaging$/mu);
+  assert.match(region[1], /\(\.\/messaging\/\)/u);
+  assert.match(region[1], /\(\.\/messagingctl\/\)/u);
+  // Nothing else in the index names Messaging, so removing the region leaves
+  // no trace of it in a docset that does not publish the product.
+  assert.doesNotMatch(index.replace(region[0], '\n'), /messaging/iu);
+  // Only gated groups are wrapped.
+  assert.equal(index.match(/<DocsetProduct /gu).length, 1);
+});
+
 test('renders required groups and conditional requirements', () => {
   const catalog = fixtureCatalog();
   const relayctl = catalog.binaries.find((binary) => binary.name === 'relayctl');

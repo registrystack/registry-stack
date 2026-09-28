@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -315,12 +316,15 @@ impl MessageTransport for SmtpTransport {
     async fn send(&self, message: &OutboundMessage) -> SendOutcome {
         let message_id = message.message_id.to_string();
         self.0
-            .send(&SmtpMessage {
-                message_id: &message_id,
-                from: &message.sender,
-                to: &message.recipient,
-                parts: &message.parts,
-            })
+            .send_within(
+                &SmtpMessage {
+                    message_id: &message_id,
+                    from: &message.sender,
+                    to: &message.recipient,
+                    parts: &message.parts,
+                },
+                message.budget,
+            )
             .await
             .outcome
     }
@@ -346,6 +350,12 @@ impl MessageTransport for HttpTransport {
         self.provider.capabilities().rate_per_second
     }
 
+    /// A paced attempt holds this bound in the worker before it takes its
+    /// turn at the rate, so the provider's own slot is free when it leaves.
+    fn concurrency_limit(&self) -> Option<NonZeroUsize> {
+        NonZeroUsize::new(usize::from(self.provider.concurrency_limit()))
+    }
+
     async fn send(&self, message: &OutboundMessage) -> SendOutcome {
         // The profile as the message was accepted with: its channel, provider,
         // and sender are the persisted ones, so a later package never changes
@@ -367,18 +377,21 @@ impl MessageTransport for HttpTransport {
         };
         let message_id = message.message_id.to_string();
         self.provider
-            .send(&HttpProviderMessage {
-                message_id: &message_id,
-                attempt: message.attempt,
-                generation: message.generation,
-                channel: message.channel,
-                profile: &profile,
-                recipient: &message.recipient,
-                parts: &message.parts,
-                idempotency_key: message
-                    .provider_idempotent_submit
-                    .then_some(message.idempotency_key.as_str()),
-            })
+            .send_within(
+                &HttpProviderMessage {
+                    message_id: &message_id,
+                    attempt: message.attempt,
+                    generation: message.generation,
+                    channel: message.channel,
+                    profile: &profile,
+                    recipient: &message.recipient,
+                    parts: &message.parts,
+                    idempotency_key: message
+                        .provider_idempotent_submit
+                        .then_some(message.idempotency_key.as_str()),
+                },
+                message.budget,
+            )
             .await
             .outcome
     }

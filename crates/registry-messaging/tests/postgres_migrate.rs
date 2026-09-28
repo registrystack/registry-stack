@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Database-backed store tests: migrations applied concurrently and
-//! repeatedly, readiness against the applied schema, and a served runtime
-//! answering `/ready` from a real PostgreSQL deployment. The package ledger
-//! has its own suite, `postgres_package`.
+//! repeatedly, readiness against the applied schema, a served runtime
+//! answering `/ready` from a real PostgreSQL deployment, and the `messaging`
+//! binary keeping its operational logs off a `stdout` audit destination. The
+//! package ledger has its own suite, `postgres_package`.
 //!
 //! Every test runs in its own schema inside the database named by
 //! `MESSAGING_TEST_DATABASE_URL`. A test binary that passes because its
@@ -12,9 +13,11 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use registry_messaging::config::{DatabaseConfig, RuntimeConfig};
+use registry_messaging::package::{package_inputs, write_package_inputs};
 use registry_messaging::runtime::{apply_package, migrate_from_path, serve_from_path};
 use registry_messaging::store::{PostgresStore, StoreError};
 use registry_messaging_client::{MessagingClient, MessagingClientConfig};
@@ -174,11 +177,23 @@ fn static_jwks() -> String {
     .to_string()
 }
 
-fn write_runtime(root: &Path, database_reference: &str, public: SocketAddr, metrics: SocketAddr) {
+/// The audit block that writes the journal to a file under `root`.
+fn file_audit(root: &Path) -> serde_json::Value {
+    json!({"path": root.join("audit").join("messaging.jsonl")})
+}
+
+fn write_runtime(
+    root: &Path,
+    database_reference: &str,
+    public: SocketAddr,
+    metrics: SocketAddr,
+    audit: serde_json::Value,
+) {
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
     let package = root.join("package");
-    std::fs::create_dir_all(&package).unwrap();
     std::fs::write(
-        package.join("messaging.yaml"),
+        project.join("messaging.yaml"),
         serde_norway::to_string(&json!({
             "apiVersion": registry_messaging_core::MESSAGING_PACKAGE_API_VERSION,
             "kind": registry_messaging_core::MESSAGING_PACKAGE_KIND,
@@ -195,11 +210,15 @@ fn write_runtime(root: &Path, database_reference: &str, public: SocketAddr, metr
         .unwrap(),
     )
     .unwrap();
+    let inputs = package_inputs(&project).expect("the authored package inputs");
+    write_package_inputs(&package, &inputs, None).expect("the installed package");
 
     let jwks_name = format!("MESSAGING_JWKS_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     let audit_name = format!("MESSAGING_AUDIT_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(&jwks_name, static_jwks());
     std::env::set_var(&audit_name, "an-audit-master-secret-of-32-bytes!");
+    let mut audit = audit;
+    audit["hashKeyRef"] = json!(format!("secret:env/{audit_name}"));
     let runtime = json!({
         "apiVersion": registry_messaging_core::MESSAGING_RUNTIME_API_VERSION,
         "kind": registry_messaging_core::MESSAGING_RUNTIME_KIND,
@@ -218,10 +237,7 @@ fn write_runtime(root: &Path, database_reference: &str, public: SocketAddr, metr
             "jwksSource": {"kind": "static", "documentRef": format!("secret:env/{jwks_name}")},
             "allowedClients": ["operations-console"]
         }},
-        "audit": {
-            "path": root.join("audit").join("messaging.jsonl"),
-            "hashKeyRef": format!("secret:env/{audit_name}")
-        }
+        "audit": audit
     });
     std::fs::write(
         root.join("runtime.yaml"),
@@ -233,10 +249,16 @@ fn write_runtime(root: &Path, database_reference: &str, public: SocketAddr, metr
 #[tokio::test]
 async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     let isolated = isolated_schema().await;
-    let root = tempfile::tempdir().expect("a runtime directory");
+    let root = tempfile::tempdir_in("/private/tmp").expect("a runtime directory");
     let public = free_port();
     let metrics = free_port();
-    write_runtime(root.path(), &isolated.reference, public, metrics);
+    write_runtime(
+        root.path(),
+        &isolated.reference,
+        public,
+        metrics,
+        file_audit(root.path()),
+    );
     let runtime_config = root.path().join("runtime.yaml");
 
     migrate_from_path(&runtime_config)
@@ -286,4 +308,75 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     assert!(journal.contains("messaging.runtime.started"));
     assert!(!journal.contains("postgres://"));
     assert!(!journal.contains("an-audit-master-secret"));
+}
+
+/// A `stdout` audit destination carries audit entries alone: the binary's
+/// operational log goes to stderr, so a strict JSON Lines collector reading
+/// stdout never meets a log record.
+#[tokio::test]
+async fn a_stdout_audit_destination_never_carries_operational_logs() {
+    let isolated = isolated_schema().await;
+    let root = tempfile::tempdir_in("/private/tmp").expect("a runtime directory");
+    let public = free_port();
+    let metrics = free_port();
+    write_runtime(
+        root.path(),
+        &isolated.reference,
+        public,
+        metrics,
+        json!({"destination": "stdout"}),
+    );
+    let runtime_config = root.path().join("runtime.yaml");
+    migrate_from_path(&runtime_config)
+        .await
+        .expect("messaging migrate");
+    let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
+    apply_package(&config, true)
+        .await
+        .expect("messagingctl apply --apply");
+
+    // The secrets the configuration names are this process's environment,
+    // which the binary inherits.
+    let mut served = Command::new(env!("CARGO_BIN_EXE_messaging"))
+        .arg("--runtime-config")
+        .arg(&runtime_config)
+        .arg("serve")
+        .env("MESSAGING_LOG", "info")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("messaging serve starts");
+    let mut ready = None;
+    // A freshly linked binary can take seconds to start on its first run.
+    for _ in 0..400 {
+        ready = get(public, "/ready").await;
+        if ready.is_some() || served.try_wait().expect("the child state").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    served.kill().expect("stop messaging serve");
+    let output = served.wait_with_output().expect("the served output");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        ready,
+        Some(200),
+        "the runtime did not become ready: {stderr}"
+    );
+    assert!(
+        stderr.contains("serving Registry Messaging"),
+        "the operational log reaches stderr: {stderr}"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
+    assert!(
+        stdout.contains("messaging.runtime.started"),
+        "the audit entry reaches stdout: {stdout}"
+    );
+    for line in stdout.lines() {
+        let entry: serde_json::Value = serde_json::from_str(line).expect("a JSON Lines entry");
+        assert!(
+            !line.contains("serving Registry Messaging") && entry.get("level").is_none(),
+            "stdout carried a log record: {line}"
+        );
+    }
 }

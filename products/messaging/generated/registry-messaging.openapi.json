@@ -327,8 +327,10 @@
             "additionalProperties": false,
             "properties": {
               "email": {
+                "description": "One address, local@domain, of visible ASCII, so its bound counts bytes and characters alike.",
                 "maxLength": 254,
                 "minLength": 3,
+                "pattern": "^[\\x21-\\x7e]+$",
                 "type": "string"
               }
             },
@@ -373,9 +375,10 @@
             "type": "object"
           },
           "correlationId": {
-            "description": "An opaque caller reference, stored, returned, and audited, never interpreted.",
+            "description": "An opaque caller reference, stored, returned, and audited, never interpreted. The runtime bounds it at 128 UTF-8 bytes, not characters, and refuses control characters.",
             "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$",
             "type": "string"
           },
           "data": {
@@ -639,7 +642,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -728,7 +741,17 @@
                 }
               }
             },
-            "description": "A problem: authentication.refused."
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -943,7 +966,17 @@
                 }
               }
             },
-            "description": "A problem: rate-limit.exceeded, quota.exceeded."
+            "description": "A problem: rate-limit.exceeded, quota.exceeded.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -966,7 +999,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1023,7 +1066,17 @@
                 }
               }
             },
-            "description": "A problem: authentication.refused."
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1115,7 +1168,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1172,7 +1235,17 @@
                 }
               }
             },
-            "description": "A problem: authentication.refused."
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1288,7 +1361,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1467,7 +1550,17 @@
                 }
               }
             },
-            "description": "A problem: rate-limit.exceeded."
+            "description": "A problem: rate-limit.exceeded.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1490,7 +1583,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1674,7 +1777,17 @@
                 }
               }
             },
-            "description": "A problem: rate-limit.exceeded."
+            "description": "A problem: rate-limit.exceeded.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1697,7 +1810,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1792,7 +1915,17 @@
                 }
               }
             },
-            "description": "A problem: authentication.refused."
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1925,7 +2058,8 @@
                             "request.unprocessable",
                             "template.data-invalid",
                             "template.locale-unavailable",
-                            "template.render-refused"
+                            "template.render-refused",
+                            "content.too-large"
                           ]
                         }
                       }
@@ -1934,7 +2068,7 @@
                 }
               }
             },
-            "description": "A problem: request.unprocessable, template.data-invalid, template.locale-unavailable, template.render-refused."
+            "description": "A problem: request.unprocessable, template.data-invalid, template.locale-unavailable, template.render-refused, content.too-large."
           },
           "503": {
             "content": {
@@ -1957,7 +2091,17 @@
                 }
               }
             },
-            "description": "A problem: service.unavailable."
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [

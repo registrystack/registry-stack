@@ -19,10 +19,11 @@ fn session() -> (tempfile::TempDir, PathBuf, PathBuf, LoadedPackage) {
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let project = fs::canonicalize(temporary.path()).unwrap().join("project");
     starter::write(&project).unwrap();
-    let loaded = load_package(&project).unwrap();
+    load_project(&project).unwrap();
     let docker = docker::Docker::new(PathBuf::from("/nonexistent/docker"));
     let (lock, root) = fresh_session(&project, &docker).unwrap();
     drop(lock);
+    let loaded = install_project(&project, &root).unwrap();
     let passwords = config::generate(&root).unwrap();
     config::database_urls(&root, 55432, &passwords).unwrap();
     (temporary, project, root, loaded)
@@ -30,7 +31,7 @@ fn session() -> (tempfile::TempDir, PathBuf, PathBuf, LoadedPackage) {
 
 #[test]
 fn the_generated_configuration_is_one_the_runtime_accepts() {
-    let (_temporary, project, root, loaded) = session();
+    let (_temporary, _project, root, loaded) = session();
     let endpoints = config::Endpoints {
         api_port: 18107,
         metrics_port: 19107,
@@ -38,7 +39,10 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
         gateway_port: 18200,
     };
     let document = serde_norway::to_string(&config::runtime_config(
-        &project, &root, &loaded, &endpoints,
+        &root.join("package"),
+        &root,
+        &loaded,
+        &endpoints,
     ))
     .unwrap();
     let path = root.join("runtime.yaml");
@@ -146,7 +150,7 @@ fn a_client_no_profile_names_is_refused_with_the_package_clients() {
     let Err(failure) = config::token(&root, &loaded, "stranger") else {
         panic!("an unknown client is refused");
     };
-    assert_eq!(failure.exit, REFUSAL_EXIT);
+    assert_eq!(failure.exit, DOMAIN_REFUSAL_EXIT);
     assert!(
         failure.message.contains("case-system, operations-console"),
         "{}",
@@ -165,7 +169,7 @@ fn a_token_without_a_session_is_refused() {
     }) else {
         panic!("a project without a session has no key to sign with");
     };
-    assert_eq!(failure.exit, REFUSAL_EXIT);
+    assert_eq!(failure.exit, DOMAIN_REFUSAL_EXIT);
     assert!(
         failure.message.contains("messagingctl dev"),
         "{}",
@@ -183,7 +187,7 @@ fn a_second_start_in_the_same_project_is_refused_while_the_first_runs() {
     let Err(failure) = fresh_session(&project, &docker) else {
         panic!("the lock is held");
     };
-    assert_eq!(failure.exit, REFUSAL_EXIT);
+    assert_eq!(failure.exit, DOMAIN_REFUSAL_EXIT);
     drop(held);
 }
 
@@ -195,7 +199,7 @@ fn a_project_path_that_reads_as_an_expression_is_refused() {
     let Err(failure) = project_directory(&project) else {
         panic!("the runtime configuration would expand the path");
     };
-    assert_eq!(failure.exit, REFUSAL_EXIT);
+    assert_eq!(failure.exit, DOMAIN_REFUSAL_EXIT);
 }
 
 #[test]

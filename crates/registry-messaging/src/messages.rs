@@ -9,8 +9,8 @@
 //! caller's access profile must list the sender profile and the template,
 //! and the parts are rendered from the active package at acceptance. One
 //! transaction then records the idempotency key, the message, its payload,
-//! its dispatch job, and the acceptance audit, so an accepted message is
-//! either wholly recorded or not at all.
+//! and its dispatch job. The HTTP edge records the accepted outcome after
+//! that transaction commits.
 //!
 //! The idempotency key is scoped to the caller's issuer and subject. The
 //! same key with the same canonical request replays the stored status and
@@ -44,10 +44,9 @@ use thiserror::Error;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::audit::AuditJournal;
+use crate::audit::MessagingAudit;
 use crate::config::RetentionConfig;
 use crate::dispatch::{acting_as, Actor, MessageDispatcher, MESSAGE_PART};
-use crate::outbox;
 use crate::store::{PostgresStore, StoreError};
 
 /// The idempotency operation a submission is recorded under.
@@ -167,11 +166,17 @@ pub fn prepare_submission(
     })
 }
 
+/// Parse an RFC 3339 instant, truncated to the microseconds PostgreSQL
+/// stores, so a window is checked exactly as it will be recorded.
 fn parse_instant(value: Option<&str>) -> Result<Option<SystemTime>, ProblemCode> {
     value
         .map(|value| {
             DateTime::parse_from_rfc3339(value)
-                .map(|instant| SystemTime::from(instant.with_timezone(&Utc)))
+                .map(|instant| {
+                    let instant =
+                        chrono::SubsecRound::trunc_subsecs(instant.with_timezone(&Utc), 6);
+                    SystemTime::from(instant)
+                })
                 .map_err(|_| ProblemCode::RequestUnprocessable)
         })
         .transpose()
@@ -191,6 +196,7 @@ pub struct SubmissionAnswer {
     pub receipt: Value,
     pub message_id: Uuid,
     pub replayed: bool,
+    pub(crate) audit_record: Option<Value>,
 }
 
 /// Why a submission was not accepted: the problem, and for a limit, how
@@ -213,12 +219,31 @@ impl From<ProblemCode> for SubmissionRefusal {
 /// Why the store could not answer an operator action.
 #[derive(Debug, Error)]
 pub enum MessageStoreError {
+    /// The store could not be reached or failed before any change was
+    /// committed.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// The dispatch core refused the transition: the message changed
-    /// between the read and the write, or the store failed.
+    /// The store refused the transition and changed nothing: the message
+    /// changed between the read and the write.
     #[error("the Messaging dispatch store refused the transition")]
     Refused,
+    /// The cancellation was refused and changed nothing: the message is
+    /// being sent, or an attempt of its current generation may have reached
+    /// its provider.
+    #[error("the Messaging message can no longer be cancelled")]
+    DispatchStarted,
+    /// The audit destination refused the request record, so the
+    /// transition was not attempted and nothing changed.
+    #[error("the Messaging audit destination refused the request record; nothing was changed")]
+    AuditUnavailable,
+    /// The transition may have been applied: its commit could not be
+    /// confirmed, or the dispatch core could not say whether it committed.
+    #[error("the Messaging transition may have been applied; its outcome could not be confirmed")]
+    OutcomeUnknown,
+    /// The transition was committed, and its outcome record could not be
+    /// written to the audit destination.
+    #[error("the Messaging transition was applied, and its audit outcome could not be recorded")]
+    AuditUnconfirmed,
 }
 
 impl From<tokio_postgres::Error> for MessageStoreError {
@@ -227,9 +252,14 @@ impl From<tokio_postgres::Error> for MessageStoreError {
     }
 }
 
+/// The dispatch core answers one value-free error for an absent or stale
+/// target, a refused write, a commit it could not confirm, and a committed
+/// change whose outcome record failed. Only the last two may have changed
+/// the message, and they cannot be told apart from the rest, so every
+/// dispatch error may have applied.
 impl From<DispatchError> for MessageStoreError {
     fn from(_: DispatchError) -> Self {
-        Self::Refused
+        Self::OutcomeUnknown
     }
 }
 
@@ -250,6 +280,23 @@ pub struct StoredMessage {
 }
 
 impl StoredMessage {
+    /// Whether an attempt of the message's current generation may have
+    /// reached its provider: one still in progress, answered maybe-sent, or
+    /// interrupted by a lapsed lease. The dispatcher refuses to cancel a
+    /// queued message this answers `true` for.
+    #[must_use]
+    pub fn may_have_reached_provider(&self) -> bool {
+        self.view.attempts.iter().any(|attempt| {
+            attempt.generation == self.generation
+                && matches!(
+                    attempt.outcome,
+                    AttemptOutcome::InProgress
+                        | AttemptOutcome::MaybeSent
+                        | AttemptOutcome::Interrupted
+                )
+        })
+    }
+
     /// Settle the view's report against whether the message's provider
     /// records delivery receipts: without them, a report no receipt has
     /// moved is `unavailable`, never `none`, so a caller does not wait for a
@@ -342,11 +389,30 @@ pub struct OperatorActionReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CancelResult {
     Cancelled,
-    /// The message is being sent, was handed to its provider, or its
-    /// outcome is unknown.
+    /// The message is being sent, was handed to its provider, its outcome
+    /// is unknown, or it waits to retry after an attempt that may have
+    /// reached its provider.
     DispatchStarted,
     /// The message already reached a final state.
     Terminal,
+}
+
+/// Read-only access to stored messages and operator-action previews.
+///
+/// This type cannot construct a dispatcher or apply an operator action, so
+/// status inspection and previews do not depend on an audit destination and
+/// cannot become an unaudited mutation path.
+#[derive(Clone)]
+pub struct MessageReader {
+    store: PostgresStore,
+}
+
+impl std::fmt::Debug for MessageReader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MessageReader")
+            .finish_non_exhaustive()
+    }
 }
 
 /// The message store: accepted messages, their jobs, and their attempts.
@@ -354,6 +420,7 @@ pub enum CancelResult {
 pub struct MessageStore {
     store: PostgresStore,
     dispatcher: MessageDispatcher,
+    audit: Arc<MessagingAudit>,
 }
 
 impl std::fmt::Debug for MessageStore {
@@ -374,15 +441,10 @@ const VIEW_SELECT: &str = "SELECT message.message_id, message.submitter_issuer, 
     JOIN messaging_dispatch_jobs AS job \
       ON job.message_id = message.message_id AND job.part = 'message'";
 
-impl MessageStore {
+impl MessageReader {
     #[must_use]
-    pub fn new(store: PostgresStore, dispatcher: MessageDispatcher) -> Self {
-        Self { store, dispatcher }
-    }
-
-    #[must_use]
-    pub fn dispatcher(&self) -> &MessageDispatcher {
-        &self.dispatcher
+    pub fn new(store: PostgresStore) -> Self {
+        Self { store }
     }
 
     /// Read one message and its attempts, in one snapshot.
@@ -473,6 +535,93 @@ impl MessageStore {
             .collect()
     }
 
+    /// Report what `action` would do to one message without changing it.
+    /// `None` when no such message exists.
+    ///
+    /// # Errors
+    ///
+    /// The store's error when it cannot answer.
+    pub async fn operate(
+        &self,
+        message_id: Uuid,
+        action: OperatorAction,
+    ) -> Result<Option<OperatorActionReport>, MessageStoreError> {
+        let Some(message) = self.read(message_id).await? else {
+            return Ok(None);
+        };
+        let eligible = message.state == action.applies_to()
+            && !(action == OperatorAction::Cancel && message.may_have_reached_provider());
+        let next_status = eligible.then_some(match action {
+            OperatorAction::Retry | OperatorAction::Settle(SettleOutcome::NotSent) => {
+                MessageStatus::Queued
+            }
+            OperatorAction::Settle(SettleOutcome::Sent) => MessageStatus::Submitted,
+            OperatorAction::Cancel => MessageStatus::Cancelled,
+        });
+        Ok(Some(OperatorActionReport {
+            id: message.view.id,
+            action: action.as_str(),
+            outcome: match action {
+                OperatorAction::Settle(outcome) => Some(outcome),
+                OperatorAction::Retry | OperatorAction::Cancel => None,
+            },
+            status: message.view.status,
+            dispatch: message.view.dispatch,
+            generation: message.generation,
+            eligible,
+            applied: false,
+            next_status,
+            next_generation: None,
+        }))
+    }
+}
+
+impl MessageStore {
+    #[must_use]
+    pub fn new(
+        store: PostgresStore,
+        dispatcher: MessageDispatcher,
+        audit: Arc<MessagingAudit>,
+    ) -> Self {
+        Self {
+            store,
+            dispatcher,
+            audit,
+        }
+    }
+
+    #[must_use]
+    pub fn dispatcher(&self) -> &MessageDispatcher {
+        &self.dispatcher
+    }
+
+    /// Read one message and its attempts, in one snapshot.
+    ///
+    /// # Errors
+    ///
+    /// The store's error when it cannot answer.
+    pub async fn read(&self, message_id: Uuid) -> Result<Option<StoredMessage>, MessageStoreError> {
+        MessageReader::new(self.store.clone())
+            .read(message_id)
+            .await
+    }
+
+    /// List messages, newest first, optionally only those whose derived
+    /// status is `status`.
+    ///
+    /// # Errors
+    ///
+    /// The store's error when it cannot answer.
+    pub async fn list(
+        &self,
+        status: Option<MessageStatus>,
+        limit: i64,
+    ) -> Result<Vec<MessageSummary>, MessageStoreError> {
+        MessageReader::new(self.store.clone())
+            .list(status, limit)
+            .await
+    }
+
     /// Cancel a queued message under `actor`.
     ///
     /// # Errors
@@ -490,7 +639,8 @@ impl MessageStore {
             CancelOutcome::Cancelled => CancelResult::Cancelled,
             CancelOutcome::NotCancellable(
                 JobState::Leased | JobState::Delivered | JobState::Unknown,
-            ) => CancelResult::DispatchStarted,
+            )
+            | CancelOutcome::MayHaveReachedReceiver => CancelResult::DispatchStarted,
             CancelOutcome::NotCancellable(_) => CancelResult::Terminal,
         })
     }
@@ -500,42 +650,28 @@ impl MessageStore {
     ///
     /// # Errors
     ///
-    /// The store's error when it cannot answer, and
+    /// The store's error when it cannot answer before any change,
     /// [`MessageStoreError::Refused`] when the message changed between the
-    /// read and the write.
+    /// read and the write, [`MessageStoreError::DispatchStarted`] when a
+    /// cancellation finds the message being sent or an attempt that may
+    /// have reached its provider, [`MessageStoreError::AuditUnavailable`] when the
+    /// request record is refused, [`MessageStoreError::OutcomeUnknown`]
+    /// when the action may have been applied, and
+    /// [`MessageStoreError::AuditUnconfirmed`] when it was applied and its
+    /// outcome record failed.
     pub async fn operate(
         &self,
         message_id: Uuid,
         action: OperatorAction,
         apply: bool,
     ) -> Result<Option<OperatorActionReport>, MessageStoreError> {
-        let Some(message) = self.read(message_id).await? else {
+        let Some(mut report) = MessageReader::new(self.store.clone())
+            .operate(message_id, action)
+            .await?
+        else {
             return Ok(None);
         };
-        let eligible = message.state == action.applies_to();
-        let next_status = eligible.then_some(match action {
-            OperatorAction::Retry | OperatorAction::Settle(SettleOutcome::NotSent) => {
-                MessageStatus::Queued
-            }
-            OperatorAction::Settle(SettleOutcome::Sent) => MessageStatus::Submitted,
-            OperatorAction::Cancel => MessageStatus::Cancelled,
-        });
-        let mut report = OperatorActionReport {
-            id: message.view.id.clone(),
-            action: action.as_str(),
-            outcome: match action {
-                OperatorAction::Settle(outcome) => Some(outcome),
-                OperatorAction::Retry | OperatorAction::Cancel => None,
-            },
-            status: message.view.status,
-            dispatch: message.view.dispatch,
-            generation: message.generation,
-            eligible,
-            applied: false,
-            next_status,
-            next_generation: None,
-        };
-        if !apply || !eligible {
+        if !apply || !report.eligible {
             return Ok(Some(report));
         }
         let key = job_key(message_id)?;
@@ -543,63 +679,90 @@ impl MessageStore {
             OperatorAction::Retry | OperatorAction::Settle(SettleOutcome::NotSent) => {
                 let generation = acting_as(
                     Actor::OperatorTool,
-                    self.dispatcher.replay(&key, message.generation),
+                    self.dispatcher.replay(&key, report.generation),
                 )
                 .await?;
                 report.next_generation = Some(generation);
             }
             OperatorAction::Settle(SettleOutcome::Sent) => {
-                self.settle_sent(message_id, message.generation).await?;
+                self.settle_sent(message_id, report.generation).await?;
             }
-            OperatorAction::Cancel => {
-                if self.cancel(message_id, Actor::OperatorTool).await? != CancelResult::Cancelled {
-                    return Err(MessageStoreError::Refused);
-                }
-            }
+            OperatorAction::Cancel => match self.cancel(message_id, Actor::OperatorTool).await? {
+                CancelResult::Cancelled => {}
+                CancelResult::DispatchStarted => return Err(MessageStoreError::DispatchStarted),
+                CancelResult::Terminal => return Err(MessageStoreError::Refused),
+            },
         }
         report.applied = true;
         Ok(Some(report))
     }
 
-    /// Apply a verified callback's `receipt` from `provider` to the message
-    /// it names.
-    ///
-    /// # Errors
-    ///
-    /// As [`crate::receipts::record_receipt`].
-    pub async fn record_receipt(
-        &self,
-        provider: &str,
-        receipt: &registry_messaging_core::Receipt,
-    ) -> Result<crate::receipts::ReceiptOutcome, MessageStoreError> {
-        crate::receipts::record_receipt(&self.store, provider, receipt).await
-    }
-
     /// Move an unknown outcome to delivered, fenced by its generation, with
-    /// its audit in the same transaction.
+    /// a request audit before the mutation and an outcome after commit. A
+    /// refused or failed write is answered `refused` in the audit; a COMMIT
+    /// that fails is read back, and one whose outcome the read cannot
+    /// establish is left `unfinished`.
     async fn settle_sent(
         &self,
         message_id: Uuid,
         generation: i64,
     ) -> Result<(), MessageStoreError> {
-        let mut client = self.store.client().await?;
-        let transaction = client.transaction().await?;
-        let changed = transaction
-            .execute(
-                "UPDATE messaging_dispatch_jobs \
-                    SET state = 'delivered', delivered_at = transaction_timestamp(), \
-                        updated_at = transaction_timestamp() \
-                  WHERE message_id = $1 AND part = $2 AND generation = $3 \
-                    AND state = 'unknown'",
-                &[&message_id, &MESSAGE_PART, &generation],
-            )
-            .await?;
-        if changed != 1 {
-            return Err(MessageStoreError::Refused);
+        let mut audit = self
+            .audit
+            .begin(json!({
+                "event": "messaging.message.settle.requested",
+                "messageId": message_id.to_string(),
+                "generation": generation,
+                "outcome": "sent",
+                "actor": Actor::OperatorTool.to_json(),
+            }))
+            .await
+            .map_err(|_| MessageStoreError::AuditUnavailable)?;
+        let refused = json!({
+            "event": "messaging.message.settle.requested",
+            "messageId": message_id.to_string(),
+            "generation": generation,
+            "outcome": "refused",
+            "actor": Actor::OperatorTool.to_json(),
+        });
+        let written = async {
+            let mut client = self.store.client().await?;
+            let transaction = client.transaction().await?;
+            let changed = transaction
+                .execute(
+                    "UPDATE messaging_dispatch_jobs \
+                        SET state = 'delivered', delivered_at = transaction_timestamp(), \
+                            updated_at = transaction_timestamp() \
+                      WHERE message_id = $1 AND part = $2 AND generation = $3 \
+                        AND state = 'unknown'",
+                    &[&message_id, &MESSAGE_PART, &generation],
+                )
+                .await?;
+            Ok::<_, MessageStoreError>((changed, transaction.commit().await))
         }
-        outbox::write(
-            &transaction,
-            json!({
+        .await;
+        let refusal = match written {
+            Ok((1, Ok(()))) => None,
+            Ok((1, Err(commit))) => match self.settled(message_id, generation).await {
+                Some(true) => None,
+                Some(false) => Some(StoreError::Query(commit).into()),
+                // The dropped guard records the settlement `unfinished`.
+                None => return Err(MessageStoreError::OutcomeUnknown),
+            },
+            Ok((_, _)) => Some(MessageStoreError::Refused),
+            Err(error) => Some(error),
+        };
+        if let Some(refusal) = refusal {
+            if let Err(error) = audit.respond(refused).await {
+                tracing::warn!(
+                    error = %error,
+                    "the Messaging audit destination could not record a refused settlement"
+                );
+            }
+            return Err(refusal);
+        }
+        audit
+            .respond(json!({
                 "event": MESSAGE_SETTLED_EVENT,
                 "messageId": message_id.to_string(),
                 "generation": generation,
@@ -607,11 +770,29 @@ impl MessageStore {
                 "from": JobState::Unknown.as_str(),
                 "disposition": JobState::Delivered.as_str(),
                 "actor": Actor::OperatorTool.to_json(),
-            }),
-        )
-        .await?;
-        transaction.commit().await?;
+            }))
+            .await
+            .map_err(|_| MessageStoreError::AuditUnconfirmed)?;
         Ok(())
+    }
+
+    /// Whether a settlement whose COMMIT failed is in the store: `None`
+    /// when the store cannot say.
+    async fn settled(&self, message_id: Uuid, generation: i64) -> Option<bool> {
+        let client = self.store.client().await.ok()?;
+        let row = client
+            .query_opt(
+                "SELECT state FROM messaging_dispatch_jobs \
+                  WHERE message_id = $1 AND part = $2 AND generation = $3",
+                &[&message_id, &MESSAGE_PART, &generation],
+            )
+            .await
+            .ok()?;
+        match row.map(|row| row.try_get::<_, String>(0)) {
+            Some(Ok(state)) if state == JobState::Delivered.as_str() => Some(true),
+            Some(Ok(state)) if state == JobState::Unknown.as_str() => Some(false),
+            _ => None,
+        }
     }
 }
 
@@ -773,7 +954,7 @@ fn decode_message(
 /// submission windows are bounded by.
 pub struct MessageService {
     messages: MessageStore,
-    audit: Arc<AuditJournal>,
+    audit: Arc<MessagingAudit>,
     retention: RetentionConfig,
     /// The providers whose delivery receipts this runtime records.
     receipt_providers: BTreeSet<String>,
@@ -803,7 +984,7 @@ impl MessageService {
     #[must_use]
     pub fn new(
         messages: MessageStore,
-        audit: Arc<AuditJournal>,
+        audit: Arc<MessagingAudit>,
         retention: RetentionConfig,
         receipt_providers: BTreeSet<String>,
     ) -> Self {
@@ -820,6 +1001,14 @@ impl MessageService {
         &self.messages
     }
 
+    pub async fn record_receipt(
+        &self,
+        provider: &str,
+        receipt: &registry_messaging_core::Receipt,
+    ) -> Result<crate::receipts::ReceiptOutcome, MessageStoreError> {
+        crate::receipts::record_receipt(&self.messages.store, &self.audit, provider, receipt).await
+    }
+
     /// Record one prepared submission under `key`, or answer the receipt
     /// the key already holds.
     ///
@@ -828,7 +1017,7 @@ impl MessageService {
     /// `idempotency.expired`, `idempotency.key-reused`, `request.invalid`
     /// for a window the retention does not allow, `quota.exceeded` with the
     /// wait until the profile's oldest counted acceptance ages out, and
-    /// `service.unavailable` when the store or the journal's keys fail.
+    /// `service.unavailable` when the store or audit reference key fails.
     pub async fn submit(
         &self,
         caller: &Caller,
@@ -894,6 +1083,15 @@ impl MessageService {
         }
         let window = Window::new(now, submission, &self.retention)?;
         if let Some(limit) = caller.profile.daily_limit {
+            lock_daily_limit(&transaction, &caller.profile.id).await?;
+            // A submission under the same key may have committed while this
+            // one waited on the lock; it is replayed, never counted against.
+            if let Some(stored) =
+                lookup_key(&transaction, &references.principal_pseudonym, key).await?
+            {
+                transaction.commit().await?;
+                return replay(stored, submission).map(Some);
+            }
             check_daily_limit(&transaction, &caller.profile.id, limit, now).await?;
         }
         let message_id = Uuid::new_v4();
@@ -937,18 +1135,15 @@ impl MessageService {
         )
         .await
         .map_err(Refusal::dispatch)?;
-        outbox::write(
-            &transaction,
-            accepted_record(caller, message_id, submission, &window, references),
-        )
-        .await
-        .map_err(Refusal::dispatch)?;
         transaction.commit().await?;
         Ok(Some(SubmissionAnswer {
             status: 202,
             receipt,
             message_id,
             replayed: false,
+            audit_record: Some(accepted_record(
+                caller, message_id, submission, &window, references,
+            )),
         }))
     }
 
@@ -1049,17 +1244,13 @@ const fn days(count: u16) -> Duration {
 /// The window a `dailyLimit` counts over.
 const DAILY_WINDOW: Duration = Duration::from_secs(SECONDS_PER_DAY);
 
-/// Refuse a submission once `profile` accepted `limit` messages in the last
-/// 24 hours. The count runs under a transaction-scoped advisory lock of the
-/// profile, so two submissions of one profile are counted one after the
-/// other and cannot both take the last place; the lock is released when
-/// the acceptance commits or rolls back. The count is the accepted
-/// messages themselves, so it survives a restart without a counter.
-async fn check_daily_limit(
+/// Take the transaction-scoped advisory lock `profile`'s daily count runs
+/// under, so two submissions of one profile are counted one after the other
+/// and cannot both take the last place; the lock is released when the
+/// acceptance commits or rolls back.
+async fn lock_daily_limit(
     transaction: &tokio_postgres::Transaction<'_>,
     profile: &str,
-    limit: u32,
-    now: SystemTime,
 ) -> Result<(), Refusal> {
     transaction
         .execute(
@@ -1067,6 +1258,19 @@ async fn check_daily_limit(
             &[&format!("{DAILY_LIMIT_LOCK_NAMESPACE}{profile}")],
         )
         .await?;
+    Ok(())
+}
+
+/// Refuse a submission once `profile` accepted `limit` messages in the last
+/// 24 hours. The caller holds the profile's lock from [`lock_daily_limit`].
+/// The count is the accepted messages themselves, so it survives a restart
+/// without a counter.
+async fn check_daily_limit(
+    transaction: &tokio_postgres::Transaction<'_>,
+    profile: &str,
+    limit: u32,
+    now: SystemTime,
+) -> Result<(), Refusal> {
     let window_start = now - DAILY_WINDOW;
     let row = transaction
         .query_one(
@@ -1080,9 +1284,13 @@ async fn check_daily_limit(
         return Ok(());
     }
     let oldest: SystemTime = row.try_get(1)?;
+    // `now` is this transaction's start, so an acceptance another
+    // transaction committed after it can carry a later instant; the wait
+    // never exceeds the window or falls below one second.
     let retry_after = (oldest + DAILY_WINDOW)
         .duration_since(now)
-        .unwrap_or(Duration::ZERO);
+        .unwrap_or(Duration::ZERO)
+        .clamp(Duration::from_secs(1), DAILY_WINDOW);
     Err(Refusal::Quota { retry_after })
 }
 
@@ -1137,6 +1345,7 @@ fn replay(stored: StoredKey, submission: &PreparedSubmission) -> Result<Submissi
             receipt,
             message_id,
             replayed: true,
+            audit_record: None,
         }),
         _ => Err(Refusal::Problem(ProblemCode::IdempotencyExpired)),
     }
@@ -1421,5 +1630,18 @@ mod tests {
                 ProblemCode::RequestUnprocessable
             );
         }
+    }
+
+    #[test]
+    fn instants_parse_at_the_microsecond_precision_postgresql_stores() {
+        let whole = parse_instant(Some("2026-10-01T07:30:00Z")).unwrap();
+        assert_eq!(
+            parse_instant(Some("2026-10-01T07:30:00.0000009Z")).unwrap(),
+            whole
+        );
+        assert_eq!(
+            parse_instant(Some("2026-10-01T07:30:00.0000019Z")).unwrap(),
+            whole.map(|instant| instant + Duration::from_micros(1))
+        );
     }
 }

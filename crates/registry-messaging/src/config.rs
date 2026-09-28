@@ -7,70 +7,38 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_messaging_core::{
-    valid_package_digest, ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
-    PACKAGE_FILE,
+    ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
 };
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
-    expand_config_env_vars_with, reject_config_env_expressions_in, SecretError, SecretProvider,
-    SecretReference, SecretResolver, MAX_SECRET_BYTES,
+    AuditKeyConfig, ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
+    REMOVED_OIDC_JWKS_URI,
+};
+pub use registry_platform_config::{
+    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
+    JwksSource as OidcJwksSource, ListenerConfig as MetricsListenerConfig, ListenerNetworkExposure,
+    OidcClientsConfig, OidcIssuerConfig, PackageConfig as RuntimePackageConfig,
+    PrivateListenerConfig as ListenerConfig,
+    RuntimeConfigErrorKind as SharedRuntimeConfigErrorKind, SecretProvidersConfig, TlsTermination,
+    MAX_ASSERTION_ISSUERS_PER_CLIENT as MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
+    MAX_ASSERTION_ISSUER_BYTES as MAXIMUM_ASSERTION_ISSUER_BYTES,
+    MAX_ASSERTION_ISSUER_CLIENTS as MAXIMUM_ASSERTION_ISSUER_CLIENTS,
+    MAX_ASSERTION_ISSUER_CLIENT_BYTES as MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::http_provider::HttpProviderSettings;
-use crate::package::{load_package, LoadedPackage, PackageLoadError};
+use crate::package::{load_runtime_package, LoadedPackage, PackageLoadError};
 use crate::smtp::SmtpProviderSettings;
 
-/// The suffix naming a credential member. Every secret reference in the
-/// runtime document is spelled this way, and none may carry an environment
-/// expression.
-const CREDENTIAL_MEMBER_SUFFIX: &str = "Ref";
-
-/// Explain one refused secret reference without disclosing what it protects.
-///
-/// A valid reference is safe and useful to name, but invalid operator-authored
-/// text might itself be a literal credential, so only its field is named. The
-/// resolved bytes and opened path never appear.
-pub(crate) fn describe_secret_failure(
-    field: &'static str,
-    reference: &str,
-    error: &SecretError,
-) -> String {
-    let reason = match error {
-        SecretError::InvalidReference => {
-            "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
-        }
-        SecretError::ProviderDisabled => "its provider is not enabled for this runtime".to_owned(),
-        SecretError::InvalidProviderConfiguration => {
-            "the secret provider configuration is invalid".to_owned()
-        }
-        SecretError::Unavailable => {
-            "no readable secret of that name exists under the configured provider".to_owned()
-        }
-        SecretError::UnsafeFile => concat!(
-            "the secret file must be a regular file owned by the runtime user, ",
-            "with mode 0400 or 0600, and exactly one hard link"
-        )
-        .to_owned(),
-        SecretError::Read => "the secret could not be read".to_owned(),
-        SecretError::InvalidValue => format!(
-            "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
-             without NUL bytes"
-        ),
-    };
-    if error == &SecretError::InvalidReference {
-        format!("the secret reference configured at {field} could not be resolved: {reason}")
-    } else {
-        format!("the secret reference {reference} could not be resolved: {reason}")
-    }
-}
+pub(crate) use registry_platform_config::describe_secret_failure;
 
 /// The configuration name of a provider kind.
 pub(crate) const fn provider_kind_name(kind: ProviderKind) -> &'static str {
@@ -92,13 +60,13 @@ pub const DEFAULT_LISTENER_BIND: &str = "127.0.0.1:8107";
 /// it to an ordinary JWT.
 const MESSAGING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
-/// Bounds on the authored assertion-issuer map, matching the Casework and
-/// Scheduling runtimes. They keep one operator document from becoming an
-/// unbounded verifier input.
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
-pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
+pub const MESSAGING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: MESSAGING_RUNTIME_API_VERSION,
+    kind: MESSAGING_RUNTIME_KIND,
+};
+
+pub const MESSAGING_REMOVED_KEYS: &[registry_platform_config::RemovedKey] =
+    &[REMOVED_OIDC_JWKS_URI];
 
 /// Retention defaults and bounds. A jurisdiction's retention schedule
 /// approves the deployed values; the bounds only keep a typo from becoming a
@@ -135,8 +103,8 @@ pub struct RuntimeConfig {
     /// `provider-unconfigured`.
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConnection>,
-    /// Named PEM bundles an `http` provider's `tlsTrustProfile` trusts
-    /// instead of the public web roots.
+    /// Named PEM bundles an `http` provider's `tlsTrustProfile` trusts in
+    /// addition to the system roots.
     #[serde(default)]
     pub tls_trust_profiles: BTreeMap<String, TlsTrustProfileConfig>,
 }
@@ -193,131 +161,6 @@ impl std::fmt::Debug for TlsTrustProfileConfig {
     }
 }
 
-/// The root of an authored Messaging package, holding `messaging.yaml` and
-/// its `templates/` tree.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimePackageConfig {
-    pub root: PathBuf,
-    /// The `sha256:` digest the operator pins the package to. The runtime
-    /// computes the digest of the package it reads and refuses to start when
-    /// the two differ.
-    #[serde(default)]
-    pub expected_digest: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ListenerConfig {
-    #[serde(default = "default_listener_bind")]
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
-    pub bind: SocketAddr,
-    pub tls_termination: TlsTermination,
-    #[serde(default)]
-    pub network_exposure: ListenerNetworkExposure,
-}
-
-fn default_listener_bind() -> SocketAddr {
-    DEFAULT_LISTENER_BIND
-        .parse()
-        .expect("valid Messaging listener default")
-}
-
-/// Declares the trusted transport boundary for the plaintext HTTP listener.
-/// Production listeners require operator-controlled upstream TLS termination;
-/// direct plaintext is limited to the explicit loopback-only development mode.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum TlsTermination {
-    OperatorControlledUpstream,
-    DevelopmentLoopback,
-}
-
-/// The operator-declared private network placement of the HTTP listener.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ListenerNetworkExposure {
-    #[default]
-    PrivateAddress,
-    ContainerPrivate,
-}
-
-/// The operator-private listener that serves `/metrics`. It is a separate
-/// socket rather than a route on the public listener, so reaching the
-/// counters requires reaching a different, private address.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MetricsListenerConfig {
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
-    pub bind: SocketAddr,
-}
-
-impl std::fmt::Debug for MetricsListenerConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("MetricsListenerConfig")
-            .field("bind", &"<redacted>")
-            .finish()
-    }
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretProvidersConfig {
-    #[serde(default)]
-    pub file: Option<FileSecretProviderConfig>,
-    #[serde(default)]
-    pub environment: Option<EnvironmentSecretProviderConfig>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnvironmentSecretProviderConfig {}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileSecretProviderConfig {
-    pub root: PathBuf,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatabaseConfig {
-    pub runtime_url_ref: String,
-    pub migration_url_ref: String,
-    #[serde(default)]
-    pub trusted_root_certificate_ref: Option<String>,
-    #[serde(default)]
-    pub test_only_plaintext: bool,
-}
-
-impl std::fmt::Debug for DatabaseConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DatabaseConfig")
-            .field("runtime_url_ref", &"<redacted>")
-            .field("migration_url_ref", &"<redacted>")
-            .field(
-                "trusted_root_certificate_ref",
-                &self
-                    .trusted_root_certificate_ref
-                    .as_ref()
-                    .map(|_| "<redacted>"),
-            )
-            .field("test_only_plaintext", &self.test_only_plaintext)
-            .finish()
-    }
-}
-
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -329,23 +172,16 @@ pub struct AuthenticationConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    pub issuer: String,
-    pub audience: String,
-    #[serde(default)]
-    pub jwks_uri: Option<String>,
-    #[serde(default)]
-    pub jwks_source: OidcJwksSource,
-    #[serde(default = "default_scope_claim")]
-    pub scope_claim: String,
+    /// The exact token issuer, audience, and signing-key source.
+    #[serde(flatten)]
+    pub provider: OidcIssuerConfig,
     /// The OAuth clients this runtime admits. Every access profile resolves
     /// its caller from the matched client, so the list is never empty, and
     /// every client a profile names must appear here.
-    pub allowed_clients: Vec<String>,
-    /// The assertion authorities each client may exchange a subject token
-    /// from, keyed by client identifier. A deployment that performs no token
-    /// exchange leaves this empty, and an exchanged token is then refused.
-    #[serde(default)]
-    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+    #[serde(flatten)]
+    pub clients: OidcClientsConfig,
+    #[serde(default = "default_scope_claim")]
+    pub scope_claim: String,
 }
 
 fn default_scope_claim() -> String {
@@ -353,23 +189,36 @@ fn default_scope_claim() -> String {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub enum OidcJwksSource {
-    #[default]
-    Discovery,
-    Static {
-        #[serde(rename = "documentRef")]
-        document_ref: String,
-    },
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
-    pub path: PathBuf,
-    pub hash_key_ref: String,
+    #[serde(flatten)]
+    pub key: AuditKeyConfig,
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub rotate_bytes: Option<u64>,
+    #[serde(default)]
+    pub retain_days: Option<u32>,
+}
+
+impl AuditConfig {
+    pub fn destination(&self) -> Result<AuditDestination, RuntimeConfigError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes,
+            self.retain_days,
+        )
+        .map_err(|error| match error {
+            AuditDestinationError::RelativePath => {
+                RuntimeConfigError::RelativeOperatedPath("audit.path")
+            }
+            error => RuntimeConfigError::InvalidAuditDestination(error),
+        })
+    }
 }
 
 /// Retention periods the retention sweep enforces. Every value is deployment
@@ -419,7 +268,9 @@ impl RuntimeConfig {
     /// Load and validate the operator document at an absolute path, reading
     /// `${VAR}` expressions from the process environment.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        Self::load_with_environment(path, &|name| std::env::var(name).ok())
+        let loaded = Self::loader().load::<Self>(path.as_ref())?;
+        loaded.config.check()?;
+        Ok(loaded.config)
     }
 
     /// Load and validate the operator document, reading `${VAR}` expressions
@@ -428,66 +279,26 @@ impl RuntimeConfig {
         path: impl AsRef<Path>,
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Self, RuntimeConfigError> {
-        if !path.as_ref().is_absolute() {
-            return Err(RuntimeConfigError::RelativeRuntimePath);
-        }
-        let bytes = read_bounded(path.as_ref()).map_err(RuntimeConfigError::Read)?;
-        let config = Self::parse_with_environment(&bytes, lookup)?;
-        config.check()?;
-        Ok(config)
+        let loaded = Self::loader().load_with::<Self>(path.as_ref(), lookup)?;
+        loaded.config.check()?;
+        Ok(loaded.config)
     }
 
-    /// Parse the operator document without checking it.
-    ///
-    /// Environment expressions are expanded over the document text by
-    /// `registry-platform-config` before the YAML is parsed, so an expanded
-    /// value is quoted as one string where it fills a whole value and refused
-    /// where it could change the document's shape. Before that, the document
-    /// as written is read once to refuse an expression in any member whose
-    /// name ends in `Ref`: a credential is named by a `secret:` reference the
-    /// resolver reads, never by text an environment variable spliced in.
+    #[must_use]
+    pub const fn loader() -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(MESSAGING_RUNTIME_ENVELOPE)
+            .removed_keys(MESSAGING_REMOVED_KEYS)
+            .max_bytes(MAXIMUM_DOCUMENT_BYTES)
+    }
+
+    /// Parse the operator document without checking it, for focused tests.
+    #[cfg(test)]
     fn parse_with_environment(
         bytes: &[u8],
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Self, RuntimeConfigError> {
-        let written: serde_json::Value =
-            serde_norway::from_slice(bytes).map_err(|error| RuntimeConfigError::Parse {
-                path: "/".to_owned(),
-                cause: redact_refused_values(&error.to_string()),
-            })?;
-        reject_config_env_expressions_in(&written, |name| name.ends_with(CREDENTIAL_MEMBER_SUFFIX))
-            .map_err(|refused| RuntimeConfigError::Environment {
-                path: refused.path().to_owned(),
-                reason: "an environment expression is not accepted in a credential member; name \
-                     the secret with a secret:env/NAME or secret:file/name reference instead"
-                    .to_owned(),
-            })?;
-        // `from_slice` above has already refused a document that is not UTF-8.
-        let text = std::str::from_utf8(bytes).map_err(|_| RuntimeConfigError::Parse {
-            path: "/".to_owned(),
-            cause: "the document is not UTF-8".to_owned(),
-        })?;
-        let expanded = expand_config_env_vars_with(text, lookup).map_err(|error| {
-            RuntimeConfigError::Environment {
-                path: "/".to_owned(),
-                reason: error.to_string(),
-            }
-        })?;
-        if expanded.len() as u64 > MAXIMUM_DOCUMENT_BYTES {
-            return Err(RuntimeConfigError::Environment {
-                path: "/".to_owned(),
-                reason: "the expanded document exceeds one mebibyte".to_owned(),
-            });
-        }
-        let document: serde_norway::Value =
-            serde_norway::from_str(&expanded).map_err(|error| RuntimeConfigError::Parse {
-                path: "/".to_owned(),
-                cause: redact_refused_values(&error.to_string()),
-            })?;
-        serde_path_to_error::deserialize(document).map_err(|error| {
-            let (path, cause) = refused_yaml(error);
-            RuntimeConfigError::Parse { path, cause }
-        })
+        let text = std::str::from_utf8(bytes).map_err(|_| RuntimeConfigError::InvalidEncoding)?;
+        Ok(Self::loader().parse_str(text, lookup)?.config)
     }
 
     #[must_use]
@@ -500,18 +311,11 @@ impl RuntimeConfig {
     /// could never be reached, and a pinned `expectedDigest` must equal the
     /// digest of what was read.
     pub fn load_package(&self) -> Result<LoadedPackage, RuntimeConfigError> {
-        let loaded = load_package(&self.package.root).map_err(RuntimeConfigError::Package)?;
-        if let Some(expected) = &self.package.expected_digest {
-            if expected != loaded.package.digest() {
-                return Err(RuntimeConfigError::PackageDigestMismatch {
-                    expected: expected.clone(),
-                    actual: loaded.package.digest().to_owned(),
-                });
-            }
-        }
+        let loaded = load_runtime_package(&self.package).map_err(RuntimeConfigError::Package)?;
         let allowed: BTreeSet<&str> = self
             .authentication
             .oidc
+            .clients
             .allowed_clients
             .iter()
             .map(String::as_str)
@@ -532,54 +336,27 @@ impl RuntimeConfig {
     }
 
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
-        if self.api_version != MESSAGING_RUNTIME_API_VERSION {
-            return Err(RuntimeConfigError::InvalidApiVersion);
-        }
-        if self.kind != MESSAGING_RUNTIME_KIND {
-            return Err(RuntimeConfigError::InvalidKind);
-        }
-        if !self.package.root.is_absolute() {
-            return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
-        }
-        if let Some(digest) = &self.package.expected_digest {
-            if !valid_package_digest(digest) {
-                return Err(RuntimeConfigError::InvalidExpectedDigest);
-            }
-        }
-        if self
-            .secret_providers
-            .file
-            .as_ref()
-            .is_some_and(|file| !file.root.is_absolute())
-        {
-            return Err(RuntimeConfigError::RelativeOperatedPath(
-                "secretProviders.file.root",
-            ));
-        }
-        if !self.audit.path.is_absolute() {
-            return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
-        }
-        if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
-            return Err(RuntimeConfigError::InvalidSecretProviders);
-        }
-        if !valid_listener(
-            self.listener.bind.ip(),
-            self.listener.network_exposure,
-            self.listener.tls_termination,
-        ) {
+        self.package.check()?;
+        self.secret_providers.check()?;
+        self.audit.destination()?;
+        if !self.listener.is_valid() {
             return Err(RuntimeConfigError::InvalidListener);
         }
         if let Some(metrics) = &self.metrics_listener {
-            if !valid_metrics_listener(metrics.bind, self.listener.bind) {
+            if !valid_metrics_listener(metrics.bind.socket_addr(), self.listener.bind.socket_addr())
+            {
                 return Err(RuntimeConfigError::InvalidMetricsListener);
             }
         }
         let oidc = &self.authentication.oidc;
-        if oidc.issuer.is_empty()
-            || oidc.audience.is_empty()
-            || oidc.scope_claim.is_empty()
-            || oidc.allowed_clients.is_empty()
-            || oidc.allowed_clients.iter().any(String::is_empty)
+        let development_loopback =
+            self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
+        oidc.provider
+            .check("authentication.oidc", development_loopback)?;
+        oidc.clients.check("authentication.oidc")?;
+        if oidc.scope_claim.is_empty()
+            || oidc.clients.allowed_clients.is_empty()
+            || oidc.clients.allowed_clients.iter().any(String::is_empty)
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
@@ -587,9 +364,7 @@ impl RuntimeConfig {
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
         }
-        if self.audit.hash_key_ref.is_empty() {
-            return Err(RuntimeConfigError::InvalidAuditReference);
-        }
+        self.audit.key.check(&self.secret_providers)?;
         let retention = self.retention;
         if !(1..=MAXIMUM_PAYLOAD_DAYS).contains(&retention.payload_days)
             || !(retention.payload_days..=MAXIMUM_RECORD_DAYS).contains(&retention.record_days)
@@ -676,19 +451,9 @@ impl RuntimeConfig {
     /// Check one secret reference parses and uses an enabled provider,
     /// naming only its member when it does not.
     fn check_reference(&self, field: &str, raw: &str) -> Result<(), String> {
-        let reference = SecretReference::parse(raw)
-            .map_err(|_| format!("{field} is not a valid secret reference"))?;
-        let enabled = match reference.provider() {
-            SecretProvider::File => self.secret_providers.file.is_some(),
-            SecretProvider::Environment => self.secret_providers.environment.is_some(),
-        };
-        if enabled {
-            Ok(())
-        } else {
-            Err(format!(
-                "{field} uses a secret provider that is not explicitly enabled"
-            ))
-        }
+        self.secret_providers
+            .check_reference(field, raw)
+            .map_err(|error| error.to_string())
     }
 
     /// Refuse an assertion-issuer map with too many clients, an oversized
@@ -696,53 +461,22 @@ impl RuntimeConfig {
     /// repeated issuer, or a client the deployment does not admit.
     fn validate_assertion_issuers(&self) -> Result<(), RuntimeConfigError> {
         let oidc = &self.authentication.oidc;
-        if oidc.assertion_issuers.len() > MAXIMUM_ASSERTION_ISSUER_CLIENTS {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
-        for (client, issuers) in &oidc.assertion_issuers {
-            if client.is_empty()
-                || client.len() > MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES
-                || issuers.is_empty()
-                || issuers.len() > MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT
-                || !oidc.allowed_clients.contains(client)
-            {
+        for (client, issuers) in &oidc.clients.assertion_issuers {
+            if issuers.is_empty() || !oidc.clients.allowed_clients.contains(client) {
                 return Err(RuntimeConfigError::InvalidOidc);
-            }
-            let mut seen = BTreeSet::new();
-            for issuer in issuers {
-                if issuer.is_empty()
-                    || issuer.len() > MAXIMUM_ASSERTION_ISSUER_BYTES
-                    || !seen.insert(issuer)
-                {
-                    return Err(RuntimeConfigError::InvalidOidc);
-                }
             }
         }
         Ok(())
     }
 
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
-        let mut references = vec![
-            ("database.runtimeUrlRef", &self.database.runtime_url_ref),
-            ("database.migrationUrlRef", &self.database.migration_url_ref),
-            ("audit.hashKeyRef", &self.audit.hash_key_ref),
-        ];
-        if let Some(reference) = &self.database.trusted_root_certificate_ref {
-            references.push(("database.trustedRootCertificateRef", reference));
-        }
-        if let OidcJwksSource::Static { document_ref } = &self.authentication.oidc.jwks_source {
+        let mut references = self.database.references();
+        references.push(("audit.hashKeyRef", self.audit.key.hash_key_ref.as_str()));
+        if let Some(document_ref) = self.authentication.oidc.provider.jwks_source.document_ref() {
             references.push(("authentication.oidc.jwksSource.documentRef", document_ref));
         }
         for (path, raw) in references {
-            let reference = SecretReference::parse(raw.clone())
-                .map_err(|_| RuntimeConfigError::InvalidSecretReference { path })?;
-            let enabled = match reference.provider() {
-                SecretProvider::File => self.secret_providers.file.is_some(),
-                SecretProvider::Environment => self.secret_providers.environment.is_some(),
-            };
-            if !enabled {
-                return Err(RuntimeConfigError::SecretProviderRequired { path });
-            }
+            self.secret_providers.check_reference(path, raw)?;
         }
         Ok(())
     }
@@ -752,17 +486,20 @@ impl RuntimeConfig {
         &self,
         secrets: &SecretResolver,
     ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
-        let fetcher = match &self.authentication.oidc.jwks_source {
-            OidcJwksSource::Discovery => {
+        let fetcher = match &self.authentication.oidc.provider.jwks_source {
+            OidcJwksSource::Discovery {} => {
                 let discovery = fetch_discovery(&OidcDiscoveryConfig {
-                    issuer: self.authentication.oidc.issuer.clone(),
-                    jwks_uri_override: self.authentication.oidc.jwks_uri.clone(),
+                    issuer: self.authentication.oidc.provider.issuer.clone(),
+                    jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
                 })
                 .await
                 .map_err(|_| RuntimeConfigError::Oidc)?;
                 JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
+            }
+            OidcJwksSource::Uri { uri } => {
+                JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults())
             }
             OidcJwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
@@ -772,7 +509,8 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())?;
+                let jwks = parse_static_jwks(document.expose_secret())
+                    .map_err(|_| RuntimeConfigError::Oidc)?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -788,79 +526,32 @@ impl RuntimeConfig {
     #[must_use]
     pub fn verifier_profile(&self) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.issuer.clone(),
-            vec![self.authentication.oidc.audience.clone()],
+            self.authentication.oidc.provider.issuer.clone(),
+            vec![self.authentication.oidc.provider.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
             access_token_typ_set(MESSAGING_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
-        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone())
+        .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
+        .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
     }
 
     /// Whether this deployment declared any token-exchange authority.
     #[must_use]
     pub fn binds_assertion_issuers(&self) -> bool {
-        !self.authentication.oidc.assertion_issuers.is_empty()
+        !self
+            .authentication
+            .oidc
+            .clients
+            .assertion_issuers
+            .is_empty()
     }
 
     /// Build the secret resolver from the providers this document enables.
     pub fn secret_resolver(&self) -> Result<SecretResolver, RuntimeConfigError> {
-        let mut providers = Vec::new();
-        if self.secret_providers.environment.is_some() {
-            providers.push(SecretProvider::Environment);
-        }
-        if self.secret_providers.file.is_some() {
-            providers.push(SecretProvider::File);
-        }
-        let root = self
-            .secret_providers
-            .file
-            .as_ref()
-            .map_or_else(|| PathBuf::from("/"), |file| file.root.clone());
-        SecretResolver::new(providers, root).map_err(|_| RuntimeConfigError::InvalidSecretProviders)
-    }
-}
-
-fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::io::Read as _;
-    let file = std::fs::File::open(path)?;
-    let mut bytes = Vec::new();
-    file.take(MAXIMUM_DOCUMENT_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAXIMUM_DOCUMENT_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "the document exceeds one mebibyte",
-        ));
-    }
-    Ok(bytes)
-}
-
-fn valid_listener(
-    address: IpAddr,
-    exposure: ListenerNetworkExposure,
-    tls_termination: TlsTermination,
-) -> bool {
-    if address.is_multicast() {
-        return false;
-    }
-    if tls_termination == TlsTermination::DevelopmentLoopback {
-        return exposure == ListenerNetworkExposure::PrivateAddress && address.is_loopback();
-    }
-    match (address, exposure) {
-        (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {
-            address.is_loopback() || address.is_private()
-        }
-        (IpAddr::V6(address), ListenerNetworkExposure::PrivateAddress) => {
-            address.is_loopback() || is_unique_local(address)
-        }
-        (IpAddr::V4(address), ListenerNetworkExposure::ContainerPrivate) => {
-            address.is_unspecified() || address.is_loopback() || address.is_private()
-        }
-        (IpAddr::V6(address), ListenerNetworkExposure::ContainerPrivate) => {
-            address.is_unspecified() || address.is_loopback() || is_unique_local(address)
-        }
+        self.secret_providers
+            .resolver()
+            .map_err(|_| RuntimeConfigError::InvalidSecretProviders)
     }
 }
 
@@ -887,26 +578,6 @@ fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
 
 fn is_unique_local(address: Ipv6Addr) -> bool {
     address.segments()[0] & 0xfe00 == 0xfc00
-}
-
-fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
-    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| RuntimeConfigError::Oidc)?;
-    let mut kids = BTreeSet::new();
-    if jwks.keys.is_empty()
-        || jwks.keys.iter().any(|key| {
-            !matches!(
-                key.algorithm,
-                AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
-            ) || key
-                .common
-                .key_id
-                .as_ref()
-                .is_none_or(|kid| kid.is_empty() || !kids.insert(kid.clone()))
-        })
-    {
-        return Err(RuntimeConfigError::Oidc);
-    }
-    Ok(jwks)
 }
 
 /// Name where a YAML document was refused and why. A refusal serde never
@@ -982,33 +653,18 @@ fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
 
 #[derive(Debug, Error)]
 pub enum RuntimeConfigError {
-    #[error("the Messaging runtime configuration could not be read")]
-    Read(#[source] std::io::Error),
-    #[error("the Messaging runtime configuration is not valid at {path}: {cause}")]
-    Parse { path: String, cause: String },
-    #[error("the environment expression at {path} is refused: {reason}")]
-    Environment { path: String, reason: String },
-    #[error("unsupported Messaging runtime apiVersion; expected {MESSAGING_RUNTIME_API_VERSION}")]
-    InvalidApiVersion,
-    #[error("unsupported Messaging runtime kind; expected {MESSAGING_RUNTIME_KIND}")]
-    InvalidKind,
+    #[error(transparent)]
+    Shared(#[from] registry_platform_config::RuntimeConfigError),
+    #[error(transparent)]
+    Block(#[from] ConfigBlockError),
+    #[error("audit destination is invalid: {0}")]
+    InvalidAuditDestination(#[source] AuditDestinationError),
+    #[error("the Messaging runtime configuration is not UTF-8 text")]
+    InvalidEncoding,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
-    #[error("the selected Messaging runtime configuration path must be absolute")]
-    RelativeRuntimePath,
-    #[error("package.expectedDigest must be sha256: followed by 64 lowercase hexadecimal digits")]
-    InvalidExpectedDigest,
-    #[error(
-        "package.expectedDigest is {expected}, but the package under package.root has digest \
-         {actual}"
-    )]
-    PackageDigestMismatch { expected: String, actual: String },
     #[error("secretProviders must explicitly enable file, environment, or both")]
     InvalidSecretProviders,
-    #[error("{path} is not a valid secret reference")]
-    InvalidSecretReference { path: &'static str },
-    #[error("{path} uses a secret provider that is not explicitly enabled")]
-    SecretProviderRequired { path: &'static str },
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
     #[error(
@@ -1026,8 +682,6 @@ pub enum RuntimeConfigError {
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
-    #[error("audit.hashKeyRef must be a non-empty secret reference")]
-    InvalidAuditReference,
     #[error(
         "retention is out of bounds: payloadDays 1 to 30, recordDays from payloadDays to 3650, \
          submissionReceiptDays from 1 to recordDays"
@@ -1055,23 +709,17 @@ impl RuntimeConfigError {
     #[must_use]
     pub fn path(&self) -> &str {
         match self {
-            Self::InvalidApiVersion => "apiVersion",
-            Self::InvalidKind => "kind",
+            Self::Shared(error) => error.field(),
+            Self::Block(error) => error.field(),
+            Self::InvalidAuditDestination(_) => "audit",
+            Self::InvalidEncoding => "/",
             Self::RelativeOperatedPath(path) => path,
-            Self::RelativeRuntimePath | Self::Read(_) => "/",
-            Self::Parse { path, .. } => path,
-            Self::Environment { path, .. } => path,
-            Self::InvalidExpectedDigest | Self::PackageDigestMismatch { .. } => {
-                "package.expectedDigest"
-            }
             Self::InvalidSecretProviders => "secretProviders",
-            Self::InvalidSecretReference { path } | Self::SecretProviderRequired { path } => path,
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
             Self::InvalidMetricsListener => "metricsListener.bind",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
-            Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidRetention => "retention",
             Self::Package(error) => error.path(),
             Self::ProfileClientNotAllowed { .. } => "authentication.oidc.allowedClients",
@@ -1123,9 +771,18 @@ pub(crate) mod tests {
             serde_norway::to_string(package).unwrap(),
         )
         .unwrap();
+        let _ = std::fs::remove_file(package_root.join(registry_platform_config::SUM_FILE));
+        let _ = std::fs::remove_file(package_root.join(registry_platform_config::REVISION_FILE));
+        registry_platform_config::write_sum_file(
+            &package_root,
+            None,
+            &crate::package::package_limits(),
+            crate::package::PACKAGE_COMMAND,
+        )
+        .unwrap();
         let path = root.join("runtime.yaml");
         std::fs::write(&path, serde_norway::to_string(runtime).unwrap()).unwrap();
-        path
+        std::fs::canonicalize(path).unwrap()
     }
 
     fn no_environment(_: &str) -> Option<String> {
@@ -1160,12 +817,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_development_configuration_loads_with_its_defaults() {
+    fn shared_runtime_configuration_blocks_use_the_platform_contract() {
         let config = load(base()).unwrap();
         assert_eq!(config.retention, RetentionConfig::default());
         assert_eq!(config.authentication.oidc.scope_claim, "registry_scopes");
         assert!(config.metrics_listener.is_none());
-        assert_eq!(config.listener.bind, DEFAULT_LISTENER_BIND.parse().unwrap());
+        assert_eq!(
+            config.listener.bind.socket_addr(),
+            DEFAULT_LISTENER_BIND.parse().unwrap()
+        );
         assert!(!config.binds_assertion_issuers());
     }
 
@@ -1190,7 +850,7 @@ pub(crate) mod tests {
                 .insert(key.to_owned(), json!("x"));
             let error = load(value).unwrap_err();
             assert!(
-                matches!(error, RuntimeConfigError::Parse { .. }),
+                matches!(error, RuntimeConfigError::Shared(_)),
                 "{key}: {error}"
             );
             assert!(error.to_string().contains(key), "{error}");
@@ -1198,16 +858,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_environment_expression_in_a_credential_field_is_refused() {
+    fn shared_runtime_loader_refuses_environment_expressions_in_secret_references() {
         let mut value = base();
         value["database"]["runtimeUrlRef"] = json!("${DATABASE_URL}");
         let error = load(value).unwrap_err();
-        assert!(
-            matches!(error, RuntimeConfigError::Environment { .. }),
-            "{error}"
-        );
+        assert!(matches!(error, RuntimeConfigError::Shared(_)), "{error}");
         assert_eq!(error.path(), "database.runtimeUrlRef");
-        assert!(error.to_string().contains("credential member"), "{error}");
+        assert!(error.to_string().contains("secret reference"), "{error}");
 
         let mut value = base();
         value["audit"]["hashKeyRef"] = json!("secret:env/${KEY_NAME:-AUDIT}");
@@ -1259,7 +916,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_environment_expression_elsewhere_is_expanded() {
+    fn shared_runtime_loader_substitutes_only_parsed_non_secret_strings() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = runtime_value(root.path());
         runtime["listener"]["bind"] = json!("${MESSAGING_BIND}");
@@ -1269,18 +926,36 @@ pub(crate) mod tests {
             (name == "MESSAGING_BIND").then(|| "127.0.0.1:9107".to_owned())
         })
         .unwrap();
-        assert_eq!(config.listener.bind, "127.0.0.1:9107".parse().unwrap());
-        assert_eq!(config.authentication.oidc.issuer, "https://fallback.test");
-
-        // Expansion runs over the document text, so an unset variable is
-        // refused at the document root rather than at its member.
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        assert!(
-            matches!(error, RuntimeConfigError::Environment { .. }),
-            "{error}"
+        assert_eq!(
+            config.listener.bind.socket_addr(),
+            "127.0.0.1:9107".parse().unwrap()
         );
-        assert_eq!(error.path(), "/");
+        assert_eq!(
+            config.authentication.oidc.provider.issuer,
+            "https://fallback.test"
+        );
+
+        // Substitution runs over the parsed document, so an unset variable
+        // is attributed to its member.
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::Shared(_)), "{error}");
+        assert_eq!(error.path(), "listener.bind");
         assert!(error.to_string().contains("MESSAGING_BIND"), "{error}");
+    }
+
+    #[test]
+    fn removed_jwks_uri_names_jwks_source_replacement() {
+        let mut value = base();
+        value["authentication"]["oidc"]["jwksUri"] =
+            json!("https://identity.example.test/jwks.json");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "authentication.oidc.jwksUri");
+        assert!(matches!(
+            error,
+            RuntimeConfigError::Shared(ref shared)
+                if shared.kind() == SharedRuntimeConfigErrorKind::RemovedKey
+        ));
+        assert!(error.to_string().contains("jwksSource"), "{error}");
     }
 
     #[test]
@@ -1293,7 +968,7 @@ pub(crate) mod tests {
             Some(format!("x\nkind: {MESSAGING_RUNTIME_KIND}"))
         })
         .unwrap_err();
-        assert!(matches!(error, RuntimeConfigError::InvalidKind), "{error}");
+        assert!(matches!(error, RuntimeConfigError::Shared(_)), "{error}");
 
         let mut runtime = runtime_value(root.path());
         runtime["authentication"]["oidc"]["issuer"] = json!("https://${HOST}/");
@@ -1305,12 +980,8 @@ pub(crate) mod tests {
         ] {
             let error = RuntimeConfig::load_with_environment(&path, &|_| Some(value.to_owned()))
                 .unwrap_err();
-            assert!(
-                matches!(error, RuntimeConfigError::Environment { .. }),
-                "{error}"
-            );
-            assert_eq!(error.path(), "/");
-            assert!(error.to_string().contains("HOST"), "{error}");
+            assert!(matches!(error, RuntimeConfigError::Block(_)), "{error}");
+            assert_eq!(error.path(), "authentication.oidc.issuer");
         }
     }
 
@@ -1328,7 +999,10 @@ pub(crate) mod tests {
             value["authentication"]["oidc"]["issuer"] = json!(issuer);
             let error = load(value).unwrap_err();
             assert!(
-                matches!(error, RuntimeConfigError::Environment { .. }),
+                matches!(
+                    error,
+                    RuntimeConfigError::Shared(_) | RuntimeConfigError::Block(_)
+                ),
                 "{issuer}: {error}"
             );
         }
@@ -1414,7 +1088,7 @@ pub(crate) mod tests {
             .remove("allowedClients");
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::Parse { .. }
+            RuntimeConfigError::InvalidOidc
         ));
 
         let mut value = base();
@@ -1440,7 +1114,7 @@ pub(crate) mod tests {
             json!({"case-system": ["https://a.test", "https://a.test"]});
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::InvalidOidc
+            RuntimeConfigError::Block(_)
         ));
         let mut value = base();
         value["authentication"]["oidc"]["assertionIssuers"] =
@@ -1449,12 +1123,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_pinned_package_digest_must_equal_the_digest_of_the_package_read() {
+    fn runtime_package_digest_pin_reports_expected_and_found() {
         let mut value = base();
         value["package"]["expectedDigest"] = json!("sha256:ABC");
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::InvalidExpectedDigest
+            RuntimeConfigError::Block(_)
         ));
 
         let root = tempfile::tempdir().unwrap();
@@ -1471,14 +1145,7 @@ pub(crate) mod tests {
         runtime["package"]["expectedDigest"] = json!(pinned);
         let path = write_project(root.path(), &runtime, &package_value());
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        assert!(
-            matches!(
-                &error,
-                RuntimeConfigError::PackageDigestMismatch { expected, actual }
-                    if *expected == pinned && *actual == digest
-            ),
-            "{error}"
-        );
+        assert!(matches!(&error, RuntimeConfigError::Package(_)), "{error}");
         assert_eq!(error.path(), "package.expectedDigest");
         assert!(error.to_string().contains(&digest), "{error}");
 
@@ -1494,7 +1161,7 @@ pub(crate) mod tests {
         .unwrap();
         assert!(matches!(
             RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err(),
-            RuntimeConfigError::PackageDigestMismatch { .. }
+            RuntimeConfigError::Package(_)
         ));
     }
 
@@ -1518,26 +1185,21 @@ pub(crate) mod tests {
         let mut value = base();
         value["database"]["runtimeUrlRef"] = json!("postgres://user:hunter2@db/messaging");
         let error = load(value).unwrap_err();
-        assert!(matches!(
-            error,
-            RuntimeConfigError::InvalidSecretReference {
-                path: "database.runtimeUrlRef"
-            }
-        ));
+        assert!(matches!(error, RuntimeConfigError::Block(_)));
         assert!(!error.to_string().contains("hunter2"));
 
         let mut value = base();
         value["secretProviders"] = json!({"file": {"root": "/placeholder/secrets"}});
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::SecretProviderRequired { .. }
+            RuntimeConfigError::Block(_)
         ));
 
         let mut value = base();
         value["secretProviders"] = json!({});
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::InvalidSecretProviders
+            RuntimeConfigError::Block(_)
         ));
     }
 
@@ -1549,7 +1211,7 @@ pub(crate) mod tests {
         assert_eq!(error.path(), "audit.path");
         assert!(matches!(
             RuntimeConfig::load_with_environment("runtime.yaml", &no_environment),
-            Err(RuntimeConfigError::RelativeRuntimePath)
+            Err(RuntimeConfigError::Shared(_))
         ));
     }
 
@@ -1719,7 +1381,7 @@ pub(crate) mod tests {
         value["providers"]["sms-gateway"]["region"] = json!("eu");
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::Parse { .. }
+            RuntimeConfigError::Shared(_)
         ));
     }
 
@@ -1752,10 +1414,7 @@ pub(crate) mod tests {
         value["providers"] = provider_connections();
         let error = load(value).unwrap_err();
         assert_eq!(error.path(), "providers.mail-relay");
-        assert!(
-            error.to_string().contains("not explicitly enabled"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("not enabled"), "{error}");
 
         let mut value = base();
         file_secrets_only(&mut value);

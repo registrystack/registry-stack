@@ -287,7 +287,9 @@ jobs:
                 "${operator_tool} ${REHEARSAL_VERSION}"
             done
           fi
-          if (( release_major > 0 || release_minor >= 35 )); then
+          messaging_in_release="$(python3 release/scripts/release_roster.py \
+            messaging-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${messaging_in_release}" == true ]]; then
             test "$("dist/bin/messaging-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
               "messaging ${REHEARSAL_VERSION}"
             test "$("dist/bin/messagingctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
@@ -423,7 +425,6 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
-            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install exact Zig toolchain
@@ -448,7 +449,7 @@ jobs:
           fi
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
-            clients+=(breg casework messaging)
+            clients+=(breg casework)
           fi
           for client in "${clients[@]}"; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
@@ -512,7 +513,7 @@ jobs:
           if [[ "${unified_client}" -eq 1 ]]; then
             client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
             platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-            for client in discovery evidence relay breg casework messaging; do
+            for client in discovery evidence relay breg casework; do
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
             done
@@ -542,7 +543,7 @@ jobs:
               test -z "$(find node_modules/@registrystack/client \
                 -maxdepth 1 -name '*.node' -print -quit)"
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
-                -maxdepth 1 -name '*.node' | wc -l)" -eq 6
+                -maxdepth 1 -name '*.node' | wc -l)" -eq 5
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
                 "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
               node smoke-registry-client-package.js

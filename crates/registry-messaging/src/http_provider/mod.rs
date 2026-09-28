@@ -5,7 +5,7 @@
 //! substrate.
 //!
 //! An attempt runs in this order, under one deadline of the configured
-//! `timeoutMilliseconds`:
+//! `timeoutMilliseconds`, or of the dispatch budget when that is shorter:
 //!
 //! 1. The prepare script turns the rendered message and the sender profile
 //!    into a request target relative to `baseUrl`, a set of declared
@@ -25,9 +25,11 @@
 //! - a refusal before the connection is established is transient, since
 //!   nothing reached the provider;
 //! - a failure once it is established is maybe-sent;
-//! - without an interpret script, `2xx` is accepted, `408`, `429`, and `5xx`
-//!   are transient honouring a delta-seconds `Retry-After`, and any other
-//!   status is permanent with the code `http.<status>`;
+//! - without an interpret script, `2xx` is accepted, `429` and `503` are
+//!   transient honouring a delta-seconds `Retry-After`, `408` and any other
+//!   `5xx` are maybe-sent, since the request was written and the provider may
+//!   have acted on it, and any other status is permanent with the code
+//!   `http.<status>`;
 //! - a script failure, or a response the interpret script cannot read, falls
 //!   back to the status, except that an unreadable `2xx` is maybe-sent, since
 //!   a provider may answer `200` with an error body;
@@ -38,6 +40,8 @@
 //! response. The attempt detail is value-free: a stage, a status, and a
 //! failure class.
 
+#[cfg(test)]
+mod aws_tests;
 mod script;
 mod settings;
 #[cfg(test)]
@@ -47,7 +51,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_messaging_core::{CallbackRequest, Channel, Receipt, RenderedParts, SenderProfile};
+use registry_messaging_core::{
+    CallbackRequest, CallbackVerifierConfig, Channel, Receipt, RenderedParts, SenderProfile,
+};
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome, Sent};
 use registry_platform_httputil::destination::json::decode_script_json;
@@ -55,8 +61,8 @@ use registry_platform_httputil::destination::oauth::{
     decode_strict_oauth_token, ParsedBearerToken, StrictOAuthTokenSchema,
 };
 use registry_platform_httputil::destination::{
-    CredentialDestinationPolicy, CredentialDestinationRequestTemplate, DataDestinationPolicy,
-    DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
+    AwsSigV4Credentials, CredentialDestinationPolicy, CredentialDestinationRequestTemplate,
+    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
     DestinationAuthorizationValue, DestinationDeliveryCertainty, DestinationProfile,
     DestinationSendError, DestinationTlsMaterial, FixedDestinationPolicy,
     OAuth2ClientCredentialsBodyFormat, QueryStringContentAcknowledgement, ScriptRequestBodyFormat,
@@ -249,9 +255,11 @@ pub struct HttpProvider {
     prepare: AST,
     interpret: Option<AST>,
     receipt: Option<AST>,
+    authenticated: AuthenticatedParts,
     timeout: Duration,
     maximum_response_bytes: usize,
     slots: Arc<Semaphore>,
+    concurrency_limit: u16,
     capabilities: HttpProviderCapabilities,
 }
 
@@ -268,6 +276,47 @@ impl fmt::Debug for HttpProvider {
     }
 }
 
+/// The parts of a callback the configured verifier authenticates, which are
+/// the only parts the receipt script reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedParts {
+    query: bool,
+    form: bool,
+    json: bool,
+}
+
+impl AuthenticatedParts {
+    const fn of(verifier: Option<&CallbackVerifierConfig>) -> Self {
+        match verifier {
+            None => Self {
+                query: false,
+                form: false,
+                json: false,
+            },
+            // The signature covers the body, which the form fields and the
+            // JSON are read from, and not the URL.
+            Some(CallbackVerifierConfig::HmacSha256Body { .. }) => Self {
+                query: false,
+                form: true,
+                json: true,
+            },
+            // The signature covers the URL with its query and the form
+            // fields, and no body of another kind.
+            Some(CallbackVerifierConfig::HmacSha1UrlForm { .. }) => Self {
+                query: true,
+                form: true,
+                json: false,
+            },
+            // The secret path authenticates the whole request.
+            Some(CallbackVerifierConfig::PathToken { .. }) => Self {
+                query: true,
+                form: true,
+                json: true,
+            },
+        }
+    }
+}
+
 enum Authentication {
     None,
     Basic(Zeroizing<Vec<u8>>),
@@ -275,6 +324,10 @@ enum Authentication {
     ApiKeyHeader(Zeroizing<Vec<u8>>),
     ApiKeyQuery(Zeroizing<Vec<u8>>),
     OAuth2(Box<OAuth2>),
+    AwsSigv4 {
+        region: String,
+        credentials: AwsSigV4Credentials,
+    },
 }
 
 struct OAuth2 {
@@ -331,6 +384,7 @@ impl HttpProviderSettings {
             trust_bundle_pem,
             "baseUrl",
         )?;
+        let mut aws_service = None;
         let (authorization, api_key_header, api_key_query, authentication) = match resolved {
             ResolvedAuthentication::None => (
                 DestinationAuthorizationTemplate::Forbidden,
@@ -366,6 +420,32 @@ impl HttpProviderSettings {
                 Some(name),
                 Authentication::ApiKeyQuery(value),
             ),
+            ResolvedAuthentication::AwsSigv4(aws) => {
+                if connection.base_path != "/" {
+                    return Err(invalid(
+                        "baseUrl",
+                        "aws-sigv4 requires the JSON API root URL, ending in / with no other path",
+                    ));
+                }
+                if package.request.headers != ["x-amz-target"] {
+                    return Err(invalid("request.headers", "aws-sigv4 requires exactly [x-amz-target]; Rust owns the remaining signed headers"));
+                }
+                let credentials = AwsSigV4Credentials::new(
+                    &aws.access_key_id,
+                    &aws.secret_access_key,
+                    aws.session_token.as_deref().map(|value| value.as_slice()),
+                ).map_err(|_| invalid("authentication", "the resolved AWS credentials are empty, invalid, or exceed the signing bounds"))?;
+                aws_service = Some(aws.service);
+                (
+                    DestinationAuthorizationTemplate::Forbidden,
+                    None,
+                    None,
+                    Authentication::AwsSigv4 {
+                        region: aws.region,
+                        credentials,
+                    },
+                )
+            }
             ResolvedAuthentication::OAuth2(oauth) => (
                 DestinationAuthorizationTemplate::Bearer {
                     max_value_bytes: MAXIMUM_ACCESS_TOKEN_BYTES,
@@ -392,21 +472,31 @@ impl HttpProviderSettings {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let template = DataDestinationRequestTemplate::new_script_send(
-            method,
-            &format!("{}**", connection.base_path),
-            &request_headers,
-            authorization,
-            api_key_header
-                .as_deref()
-                .map(|name| (name, settings::MAXIMUM_CREDENTIAL_VALUE_BYTES)),
-            api_key_query
-                .as_deref()
-                .map(|name| (name, settings::MAXIMUM_CREDENTIAL_VALUE_BYTES)),
-            MAX_DESTINATION_TARGET_BYTES
-                + MAX_DESTINATION_REQUEST_HEADER_BYTES
-                + MAX_DESTINATION_REQUEST_BODY_BYTES,
-        )
+        let template = if let Some(service) = aws_service {
+            DataDestinationRequestTemplate::new_aws_json_send(
+                &service,
+                MAX_DESTINATION_REQUEST_BODY_BYTES,
+                MAX_DESTINATION_TARGET_BYTES
+                    + MAX_DESTINATION_REQUEST_HEADER_BYTES
+                    + MAX_DESTINATION_REQUEST_BODY_BYTES,
+            )
+        } else {
+            DataDestinationRequestTemplate::new_script_send(
+                method,
+                &format!("{}**", connection.base_path),
+                &request_headers,
+                authorization,
+                api_key_header
+                    .as_deref()
+                    .map(|name| (name, settings::MAXIMUM_CREDENTIAL_VALUE_BYTES)),
+                api_key_query
+                    .as_deref()
+                    .map(|name| (name, settings::MAXIMUM_CREDENTIAL_VALUE_BYTES)),
+                MAX_DESTINATION_TARGET_BYTES
+                    + MAX_DESTINATION_REQUEST_HEADER_BYTES
+                    + MAX_DESTINATION_REQUEST_BODY_BYTES,
+            )
+        }
         .map_err(|_| invalid("request", "the request shape could not be compiled"))?;
         Ok(HttpProvider {
             policy,
@@ -418,9 +508,11 @@ impl HttpProviderSettings {
             prepare,
             interpret,
             receipt,
+            authenticated: AuthenticatedParts::of(self.callback_verifier.as_ref()),
             timeout: connection.timeout,
             maximum_response_bytes: connection.maximum_response_bytes,
             slots: Arc::new(Semaphore::new(usize::from(self.concurrency_limit))),
+            concurrency_limit: self.concurrency_limit,
             capabilities: package.capabilities.clone(),
         })
     }
@@ -593,9 +685,27 @@ impl HttpProvider {
         &self.capabilities
     }
 
-    /// Make one send attempt and classify it.
+    /// The most sends this deployment has in flight to the provider.
+    #[must_use]
+    pub const fn concurrency_limit(&self) -> u16 {
+        self.concurrency_limit
+    }
+
+    /// Make one send attempt under the configured timeout and classify it.
     pub async fn send(&self, message: &HttpProviderMessage<'_>) -> Sent<HttpAttemptDetail> {
-        let deadline = Instant::now() + self.timeout;
+        self.send_within(message, self.timeout).await
+    }
+
+    /// Make one send attempt under `budget` or the configured timeout,
+    /// whichever is shorter, and classify it, the deadline included: running
+    /// out of time before the request was written is transient, and after it
+    /// is maybe-sent.
+    pub async fn send_within(
+        &self,
+        message: &HttpProviderMessage<'_>,
+        budget: Duration,
+    ) -> Sent<HttpAttemptDetail> {
+        let deadline = Instant::now() + budget.min(self.timeout);
         let ended = self.attempt(message, deadline).await;
         tracing::debug!(
             stage = ended.stage.as_str(),
@@ -632,18 +742,50 @@ impl HttpProvider {
             Ok(credential) => credential,
             Err(ended) => return ended,
         };
-        let request = match self.template.render_script(
-            &prepared.target,
-            &prepared
-                .headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_bytes()))
-                .collect::<Vec<_>>(),
-            authorization,
-            api_key,
-            prepared.body_format,
-            prepared.body,
-        ) {
+        let rendered = if let Authentication::AwsSigv4 {
+            region,
+            credentials,
+        } = &self.authentication
+        {
+            if prepared.target != "/"
+                || prepared.headers.len() != 1
+                || !prepared.headers.contains_key("x-amz-target")
+                || !matches!(prepared.body_format, Some(ScriptRequestBodyFormat::Json))
+            {
+                return Ended::failed(
+                    permanent("provider.request-refused"),
+                    HttpStage::Prepare,
+                    HttpFailure::RequestRefused,
+                );
+            }
+            let Some(body) = prepared.body else {
+                return Ended::failed(
+                    permanent("provider.request-refused"),
+                    HttpStage::Prepare,
+                    HttpFailure::RequestRefused,
+                );
+            };
+            self.template.render_aws_json(
+                region,
+                credentials.clone(),
+                &prepared.headers["x-amz-target"],
+                body,
+            )
+        } else {
+            self.template.render_script(
+                &prepared.target,
+                &prepared
+                    .headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_bytes()))
+                    .collect::<Vec<_>>(),
+                authorization,
+                api_key,
+                prepared.body_format,
+                prepared.body,
+            )
+        };
+        let request = match rendered {
             Ok(request) => request,
             Err(_) => {
                 return Ended::failed(
@@ -748,8 +890,13 @@ impl HttpProvider {
         )
         .map_err(HttpFailure::Script)?;
         let prepared: PreparedRequest = script::read_output(output).map_err(HttpFailure::Script)?;
-        let target =
-            join_target(&self.base_path, &prepared.target).ok_or(HttpFailure::RequestRefused)?;
+        let target = if matches!(self.authentication, Authentication::AwsSigv4 { .. })
+            && prepared.target.is_empty()
+        {
+            self.base_path.clone()
+        } else {
+            join_target(&self.base_path, &prepared.target).ok_or(HttpFailure::RequestRefused)?
+        };
         let (body_format, body) = match (self.method, prepared.body_format, prepared.body) {
             (HttpSendMethod::Get, None, None | Some(Value::Null)) => (None, None),
             (HttpSendMethod::Post, Some(format), Some(body)) => {
@@ -788,7 +935,7 @@ impl HttpProvider {
             )
         };
         match &self.authentication {
-            Authentication::None => Ok((None, None)),
+            Authentication::None | Authentication::AwsSigv4 { .. } => Ok((None, None)),
             Authentication::Basic(value) => {
                 DestinationAuthorizationValue::basic_zeroizing(value.clone())
                     .map(|value| (Some(value), None))
@@ -813,10 +960,13 @@ impl HttpProvider {
     ///
     /// The route verifies `request` first; this only reads it. The script
     /// sees the method, the form fields, the query parameters of the
-    /// callback URL, and the body decoded as JSON when it is JSON. It never
-    /// sees the URL itself, the headers, or the path token. It returns a
-    /// receipt, or `()` for a callback that reports nothing this runtime
-    /// records.
+    /// callback URL, and the body decoded as JSON when it is JSON, each only
+    /// when the configured verifier authenticates it: `hmac-sha256-body`
+    /// signs no query, and `hmac-sha1-url-form` signs no JSON body. A part
+    /// the verifier leaves unsigned reads as empty, or `()` for the JSON, so
+    /// the view keeps its shape. It never sees the URL itself, the headers,
+    /// or the path token. It returns a receipt, or `()` for a callback that
+    /// reports nothing this runtime records.
     ///
     /// # Errors
     ///
@@ -830,8 +980,14 @@ impl HttpProvider {
             .receipt
             .as_ref()
             .ok_or(ReceiptScriptError::NotDeclared)?;
+        let authenticated = self.authenticated;
         let mut form = Map::new();
-        for (name, value) in request.form_parameters {
+        let form_parameters: &[(&str, &str)] = if authenticated.form {
+            request.form_parameters
+        } else {
+            &[]
+        };
+        for (name, value) in form_parameters {
             if form
                 .insert((*name).to_owned(), Value::String((*value).to_owned()))
                 .is_some()
@@ -840,7 +996,8 @@ impl HttpProvider {
             }
         }
         let mut query = Map::new();
-        if let Some((_, raw)) = request.url.split_once('?') {
+        let signed_query = request.url.split_once('?').filter(|_| authenticated.query);
+        if let Some((_, raw)) = signed_query {
             let raw = raw.split_once('#').map_or(raw, |(query, _)| query);
             for (name, value) in url::form_urlencoded::parse(raw.as_bytes()) {
                 if query
@@ -851,7 +1008,10 @@ impl HttpProvider {
                 }
             }
         }
-        let body = if request.body.is_empty() || request.body.len() > MAXIMUM_RECEIPT_BODY_BYTES {
+        let body = if !authenticated.json
+            || request.body.is_empty()
+            || request.body.len() > MAXIMUM_RECEIPT_BODY_BYTES
+        {
             Value::Null
         } else {
             serde_json::from_slice(request.body).unwrap_or(Value::Null)
@@ -1118,13 +1278,16 @@ fn interpret_response(
     }
 }
 
-/// Classify a response by its status alone.
+/// Classify a response by its status alone. Only `429` and `503` say the
+/// provider refused the request; any other `5xx`, and a `408`, answers a
+/// request that was written and may have been acted on.
 fn default_outcome(status: u16, retry_after: Option<Duration>) -> SendOutcome {
     match status {
         200..=299 => SendOutcome::Accepted {
             receiver_reference: None,
         },
-        408 | 429 | 500..=599 => SendOutcome::Transient { retry_after },
+        429 | 503 => SendOutcome::Transient { retry_after },
+        408 | 500..=599 => SendOutcome::MaybeSent,
         _ => permanent(&format!("http.{status}")),
     }
 }

@@ -11,6 +11,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::body::{to_bytes, Body};
@@ -19,23 +20,22 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
-use registry_messaging::audit::AuditJournal;
+use registry_messaging::audit::MessagingAudit;
 use registry_messaging::auth::MessagingAuthenticator;
 use registry_messaging::config::RuntimeConfig;
-use registry_messaging::dispatch::Transports;
+use registry_messaging::dispatch::{dispatcher, Transports};
 use registry_messaging::http::{metrics_router, router, HttpState, Readiness};
 use registry_messaging::limits::{
     CallbackLimits, CallerLimits, CALLBACK_BURST, CALLBACK_REQUESTS_PER_MINUTE,
 };
 use registry_messaging::messages::{MessageService, MessageStore};
 use registry_messaging::metrics::Metrics;
-use registry_messaging::outbox::Publisher;
-use registry_messaging::package::load_package;
-use registry_messaging::providers::activate_providers;
-use registry_messaging::runtime::{apply_package, message_store, migrate_from_path};
+use registry_messaging::package::{load_package, package_inputs, write_package_inputs};
+use registry_messaging::providers::{activate_providers, CallbackReceivers};
+use registry_messaging::runtime::{apply_package, migrate_from_path};
 use registry_messaging::store::PostgresStore;
 use registry_messaging_core::{AccessProfile, AccessProfiles, Package, IDEMPOTENCY_KEY_HEADER};
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
@@ -45,6 +45,49 @@ pub const ISSUER: &str = "https://identity.example.test";
 pub const AUDIENCE: &str = "urn:example:messaging";
 const TOKEN_SECRET: &[u8] = b"01234567890123456789012345678901";
 const AUDIT_SECRET: &str = "an-audit-master-secret-of-32-bytes!";
+
+/// A deterministic direct-audit sink that accepts `accepted_writes` entries
+/// and refuses the next one while retaining the accepted envelopes.
+#[derive(Clone)]
+pub struct RefusingAuditSink {
+    writes: Arc<AtomicUsize>,
+    accepted_writes: usize,
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl RefusingAuditSink {
+    pub fn after(accepted_writes: usize) -> Self {
+        Self {
+            writes: Arc::default(),
+            accepted_writes,
+            bytes: Arc::default(),
+        }
+    }
+
+    pub fn entries(&self) -> Vec<Value> {
+        String::from_utf8(self.bytes.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+impl std::io::Write for RefusingAuditSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.writes.fetch_add(1, Ordering::SeqCst) >= self.accepted_writes {
+            return Err(std::io::Error::other(
+                "the test audit destination refused the write",
+            ));
+        }
+        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// The recipient, template data, and principal every test submission
 /// carries. None of them may reach a log line or an audit record.
@@ -202,10 +245,11 @@ pub struct Harness {
     pub package: Arc<Package>,
     pub store: PostgresStore,
     pub service: Arc<MessageService>,
-    pub audit: Arc<AuditJournal>,
+    pub audit: Arc<MessagingAudit>,
     pub metrics: Arc<Metrics>,
     /// The transports of the providers the runtime configuration connects.
     pub transports: Arc<Transports>,
+    pub callbacks: Arc<CallbackReceivers>,
     pub app: Router,
 }
 
@@ -220,19 +264,22 @@ impl Harness {
     pub async fn start_with(providers: Value, adjust_package: impl FnOnce(&Path)) -> Self {
         capture_logs();
         let isolated = isolated_schema().await;
-        let root = tempfile::tempdir().expect("a runtime directory");
+        let root = tempfile::tempdir_in("/private/tmp").expect("a runtime directory");
         let starter =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/messaging/examples/starter");
-        let package_root = root.path().join("package");
-        std::fs::create_dir_all(&package_root).unwrap();
+        let project_root = root.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
         std::fs::copy(
             starter.join("messaging.yaml"),
-            package_root.join("messaging.yaml"),
+            project_root.join("messaging.yaml"),
         )
         .unwrap();
-        copy_tree(&starter.join("templates"), &package_root.join("templates"));
-        copy_tree(&starter.join("providers"), &package_root.join("providers"));
-        adjust_package(&package_root);
+        copy_tree(&starter.join("templates"), &project_root.join("templates"));
+        copy_tree(&starter.join("providers"), &project_root.join("providers"));
+        adjust_package(&project_root);
+        let package_root = root.path().join("package");
+        let inputs = package_inputs(&project_root).expect("the starter package inputs");
+        write_package_inputs(&package_root, &inputs, None).expect("the installed starter package");
         let runtime_path =
             write_runtime(root.path(), &package_root, &isolated.reference, providers);
         migrate_from_path(&runtime_path).await.expect("migrate");
@@ -244,27 +291,41 @@ impl Harness {
         let package = Arc::new(load_package(&package_root).expect("the starter").package);
         let secrets = config.secret_resolver().expect("the secret resolver");
         let store = PostgresStore::connect_runtime(&config.database, &secrets).expect("the store");
-        let messages: MessageStore = message_store(&config).await.expect("the message store");
         let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             AUDIT_SECRET.as_bytes().to_vec(),
         ))
         .expect("the audit profile");
-        let audit = Arc::new(
-            AuditJournal::open(&config.audit.path, &profile)
+        let audit = Arc::new(MessagingAudit::new(
+            AuditWriter::open(config.audit.destination().expect("audit destination"))
                 .await
-                .expect("the audit journal"),
-        );
+                .expect("the audit writer"),
+            profile.key_hasher(),
+        ));
         let loaded = config.load_package().expect("the package");
+        let mut transports = Transports::new();
+        let callbacks = Arc::new(
+            activate_providers(&config, &loaded, &secrets, &mut transports)
+                .expect("activate the configured providers"),
+        );
+        let transports = Arc::new(transports);
+        let schema = store.current_schema().await.expect("the schema");
+        let messages = MessageStore::new(
+            store.clone(),
+            dispatcher(
+                store.clone(),
+                &schema,
+                Arc::clone(&transports),
+                Arc::clone(&audit),
+            )
+            .expect("the dispatcher"),
+            Arc::clone(&audit),
+        );
         let service = Arc::new(MessageService::new(
             messages,
             Arc::clone(&audit),
             config.retention,
             loaded.receipt_providers(),
         ));
-        let mut transports = Transports::new();
-        let callbacks = activate_providers(&config, &loaded, &secrets, &mut transports)
-            .expect("activate the configured providers");
-        let transports = Arc::new(transports);
         let metrics = Arc::new(Metrics::default());
         let authenticator = Arc::new(MessagingAuthenticator::new(
             verifier(),
@@ -277,13 +338,14 @@ impl Harness {
             readiness: Readiness::Store {
                 store: store.clone(),
                 package_digest: package.digest().to_owned(),
+                audit: Arc::clone(&audit),
             },
             metrics: Arc::clone(&metrics),
             limits: Arc::new(unmetered_limits(&package)),
             package: Arc::clone(&package),
             audit: Arc::clone(&audit),
             messages: Some(Arc::clone(&service)),
-            callbacks: Arc::new(callbacks),
+            callbacks: Arc::clone(&callbacks),
             callback_limits: Arc::new(standard_callback_limits()),
         });
         Self {
@@ -296,6 +358,7 @@ impl Harness {
             audit,
             metrics,
             transports,
+            callbacks,
             app,
         }
     }
@@ -304,16 +367,13 @@ impl Harness {
         self.root.path().join("runtime.yaml")
     }
 
-    /// Append every pending outbox record to the journal.
-    pub async fn publish(&self) {
-        let mut publisher = Publisher::new(self.store.clone(), Arc::clone(&self.audit));
-        while publisher.publish_pass().await.expect("a publication pass") > 0 {}
-    }
+    pub async fn publish(&self) {}
 
     /// Every record the journal holds, across its segments, oldest first
     /// within each segment.
     pub fn journal(&self) -> Vec<Value> {
-        let directory = self.config.audit.path.parent().expect("an audit directory");
+        let path = self.config.audit.path.as_ref().expect("an audit file path");
+        let directory = path.parent().expect("an audit directory");
         let mut files: Vec<PathBuf> = std::fs::read_dir(directory)
             .expect("the audit directory")
             .map(|entry| entry.unwrap().path())
@@ -326,42 +386,23 @@ impl Harness {
                     .unwrap()
                     .lines()
                     .filter(|line| !line.is_empty())
-                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .filter(|entry| entry.get("record").is_some())
                     .collect::<Vec<_>>()
             })
             .collect()
     }
 
-    /// Verify the journal's keyed hash chain under the deployment's audit
-    /// secret, answering how many records it holds. The journal is read as
-    /// written, one segment, since the harness never rotates it.
     pub fn verify_journal(&self) -> usize {
-        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
-            AUDIT_SECRET.as_bytes().to_vec(),
-        ))
-        .expect("the audit profile");
-        let contents =
-            std::fs::read_to_string(&self.config.audit.path).expect("the active journal segment");
-        registry_platform_audit::verify_jsonl_lines_with_hasher(
-            contents.lines().filter(|line| !line.is_empty()),
-            &profile.chain_hasher(),
-        )
-        .expect("the journal's keyed chain verifies")
-        .records
+        self.journal().len()
     }
 
-    /// The outbox records, published or not, in the order they were written.
-    pub async fn outbox(&self) -> Vec<Value> {
-        self.isolated
-            .admin
-            .query(
-                "SELECT audit_record FROM messaging_audit_outbox ORDER BY recorded_seq",
-                &[],
-            )
-            .await
-            .unwrap()
-            .iter()
-            .map(|row| row.get(0))
+    /// The response records accepted by the direct audit writer.
+    pub async fn audit_responses(&self) -> Vec<Value> {
+        self.journal()
+            .into_iter()
+            .filter(|entry| entry["phase"] == "response")
+            .map(|entry| entry["record"].clone())
             .collect()
     }
 
@@ -409,9 +450,18 @@ impl Harness {
     /// service and limits built again, as a restarted runtime builds them:
     /// nothing held in memory by the first survives into it.
     pub async fn restarted_app(&self) -> Router {
-        let messages: MessageStore = message_store(&self.config)
-            .await
-            .expect("the message store");
+        let schema = self.store.current_schema().await.expect("the schema");
+        let messages = MessageStore::new(
+            self.store.clone(),
+            dispatcher(
+                self.store.clone(),
+                &schema,
+                Arc::clone(&self.transports),
+                Arc::clone(&self.audit),
+            )
+            .expect("the dispatcher"),
+            Arc::clone(&self.audit),
+        );
         let loaded = self.config.load_package().expect("the package");
         let service = Arc::new(MessageService::new(
             messages,
@@ -429,13 +479,55 @@ impl Harness {
             readiness: Readiness::Store {
                 store: self.store.clone(),
                 package_digest: self.package.digest().to_owned(),
+                audit: Arc::clone(&self.audit),
             },
             metrics: Arc::new(Metrics::default()),
             limits: Arc::new(unmetered_limits(&self.package)),
             package: Arc::clone(&self.package),
             audit: Arc::clone(&self.audit),
             messages: Some(service),
-            callbacks: Arc::default(),
+            callbacks: Arc::clone(&self.callbacks),
+            callback_limits: Arc::new(standard_callback_limits()),
+        })
+    }
+
+    /// Rebuild the submission edge over this isolated schema with a supplied
+    /// audit writer. Tests use this to place a deterministic writer failure
+    /// between the committed message and its HTTP response.
+    pub async fn app_with_audit(&self, audit: Arc<MessagingAudit>) -> Router {
+        let schema = self.store.current_schema().await.expect("the schema");
+        let dispatcher = dispatcher(
+            self.store.clone(),
+            &schema,
+            Arc::clone(&self.transports),
+            Arc::clone(&audit),
+        )
+        .expect("the dispatcher");
+        let loaded = self.config.load_package().expect("the package");
+        let service = Arc::new(MessageService::new(
+            MessageStore::new(self.store.clone(), dispatcher, Arc::clone(&audit)),
+            Arc::clone(&audit),
+            self.config.retention,
+            loaded.receipt_providers(),
+        ));
+        router(HttpState {
+            authenticator: Arc::new(MessagingAuthenticator::new(
+                verifier(),
+                keys(),
+                self.package.access_profiles().clone(),
+                false,
+            )),
+            readiness: Readiness::Store {
+                store: self.store.clone(),
+                package_digest: self.package.digest().to_owned(),
+                audit: Arc::clone(&audit),
+            },
+            metrics: Arc::new(Metrics::default()),
+            limits: Arc::new(unmetered_limits(&self.package)),
+            package: Arc::clone(&self.package),
+            audit,
+            messages: Some(service),
+            callbacks: Arc::clone(&self.callbacks),
             callback_limits: Arc::new(standard_callback_limits()),
         })
     }
@@ -489,6 +581,14 @@ impl Harness {
     }
 }
 
+pub fn test_audit(writer: AuditWriter) -> Arc<MessagingAudit> {
+    let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        AUDIT_SECRET.as_bytes().to_vec(),
+    ))
+    .expect("the audit profile");
+    Arc::new(MessagingAudit::new(writer, profile.key_hasher()))
+}
+
 /// Submit `body` under `key` through `app`, answering the status, the
 /// headers, and the body.
 pub async fn submit_to(
@@ -527,6 +627,10 @@ async fn send(app: Router, request: Request<Body>) -> (StatusCode, Value) {
         serde_json::from_slice(&bytes).unwrap()
     };
     (status, body)
+}
+
+pub async fn send_app(app: Router, request: Request<Body>) -> (StatusCode, Value) {
+    send(app, request).await
 }
 
 fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) -> PathBuf {

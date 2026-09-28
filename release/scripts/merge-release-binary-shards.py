@@ -73,7 +73,7 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
             scheduling.append(f"schedulingctl-{tag}-linux-amd64")
             image_bins.append(("schedulingctl", scheduling[1]))
     messaging: list[str] = []
-    if parsed >= (0, 35, 0):
+    if release_roster.messaging_in_release(parsed):
         messaging = [
             f"messaging-{tag}-linux-amd64",
             f"messagingctl-{tag}-linux-amd64",
@@ -256,7 +256,9 @@ def merge(
         )
     if messaging is None:
         if shard_rosters["messaging"]:
-            raise ShardError("messaging shard is required from version 0.35.0")
+            raise ShardError(
+                "messaging shard is required for a release that ships Messaging"
+            )
         inputs["messaging"] = {}
     else:
         inputs["messaging"] = validate_shard(

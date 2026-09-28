@@ -164,9 +164,7 @@ manifest="registry-stack-${tag}-release-manifest.json"
 jq -e --arg tag "${tag}" '
   ($tag | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") |
     {major: (.major | tonumber), minor: (.minor | tonumber)}) as $version |
-  (if ($version.major > 0 or $version.minor >= 35)
-   then ["breg", "casework", "discovery", "evidence", "messaging", "relay", "scheduling"]
-   elif $version.minor >= 33
+  (if ($version.major > 0 or $version.minor >= 33)
    then ["breg", "casework", "discovery", "evidence", "relay", "scheduling"]
    elif $version.minor >= 31
    then ["breg", "casework", "discovery", "evidence", "relay"]
@@ -195,8 +193,7 @@ jq -e --arg tag "${tag}" '
 Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
 Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Base
 Registry Engine joins at `v0.26.0`, Registry Casework joins at `v0.30.0`,
-Registry Scheduling joins at `v0.33.0`, and
-Registry Messaging joins at `v0.35.0`. Mint is retired from `v0.31.0`;
+and Registry Scheduling joins at `v0.33.0`. Mint is retired from `v0.31.0`;
 historical releases retain their original roster.
 The citizen MCP gateway `breg-mcp` and the citizen review page `breg-review`,
 the two supporting services beside Base Registry Engine, have not joined a
@@ -204,6 +201,12 @@ release, so no release manifest names their images.
 `BREG_SERVICES_FIRST_RELEASE` in `release/scripts/release_roster.py` decides
 their first release; the pull request that admits them sets the constant and
 adds both names to the roster above.
+Registry Messaging has not joined a release, so no release manifest names a
+`messaging` image. `MESSAGING_FIRST_RELEASE` in
+`release/scripts/release_roster.py` decides its first release; Messaging joins
+a release in the pull request that adopts the shared platform activation crate
+(issue #1731) in place of `messaging migrate`, and that pull request sets the
+constant and adds `messaging` to the roster above.
 The final release tags recorded in the manifest must resolve to the same digests
 as their candidate bindings:
 
@@ -246,9 +249,10 @@ tar -tzf "${evidence}"
 Starting with `v0.21.0`, the archive contains image-specific SPDX and Syft
 reports and Grype reports for `evidence`, `mint`, and `relay`, joined by
 `discovery` from `v0.24.0`, `breg` from `v0.26.0`, and `casework` from
-`v0.30.0`, with `scheduling` from `v0.33.0` and `messaging` from `v0.35.0`.
-No archive contains `breg-mcp` or `breg-review` reports until those services
-join a release. Mint reports are excluded from `v0.31.0` onward; `v0.19.x` and
+`v0.30.0`, with `scheduling` from `v0.33.0`. No archive contains `breg-mcp`
+or `breg-review` reports until those services join a release, and no archive
+contains `messaging` reports until Messaging joins a release. Mint reports
+are excluded from `v0.31.0` onward; `v0.19.x` and
 `v0.20.x` archives contain those reports for `relay`
 only. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names

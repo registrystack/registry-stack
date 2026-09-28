@@ -248,19 +248,27 @@ impl PostgresStore {
         Ok(row.map(|row| row.get(0)))
     }
 
-    /// Record `digest` as the active package. Applying the package the
-    /// ledger already names active records nothing and answers `false`.
+    /// Record `digest` as the active package, under the ledger lock, and
+    /// answer what the ledger named active when the lock was taken.
+    /// Applying the package the ledger already names active records
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerWriteError::Store`] when nothing was recorded, and
+    /// [`LedgerWriteError::Commit`] when the COMMIT failed, so the package
+    /// may have been recorded.
     pub async fn apply_package(
         &self,
         digest: &str,
         runtime_version: &str,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<LedgerWrite, LedgerWriteError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
             .execute("SELECT pg_advisory_xact_lock($1)", &[&LEDGER_LOCK_KEY])
             .await?;
-        let active: Option<String> = transaction
+        let predecessor: Option<String> = transaction
             .query_opt(
                 "SELECT package_digest FROM messaging_package_ledger \
                  ORDER BY sequence DESC LIMIT 1",
@@ -268,9 +276,12 @@ impl PostgresStore {
             )
             .await?
             .map(|row| row.get(0));
-        if active.as_deref() == Some(digest) {
+        if predecessor.as_deref() == Some(digest) {
             transaction.commit().await?;
-            return Ok(false);
+            return Ok(LedgerWrite {
+                recorded: false,
+                predecessor,
+            });
         }
         transaction
             .execute(
@@ -279,8 +290,40 @@ impl PostgresStore {
                 &[&digest, &runtime_version],
             )
             .await?;
-        transaction.commit().await?;
-        Ok(true)
+        transaction
+            .commit()
+            .await
+            .map_err(LedgerWriteError::Commit)?;
+        Ok(LedgerWrite {
+            recorded: true,
+            predecessor,
+        })
+    }
+}
+
+/// What one package ledger write did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LedgerWrite {
+    /// Whether this write recorded the package.
+    pub recorded: bool,
+    /// The digest the ledger named active under the lock, before the write.
+    pub predecessor: Option<String>,
+}
+
+/// Why a package ledger write did not complete.
+#[derive(Debug, Error)]
+pub enum LedgerWriteError {
+    /// The write failed before its COMMIT, so nothing was recorded.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The COMMIT failed, so the package may have been recorded.
+    #[error("the Messaging package ledger commit could not be confirmed: {0}")]
+    Commit(#[source] tokio_postgres::Error),
+}
+
+impl From<tokio_postgres::Error> for LedgerWriteError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Self::Store(StoreError::Query(error))
     }
 }
 

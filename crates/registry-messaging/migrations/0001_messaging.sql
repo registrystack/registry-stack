@@ -2,7 +2,7 @@
 --
 -- The Messaging schema: the package ledger, accepted messages, their
 -- dispatch jobs, their attempts and delivery receipts, the idempotency
--- records of their submissions, and the audit outbox.
+-- records of their submissions, and their bounded retention state.
 
 -- The package ledger: one row for each package a deployment activated, in
 -- activation order. The digest is the package identity the runtime verified;
@@ -300,17 +300,3 @@ CREATE INDEX messaging_idempotency_expiry_idx
 CREATE INDEX messaging_idempotency_message_idx
     ON messaging_idempotency (message_id)
     WHERE message_id IS NOT NULL;
-
--- Audit records written in the transaction whose change they record, and
--- appended to the keyed journal by the runtime's publisher. The sequence
--- orders one publication pass; the chain attests to publication order.
-CREATE TABLE messaging_audit_outbox (
-    event_id uuid PRIMARY KEY,
-    recorded_seq bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
-    audit_record jsonb NOT NULL,
-    published_at timestamptz
-);
-
-CREATE INDEX messaging_audit_outbox_pending_idx
-    ON messaging_audit_outbox (recorded_seq)
-    WHERE published_at IS NULL;

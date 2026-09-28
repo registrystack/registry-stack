@@ -85,11 +85,11 @@ created: tutorial-work/notices
   templates/appointment-reminder/1/sample.json
   templates/appointment-reminder/1/schema.json
   templates/appointment-reminder/1/template.yaml
-next: Run messagingctl check --package DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
-next: Copy runtime.example.yaml to runtime.yaml, set its absolute paths and secret references, run messaging migrate, then messagingctl apply --apply, then messaging serve.
+next: Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
+next: Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messaging migrate, then messagingctl apply --apply, then messaging serve.
 ```
 
-The two `next:` lines describe a deployment. This tutorial runs the package locally instead.
+The first `next:` line describes the local journey below. The second describes packaging and deployment.
 
 `init` refuses an existing destination. The starter declares an `smtp` provider for email and an
 `http` provider for SMS, the `transactional` and `reminders-sms` sender profiles, one email and one

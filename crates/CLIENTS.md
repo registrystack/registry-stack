@@ -129,8 +129,8 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
-Relay bindings.
+are generated from the BReg, Casework, Discovery, Evidence, and Relay bindings.
+The Messaging bindings stay out of them until Messaging joins a release.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
@@ -149,7 +149,7 @@ python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 Where this assembly exists, regenerate the Node facade with
 `sync-registry-client-node.py` when its source bindings change; do not hand-edit
 copied product wrappers. Python assembly
-combines six version-matched internal native wheels with the public facade;
+combines five version-matched internal native wheels with the public facade;
 the facade directory is not built directly. Follow current release inventory
 for publication instead of assuming standalone package instructions apply.
 For a checkout without unified native assembly, use the product binding checks

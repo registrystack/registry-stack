@@ -64,6 +64,12 @@ Outbound HTTP utilities for registry services.
   whose content travels in the query string only behind an explicit
   `QueryStringContentAcknowledgement` that the content reaches the
   destination's access logs.
+- A typed AWS SigV4 path for bounded JSON 1.0 sends. It accepts only `POST /`
+  with no query, freezes the signing service, constructs `Content-Type` and
+  `X-Amz-Target`, and signs the final fixed-origin authority, body, and headers
+  inside the send path. Credentials use zeroizing storage and redacted
+  diagnostics. Ordinary script templates cannot set SigV4 authentication
+  headers.
 - `ProductionAddressPolicy`, the production fixed-destination private-CIDR
   validation and resolved-address classification for a product that opens its
   own non-HTTP connection: it resolves once, classifies every answer, and

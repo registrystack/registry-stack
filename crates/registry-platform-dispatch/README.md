@@ -5,7 +5,7 @@ at-least-once dispatch: handing a job to something outside the product's own
 transaction (a webhook destination, a remote service) under a fenced
 PostgreSQL lease. It carries no product vocabulary. The product owns the job
 table's schema and name, the policy and payload rows the claim reads, the
-audit every transition writes, and the send itself.
+  audit lifecycle around every transition, and the send itself.
 
 The pure half is always compiled:
 
@@ -38,13 +38,14 @@ The opt-in `postgres` feature adds the lease machine in `postgres`:
   an optional not-before instant.
 - `DispatchStore` is the product's seam: it lends a connection, verifies the
   transaction's identity, decodes the product columns its `DispatchSql` joins
-  into each read, writes the attempt and transition audits inside the
-  transaction that makes them, and adds its own columns to terminal writes.
-  `DispatchTransport` is the send: `send(&LeasedJob) -> Sent`.
+  into each read, keeps product relational writes in the transition
+  transaction, writes audit directly before and after that transaction, and
+  adds its own columns to terminal writes. `DispatchTransport` is the send:
+  `send(&LeasedJob) -> Sent`.
 - `Dispatcher` runs every transition. A claim recovers one lapsed lease,
   expires one job past its expiry, then leases the next due job with
-  `FOR UPDATE SKIP LOCKED`, and commits the lease with its attempt audit before
-  the transport runs. A lease lasts the captured attempt timeout plus
+  `FOR UPDATE SKIP LOCKED`, accepts the attempt request before commit, and
+  commits the lease before the transport runs. A lease lasts the captured attempt timeout plus
   `LEASE_FINALIZATION_ALLOWANCE` (5 seconds). Every later write carries the
   lease's `Fence` (key, generation, attempt, and lease token), so a worker that
   lost its lease matches no row. A lapsed lease is decided by the job's
@@ -79,9 +80,26 @@ quarantine that skipped recovery would hide behind an empty proposal
 disposition. A refused hook row therefore still fails its claim and is
 reported as a transition failure.
 
-The core writes no audit of its own. Each transition calls the store's audit
-hook inside the same transaction, so an audit that fails rolls the transition
-back, and no attempt is sent before its audit has committed.
+The core writes no audit of its own. It calls a store's direct request hook
+before a protected commit and its response hook only after the commit is
+known. A refused request rolls the database transition back. When PostgreSQL
+returns an uncertain COMMIT result, the core makes a bounded set of fresh
+reads and records only the fate that observation proves for this invocation.
+A lease carrying this claim's unique token proves the claim committed; an
+unchanged pre-state proves a rollback. A matching target state or replay
+generation can belong to another invocation, so it remains `unfinished`. An
+unreadable lease request is answered with an `unknown` disposition and is
+never sent. Claim, finish, replay, and cancellation run as owned tasks, so
+cancelling their caller does not strand a transition between its durable
+database state and its direct audit response. Consumer attempt rows, advisory
+locks, and other relational effects remain in the transaction through
+`write_attempt` and `write_transition`.
+
+The store owns audit correlation. Each invocation must receive a fresh
+correlation while its request and response keep the same value. An attempt can
+use its unique lease token because claim and finish carry that token together;
+operator and maintenance transitions use context captured once before their
+owned task starts.
 
 Registry Platform Hooks is the first consumer: its notification delivery
 worker runs on this core over the product's

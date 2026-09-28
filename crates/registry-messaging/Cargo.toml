@@ -55,7 +55,11 @@ postgres-test = []
 # `MESSAGING_SMTP_TEST_MAILPIT_API` (its HTTP API base URL), and fails when
 # either is absent.
 smtp-test = []
-schema = ["dep:schemars"]
+schema = [
+  "dep:schemars",
+  "registry-platform-audit/schema",
+  "registry-platform-config/schema",
+]
 
 [lints]
 workspace = true

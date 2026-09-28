@@ -109,10 +109,12 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
 `v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.31.0`;
-`scheduling` joins from `v0.33.0` and `messaging` from `v0.35.0`.
-`breg-mcp` and `breg-review` have not joined a release:
-`BREG_SERVICES_FIRST_RELEASE` in `release/scripts/release_roster.py` names
-their first release and is unset. The published `v0.32.0` and older release
+`scheduling` joins from `v0.33.0`. `breg-mcp` and `breg-review` have not
+joined a release: `BREG_SERVICES_FIRST_RELEASE` in
+`release/scripts/release_roster.py` names their first release and is unset.
+`messaging` has not joined a release either: `MESSAGING_FIRST_RELEASE` in the
+same module names its first release and is unset.
+The published `v0.32.0` and older release
 inventories remain unchanged. After selecting
 the candidate version, derive its exact image roster and verify each final
 destination:
@@ -211,13 +213,19 @@ address such as `0.0.0.0:8110` for the gateway or `0.0.0.0:8115` for the
 review page, with `listener.networkExposure: container-private`, and publish
 the port only to the operator-controlled TLS terminator.
 
-Selecting `v0.35.0` or later also includes Messaging in both checks. The
-release source deny-lists the public `messaging` package, but the commands do
-not establish that `messaging` or `messaging-candidate` has already been
-provisioned. Complete the onboarding steps above, add `messaging-candidate` to
-the cleanup allowlist only after its private package exists, and merge the
-reviewed `release/security/messaging-advisory-baseline.json` before requesting
-a `v0.35.0` or later candidate.
+Messaging has not joined a release, so no version includes it in either
+check. `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` is the
+single place that decides the first release that ships it, and every release
+script and workflow reads it. Messaging joins a release in the pull request
+that adopts the shared platform activation crate (issue #1731) in place of
+`messaging migrate`, and that pull request sets the constant. From that
+release both checks include Messaging. The release source deny-lists the
+public `messaging` package, but the commands do not establish that `messaging`
+or `messaging-candidate` has already been provisioned. Complete the onboarding
+steps above, add `messaging-candidate` to the cleanup allowlist only after its
+private package exists, and merge the reviewed
+`release/security/messaging-advisory-baseline.json` before requesting a
+candidate at or after that release.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be
@@ -716,7 +724,12 @@ operator archiving the old audit file before the upgraded runtime starts, as
 the Scheduling changelog and the retention page describe. An image-driven
 Scheduling leg is tracked separately.
 
-Messaging joins the rehearsal from `v0.35.0`, its first release. The old
+Messaging joins the rehearsal once a release has shipped it. It has not
+joined a release yet: `MESSAGING_FIRST_RELEASE` in
+`release/scripts/release_roster.py` is unset, so every rehearsal omits it.
+Messaging joins a release in the pull request that adopts the shared platform
+activation crate (issue #1731) in place of `messaging migrate`, and that pull
+request sets the constant. When the starting release ships Messaging, the old
 binaries apply the `messagingctl init` starter package, then submit scheduled
 email and SMS messages whose delivery window starts a day later, so no provider
 is contacted, and cancel one of them. After the upgrade the new binaries must

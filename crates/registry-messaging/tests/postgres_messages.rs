@@ -14,20 +14,64 @@
 
 mod support;
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use registry_messaging::dispatch::dispatcher;
+use registry_messaging::messages::{
+    MessageStore, MessageStoreError, OperatorAction, SettleOutcome,
+};
+use registry_messaging::runtime::message_reader;
+use registry_messaging_core::READY_PATH;
+use registry_platform_audit::AuditWriter;
 use registry_platform_dispatch::postgres::Claim;
+use registry_platform_dispatch::{SendOutcome, Sent};
 use serde_json::{json, Value};
 use support::{
     email_submission, operator_token, sender_token, sender_token_for, sms_submission, submit_to,
-    token, Harness, NAME, OTHER_SENDER_PRINCIPAL, RECIPIENT,
+    test_audit, token, Harness, RefusingAuditSink, NAME, OTHER_SENDER_PRINCIPAL, RECIPIENT,
 };
+use tower::ServiceExt as _;
 use uuid::Uuid;
 
 fn assert_problem(answer: &(StatusCode, Value), status: StatusCode, code: &str) {
     assert_eq!(answer.0, status, "{}", answer.1);
     assert_eq!(answer.1["code"], code, "{}", answer.1);
+}
+
+#[tokio::test]
+async fn operator_reads_and_action_previews_ignore_a_refused_audit_destination() {
+    let harness = Harness::start().await;
+    let message_id = harness.accepted(&email_submission()).await;
+    let audit_path = harness
+        .config
+        .audit
+        .path
+        .as_ref()
+        .expect("a file audit destination");
+    let blocked_parent = audit_path
+        .parent()
+        .unwrap()
+        .join("reader-audit-parent-is-a-file");
+    std::fs::write(&blocked_parent, b"not a directory").unwrap();
+    let mut config = harness.config.clone();
+    config.audit.path = Some(blocked_parent.join("audit.jsonl"));
+
+    let reader = message_reader(&config)
+        .await
+        .expect("read-only access does not open the audit destination");
+    assert_eq!(reader.list(None, 10).await.unwrap().len(), 1);
+    assert!(reader.read(message_id).await.unwrap().is_some());
+    let preview = reader
+        .operate(message_id, OperatorAction::Cancel)
+        .await
+        .unwrap()
+        .expect("the message exists");
+    assert!(preview.eligible);
+    assert!(!preview.applied);
+    assert_eq!(harness.state(message_id).await, "pending");
 }
 
 #[tokio::test]
@@ -74,10 +118,115 @@ async fn an_accepted_submission_records_its_rendered_parts_and_answers_a_receipt
     assert!(row.get::<_, String>(8).contains(NAME));
     assert!(row.get::<_, bool>(9));
     assert_eq!(harness.state(message_id).await, "pending");
-    let outbox = harness.outbox().await;
-    assert_eq!(outbox.len(), 1);
-    assert_eq!(outbox[0]["event"], "messaging.message.accepted");
-    assert_eq!(outbox[0]["messageId"], id);
+    let responses = harness.audit_responses().await;
+    let accepted: Vec<&Value> = responses
+        .iter()
+        .filter(|record| record["event"] == "messaging.message.accepted")
+        .collect();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0]["messageId"], id);
+}
+
+#[tokio::test]
+async fn an_audit_request_refusal_records_no_submission() {
+    let harness = Harness::start().await;
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+        RefusingAuditSink::after(0),
+    )));
+    let app = harness.app_with_audit(audit).await;
+    let (status, _, problem) = submit_to(
+        app,
+        &sender_token(),
+        "audit-request-refused",
+        &email_submission(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        0
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_idempotency")
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_post_commit_audit_refusal_replays_one_committed_submission_receipt() {
+    let harness = Harness::start().await;
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+        RefusingAuditSink::after(1),
+    )));
+    let app = harness.app_with_audit(audit).await;
+    let key = "audit-response-refused";
+    let (status, _, problem) = submit_to(app, &sender_token(), key, &email_submission()).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        1
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_idempotency")
+            .await,
+        1
+    );
+
+    let (status, receipt) = harness
+        .submit(&sender_token(), key, &email_submission())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    let committed_id: Uuid = harness
+        .isolated
+        .admin
+        .query_one(
+            "SELECT message_id FROM messaging_idempotency WHERE idempotency_key = $1",
+            &[&key],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(receipt["id"], committed_id.to_string());
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn readiness_fails_when_the_audit_writer_loses_its_destination() {
+    let harness = Harness::start().await;
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+        RefusingAuditSink::after(0),
+    )));
+    assert!(audit
+        .append_background(json!({"event": "messaging.test.probe"}))
+        .await
+        .is_err());
+    let app = harness.app_with_audit(audit).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(READY_PATH)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
@@ -363,7 +512,7 @@ async fn a_status_read_writes_no_audit_record() {
     let harness = Harness::start().await;
     let id = harness.accepted(&email_submission()).await;
     harness.publish().await;
-    let outbox = harness.outbox().await.len();
+    let audit_responses = harness.audit_responses().await.len();
     let journal = harness.journal().len();
     let uri = format!("/v1/messages/{id}");
 
@@ -376,7 +525,7 @@ async fn a_status_read_writes_no_audit_record() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     harness.publish().await;
 
-    assert_eq!(harness.outbox().await.len(), outbox);
+    assert_eq!(harness.audit_responses().await.len(), audit_responses);
     assert_eq!(harness.journal().len(), journal);
 }
 
@@ -426,12 +575,136 @@ async fn a_queued_message_cancels_once_and_a_claimed_one_does_not() {
         .filter(|entry| entry["record"]["event"] == "messaging.dispatch.transition")
         .filter(|entry| entry["record"]["disposition"] == "cancelled")
         .collect();
-    assert_eq!(cancelled.len(), 1, "{cancelled:?}");
-    assert_eq!(cancelled[0]["record"]["actor"]["kind"], "caller");
+    assert_eq!(cancelled.len(), 2, "{cancelled:?}");
+    assert_eq!(cancelled[0]["phase"], "request");
+    assert_eq!(cancelled[1]["phase"], "response");
+    assert_eq!(cancelled[0]["correlation"], cancelled[1]["correlation"]);
+    assert_eq!(cancelled[1]["record"]["actor"]["kind"], "caller");
     assert_eq!(
-        cancelled[0]["record"]["actor"]["accessProfile"],
+        cancelled[1]["record"]["actor"]["accessProfile"],
         "case-notices"
     );
+}
+
+/// Start with the SMS sender profile set to `onUncertain: retry`.
+async fn retrying_harness() -> Harness {
+    Harness::start_with(Value::Null, |package| {
+        let path = package.join("messaging.yaml");
+        let source = std::fs::read_to_string(&path).unwrap();
+        let mut manifest: Value = serde_norway::from_str(&source).unwrap();
+        manifest["senderProfiles"][1]["onUncertain"] = Value::String("retry".to_owned());
+        std::fs::write(path, serde_norway::to_string(&manifest).unwrap()).unwrap();
+    })
+    .await
+}
+
+/// Lease the message and finish its attempt with `outcome`.
+async fn attempt(harness: &Harness, id: Uuid, outcome: SendOutcome) {
+    let dispatcher = harness.service.messages().dispatcher();
+    let leased = dispatcher
+        .claim()
+        .await
+        .unwrap()
+        .leased()
+        .expect("the queued message is leased");
+    assert_eq!(leased.key.id(), id);
+    dispatcher
+        .finish(
+            &leased,
+            Sent {
+                outcome,
+                detail: (),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(harness.state(id).await, "pending");
+}
+
+/// MESSAGING-DEC-09: a message waiting to retry after attempts that were
+/// definitely not sent is still withdrawn by a cancel.
+#[tokio::test]
+async fn a_message_retrying_after_transient_failures_cancels() {
+    let harness = retrying_harness().await;
+    let id = harness.accepted(&sms_submission()).await;
+    attempt(&harness, id, SendOutcome::Transient { retry_after: None }).await;
+    let preview = harness
+        .service
+        .messages()
+        .operate(id, OperatorAction::Cancel, false)
+        .await
+        .unwrap()
+        .expect("the message exists");
+    assert!(preview.eligible, "the operator preview agrees");
+    let (status, view) = harness
+        .call(
+            "POST",
+            &format!("/v1/messages/{id}/cancel"),
+            Some(&sender_token()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["status"], "cancelled");
+    assert_eq!(harness.state(id).await, "cancelled");
+}
+
+/// MESSAGING-DEC-09: a message waiting to retry after an attempt that may
+/// have reached its provider, whether the provider answered maybe-sent or
+/// the lease lapsed mid-attempt, is refused as started and keeps its retry.
+#[tokio::test]
+async fn a_message_retrying_after_an_attempt_that_may_have_been_sent_does_not_cancel() {
+    let harness = retrying_harness().await;
+    let maybe_sent = harness.accepted(&sms_submission()).await;
+    attempt(&harness, maybe_sent, SendOutcome::MaybeSent).await;
+
+    let lapsed = harness.accepted(&sms_submission()).await;
+    let dispatcher = harness.service.messages().dispatcher();
+    let leased = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(leased.key.id(), lapsed);
+    assert_eq!(
+        harness
+            .execute(
+                "UPDATE messaging_dispatch_jobs \
+                    SET attempt_started_at = now() - interval '2 minutes', \
+                        lease_expires_at = now() - interval '1 minute' \
+                  WHERE message_id = $1 AND state = 'leased'",
+                &[&lapsed],
+            )
+            .await,
+        1
+    );
+    assert!(dispatcher.claim().await.unwrap().leased().is_none());
+    assert_eq!(harness.state(lapsed).await, "pending");
+
+    for id in [maybe_sent, lapsed] {
+        assert_problem(
+            &harness
+                .call(
+                    "POST",
+                    &format!("/v1/messages/{id}/cancel"),
+                    Some(&operator_token()),
+                )
+                .await,
+            StatusCode::CONFLICT,
+            "message.dispatch-started",
+        );
+        assert_eq!(harness.state(id).await, "pending");
+        for apply in [false, true] {
+            let report = harness
+                .service
+                .messages()
+                .operate(id, OperatorAction::Cancel, apply)
+                .await
+                .unwrap()
+                .expect("the message exists");
+            assert!(
+                !report.eligible && !report.applied,
+                "the operator preview agrees with the cancel: {report:?}"
+            );
+            assert_eq!(report.next_status, None);
+        }
+        assert_eq!(harness.state(id).await, "pending");
+    }
 }
 
 /// A cancellation racing the worker's claim has exactly one winner: the
@@ -555,7 +828,10 @@ async fn no_contact_content_data_principal_or_credential_reaches_the_journal_or_
         "{accepted}"
     );
     support::assert_absent("the journal", &Value::Array(journal));
-    support::assert_absent("the outbox", &Value::Array(harness.outbox().await));
+    support::assert_absent(
+        "the audit responses",
+        &Value::Array(harness.audit_responses().await),
+    );
     support::assert_logs_clean();
 }
 
@@ -699,6 +975,118 @@ async fn concurrent_submissions_never_take_more_than_the_daily_limit() {
     );
 }
 
+/// The advisory-lock name a profile's daily count is taken under.
+const CASE_NOTICES_DAILY_LOCK: &str = "registry-messaging.daily-limit:case-notices";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_key_submissions_racing_for_the_last_daily_place_answer_one_receipt() {
+    let harness = Harness::start_with(Value::Null, with_daily_limit(2)).await;
+    let sender = sender_token();
+    let (status, receipt) = harness.submit(&sender, "first", &email_submission()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    // Hold the profile's daily-limit lock so both submissions find no
+    // record under their key before either reaches the count.
+    let admin = &harness.isolated.admin;
+    admin.batch_execute("BEGIN").await.unwrap();
+    admin
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&CASE_NOTICES_DAILY_LOCK],
+        )
+        .await
+        .unwrap();
+    let submissions: Vec<_> = (0..2)
+        .map(|_| {
+            let app = harness.app.clone();
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                let (status, _, body) =
+                    submit_to(app, &sender, "shared", &email_submission()).await;
+                (status, body)
+            })
+        })
+        .collect();
+    let mut waiting = 0;
+    for _ in 0..500 {
+        waiting = admin
+            .query_one(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0);
+        if waiting >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        waiting >= 2,
+        "both submissions wait on the daily-limit lock"
+    );
+    admin.batch_execute("COMMIT").await.unwrap();
+    let mut answers = Vec::new();
+    for submission in submissions {
+        answers.push(submission.await.unwrap());
+    }
+    for answer in &answers {
+        assert_eq!(answer.0, StatusCode::ACCEPTED, "{}", answer.1);
+        assert_eq!(answer.1["id"], answers[0].1["id"]);
+    }
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn a_daily_limit_wait_never_exceeds_the_window() {
+    let harness = Harness::start_with(Value::Null, with_daily_limit(1)).await;
+    let sender = sender_token();
+    let (status, receipt) = harness.submit(&sender, "first", &email_submission()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    // An acceptance committed by a transaction that started after this
+    // submission's own carries a later instant than the submission's now.
+    harness
+        .execute(
+            "UPDATE messaging_messages SET accepted_at = now() + interval '1 hour'",
+            &[],
+        )
+        .await;
+    let (status, headers, problem) =
+        submit_to(harness.app.clone(), &sender, "second", &email_submission()).await;
+    assert_problem(
+        &(status, problem),
+        StatusCode::TOO_MANY_REQUESTS,
+        "quota.exceeded",
+    );
+    assert_eq!(headers.get("retry-after").unwrap(), "86400");
+}
+
+#[tokio::test]
+async fn a_window_narrower_than_the_stored_precision_is_unprocessable() {
+    let harness = Harness::start().await;
+    // PostgreSQL keeps microseconds: these instants differ only below that.
+    let second = (chrono::Utc::now() + chrono::Duration::hours(1)).format("%Y-%m-%dT%H:%M:%S");
+    let mut body = email_submission();
+    body["notBefore"] = json!(format!("{second}.0000001Z"));
+    body["expiresAt"] = json!(format!("{second}.0000009Z"));
+    assert_problem(
+        &harness.submit(&sender_token(), "narrow", &body).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "request.unprocessable",
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        0
+    );
+}
+
 #[tokio::test]
 async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
     let harness = Harness::start().await;
@@ -718,4 +1106,157 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
     assert_eq!(problem["code"], "service.unavailable");
     assert_eq!(harness.call("GET", "/health", None).await.0, StatusCode::OK);
+}
+
+/// Put one message's dispatch job in the unknown outcome an operator
+/// settles.
+async fn make_unknown(harness: &Harness, message_id: Uuid) {
+    let changed = harness
+        .execute(
+            "UPDATE messaging_dispatch_jobs \
+                SET state = 'unknown', attempt = 1, next_attempt_at = NULL \
+              WHERE message_id = $1",
+            &[&message_id],
+        )
+        .await;
+    assert_eq!(changed, 1);
+}
+
+/// Make every later write to a dispatch job change nothing, as a write
+/// that lost a race with another transaction does.
+async fn skip_job_writes(harness: &Harness) {
+    harness
+        .execute(
+            "CREATE FUNCTION skip_job_write() RETURNS trigger LANGUAGE plpgsql \
+             AS $$ BEGIN RETURN NULL; END $$",
+            &[],
+        )
+        .await;
+    harness
+        .execute(
+            "CREATE TRIGGER skip_job_write BEFORE UPDATE ON messaging_dispatch_jobs \
+             FOR EACH ROW EXECUTE FUNCTION skip_job_write()",
+            &[],
+        )
+        .await;
+}
+
+fn settlement_responses(journal: &[Value]) -> Vec<Value> {
+    journal
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response"
+                && entry["record"]["messageId"].is_string()
+                && entry["record"]["event"]
+                    .as_str()
+                    .is_some_and(|event| event.contains("settle"))
+        })
+        .map(|entry| entry["record"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_settlement_the_store_refuses_is_reported_changed_and_journaled_refused() {
+    let harness = Harness::start().await;
+    let message_id = harness.accepted(&email_submission()).await;
+    make_unknown(&harness, message_id).await;
+    skip_job_writes(&harness).await;
+
+    let refused = harness
+        .service
+        .messages()
+        .operate(
+            message_id,
+            OperatorAction::Settle(SettleOutcome::Sent),
+            true,
+        )
+        .await
+        .expect_err("a settlement that changed no row is refused");
+    assert!(matches!(refused, MessageStoreError::Refused), "{refused}");
+    assert_eq!(harness.state(message_id).await, "unknown");
+    let responses = settlement_responses(&harness.journal());
+    assert_eq!(responses.len(), 1, "{responses:?}");
+    assert_eq!(responses[0]["outcome"], "refused");
+}
+
+#[tokio::test]
+async fn a_dispatch_core_refusal_is_reported_as_an_outcome_that_may_have_applied() {
+    let harness = Harness::start().await;
+    let message_id = harness.accepted(&email_submission()).await;
+    skip_job_writes(&harness).await;
+
+    let unknown = harness
+        .service
+        .messages()
+        .operate(message_id, OperatorAction::Cancel, true)
+        .await
+        .expect_err("the dispatch core refuses a cancellation that changed no row");
+    assert!(
+        matches!(unknown, MessageStoreError::OutcomeUnknown),
+        "{unknown}"
+    );
+}
+
+/// A message store over the harness's schema whose audit writer accepts
+/// only its first `accepted_writes` records.
+async fn store_with_audit(harness: &Harness, accepted_writes: usize) -> MessageStore {
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+        RefusingAuditSink::after(accepted_writes),
+    )));
+    let schema = harness.store.current_schema().await.unwrap();
+    MessageStore::new(
+        harness.store.clone(),
+        dispatcher(
+            harness.store.clone(),
+            &schema,
+            Arc::clone(&harness.transports),
+            Arc::clone(&audit),
+        )
+        .unwrap(),
+        audit,
+    )
+}
+
+#[tokio::test]
+async fn a_settlement_whose_request_record_is_refused_changes_nothing() {
+    let harness = Harness::start().await;
+    let message_id = harness.accepted(&email_submission()).await;
+    make_unknown(&harness, message_id).await;
+
+    let refused = store_with_audit(&harness, 0)
+        .await
+        .operate(
+            message_id,
+            OperatorAction::Settle(SettleOutcome::Sent),
+            true,
+        )
+        .await
+        .expect_err("a settlement requires its request record");
+    assert!(
+        matches!(refused, MessageStoreError::AuditUnavailable),
+        "{refused}"
+    );
+    assert_eq!(harness.state(message_id).await, "unknown");
+}
+
+#[tokio::test]
+async fn a_settlement_whose_outcome_record_is_refused_is_applied_and_unconfirmed() {
+    let harness = Harness::start().await;
+    let message_id = harness.accepted(&email_submission()).await;
+    make_unknown(&harness, message_id).await;
+
+    let unconfirmed = store_with_audit(&harness, 1)
+        .await
+        .operate(
+            message_id,
+            OperatorAction::Settle(SettleOutcome::Sent),
+            true,
+        )
+        .await
+        .expect_err("the outcome record is written after the commit");
+    assert!(
+        matches!(unconfirmed, MessageStoreError::AuditUnconfirmed),
+        "{unconfirmed}"
+    );
+    assert_eq!(harness.state(message_id).await, "delivered");
 }

@@ -49,6 +49,12 @@ The binary is `target/release/messagingctl`. It reads files and prints reports; 
 on a refusal, 2 on a usage error, and 3 when a file, secret, or database could not be reached. Run
 `messagingctl <command> --help` for each command's arguments.
 
+A human failure is one `error[CODE] PATH: MESSAGE` line on standard error, followed by a `next:`
+line naming what to do. With `--format json`, every report opens with `ok`, `command`, and
+`status`, and a failure lists its `diagnostics`, each with a `code`, `path`, `message`, and
+`suggestedAction`. The one exception is a successful `preview`, which prints the route body the
+HTTP preview answers, unwrapped.
+
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
     products/messaging/README.md, Running locally;
     scripts/cargo-runtime-library-path.sh, registry_cargo_build; CONTRIBUTING.md. */}
@@ -57,7 +63,7 @@ on a refusal, 2 on a usage error, and 3 when a file, secret, or database could n
 
 ## Start from the starter
 
-`messagingctl init` writes a complete package into a directory that must not exist yet:
+`messagingctl init` writes an editable project into a directory that must not exist yet:
 
 ```sh
 messagingctl init ./notices
@@ -84,14 +90,14 @@ created: ./notices
   templates/appointment-reminder/1/sample.json
   templates/appointment-reminder/1/schema.json
   templates/appointment-reminder/1/template.yaml
-next: Run messagingctl check --package DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
-next: Copy runtime.example.yaml to runtime.yaml, set its absolute paths and secret references, run messaging migrate, then messagingctl apply --apply, then messaging serve.
+next: Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
+next: Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messaging migrate, then messagingctl apply --apply, then messaging serve.
 ```
 
-The directory is the package. `messaging.yaml`, `templates/`, and `providers/` are its content, and
-the package digest covers every file under them. Any other file at the root, such as
-`runtime.example.yaml`, is ignored and not part of the digest, and a symbolic link anywhere in the
-package is refused.
+The directory is an editable project. `messaging.yaml`, `templates/`, and `providers/` describe
+what the runtime may send. Keep `runtime.example.yaml` for deployment configuration; packaging
+excludes that file and development state. Use project-mode checks while editing, then produce a
+separate installed directory for handover.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, init(); crates/registry-messagingctl/src/starter.rs;
     products/messaging/examples/starter/;
@@ -316,9 +322,12 @@ capabilities:
 | `capabilities.ratePerSecond` | Optional, 1 to 1000. Paces how often this runtime process starts a send |
 
 With `ratePerSecond` set, at most one send to the provider starts every `1 / ratePerSecond` seconds
-in each runtime process. An attempt waits for its slot for up to ten seconds on top of the send's
-own time budget; an attempt whose slot does not open in time sends nothing and is retried under its
-dispatch policy.
+in each runtime process. An attempt first waits for one of the connection's `concurrencyLimit` sends
+in flight, then for its slot, so the rate spaces requests as they leave, even when sends queue behind
+a slow one. Both waits together last up to ten seconds on top of the send's own time budget, and never
+past the message's `expiresAt`. An attempt whose slot does not open in time sends nothing and is
+retried under its dispatch policy; a message whose expiry passes first is not sent again, and expires,
+or stays `unknown` when an earlier attempt may have reached the provider and its policy retries.
 
 `provider.yaml` is closed and at most 64 KiB, and each script is at most 64 KiB and must compile
 with exactly its entry point when the package loads. A file the provider does not name, a hidden
@@ -330,10 +339,11 @@ The scripts see plain data only, never a credential, a URL, or a header value th
 | --- | --- | --- |
 | `prepare(message, profile)` | `message`: `messageId`, `generation`, `attempt`, `channel`, `recipient`, `parts`, and `idempotencyKey` when the provider declares `idempotentSubmit`. `profile`: `id`, `channel`, `sender`, `maximumSegments` | `target` relative to the operator's `baseUrl`, declared `headers`, `bodyFormat` `json` or `form`, and `body`. Messaging serializes the body |
 | `interpret(response)` | `status`, the declared response `headers`, and the decoded `body` | `outcome`: `accepted` with a `providerReference`, `transient` with an optional `retryAfter`, `permanent` with an optional `code`, or `maybe-sent` |
-| `receipt(request)` | A verified callback's `method`, `form`, `query`, and `json` | `providerReference` and `report` (`sent`, `delivered`, or `undelivered`) with an optional `code`, or `()` to ignore the callback. A throw answers `422 callback.unreadable` |
+| `receipt(request)` | A verified callback's `method`, `form`, `query`, and `json`, each only when the callback verifier signs it: `hmac-sha256-body` leaves `query` empty, and `hmac-sha1-url-form` leaves `json` as `()` | `providerReference` and `report` (`sent`, `delivered`, or `undelivered`) with an optional `code`, or `()` to ignore the callback. A throw answers `422 callback.unreadable` |
 
-Without an interpret script, a `2xx` is accepted, `408`, `429`, and `5xx` are transient, and any
-other status is permanent with the code `http.<status>`. An interpret script that fails falls back
+Without an interpret script, a `2xx` is accepted, `429` and `503` are transient, `408` and any other
+`5xx` are `maybe-sent`, because the request was written and the provider may have acted on it, and
+any other status is permanent with the code `http.<status>`. An interpret script that fails falls back
 to the status, except that an unreadable `2xx` is `maybe-sent`, because a provider may answer `200`
 with an error body. Report `maybe-sent` whenever the provider may have taken the message: that is
 what keeps a message from being sent twice under `onUncertain: hold`.
@@ -351,16 +361,16 @@ The Registry Stack repository carries two more example provider directories unde
 
 ## Check and preview the package
 
-`messagingctl check --package` loads the package the way the runtime does, renders every sample,
+`messagingctl check --project` validates the editable project, renders every sample,
 and reports the digest:
 
 ```sh
-messagingctl check --package ./notices
+messagingctl check --project ./notices
 ```
 
 ```text
 ok: ./notices
-package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+package digest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
 template: appointment-reminder 1 (email)
   sample en: renders
   sample fr: renders
@@ -374,13 +384,13 @@ access profile: operations (operator)
 each locale before a caller sends it:
 
 ```sh
-messagingctl preview --package ./notices appointment-reminder 1 \
+messagingctl preview --project ./notices appointment-reminder 1 \
   --locale fr --data ./notices/templates/appointment-reminder/1/sample.json
 ```
 
 ```text
 template: appointment-reminder 1 (email, fr)
-package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+package digest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
 --- subject
 Votre rendez-vous du 01/10/2026
 --- text
@@ -399,13 +409,13 @@ An SMS preview adds the encoding and segment count the runtime charges against
 `maximumSegments`:
 
 ```sh
-messagingctl preview --package ./notices appointment-reminder-sms 1 \
+messagingctl preview --project ./notices appointment-reminder-sms 1 \
   --locale en --data ./notices/templates/appointment-reminder-sms/1/sample.json
 ```
 
 ```text
 template: appointment-reminder-sms 1 (sms, en)
-package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+package digest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
 --- text
 Reminder: Ada Lovelace, your appointment at Central Registry Office is on 01/10/2026.
 --- sms: 1 segment(s), gsm7 85 units
@@ -414,34 +424,46 @@ Reminder: Ada Lovelace, your appointment at Central Registry Office is on 01/10/
 A refusal exits 1 and names what failed. Data missing two of the schema's required members:
 
 ```text
-messagingctl: the data does not satisfy the template schema: `/` fails `required`; `/` fails `required`; (/)
+error[template.data-invalid] /: the data does not satisfy the template schema: `/` fails `required`; `/` fails `required`;
   data /: required
   data /: required
+  next: Correct the template, locale, or data the message names, then retry.
 ```
 
 A locale the version does not declare:
 
 ```text
-messagingctl: the template does not ship this locale (/)
+error[template.locale-unavailable] /: the template does not ship this locale
+  next: Correct the template, locale, or data the message names, then retry.
 ```
 
 The same preview is available to a sender over HTTP, and it answers the same bytes
 `messagingctl --format json preview` prints for the same package, template, locale, and data.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, check() and preview();
-    products/messaging/README.md, HTTP contract; outputs observed with messagingctl 0.33.0-dev on
-    2026-09-25. */}
+    products/messaging/README.md, HTTP contract; check and preview outputs observed with messagingctl 0.34.0-dev on
+    2026-09-27. */}
 
 ## Hand over the package
 
-Give the operator the package directory and the digest `messagingctl check` reported. The operator
-records that digest in the runtime's package ledger with `messagingctl apply --apply`, and the
-runtime serves only the package whose digest the ledger names active, so an edited file never
-changes what a running deployment sends. The operator may also set `package.expectedDigest` to the
-same value, which refuses any other package before the runtime starts.
+Produce an installed package in a directory that does not exist yet:
 
-{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package ledger;
-    crates/registry-messaging/src/config.rs, expected_digest. */}
+```sh
+messagingctl package ./notices --output ./notices-installed
+messagingctl check --package ./notices-installed
+```
+
+Use `--dry-run` to inspect the selected files without writing, and `--revision TEXT` when you need
+explicit source provenance. Give the operator the installed directory and its reported digest.
+The directory contains the shared checksum envelope, product configuration, providers, and templates,
+with no runtime credentials or development state.
+
+The operator records the digest with `messagingctl apply --apply` and restarts onto it. The runtime
+verifies the package and optional `package.expectedDigest` before database work, then uses only the
+verified file buffers. Editing the authoring project never changes what a running deployment sends.
+
+{/* Evidence: crates/registry-messaging/src/package.rs; crates/registry-messagingctl/src/lib.rs;
+    crates/registry-platform-config/src/package.rs; products/messaging/RUNTIME-CONFIG.md. */}
 
 ## Next
 

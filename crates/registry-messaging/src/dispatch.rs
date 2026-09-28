@@ -14,6 +14,7 @@
 //! pub trait MessageTransport: Send + Sync {
 //!     fn attempt_timeout(&self) -> Duration { DEFAULT_ATTEMPT_TIMEOUT }
 //!     fn rate_per_second(&self) -> Option<u32> { None }
+//!     fn concurrency_limit(&self) -> Option<NonZeroUsize> { None }
 //!     async fn send(&self, message: &OutboundMessage) -> SendOutcome;
 //! }
 //! ```
@@ -33,23 +34,37 @@
 //!   is unknown.
 //!
 //! The transport never sees the database, the audit journal, or the lease.
-//! It must finish within [`OutboundMessage::budget`]; the worker stops
-//! waiting when the budget is spent and records the attempt as `MaybeSent`,
-//! because a send cut off mid-flight may have reached the provider.
+//! It must finish within [`OutboundMessage::budget`] and classify its own
+//! deadline, because only it knows whether the request was written: a send
+//! that ran out of time before anything left is `Transient`, and one cut off
+//! after it left is `MaybeSent`. The worker stops waiting
+//! [`TRANSPORT_OVERRUN_ALLOWANCE`] after the budget is spent and records a
+//! transport that overran it as `MaybeSent`, because a send cut off
+//! mid-flight may have reached the provider.
 //! [`OutboundMessage::idempotency_key`] is stable across every attempt of one
 //! generation and changes when an operator requeues the message, so a
 //! provider that deduplicates on it never delivers one generation twice.
 //!
 //! A transport that declares a `rate_per_second` is paced: each attempt
 //! waits for the provider's next send slot, in turn, before `send` is
-//! called (see [`crate::limits`]). The wait is not taken from the send's
-//! budget: the job's attempt timeout is the transport's plus
-//! [`PACING_ALLOWANCE`], at most sixty seconds, and `send` is still given
-//! only the transport's own timeout. An attempt whose slot does not open in
-//! that allowance is `Transient`, with the wait as its pause hint: nothing
-//! reached the provider. One replica runs at most eight attempts at once,
-//! so a paced attempt waits at most seven send intervals, under the
-//! allowance at every rate the package accepts.
+//! called (see [`crate::limits`]). When it also declares a
+//! `concurrency_limit`, the attempt first waits for one of that many
+//! in-flight slots and holds it until `send` returns, so the rate spaces
+//! the requests as they leave the transport rather than as they queue for
+//! it. The wait is not taken from the send's budget: the job's attempt
+//! timeout is the transport's plus [`PACING_ALLOWANCE`], at most sixty
+//! seconds, and `send` is still given only the transport's own timeout. An
+//! attempt whose slot does not open in that allowance is `Transient`, with
+//! the wait as its pause hint: nothing reached the provider. One replica
+//! runs at most eight attempts at once, so an attempt that finds every
+//! in-flight slot free waits at most seven send intervals, under the
+//! allowance at every rate the package accepts; one queued behind slow
+//! sends may not, and is retried.
+//!
+//! The wait is also bounded by the message's `expiresAt`, and no attempt
+//! reaches `send` once it has passed: the attempt is `Transient`, which
+//! lets the core expire the message, or hold it `unknown` when an earlier
+//! attempt may have been sent and its policy retries.
 //!
 //! A message whose provider has no registered transport is refused
 //! permanently with the failure code `provider-unconfigured`, and a message
@@ -67,25 +82,32 @@
 //!
 //! # Audit
 //!
-//! Every transition writes its audit record into the audit outbox inside
-//! the transaction that makes it; the runtime's publisher appends the outbox
-//! to the keyed journal. The records carry identifiers, classes, and
-//! dispositions, never a contact, a part, or provider text.
+//! Every protected transition accepts a direct intent audit before its write
+//! and records its outcome only after commit is established. Consumer attempt
+//! rows and provider-reference locks remain in the database transaction. The
+//! audit carries identifiers, classes, and dispositions, never a contact, a
+//! message part, or provider response text. An attempt's lease token correlates
+//! its request and response. Every maintenance or operator invocation captures
+//! a fresh UUID, so a rolled-back claim or repeated refused replay cannot reuse
+//! an earlier request's correlation.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use registry_messaging_core::{Channel, RenderedParts};
+use registry_platform_audit::AuditEntry;
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
-    DispatchSql, DispatchStore, DispatchTransport, Dispatcher, ExpirySql, JobKey, JobState,
-    JobTable, LeasedJob, LeasedReadError, Quarantine, QuarantineDisposition, QuarantineReason,
-    SelectSql, TargetAction, Transition, TransitionAudit,
+    DispatchSql, DispatchStore, DispatchTransport, Dispatcher, Disposition, ExpirySql, JobKey,
+    JobState, JobTable, LeasedJob, LeasedReadError, Quarantine, QuarantineAudit,
+    QuarantineDisposition, QuarantineReason, ReplayAudit, ReplayOutcome, SelectSql, TargetAction,
+    Transition, TransitionAudit, TransitionOutcome,
 };
 use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, ConfigError, DispatchError, FailureCode, Jitter,
@@ -96,10 +118,10 @@ use thiserror::Error;
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
+use crate::audit::{MessagingAudit, MESSAGING_AUDIT_SCHEMA};
 use crate::http_provider::MAXIMUM_RATE_PER_SECOND;
-use crate::limits::{LimitRefusal, ProviderPacer, PACING_ALLOWANCE};
+use crate::limits::{LimitRefusal, PacedSlot, ProviderPacer, PACING_ALLOWANCE};
 use crate::metrics::{AttemptOutcome, LimitKind, Metrics};
-use crate::outbox;
 use crate::store::PostgresStore;
 
 /// The attempt timeout of a transport that does not declare its own.
@@ -107,6 +129,13 @@ pub const DEFAULT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The shortest attempt timeout a transport may declare.
 pub const MINIMUM_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How long past an attempt's budget the worker still waits for the
+/// transport. The transport classifies its own deadline, since only it knows
+/// whether the request was written; this backstop only catches a transport
+/// that overruns its budget, and stays well inside the lease's finalization
+/// allowance.
+pub const TRANSPORT_OVERRUN_ALLOWANCE: Duration = Duration::from_secs(1);
 
 /// The job table's name.
 pub const JOB_TABLE: &str = "messaging_dispatch_jobs";
@@ -174,8 +203,9 @@ pub struct OutboundMessage {
     /// Whether the provider declared idempotent submission when this message
     /// was accepted. A later package cannot withdraw the key from a retry.
     pub provider_idempotent_submit: bool,
-    /// What is left of the attempt's timeout. The worker stops waiting when
-    /// it is spent.
+    /// What is left of the attempt's timeout. The transport classifies its
+    /// own deadline within it; the worker stops waiting
+    /// [`TRANSPORT_OVERRUN_ALLOWANCE`] after it is spent.
     pub budget: Duration,
 }
 
@@ -203,6 +233,12 @@ pub trait MessageTransport: Send + Sync {
     /// The most sends per second the provider accepts, when it declares a
     /// limit.
     fn rate_per_second(&self) -> Option<u32> {
+        None
+    }
+
+    /// The most sends the provider has in flight at once, when it bounds
+    /// them.
+    fn concurrency_limit(&self) -> Option<NonZeroUsize> {
         None
     }
 
@@ -266,7 +302,7 @@ impl Transports {
             if rate > MAXIMUM_RATE_PER_SECOND {
                 return Err(TransportRegistrationError::Rate);
             }
-            let pacer = ProviderPacer::new(&provider, rate)
+            let pacer = ProviderPacer::new(&provider, rate, transport.concurrency_limit())
                 .map_err(|_| TransportRegistrationError::Rate)?;
             self.pacers.insert(provider.clone(), Arc::new(pacer));
         }
@@ -350,10 +386,15 @@ pub async fn acting_as<F: Future>(actor: Actor, future: F) -> F::Output {
     ACTOR.scope(actor, future).await
 }
 
-fn current_actor() -> Value {
-    ACTOR
-        .try_with(Actor::to_json)
-        .unwrap_or_else(|_| Actor::Worker.to_json())
+fn captured_actor() -> Actor {
+    ACTOR.try_with(Clone::clone).unwrap_or(Actor::Worker)
+}
+
+#[derive(Clone, Debug)]
+#[doc(hidden)]
+pub struct MessageAuditContext {
+    actor: Actor,
+    invocation_id: Uuid,
 }
 
 /// What a claim decodes: the provider and sender profile the message was
@@ -387,6 +428,7 @@ pub struct MessageDispatchStore {
     store: PostgresStore,
     schema: String,
     transports: Arc<Transports>,
+    audit: Arc<MessagingAudit>,
 }
 
 impl fmt::Debug for MessageDispatchStore {
@@ -410,6 +452,7 @@ pub fn dispatcher(
     store: PostgresStore,
     schema: &str,
     transports: Arc<Transports>,
+    audit: Arc<MessagingAudit>,
 ) -> Result<MessageDispatcher, ConfigError> {
     let table = JobTable::new(schema, JOB_TABLE, "message_id", "part")?;
     Dispatcher::new(
@@ -417,6 +460,7 @@ pub fn dispatcher(
             store,
             schema: schema.to_owned(),
             transports,
+            audit,
         },
         DispatchConfig {
             table,
@@ -445,7 +489,7 @@ fn dispatch_sql() -> DispatchSql {
             states: &[JobState::Pending],
             select: SelectSql {
                 predicate: "message.expires_at <= transaction_timestamp()",
-                ..record
+                ..policy
             },
             order_by: "message.expires_at",
             lock_of: "state",
@@ -479,7 +523,7 @@ impl MessageDispatchStore {
             }),
             on_uncertain: match on_uncertain.as_str() {
                 "hold" => UncertainOutcome::Hold,
-                "retry" => UncertainOutcome::Retry,
+                "retry" => UncertainOutcome::RetryThenHold,
                 _ => return Err(DispatchError::Unavailable),
             },
             expires_at: Some(expires_at),
@@ -533,11 +577,106 @@ const fn event_name(event: DispatchEvent) -> &'static str {
     }
 }
 
+fn attempt_correlation(job: &LeasedJob<MessageJob>) -> String {
+    format!(
+        "dispatch/{}/{}/{}/{}/attempt",
+        job.key.id(),
+        job.generation,
+        job.attempt,
+        job.lease_token
+    )
+}
+
+fn transition_correlation(
+    audit: &TransitionAudit<MessageJob>,
+    context: &MessageAuditContext,
+) -> String {
+    format!(
+        "dispatch/{}/{}/{}/{}/{}",
+        audit.key.id(),
+        audit.generation,
+        audit.attempt,
+        context.invocation_id,
+        audit.transition.as_str()
+    )
+}
+
+fn replay_correlation(audit: &ReplayAudit<MessageJob>, context: &MessageAuditContext) -> String {
+    format!(
+        "dispatch/{}/{}/0/{}/replay",
+        audit.key.id(),
+        audit.generation,
+        context.invocation_id
+    )
+}
+
+fn quarantine_correlation(
+    key: &JobKey,
+    generation: i64,
+    attempt: i16,
+    context: &MessageAuditContext,
+) -> String {
+    format!(
+        "dispatch/{}/{}/{generation}/{attempt}/{}/quarantine",
+        key.id(),
+        key.part(),
+        context.invocation_id
+    )
+}
+
+const fn transition_outcome(outcome: TransitionOutcome) -> &'static str {
+    match outcome {
+        TransitionOutcome::Committed => "committed",
+        TransitionOutcome::Refused => "refused",
+        TransitionOutcome::Unfinished => "unfinished",
+    }
+}
+
+const fn replay_outcome(outcome: ReplayOutcome) -> &'static str {
+    match outcome {
+        ReplayOutcome::Requested => "requested",
+        ReplayOutcome::Committed => "committed",
+        ReplayOutcome::Refused => "refused",
+        ReplayOutcome::Unfinished => "unfinished",
+    }
+}
+
+const fn transition_disposition(
+    transition: Transition,
+    outcome: TransitionOutcome,
+) -> &'static str {
+    match outcome {
+        TransitionOutcome::Committed => transition.disposition().as_str(),
+        TransitionOutcome::Refused => match transition {
+            Transition::LeaseLapsed(_) => JobState::Leased.as_str(),
+            Transition::Expired { from, .. } => from.as_str(),
+            Transition::Cancelled => JobState::Pending.as_str(),
+        },
+        TransitionOutcome::Unfinished => Disposition::Unknown.as_str(),
+    }
+}
+
+const fn replay_disposition(from: JobState, outcome: ReplayOutcome) -> &'static str {
+    match outcome {
+        ReplayOutcome::Requested | ReplayOutcome::Committed => Disposition::ReplayPending.as_str(),
+        ReplayOutcome::Refused => from.as_str(),
+        ReplayOutcome::Unfinished => Disposition::Unknown.as_str(),
+    }
+}
+
 #[async_trait]
 impl DispatchStore for MessageDispatchStore {
     type Job = MessageJob;
     type Record = MessageJob;
     type Detail = ();
+    type Context = MessageAuditContext;
+
+    fn capture_context(&self) -> MessageAuditContext {
+        MessageAuditContext {
+            actor: captured_actor(),
+            invocation_id: Uuid::new_v4(),
+        }
+    }
 
     async fn connection(&self) -> Result<DispatchConnection, DispatchError> {
         let client = self
@@ -577,6 +716,15 @@ impl DispatchStore for MessageDispatchStore {
         decode_record(row, first)
     }
 
+    fn decode_expired_on_uncertain(
+        &self,
+        row: &Row,
+        first: usize,
+    ) -> Result<UncertainOutcome, DispatchError> {
+        self.decode_policy(row, first)
+            .map(|decoded| decoded.policy.on_uncertain)
+    }
+
     fn decode_target(
         &self,
         row: &Row,
@@ -587,7 +735,7 @@ impl DispatchStore for MessageDispatchStore {
         decode_record(row, first).map(Some)
     }
 
-    async fn record_attempt_audit(
+    async fn write_attempt(
         &self,
         transaction: &Transaction<'_>,
         job: &LeasedJob<MessageJob>,
@@ -609,20 +757,11 @@ impl DispatchStore for MessageDispatchStore {
                         ],
                     )
                     .await?;
-                outbox::write(
-                    transaction,
-                    json!({
-                        "event": ATTEMPT_STARTED_EVENT,
-                        "messageId": message_id.to_string(),
-                        "generation": job.generation,
-                        "attempt": job.attempt,
-                        "provider": job.job.provider,
-                        "senderProfile": job.job.sender_profile,
-                    }),
-                )
-                .await?;
             }
-            AttemptAudit::Finished { sent, disposition } => {
+            AttemptAudit::Finished {
+                sent,
+                disposition: _,
+            } => {
                 let (reference, failure) = match &sent.outcome {
                     SendOutcome::Accepted { receiver_reference } => (
                         receiver_reference
@@ -662,29 +801,16 @@ impl DispatchStore for MessageDispatchStore {
                 if changed != 1 {
                     return Err(DispatchError::Unavailable);
                 }
-                outbox::write(
-                    transaction,
-                    json!({
-                        "event": ATTEMPT_FINISHED_EVENT,
-                        "messageId": message_id.to_string(),
-                        "generation": job.generation,
-                        "attempt": job.attempt,
-                        "outcome": class,
-                        "providerReference": reference.is_some(),
-                        "failureCode": failure,
-                        "disposition": disposition.as_str(),
-                    }),
-                )
-                .await?;
             }
+            AttemptAudit::Interrupted { .. } => {}
         }
         Ok(())
     }
 
-    async fn record_transition_audit(
+    async fn write_transition(
         &self,
         transaction: &Transaction<'_>,
-        audit: TransitionAudit<'_, MessageJob>,
+        audit: &TransitionAudit<MessageJob>,
     ) -> Result<(), DispatchError> {
         let message_id = audit.key.id();
         if let Transition::LeaseLapsed(_) = audit.transition {
@@ -698,27 +824,169 @@ impl DispatchStore for MessageDispatchStore {
                 )
                 .await?;
         }
-        let from = match audit.transition {
-            Transition::Expired { from } | Transition::Replayed { from } => Some(from.as_str()),
-            Transition::LeaseLapsed(_) => Some(JobState::Leased.as_str()),
-            Transition::Cancelled => Some(JobState::Pending.as_str()),
-        };
-        outbox::write(
-            transaction,
-            json!({
-                "event": DISPATCH_TRANSITION_EVENT,
-                "messageId": message_id.to_string(),
-                "generation": audit.generation,
-                "attempt": audit.attempt,
-                "transition": audit.transition.as_str(),
-                "from": from,
-                "disposition": audit.transition.disposition().as_str(),
-                "senderProfile": audit.record.sender_profile,
-                "actor": current_actor(),
-            }),
-        )
-        .await?;
         Ok(())
+    }
+
+    async fn record_attempt_audit(
+        &self,
+        job: &LeasedJob<MessageJob>,
+        audit: AttemptAudit<'_, ()>,
+        context: &MessageAuditContext,
+    ) -> Result<(), DispatchError> {
+        let (kind, record) = match audit {
+            AttemptAudit::Started => (
+                true,
+                json!({
+                    "event": ATTEMPT_STARTED_EVENT,
+                    "messageId": job.key.id().to_string(),
+                    "generation": job.generation,
+                    "attempt": job.attempt,
+                    "provider": job.job.provider,
+                    "senderProfile": job.job.sender_profile,
+                    "outcome": "requested",
+                    "disposition": Disposition::Leased.as_str(),
+                    "actor": context.actor.to_json(),
+                }),
+            ),
+            AttemptAudit::Finished { sent, disposition } => {
+                let failure = match &sent.outcome {
+                    SendOutcome::Permanent { code } => Some(code.as_str()),
+                    _ => None,
+                };
+                let provider_reference = matches!(
+                    sent.outcome,
+                    SendOutcome::Accepted {
+                        receiver_reference: Some(_)
+                    }
+                );
+                (
+                    false,
+                    json!({
+                        "event": ATTEMPT_FINISHED_EVENT,
+                        "messageId": job.key.id().to_string(),
+                        "generation": job.generation,
+                        "attempt": job.attempt,
+                        "attemptOutcome": outcome_class(&sent.outcome),
+                        "providerReference": provider_reference,
+                        "failureCode": failure,
+                        "outcome": "committed",
+                        "disposition": disposition.as_str(),
+                        "actor": context.actor.to_json(),
+                    }),
+                )
+            }
+            AttemptAudit::Interrupted { disposition } => (
+                false,
+                json!({
+                    "event": ATTEMPT_FINISHED_EVENT,
+                    "messageId": job.key.id().to_string(),
+                    "generation": job.generation,
+                    "attempt": job.attempt,
+                    "attemptOutcome": "interrupted",
+                    "outcome": if disposition == Disposition::Unknown { "unfinished" } else { "refused" },
+                    "disposition": disposition.as_str(),
+                    "actor": context.actor.to_json(),
+                }),
+            ),
+        };
+        let correlation = attempt_correlation(job);
+        let entry = if kind {
+            AuditEntry::request(MESSAGING_AUDIT_SCHEMA, correlation, record)
+        } else {
+            AuditEntry::response(MESSAGING_AUDIT_SCHEMA, correlation, record)
+        };
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| DispatchError::Unavailable)
+    }
+
+    async fn begin_transition_audit(
+        &self,
+        audit: &TransitionAudit<MessageJob>,
+        context: &MessageAuditContext,
+    ) -> Result<(), DispatchError> {
+        let from = match audit.transition {
+            Transition::Expired { from, .. } => from.as_str(),
+            Transition::LeaseLapsed(_) => JobState::Leased.as_str(),
+            Transition::Cancelled => JobState::Pending.as_str(),
+        };
+        self.audit
+            .append(AuditEntry::request(
+                MESSAGING_AUDIT_SCHEMA,
+                transition_correlation(audit, context),
+                json!({
+                    "event": DISPATCH_TRANSITION_EVENT,
+                    "messageId": audit.key.id().to_string(),
+                    "generation": audit.generation,
+                    "attempt": audit.attempt,
+                    "transition": audit.transition.as_str(),
+                    "from": from,
+                    "outcome": "requested",
+                    "disposition": audit.transition.disposition().as_str(),
+                    "senderProfile": audit.record.sender_profile,
+                    "actor": context.actor.to_json(),
+                }),
+            ))
+            .await
+            .map_err(|_| DispatchError::Unavailable)
+    }
+
+    async fn record_transition_audit(
+        &self,
+        audit: &TransitionAudit<MessageJob>,
+        outcome: TransitionOutcome,
+        context: &MessageAuditContext,
+    ) -> Result<(), DispatchError> {
+        let disposition = transition_disposition(audit.transition, outcome);
+        self.audit
+            .append(AuditEntry::response(
+                MESSAGING_AUDIT_SCHEMA,
+                transition_correlation(audit, context),
+                json!({
+                    "event": DISPATCH_TRANSITION_EVENT,
+                    "messageId": audit.key.id().to_string(),
+                    "generation": audit.generation,
+                    "attempt": audit.attempt,
+                    "transition": audit.transition.as_str(),
+                    "outcome": transition_outcome(outcome),
+                    "disposition": disposition,
+                    "senderProfile": audit.record.sender_profile,
+                    "actor": context.actor.to_json(),
+                }),
+            ))
+            .await
+            .map_err(|_| DispatchError::Unavailable)
+    }
+
+    async fn record_replay_audit(
+        &self,
+        audit: &ReplayAudit<MessageJob>,
+        context: &MessageAuditContext,
+    ) -> Result<(), DispatchError> {
+        let disposition = replay_disposition(audit.from, audit.outcome);
+        let record = json!({
+            "event": DISPATCH_TRANSITION_EVENT,
+            "messageId": audit.key.id().to_string(),
+            "generation": audit.generation,
+            "attempt": 0,
+            "transition": "replayed",
+            "from": audit.from.as_str(),
+            "outcome": replay_outcome(audit.outcome),
+            "disposition": disposition,
+            "senderProfile": audit.record.sender_profile,
+            "actor": context.actor.to_json(),
+        });
+        let correlation = replay_correlation(audit, context);
+        let entry = if audit.outcome == ReplayOutcome::Requested {
+            AuditEntry::request(MESSAGING_AUDIT_SCHEMA, correlation, record)
+        } else {
+            AuditEntry::response(MESSAGING_AUDIT_SCHEMA, correlation, record)
+        };
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| DispatchError::Unavailable)
     }
 
     fn operational_event(&self, event: DispatchEvent) {
@@ -747,19 +1015,95 @@ impl DispatchStore for MessageDispatchStore {
         true
     }
 
+    async fn may_have_reached_receiver(
+        &self,
+        transaction: &Transaction<'_>,
+        key: &JobKey,
+        generation: i64,
+        attempt: i16,
+    ) -> Result<bool, DispatchError> {
+        // Only an attempt that ended transient or permanent is known not to
+        // have reached the provider; one still in progress, answered
+        // maybe-sent, or interrupted by a lapsed lease may have.
+        Ok(transaction
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM messaging_attempts \
+                  WHERE message_id = $1 AND generation = $2 AND attempt <= $3 \
+                    AND outcome IN ('in-progress', 'maybe-sent', 'interrupted'))",
+                &[&key.id(), &generation, &attempt],
+            )
+            .await?
+            .try_get(0)?)
+    }
+
+    async fn begin_quarantine_audit(
+        &self,
+        quarantine: Quarantine<'_>,
+        context: &MessageAuditContext,
+    ) -> Result<(), DispatchError> {
+        let (disposition, _) = quarantine_state(&quarantine);
+        self.audit
+            .append(AuditEntry::request(
+                MESSAGING_AUDIT_SCHEMA,
+                quarantine_correlation(
+                    quarantine.key,
+                    quarantine.generation,
+                    quarantine.attempt,
+                    context,
+                ),
+                json!({
+                    "event": MESSAGE_QUARANTINED_EVENT,
+                    "messageId": quarantine.key.id().to_string(),
+                    "generation": quarantine.generation,
+                    "attempt": quarantine.attempt,
+                    "from": quarantine.from.as_str(),
+                    "reason": quarantine_reason(quarantine.reason),
+                    "outcome": "requested",
+                    "disposition": disposition.as_str(),
+                    "actor": context.actor.to_json(),
+                }),
+            ))
+            .await
+            .map_err(|_| DispatchError::Unavailable)
+    }
+
+    async fn record_quarantine_audit(
+        &self,
+        audit: &QuarantineAudit,
+        outcome: TransitionOutcome,
+        context: &MessageAuditContext,
+    ) -> Result<(), DispatchError> {
+        let disposition = match outcome {
+            TransitionOutcome::Committed => audit.disposition.unwrap_or(audit.from),
+            TransitionOutcome::Refused => audit.from,
+            TransitionOutcome::Unfinished => JobState::Unknown,
+        };
+        self.audit
+            .append(AuditEntry::response(
+                MESSAGING_AUDIT_SCHEMA,
+                quarantine_correlation(&audit.key, audit.generation, audit.attempt, context),
+                json!({
+                    "event": MESSAGE_QUARANTINED_EVENT,
+                    "messageId": audit.key.id().to_string(),
+                    "generation": audit.generation,
+                    "attempt": audit.attempt,
+                    "from": audit.from.as_str(),
+                    "reason": quarantine_reason(audit.reason),
+                    "outcome": transition_outcome(outcome),
+                    "disposition": disposition.as_str(),
+                    "actor": context.actor.to_json(),
+                }),
+            ))
+            .await
+            .map_err(|_| DispatchError::Unavailable)
+    }
+
     async fn quarantine(
         &self,
         transaction: &Transaction<'_>,
         quarantine: Quarantine<'_>,
     ) -> Result<QuarantineDisposition, DispatchError> {
-        // A row that was ever attempted may have reached its provider, so it
-        // becomes a failure an operator can requeue; one never attempted
-        // expires, since nothing was sent.
-        let (state, stamp) = if quarantine.attempt > 0 {
-            (JobState::DeadLettered, "dead_lettered_at")
-        } else {
-            (JobState::Expired, "expired_at")
-        };
+        let (state, stamp) = quarantine_state(&quarantine);
         let message_id = quarantine.key.id();
         let changed = transaction
             .execute(
@@ -767,8 +1111,7 @@ impl DispatchStore for MessageDispatchStore {
                     "UPDATE {JOB_TABLE} \
                         SET state = $4, next_attempt_at = NULL, attempt_started_at = NULL, \
                             lease_expires_at = NULL, lease_token = NULL, \
-                            {stamp} = transaction_timestamp(), \
-                            updated_at = transaction_timestamp() \
+                            {stamp}updated_at = transaction_timestamp() \
                       WHERE message_id = $1 AND part = $2 AND generation = $3"
                 ),
                 &[
@@ -790,20 +1133,25 @@ impl DispatchStore for MessageDispatchStore {
                 &[&message_id, &quarantine.generation],
             )
             .await?;
-        outbox::write(
-            transaction,
-            json!({
-                "event": MESSAGE_QUARANTINED_EVENT,
-                "messageId": message_id.to_string(),
-                "generation": quarantine.generation,
-                "attempt": quarantine.attempt,
-                "from": quarantine.from.as_str(),
-                "reason": quarantine_reason(quarantine.reason),
-                "disposition": state.as_str(),
-            }),
-        )
-        .await?;
         Ok(QuarantineDisposition::Quarantined(state))
+    }
+}
+
+/// The state a quarantined row is set aside in, with the SQL assignment
+/// that stamps it. A row that may have reached its provider becomes
+/// `unknown` for an operator to settle; one attempted only without reaching
+/// it becomes a failure an operator can requeue; one never attempted
+/// expires, since nothing was sent.
+fn quarantine_state(quarantine: &Quarantine<'_>) -> (JobState, &'static str) {
+    if quarantine.may_have_reached_receiver {
+        (JobState::Unknown, "")
+    } else if quarantine.attempt > 0 {
+        (
+            JobState::DeadLettered,
+            "dead_lettered_at = transaction_timestamp(), ",
+        )
+    } else {
+        (JobState::Expired, "expired_at = transaction_timestamp(), ")
     }
 }
 
@@ -909,6 +1257,42 @@ impl MessageSender {
         }
     }
 
+    /// Wait for the paced provider's next send slot, or refuse the attempt
+    /// with the outcome it records.
+    async fn pace(
+        &self,
+        pacer: &ProviderPacer,
+        transport: &dyn MessageTransport,
+        job: &LeasedJob<MessageJob>,
+    ) -> Result<PacedSlot, Sent<()>> {
+        let Some(budget) = job.remaining_budget(SystemTime::now()) else {
+            return Err(transient());
+        };
+        // The wait is bounded by what the budget holds beyond the send's
+        // own timeout, so pacing never shortens the send, and by the
+        // message's expiry, so a slot that opens too late is refused now.
+        let mut wait = budget.saturating_sub(transport.attempt_timeout());
+        if let Some(expires_at) = job.policy.expires_at {
+            let Ok(left) = expires_at.duration_since(SystemTime::now()) else {
+                return Err(transient());
+            };
+            wait = wait.min(left);
+        }
+        match pacer.acquire(tokio::time::Instant::now() + wait).await {
+            Ok(slot) => Ok(slot),
+            Err(LimitRefusal::Exceeded { retry_after }) => {
+                self.metrics.record_limit_refusal(LimitKind::Pacing);
+                Err(Sent {
+                    outcome: SendOutcome::Transient {
+                        retry_after: Some(retry_after),
+                    },
+                    detail: (),
+                })
+            }
+            Err(LimitRefusal::Unavailable) => Err(transient()),
+        }
+    }
+
     async fn attempt(&self, job: &LeasedJob<MessageJob>) -> Sent<()> {
         let Some(transport) = self.transports.get(&job.job.provider) else {
             tracing::warn!(
@@ -929,26 +1313,19 @@ impl MessageSender {
                 return transient();
             }
         };
-        if let Some(pacer) = self.transports.pacer(&job.job.provider) {
-            let Some(budget) = job.remaining_budget(SystemTime::now()) else {
-                return transient();
-            };
-            // The wait is bounded by what the budget holds beyond the send's
-            // own timeout, so pacing never shortens the send.
-            let wait = budget.saturating_sub(transport.attempt_timeout());
-            match pacer.acquire(tokio::time::Instant::now() + wait).await {
-                Ok(()) => {}
-                Err(LimitRefusal::Exceeded { retry_after }) => {
-                    self.metrics.record_limit_refusal(LimitKind::Pacing);
-                    return Sent {
-                        outcome: SendOutcome::Transient {
-                            retry_after: Some(retry_after),
-                        },
-                        detail: (),
-                    };
-                }
-                Err(LimitRefusal::Unavailable) => return transient(),
-            }
+        // Held through the send, so a provider's in-flight bound counts the
+        // paced sends as they leave.
+        let _paced = match self.transports.pacer(&job.job.provider) {
+            Some(pacer) => match self.pace(pacer, transport.as_ref(), job).await {
+                Ok(slot) => Some(slot),
+                Err(refused) => return refused,
+            },
+            None => None,
+        };
+        // Nothing reaches the provider once the message has expired; the
+        // transient failure lets the core expire it.
+        if expired(job.policy.expires_at) {
+            return transient();
         }
         let Some(budget) = job.remaining_budget(SystemTime::now()) else {
             return transient();
@@ -969,15 +1346,31 @@ impl MessageSender {
             parts: payload.parts,
             budget,
         };
-        let outcome = match tokio::time::timeout(budget, transport.send(&message)).await {
-            Ok(outcome) => outcome,
-            // A send cut off mid-flight may have reached the provider.
-            Err(_elapsed) => SendOutcome::MaybeSent,
-        };
         Sent {
-            outcome,
+            outcome: send_within_budget(transport.as_ref(), &message).await,
             detail: (),
         }
+    }
+}
+
+/// Whether `expires_at` names a moment already past.
+fn expired(expires_at: Option<SystemTime>) -> bool {
+    expires_at.is_some_and(|expires_at| expires_at <= SystemTime::now())
+}
+
+/// Make one attempt through `transport`, which classifies its own deadline
+/// within `message.budget`. The worker stops waiting only
+/// [`TRANSPORT_OVERRUN_ALLOWANCE`] later, and records an attempt cut off
+/// there as `MaybeSent`.
+pub(crate) async fn send_within_budget(
+    transport: &dyn MessageTransport,
+    message: &OutboundMessage,
+) -> SendOutcome {
+    let backstop = message.budget + TRANSPORT_OVERRUN_ALLOWANCE;
+    match tokio::time::timeout(backstop, transport.send(message)).await {
+        Ok(outcome) => outcome,
+        // A send cut off mid-flight may have reached the provider.
+        Err(_elapsed) => SendOutcome::MaybeSent,
     }
 }
 
@@ -1130,6 +1523,68 @@ mod tests {
         }
     }
 
+    /// A transport that answers `outcome` after `after`, or never.
+    struct Late {
+        after: Option<Duration>,
+        outcome: SendOutcome,
+    }
+
+    #[async_trait]
+    impl MessageTransport for Late {
+        async fn send(&self, _message: &OutboundMessage) -> SendOutcome {
+            match self.after {
+                Some(after) => {
+                    tokio::time::sleep(after).await;
+                    self.outcome.clone()
+                }
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    fn budgeted(budget: Duration) -> OutboundMessage {
+        OutboundMessage {
+            message_id: Uuid::from_u128(7),
+            generation: 1,
+            attempt: 1,
+            channel: Channel::Sms,
+            provider: "gateway".to_owned(),
+            sender_profile: "sms".to_owned(),
+            sender: "Registry".to_owned(),
+            recipient: "+15550100".to_owned(),
+            parts: RenderedParts {
+                subject: None,
+                text: "hello".to_owned(),
+                html: None,
+            },
+            idempotency_key: "sha256:00".to_owned(),
+            provider_idempotent_submit: false,
+            budget,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_transport_classifies_its_own_deadline_and_the_worker_backstops_an_overrun() {
+        let budget = Duration::from_millis(100);
+        let not_sent = SendOutcome::Transient { retry_after: None };
+        let late = Late {
+            after: Some(budget + Duration::from_millis(50)),
+            outcome: not_sent.clone(),
+        };
+        assert_eq!(send_within_budget(&late, &budgeted(budget)).await, not_sent);
+
+        let started = std::time::Instant::now();
+        let stuck = Late {
+            after: None,
+            outcome: not_sent,
+        };
+        assert_eq!(
+            send_within_budget(&stuck, &budgeted(budget)).await,
+            SendOutcome::MaybeSent
+        );
+        assert!(started.elapsed() >= budget + TRANSPORT_OVERRUN_ALLOWANCE);
+    }
+
     #[test]
     fn the_dispatch_statements_render_against_a_schema() {
         let sql = dispatch_sql();
@@ -1139,5 +1594,111 @@ mod tests {
             assert!(!select.joins.contains("--"));
         }
         assert_eq!(table.table(), JOB_TABLE);
+    }
+
+    #[test]
+    fn audit_correlations_pair_one_lifecycle_and_distinguish_repeated_invocations() {
+        let key = JobKey::new(Uuid::from_u128(7), MESSAGE_PART).expect("key");
+        let record = MessageJob {
+            provider: "relay".to_owned(),
+            sender_profile: "email".to_owned(),
+        };
+        let job = |lease_token| LeasedJob {
+            key: key.clone(),
+            generation: 1,
+            attempt: 1,
+            attempt_started_at: SystemTime::UNIX_EPOCH,
+            lease_token,
+            policy: JobPolicy {
+                attempt_timeout: Duration::from_secs(1),
+                maximum_attempts: 1,
+                retry: RetrySchedule::Frozen {
+                    delays_ms: Vec::new(),
+                },
+                on_uncertain: UncertainOutcome::Hold,
+                expires_at: None,
+            },
+            job: record.clone(),
+        };
+        let transition = TransitionAudit {
+            key: key.clone(),
+            generation: 1,
+            attempt: 0,
+            record: record.clone(),
+            transition: Transition::Cancelled,
+        };
+        let replay = ReplayAudit {
+            key: key.clone(),
+            generation: 2,
+            record: record.clone(),
+            from: JobState::DeadLettered,
+            outcome: ReplayOutcome::Requested,
+        };
+        let first = MessageAuditContext {
+            actor: Actor::Worker,
+            invocation_id: Uuid::from_u128(11),
+        };
+        let second = MessageAuditContext {
+            actor: Actor::Worker,
+            invocation_id: Uuid::from_u128(12),
+        };
+
+        assert_ne!(
+            attempt_correlation(&job(Uuid::from_u128(21))),
+            attempt_correlation(&job(Uuid::from_u128(22))),
+            "a rolled-back claim retry receives a fresh attempt correlation"
+        );
+        assert_eq!(
+            transition_correlation(&transition, &first),
+            transition_correlation(&transition, &first),
+            "one request and response share their invocation correlation"
+        );
+        assert_ne!(
+            transition_correlation(&transition, &first),
+            transition_correlation(&transition, &second),
+            "a repeated transition is a fresh invocation"
+        );
+        assert_ne!(
+            replay_correlation(&replay, &first),
+            replay_correlation(&replay, &second),
+            "repeated refused replays cannot collapse into one pair"
+        );
+        assert_ne!(
+            quarantine_correlation(&key, 1, 0, &first),
+            quarantine_correlation(&key, 1, 0, &second)
+        );
+    }
+
+    #[test]
+    fn refused_dispatch_audits_keep_the_truthful_prior_disposition() {
+        assert_eq!(
+            transition_disposition(Transition::Cancelled, TransitionOutcome::Refused),
+            "pending"
+        );
+        assert_eq!(
+            transition_disposition(
+                Transition::Expired {
+                    from: JobState::Pending,
+                    disposition: Disposition::Expired,
+                },
+                TransitionOutcome::Refused,
+            ),
+            "pending"
+        );
+        assert_eq!(
+            transition_disposition(
+                Transition::LeaseLapsed(Disposition::RetryPending),
+                TransitionOutcome::Refused,
+            ),
+            "leased"
+        );
+        assert_eq!(
+            replay_disposition(JobState::Unknown, ReplayOutcome::Refused),
+            "unknown"
+        );
+        assert_eq!(
+            replay_disposition(JobState::DeadLettered, ReplayOutcome::Refused),
+            "dead_lettered"
+        );
     }
 }

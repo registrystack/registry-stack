@@ -1,6 +1,6 @@
 ---
 title: Registry Stack client API reference
-description: Construction, operations, outcomes, and errors for the Registry Discovery, Evidence Gateway, Registry Relay, Base Registry Engine, Registry Casework, and Registry Messaging namespaces of the unified Registry Stack client.
+description: Construction, operations, outcomes, and errors for each product namespace of the unified Registry Stack client.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,9 +14,10 @@ standards_referenced:
 ---
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. It holds six namespaces, one per product: `discovery` for Registry
+`registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
 Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, `breg` for Base Registry
-Engine (BReg), `casework` for Registry Casework, and `messaging` for Registry Messaging. Each namespace keeps its own routes,
+Engine (BReg), <DocsetProduct product="registry-messaging" absent>and </DocsetProduct>`casework` for Registry
+Casework<DocsetProduct product="registry-messaging">, and `messaging` for Registry Messaging</DocsetProduct>. Each namespace keeps its own routes,
 authentication, errors, and verification rules, because those contracts differ. Relay and BReg share
 only the neutral `registry-record` types they decode Registry Record responses into.
 
@@ -33,8 +34,8 @@ deployment it calls unless a release note states a wider compatibility range.
 The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
 carry no Base Registry Engine client package and no unified package; they distribute one standalone
 package per product instead. The `casework` namespace is present in those same unified packages
-beginning with Registry Stack v0.30.0, and the `messaging` namespace beginning with Registry Stack
-v0.35.0. Python requires version 3.10 or later and the wheels use the
+beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">, and the `messaging` namespace beginning with Registry Stack
+v0.35.0</DocsetProduct>. Python requires version 3.10 or later and the wheels use the
 Python 3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
 macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains
@@ -79,8 +80,8 @@ npm install --save-dev "@types/node"
 The package does not declare that dependency itself, because a JavaScript consumer does not need it.
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
-the facade that re-exports the six product clients under `breg`, `casework`, `discovery`,
-`evidence`, `messaging`, and `relay` modules; a single-product application can depend on that product's crate
+the facade that re-exports the product clients under `breg`, `casework`, `discovery`,
+`evidence`, <DocsetProduct product="registry-messaging">`messaging`, </DocsetProduct>and `relay` modules; a single-product application can depend on that product's crate
 directly instead.
 
 ```toml
@@ -92,7 +93,9 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
     crates/registry-stack-client-py/README.md, crates/registry-stack-client/Cargo.toml,
     release/scripts/assemble-registry-client-wheel.py */}
 
-## One import, six namespaces
+## One import, one namespace per product
+
+<DocsetProduct product="registry-messaging">
 
 ```python
 from registry_client import breg, casework, discovery, evidence, messaging, relay
@@ -105,6 +108,24 @@ const { breg, casework, discovery, evidence, messaging, relay } = require('@regi
 ```rust
 use registry_stack_client::{breg, casework, discovery, evidence, messaging, relay};
 ```
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-messaging" absent>
+
+```python
+from registry_client import breg, casework, discovery, evidence, relay
+```
+
+```js
+const { breg, casework, discovery, evidence, relay } = require('@registrystack/client');
+```
+
+```rust
+use registry_stack_client::{breg, casework, discovery, evidence, relay};
+```
+
+</DocsetProduct>
 
 Import only the namespaces an application uses. Nothing crosses a namespace: a Relay error is never
 a BReg error, and a Discovery selection is inert metadata that grants no access to either.
@@ -1280,6 +1301,8 @@ value outside the schema itself, and both reasons carry the instance path of the
     CaseworkErrorKind and ValidationDetail, crates/registry-casework-client-py/src/lib.rs,
     crates/registry-casework-client-node/client.d.ts, CaseworkClientError */}
 
+<DocsetProduct product="registry-messaging">
+
 ## Registry Messaging
 
 The Messaging client covers six routes: liveness, readiness, the submission of one message, the
@@ -1446,6 +1469,8 @@ an `Error` with `kind` and the optional `code`, `title`, `detail`, `status`, `tr
     MessagingErrorKind and MessagingProblemCode; crates/registry-messaging-client-node/client.d.ts,
     MessagingClientError and MessagingProblemCode */}
 
+</DocsetProduct>
+
 ## Shared implementation boundary
 
 The canonical Rust clients own product-neutral outbound policy, bearer acquisition, prefix-safe route
@@ -1463,10 +1488,15 @@ Deployment-defined data stays dynamic at the SDK boundary.
 - [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
 - [Registry Casework API](../apis/registry-casework/) for the Casework HTTP, header, and problem
   contracts.
-- [Registry Messaging API](../apis/registry-messaging/) for the Messaging HTTP, idempotency, limit,
-  and problem contracts.
 - [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
 - [Relayctl command reference](../relayctl/) for Relay project authoring and package commands.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.
 - [Control access per profile](../../configure/breg-access/) for the profiles and capability bindings
   a BReg selection matches against.
+
+<DocsetProduct product="registry-messaging">
+
+- [Registry Messaging API](../apis/registry-messaging/) for the Messaging HTTP, idempotency, limit,
+  and problem contracts.
+
+</DocsetProduct>

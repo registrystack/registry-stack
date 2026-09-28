@@ -22,6 +22,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use hickory_resolver::config::ResolveHosts;
 use hickory_resolver::net::{DnsError, NetError};
 use hickory_resolver::proto::op::ResponseCode;
@@ -36,7 +37,9 @@ use http::uri::PathAndQuery;
 use http::{HeaderMap, StatusCode};
 use ipnet::IpNet;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_crypto::mac::hmac_sha256;
 use reqwest::Url;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio::time::{timeout_at, Instant};
@@ -71,6 +74,16 @@ pub const MAX_DESTINATION_HEADER_VALUE_BYTES: usize = 8_192;
 pub const MAX_DESTINATION_REQUEST_HEADER_BYTES: usize = 32_768;
 /// Maximum request-body bytes accepted by the platform transport.
 pub const MAX_DESTINATION_REQUEST_BODY_BYTES: usize = 1_048_576;
+/// Maximum AWS SigV4 signing service or region bytes.
+pub const MAX_AWS_SIGV4_SCOPE_COMPONENT_BYTES: usize = 64;
+/// Maximum AWS access-key identifier bytes retained by this transport.
+pub const MAX_AWS_SIGV4_ACCESS_KEY_ID_BYTES: usize = 128;
+/// Maximum AWS secret-access-key bytes retained by this transport.
+pub const MAX_AWS_SIGV4_SECRET_ACCESS_KEY_BYTES: usize = 128;
+/// Maximum AWS session-token bytes retained by this transport.
+pub const MAX_AWS_SIGV4_SESSION_TOKEN_BYTES: usize = 8_192;
+/// Maximum `X-Amz-Target` bytes accepted by the bounded AWS JSON transport.
+pub const MAX_AWS_JSON_ACTION_BYTES: usize = 256;
 /// Maximum response-body ceiling accepted by the platform transport.
 pub const MAX_DESTINATION_RESPONSE_BODY_BYTES: usize = 16_777_216;
 /// Maximum parsed upstream response-header count.
@@ -867,6 +880,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             target,
             headers,
             authorization,
+            aws_sigv4,
             body,
             slot: _,
         } = request;
@@ -878,12 +892,39 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         operation_url.set_path(target.path());
         operation_url.set_query(target.query());
 
-        let mut reqwest_headers = HeaderMap::with_capacity(headers.len());
+        if authorization.is_some() && aws_sigv4.is_some() {
+            return Err(DestinationSendError::InvalidFrozenRequest);
+        }
+        let signing_headers = match aws_sigv4.as_ref() {
+            Some(signing) => Some(aws_sigv4_headers(
+                method,
+                &operation_url,
+                &target,
+                &headers,
+                body.as_deref()
+                    .ok_or(DestinationSendError::InvalidFrozenRequest)?,
+                signing,
+                Utc::now(),
+            )?),
+            None => None,
+        };
+        let mut reqwest_headers =
+            HeaderMap::with_capacity(headers.len() + signing_headers.as_ref().map_or(0, Vec::len));
         for header in &headers {
             let mut value = HeaderValue::from_bytes(header.value.as_slice())
                 .map_err(|_| DestinationSendError::InvalidFrozenRequest)?;
             value.set_sensitive(true);
             reqwest_headers.insert(header.name.clone(), value);
+        }
+        if let Some(signing_headers) = signing_headers {
+            for (name, bytes) in signing_headers {
+                let mut value = HeaderValue::from_bytes(bytes.as_slice())
+                    .map_err(|_| DestinationSendError::InvalidFrozenRequest)?;
+                value.set_sensitive(true);
+                if reqwest_headers.insert(name, value).is_some() {
+                    return Err(DestinationSendError::InvalidFrozenRequest);
+                }
+            }
         }
 
         let mut builder = client
@@ -1482,6 +1523,70 @@ impl fmt::Debug for DestinationAuthorizationValue {
     }
 }
 
+/// AWS credentials retained only for one bounded SigV4 request.
+///
+/// Every credential component uses zeroizing storage. `Clone` supports a
+/// runtime that resolves and validates credentials once at activation; each
+/// clone preserves the same erasure and diagnostic-redaction behavior.
+#[derive(Clone)]
+pub struct AwsSigV4Credentials {
+    access_key_id: Zeroizing<Vec<u8>>,
+    secret_access_key: Zeroizing<Vec<u8>>,
+    session_token: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl AwsSigV4Credentials {
+    /// Validate and copy one long-lived or temporary AWS credential set.
+    ///
+    /// The secret access key and session token must be printable ASCII
+    /// without spaces. Whitespace, including a trailing line break from a
+    /// secret file, is refused rather than trimmed: it would otherwise make
+    /// every signature invalid.
+    pub fn new(
+        access_key_id: &[u8],
+        secret_access_key: &[u8],
+        session_token: Option<&[u8]>,
+    ) -> Result<Self, DestinationRequestError> {
+        if access_key_id.is_empty()
+            || access_key_id.len() > MAX_AWS_SIGV4_ACCESS_KEY_ID_BYTES
+            || !access_key_id.iter().all(u8::is_ascii_alphanumeric)
+            || secret_access_key.is_empty()
+            || secret_access_key.len() > MAX_AWS_SIGV4_SECRET_ACCESS_KEY_BYTES
+            || !secret_access_key
+                .iter()
+                .all(|byte| matches!(byte, 0x21..=0x7e))
+            || session_token.is_some_and(|token| {
+                token.is_empty()
+                    || token.len() > MAX_AWS_SIGV4_SESSION_TOKEN_BYTES
+                    || !token.iter().all(|byte| matches!(byte, 0x21..=0x7e))
+            })
+        {
+            return Err(DestinationRequestError::InvalidAwsSigV4Credentials);
+        }
+        Ok(Self {
+            access_key_id: Zeroizing::new(access_key_id.to_vec()),
+            secret_access_key: Zeroizing::new(secret_access_key.to_vec()),
+            session_token: session_token.map(|token| Zeroizing::new(token.to_vec())),
+        })
+    }
+}
+
+impl fmt::Debug for AwsSigV4Credentials {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AwsSigV4Credentials([REDACTED])")
+    }
+}
+
+struct AwsJsonSigningTemplate {
+    service: Box<str>,
+}
+
+struct AwsSigV4RequestAuthorization {
+    service: Box<str>,
+    region: Box<str>,
+    credentials: AwsSigV4Credentials,
+}
+
 struct QueryValueTemplate {
     name: String,
     max_value_bytes: usize,
@@ -1561,6 +1666,7 @@ pub struct BoundedDestinationRequestTemplate<S: DestinationSlot> {
     max_target_bytes: usize,
     max_request_bytes: usize,
     script_policy: Option<ScriptRequestPolicy>,
+    aws_json_signing: Option<AwsJsonSigningTemplate>,
     slot: PhantomData<fn() -> S>,
 }
 
@@ -1818,6 +1924,97 @@ impl BoundedDestinationRequestTemplate<EventDestination> {
 }
 
 impl BoundedDestinationRequestTemplate<DataDestination> {
+    /// Compile the closed AWS JSON 1.0 POST shape used by reviewed AWS APIs.
+    ///
+    /// This is deliberately not a general SigV4 signer. It admits only `POST
+    /// /` with no query, fixes the signing service at activation, constructs
+    /// `Content-Type` and `X-Amz-Target` itself, and requires typed SigV4
+    /// credentials at render time.
+    pub fn new_aws_json_send(
+        service: &str,
+        max_body_bytes: usize,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        if !valid_aws_scope_component(service)
+            || !(1..=MAX_DESTINATION_REQUEST_BODY_BYTES).contains(&max_body_bytes)
+        {
+            return Err(DestinationRequestError::InvalidAwsSigV4Configuration);
+        }
+        let headers = vec![
+            HeaderValueTemplate::Exact {
+                name: CONTENT_TYPE,
+                value: Box::from(b"application/x-amz-json-1.0".as_slice()),
+            },
+            HeaderValueTemplate::Dynamic {
+                name: HeaderName::from_static("x-amz-target"),
+                max_value_bytes: MAX_AWS_JSON_ACTION_BYTES,
+            },
+        ];
+        let fixed_bytes = 1_usize
+            + headers
+                .iter()
+                .map(|header| header.name().as_str().len() + header.max_value_bytes())
+                .sum::<usize>()
+            + aws_sigv4_reserved_request_bytes(service.len())
+            + max_body_bytes;
+        if fixed_bytes > max_request_bytes
+            || max_request_bytes
+                > MAX_DESTINATION_TARGET_BYTES
+                    + MAX_DESTINATION_REQUEST_HEADER_BYTES
+                    + MAX_DESTINATION_REQUEST_BODY_BYTES
+        {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        Ok(Self {
+            method: DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post),
+            fixed_path: "/".to_owned(),
+            path_segment_max_bytes: None,
+            query: Vec::new(),
+            headers,
+            authorization: DestinationAuthorizationTemplate::Forbidden,
+            body: DestinationBodyTemplate::Required {
+                max_bytes: max_body_bytes,
+            },
+            max_target_bytes: 1,
+            max_request_bytes,
+            script_policy: None,
+            aws_json_signing: Some(AwsJsonSigningTemplate {
+                service: service.into(),
+            }),
+            slot: PhantomData,
+        })
+    }
+
+    /// Render one bounded AWS JSON 1.0 call for signing at the final origin.
+    pub fn render_aws_json(
+        &self,
+        region: &str,
+        credentials: AwsSigV4Credentials,
+        action: &str,
+        body: Zeroizing<Vec<u8>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        let signing = self
+            .aws_json_signing
+            .as_ref()
+            .ok_or(DestinationRequestError::AuthorizationShapeMismatch)?;
+        if !valid_aws_scope_component(region) || !valid_aws_json_action(action) {
+            return Err(DestinationRequestError::InvalidAwsSigV4Configuration);
+        }
+        let authorization = AwsSigV4RequestAuthorization {
+            service: signing.service.clone(),
+            region: region.into(),
+            credentials,
+        };
+        self.render_zeroizing_parts(
+            None,
+            &[],
+            &[action.as_bytes()],
+            None,
+            Some(body),
+            Some(authorization),
+        )
+    }
+
     /// Compile the maximum request authority available to one reviewed script allow rule.
     ///
     /// Query names and values remain script-authored and are bounded at render time. Header
@@ -1998,6 +2195,7 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
                 request_headers: retained_headers,
                 api_key,
             }),
+            aws_json_signing: None,
             slot: PhantomData,
         })
     }
@@ -2543,6 +2741,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             max_target_bytes: target_bytes,
             max_request_bytes,
             script_policy: None,
+            aws_json_signing: None,
             slot: PhantomData,
         })
     }
@@ -2578,6 +2777,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             header_values,
             authorization,
             body.map(Zeroizing::new),
+            None,
         )
     }
 
@@ -2596,6 +2796,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             header_values,
             authorization,
             body,
+            None,
         )
     }
 
@@ -2607,7 +2808,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         authorization: Option<DestinationAuthorizationValue>,
         body: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
-        self.render_zeroizing_parts(None, query_values, header_values, authorization, body)
+        self.render_zeroizing_parts(None, query_values, header_values, authorization, body, None)
     }
 
     fn render_zeroizing_parts(
@@ -2617,7 +2818,11 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         header_values: &[&[u8]],
         authorization: Option<DestinationAuthorizationValue>,
         body: Option<Zeroizing<Vec<u8>>>,
+        aws_sigv4: Option<AwsSigV4RequestAuthorization>,
     ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        if self.aws_json_signing.is_some() != aws_sigv4.is_some() {
+            return Err(DestinationRequestError::AuthorizationShapeMismatch);
+        }
         match (self.path_segment_max_bytes, path_segment) {
             (None, None) => {}
             (Some(max_bytes), Some(segment))
@@ -2739,7 +2944,15 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         }
         let authorization =
             authorization.map(|value| DestinationAuthorization { value: value.value });
-        BoundedDestinationRequest::new_sensitive(self.method, target, headers, authorization, body)
+        let mut request = BoundedDestinationRequest::new_sensitive(
+            self.method,
+            target,
+            headers,
+            authorization,
+            body,
+        )?;
+        request.aws_sigv4 = aws_sigv4;
+        Ok(request)
     }
 }
 
@@ -3142,6 +3355,7 @@ pub struct BoundedDestinationRequest<S: DestinationSlot> {
     target: Zeroizing<Vec<u8>>,
     headers: Vec<SensitiveHeader>,
     authorization: Option<DestinationAuthorization>,
+    aws_sigv4: Option<AwsSigV4RequestAuthorization>,
     body: Option<Zeroizing<Vec<u8>>>,
     slot: PhantomData<fn() -> S>,
 }
@@ -3167,6 +3381,7 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequest<S> {
             .field("target", &"[REDACTED]")
             .field("headers", &"[REDACTED]")
             .field("authorization", &"[REDACTED]")
+            .field("aws_sigv4", &"[REDACTED]")
             .field("body", &"[REDACTED]")
             .finish()
     }
@@ -3340,10 +3555,230 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
             target,
             headers: retained_headers,
             authorization,
+            aws_sigv4: None,
             body,
             slot: PhantomData,
         })
     }
+}
+
+const AWS_SIGV4_ALGORITHM: &[u8] = b"AWS4-HMAC-SHA256";
+const AWS_SIGV4_TERMINATOR: &[u8] = b"aws4_request";
+const MAX_AWS_SIGV4_AUTHORIZATION_BYTES: usize = 1_024;
+type AwsSigV4HeaderValues = Vec<(HeaderName, Zeroizing<Vec<u8>>)>;
+
+fn valid_aws_scope_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_AWS_SIGV4_SCOPE_COMPONENT_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn valid_aws_json_action(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_AWS_JSON_ACTION_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn aws_sigv4_reserved_request_bytes(service_bytes: usize) -> usize {
+    let signed_header_names =
+        b"content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token;x-amz-target";
+    let authorization_bytes = AWS_SIGV4_ALGORITHM.len()
+        + b" Credential=".len()
+        + MAX_AWS_SIGV4_ACCESS_KEY_ID_BYTES
+        + 1
+        + 8
+        + 1
+        + MAX_AWS_SIGV4_SCOPE_COMPONENT_BYTES
+        + 1
+        + service_bytes
+        + 1
+        + AWS_SIGV4_TERMINATOR.len()
+        + b", SignedHeaders=".len()
+        + signed_header_names.len()
+        + b", Signature=".len()
+        + 64;
+    debug_assert!(authorization_bytes <= MAX_AWS_SIGV4_AUTHORIZATION_BYTES);
+    HOST.as_str().len()
+        + MAX_DESTINATION_ORIGIN_URL_BYTES
+        + "x-amz-date".len()
+        + 16
+        + "x-amz-content-sha256".len()
+        + 64
+        + "x-amz-security-token".len()
+        + MAX_AWS_SIGV4_SESSION_TOKEN_BYTES
+        + AUTHORIZATION.as_str().len()
+        + MAX_AWS_SIGV4_AUTHORIZATION_BYTES
+}
+
+fn aws_sigv4_headers(
+    method: DestinationMethod,
+    operation_url: &Url,
+    target: &PathAndQuery,
+    headers: &[SensitiveHeader],
+    body: &[u8],
+    signing: &AwsSigV4RequestAuthorization,
+    now: DateTime<Utc>,
+) -> Result<AwsSigV4HeaderValues, DestinationSendError> {
+    if method != DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post)
+        || target.path() != "/"
+        || target.query().is_some()
+        || !valid_aws_scope_component(&signing.service)
+        || !valid_aws_scope_component(&signing.region)
+        || headers.len() != 2
+    {
+        return Err(DestinationSendError::InvalidFrozenRequest);
+    }
+    let content_type = headers
+        .iter()
+        .find(|header| header.name == CONTENT_TYPE)
+        .map(|header| header.value.as_slice())
+        .ok_or(DestinationSendError::InvalidFrozenRequest)?;
+    let action = headers
+        .iter()
+        .find(|header| header.name.as_str() == "x-amz-target")
+        .map(|header| header.value.as_slice())
+        .ok_or(DestinationSendError::InvalidFrozenRequest)?;
+    if content_type != b"application/x-amz-json-1.0"
+        || std::str::from_utf8(action).map_or(true, |value| !valid_aws_json_action(value))
+    {
+        return Err(DestinationSendError::InvalidFrozenRequest);
+    }
+
+    let authority = &operation_url[::url::Position::BeforeHost..::url::Position::AfterPort];
+    if authority.is_empty()
+        || authority.len() > MAX_DESTINATION_ORIGIN_URL_BYTES
+        || !is_valid_header_value(authority.as_bytes())
+    {
+        return Err(DestinationSendError::InvalidFrozenRequest);
+    }
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let short_date = now.format("%Y%m%d").to_string();
+    let payload_hash = sha256_hex(body);
+    let signed_headers = if signing.credentials.session_token.is_some() {
+        "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token;x-amz-target"
+    } else {
+        "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-target"
+    };
+
+    let mut canonical = Zeroizing::new(Vec::with_capacity(
+        body.len().min(256) + authority.len() + action.len() + 512,
+    ));
+    canonical.extend_from_slice(b"POST\n/\n\ncontent-type:");
+    canonical.extend_from_slice(content_type);
+    canonical.extend_from_slice(b"\nhost:");
+    canonical.extend_from_slice(authority.as_bytes());
+    canonical.extend_from_slice(b"\nx-amz-content-sha256:");
+    canonical.extend_from_slice(payload_hash.as_bytes());
+    canonical.extend_from_slice(b"\nx-amz-date:");
+    canonical.extend_from_slice(amz_date.as_bytes());
+    canonical.push(b'\n');
+    if let Some(token) = &signing.credentials.session_token {
+        canonical.extend_from_slice(b"x-amz-security-token:");
+        canonical.extend_from_slice(token.as_slice());
+        canonical.push(b'\n');
+    }
+    canonical.extend_from_slice(b"x-amz-target:");
+    canonical.extend_from_slice(action);
+    canonical.push(b'\n');
+    canonical.push(b'\n');
+    canonical.extend_from_slice(signed_headers.as_bytes());
+    canonical.push(b'\n');
+    canonical.extend_from_slice(payload_hash.as_bytes());
+    let canonical_hash = sha256_hex(canonical.as_slice());
+
+    let mut credential_scope =
+        String::with_capacity(short_date.len() + signing.region.len() + signing.service.len() + 16);
+    credential_scope.push_str(&short_date);
+    credential_scope.push('/');
+    credential_scope.push_str(&signing.region);
+    credential_scope.push('/');
+    credential_scope.push_str(&signing.service);
+    credential_scope.push('/');
+    credential_scope.push_str("aws4_request");
+
+    let mut string_to_sign = Vec::with_capacity(160);
+    string_to_sign.extend_from_slice(AWS_SIGV4_ALGORITHM);
+    string_to_sign.push(b'\n');
+    string_to_sign.extend_from_slice(amz_date.as_bytes());
+    string_to_sign.push(b'\n');
+    string_to_sign.extend_from_slice(credential_scope.as_bytes());
+    string_to_sign.push(b'\n');
+    string_to_sign.extend_from_slice(canonical_hash.as_bytes());
+
+    let mut initial_key = Zeroizing::new(Vec::with_capacity(
+        4 + signing.credentials.secret_access_key.len(),
+    ));
+    initial_key.extend_from_slice(b"AWS4");
+    initial_key.extend_from_slice(signing.credentials.secret_access_key.as_slice());
+    let date_key = Zeroizing::new(hmac_sha256(initial_key.as_slice(), short_date.as_bytes()));
+    let region_key = Zeroizing::new(hmac_sha256(date_key.as_slice(), signing.region.as_bytes()));
+    let service_key = Zeroizing::new(hmac_sha256(
+        region_key.as_slice(),
+        signing.service.as_bytes(),
+    ));
+    let signing_key = Zeroizing::new(hmac_sha256(service_key.as_slice(), AWS_SIGV4_TERMINATOR));
+    let signature = hex::encode(hmac_sha256(signing_key.as_slice(), &string_to_sign));
+
+    let mut authorization = Zeroizing::new(Vec::with_capacity(
+        MAX_AWS_SIGV4_AUTHORIZATION_BYTES.min(512),
+    ));
+    authorization.extend_from_slice(AWS_SIGV4_ALGORITHM);
+    authorization.extend_from_slice(b" Credential=");
+    authorization.extend_from_slice(signing.credentials.access_key_id.as_slice());
+    authorization.push(b'/');
+    authorization.extend_from_slice(credential_scope.as_bytes());
+    authorization.extend_from_slice(b", SignedHeaders=");
+    authorization.extend_from_slice(signed_headers.as_bytes());
+    authorization.extend_from_slice(b", Signature=");
+    authorization.extend_from_slice(signature.as_bytes());
+    if authorization.len() > MAX_AWS_SIGV4_AUTHORIZATION_BYTES {
+        return Err(DestinationSendError::InvalidFrozenRequest);
+    }
+
+    let mut signed = vec![
+        (HOST, Zeroizing::new(authority.as_bytes().to_vec())),
+        (
+            HeaderName::from_static("x-amz-content-sha256"),
+            Zeroizing::new(payload_hash.into_bytes()),
+        ),
+        (
+            HeaderName::from_static("x-amz-date"),
+            Zeroizing::new(amz_date.into_bytes()),
+        ),
+        (AUTHORIZATION, authorization),
+    ];
+    if let Some(token) = &signing.credentials.session_token {
+        signed.push((
+            HeaderName::from_static("x-amz-security-token"),
+            Zeroizing::new(token.to_vec()),
+        ));
+    }
+    let aggregate = headers
+        .iter()
+        .map(|header| header.name.as_str().len() + header.value.len())
+        .chain(
+            signed
+                .iter()
+                .map(|(name, value)| name.as_str().len() + value.len()),
+        )
+        .sum::<usize>();
+    if headers.len() + signed.len() > MAX_DESTINATION_REQUEST_HEADERS
+        || aggregate > MAX_DESTINATION_REQUEST_HEADER_BYTES
+        || signed
+            .iter()
+            .any(|(_, value)| value.len() > MAX_DESTINATION_HEADER_VALUE_BYTES)
+    {
+        return Err(DestinationSendError::InvalidFrozenRequest);
+    }
+    Ok(signed)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// Value-free operation-shape validation failures.
@@ -3389,6 +3824,10 @@ pub enum DestinationRequestError {
     BodyPresenceMismatch,
     #[error("event request body is not strict canonical JSON")]
     InvalidEventBody,
+    #[error("AWS SigV4 credentials are invalid")]
+    InvalidAwsSigV4Credentials,
+    #[error("AWS SigV4 request configuration is invalid")]
+    InvalidAwsSigV4Configuration,
 }
 
 /// Value-free resolve, destination-policy, and transport failures.
@@ -4236,7 +4675,12 @@ fn is_forbidden_static_request_header(name: &HeaderName) -> bool {
         || name == UPGRADE
         || matches!(
             name.as_str(),
-            "keep-alive" | "proxy-connection" | "x-real-ip"
+            "keep-alive"
+                | "proxy-connection"
+                | "x-real-ip"
+                | "x-amz-date"
+                | "x-amz-security-token"
+                | "x-amz-content-sha256"
         )
         || name.as_str().starts_with("x-forwarded-")
 }
@@ -4534,6 +4978,241 @@ mod tests {
     use super::*;
 
     const MAX_TEST_EVENT_REQUEST_BYTES: usize = 16_384;
+
+    const AWS_FIXTURE_BODY: &[u8] = br#"{"DestinationPhoneNumber":"+12065550100","MessageBody":"hello","OriginationIdentity":"+12065550101"}"#;
+    const AWS_FIXTURE_ACTION: &str = "PinpointSMSVoiceV2.SendTextMessage";
+
+    fn aws_fixture_credentials(session_token: Option<&[u8]>) -> AwsSigV4Credentials {
+        AwsSigV4Credentials::new(
+            b"AKIDEXAMPLE",
+            b"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            session_token,
+        )
+        .expect("AWS fixture credentials validate")
+    }
+
+    fn aws_fixture_signing(session_token: Option<&[u8]>) -> AwsSigV4RequestAuthorization {
+        AwsSigV4RequestAuthorization {
+            service: "sms-voice".into(),
+            region: "us-east-1".into(),
+            credentials: aws_fixture_credentials(session_token),
+        }
+    }
+
+    fn aws_fixture_headers(action: &str) -> Vec<SensitiveHeader> {
+        vec![
+            SensitiveHeader {
+                name: CONTENT_TYPE,
+                value: Zeroizing::new(b"application/x-amz-json-1.0".to_vec()),
+            },
+            SensitiveHeader {
+                name: HeaderName::from_static("x-amz-target"),
+                value: Zeroizing::new(action.as_bytes().to_vec()),
+            },
+        ]
+    }
+
+    fn aws_header<'a>(headers: &'a [(HeaderName, Zeroizing<Vec<u8>>)], name: &str) -> &'a [u8] {
+        headers
+            .iter()
+            .find(|(candidate, _)| candidate.as_str() == name)
+            .map(|(_, value)| value.as_slice())
+            .expect("signed header exists")
+    }
+
+    fn sign_aws_fixture(
+        authority: &str,
+        action: &str,
+        body: &[u8],
+        session_token: Option<&[u8]>,
+    ) -> AwsSigV4HeaderValues {
+        let url = Url::parse(&format!("https://{authority}/")).expect("fixture URL parses");
+        let target = PathAndQuery::from_static("/");
+        aws_sigv4_headers(
+            DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post),
+            &url,
+            &target,
+            &aws_fixture_headers(action),
+            body,
+            &aws_fixture_signing(session_token),
+            DateTime::parse_from_rfc3339("2015-08-30T12:36:00Z")
+                .expect("fixture time parses")
+                .with_timezone(&Utc),
+        )
+        .expect("fixture signs")
+    }
+
+    #[test]
+    fn aws_json_sigv4_matches_botocore_1_40_0() {
+        // Generated independently by botocore 1.40.0 `SigV4Auth` from the
+        // fixed request inputs above and timestamp 2015-08-30T12:36:00Z.
+        // Its canonical-request hash is
+        // 61c4b0687df543e111afecbda8d35facda28f94d8551878e350088208b70df43.
+        let headers = sign_aws_fixture(
+            "sms-voice.us-east-1.amazonaws.com",
+            AWS_FIXTURE_ACTION,
+            AWS_FIXTURE_BODY,
+            None,
+        );
+        assert_eq!(
+            aws_header(&headers, "x-amz-content-sha256"),
+            b"cc471d8d3a4d43648fb165f51ab1444bbfc9523a9cac82fedcc4920f6f32e9ac"
+        );
+        assert_eq!(
+            aws_header(&headers, "authorization"),
+            concat!(
+                "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/",
+                "sms-voice/aws4_request, SignedHeaders=content-type;host;",
+                "x-amz-content-sha256;x-amz-date;x-amz-target, Signature=",
+                "b87e542efc6dfbd860e905b15c2b3db7dccafeb2060cec63f68f204ae837c8e5"
+            )
+            .as_bytes()
+        );
+    }
+
+    #[test]
+    fn aws_json_sigv4_binds_body_action_authority_and_session_token() {
+        let baseline = sign_aws_fixture(
+            "sms-voice.us-east-1.amazonaws.com",
+            AWS_FIXTURE_ACTION,
+            AWS_FIXTURE_BODY,
+            None,
+        );
+        let authorization = aws_header(&baseline, "authorization");
+        for changed in [
+            sign_aws_fixture(
+                "sms-voice.us-east-1.amazonaws.com",
+                AWS_FIXTURE_ACTION,
+                b"{}",
+                None,
+            ),
+            sign_aws_fixture(
+                "sms-voice.us-east-1.amazonaws.com",
+                "PinpointSMSVoiceV2.SendVoiceMessage",
+                AWS_FIXTURE_BODY,
+                None,
+            ),
+            sign_aws_fixture(
+                "sms-voice.us-west-2.amazonaws.com",
+                AWS_FIXTURE_ACTION,
+                AWS_FIXTURE_BODY,
+                None,
+            ),
+        ] {
+            assert_ne!(aws_header(&changed, "authorization"), authorization);
+        }
+
+        let temporary = sign_aws_fixture(
+            "sms-voice.us-east-1.amazonaws.com",
+            AWS_FIXTURE_ACTION,
+            AWS_FIXTURE_BODY,
+            Some(b"temporary-session-token"),
+        );
+        assert_eq!(
+            aws_header(&temporary, "x-amz-security-token"),
+            b"temporary-session-token"
+        );
+        assert!(std::str::from_utf8(aws_header(&temporary, "authorization"))
+            .expect("authorization is ASCII")
+            .contains("x-amz-security-token"));
+        assert_ne!(aws_header(&temporary, "authorization"), authorization);
+    }
+
+    #[test]
+    fn aws_json_requires_the_typed_template_and_redacts_credentials() {
+        let template =
+            DataDestinationRequestTemplate::new_aws_json_send("sms-voice", 4_096, 32_768)
+                .expect("AWS JSON template compiles");
+        let credentials = aws_fixture_credentials(Some(b"temporary-session-token"));
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains("AKIDEXAMPLE"));
+        assert!(!debug.contains("EXAMPLEKEY"));
+        assert!(!debug.contains("temporary-session-token"));
+
+        assert!(matches!(
+            template.render_zeroizing(
+                &[],
+                &[AWS_FIXTURE_ACTION.as_bytes()],
+                None,
+                Some(Zeroizing::new(AWS_FIXTURE_BODY.to_vec()))
+            ),
+            Err(DestinationRequestError::AuthorizationShapeMismatch)
+        ));
+        let request = template
+            .render_aws_json(
+                "us-east-1",
+                credentials,
+                AWS_FIXTURE_ACTION,
+                Zeroizing::new(AWS_FIXTURE_BODY.to_vec()),
+            )
+            .expect("typed AWS request renders");
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("AKIDEXAMPLE"));
+        assert!(!debug.contains("EXAMPLEKEY"));
+        assert!(!debug.contains("temporary-session-token"));
+        assert!(!debug.contains("+12065550100"));
+    }
+
+    #[test]
+    fn aws_json_and_script_auth_inputs_are_bounded_and_closed() {
+        assert!(matches!(
+            AwsSigV4Credentials::new(b"bad/key", b"secret", None),
+            Err(DestinationRequestError::InvalidAwsSigV4Credentials)
+        ));
+        assert!(matches!(
+            AwsSigV4Credentials::new(
+                b"AKIDEXAMPLE",
+                b"secret",
+                Some(&vec![b'x'; MAX_AWS_SIGV4_SESSION_TOKEN_BYTES + 1])
+            ),
+            Err(DestinationRequestError::InvalidAwsSigV4Credentials)
+        ));
+        for secret_access_key in [
+            &b"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\n"[..],
+            b"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\r\n",
+            b" wJalrXUtnFEMI",
+            b"wJalr\tXUtnFEMI",
+            b"wJalr\x7fXUtnFEMI",
+            "wJalr\u{e9}XUtnFEMI".as_bytes(),
+            b"wJalr\0XUtnFEMI",
+        ] {
+            assert!(matches!(
+                AwsSigV4Credentials::new(b"AKIDEXAMPLE", secret_access_key, None),
+                Err(DestinationRequestError::InvalidAwsSigV4Credentials)
+            ));
+        }
+        AwsSigV4Credentials::new(
+            b"AKIDEXAMPLE",
+            b"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+        )
+        .expect("a printable ASCII secret access key is accepted");
+        assert!(matches!(
+            DataDestinationRequestTemplate::new_aws_json_send("SMS-Voice", 1, 32_768),
+            Err(DestinationRequestError::InvalidAwsSigV4Configuration)
+        ));
+        let template =
+            DataDestinationRequestTemplate::new_aws_json_send("sms-voice", 4_096, 32_768)
+                .expect("AWS JSON template compiles");
+        assert!(matches!(
+            template.render_aws_json(
+                "US-EAST-1",
+                aws_fixture_credentials(None),
+                AWS_FIXTURE_ACTION,
+                Zeroizing::new(AWS_FIXTURE_BODY.to_vec()),
+            ),
+            Err(DestinationRequestError::InvalidAwsSigV4Configuration)
+        ));
+        for header in [
+            "authorization",
+            "host",
+            "x-amz-date",
+            "x-amz-security-token",
+            "x-amz-content-sha256",
+        ] {
+            assert!(!is_script_writable_request_header_name(header), "{header}");
+        }
+    }
 
     fn ip(raw: &str) -> IpAddr {
         raw.parse().expect("test IP parses")
@@ -7387,6 +8066,99 @@ mod tests {
             &[],
         )
         .expect("loopback send policy validates")
+    }
+
+    #[tokio::test]
+    async fn aws_json_send_signs_the_exact_wire_host_port_headers_and_body() {
+        let (sender, received) = tokio::sync::oneshot::channel();
+        let sender = Arc::new(Mutex::new(Some(sender)));
+        let route_sender = Arc::clone(&sender);
+        let app = Router::new().route(
+            "/",
+            post(move |headers: HeaderMap, body: Bytes| {
+                let route_sender = Arc::clone(&route_sender);
+                async move {
+                    route_sender
+                        .lock()
+                        .expect("capture lock")
+                        .take()
+                        .expect("one request")
+                        .send((headers, body.to_vec()))
+                        .expect("test awaits request");
+                    (StatusCode::OK, "{}")
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind AWS signing test server");
+        let address = listener.local_addr().expect("AWS test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve AWS signing test app");
+        });
+
+        let template = DataDestinationRequestTemplate::new_aws_json_send(
+            "sms-voice",
+            4_096,
+            MAX_DESTINATION_REQUEST_HEADER_BYTES + 4_097,
+        )
+        .expect("AWS JSON template compiles");
+        let request = template
+            .render_aws_json(
+                "us-east-1",
+                aws_fixture_credentials(Some(b"temporary-session-token")),
+                AWS_FIXTURE_ACTION,
+                Zeroizing::new(AWS_FIXTURE_BODY.to_vec()),
+            )
+            .expect("AWS JSON request renders");
+        let response = loopback_send_policy(address)
+            .send(request, Duration::from_secs(2))
+            .await
+            .expect("AWS JSON request sends");
+        assert_eq!(response.status(), StatusCode::OK);
+        let (headers, body) = received.await.expect("AWS request was captured");
+        assert_eq!(body, AWS_FIXTURE_BODY);
+
+        let authority = format!("127.0.0.1:{}", address.port());
+        assert_eq!(
+            headers.get(HOST).expect("Host is sent").as_bytes(),
+            authority.as_bytes()
+        );
+        assert_eq!(
+            headers
+                .get("x-amz-security-token")
+                .expect("session token is sent")
+                .as_bytes(),
+            b"temporary-session-token"
+        );
+        let timestamp = headers
+            .get("x-amz-date")
+            .expect("signing date is sent")
+            .to_str()
+            .expect("signing date is ASCII");
+        let now = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%dT%H%M%SZ")
+            .expect("signing date parses")
+            .and_utc();
+        let operation_url = Url::parse(&format!("http://{authority}/")).expect("URL parses");
+        let expected = aws_sigv4_headers(
+            DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post),
+            &operation_url,
+            &PathAndQuery::from_static("/"),
+            &aws_fixture_headers(AWS_FIXTURE_ACTION),
+            &body,
+            &aws_fixture_signing(Some(b"temporary-session-token")),
+            now,
+        )
+        .expect("captured request recomputes");
+        assert_eq!(
+            headers
+                .get(AUTHORIZATION)
+                .expect("authorization is sent")
+                .as_bytes(),
+            aws_header(&expected, "authorization")
+        );
     }
 
     fn post_send_template() -> DataDestinationRequestTemplate {

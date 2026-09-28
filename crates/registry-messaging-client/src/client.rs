@@ -198,7 +198,8 @@ impl MessagingClient {
     /// a locale it does not carry, and a render the runtime stopped answer
     /// `ProblemCode::TemplateDataInvalid`,
     /// `ProblemCode::TemplateLocaleUnavailable`, and
-    /// `ProblemCode::TemplateRenderRefused`.
+    /// `ProblemCode::TemplateRenderRefused`; a rendered part over its size
+    /// ceiling answers `ProblemCode::ContentTooLarge`.
     ///
     /// `template_id` must be a package identifier and `version` a package
     /// version label; any other value is refused before a request is sent.

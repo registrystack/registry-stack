@@ -123,7 +123,8 @@ pub enum SendOutcome {
     Permanent { code: FailureCode },
     /// The request may have reached the receiver and its fate is unknown.
     /// The job's [`crate::UncertainOutcome`] policy decides whether the core
-    /// holds it as unknown or retries it.
+    /// holds it as unknown or retries it, and what a retry it cannot make
+    /// becomes.
     MaybeSent,
 }
 

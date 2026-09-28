@@ -392,7 +392,7 @@
     },
     "RawAuditConfig": {
       "additionalProperties": false,
-      "description": "The key that keys an audit journal's hashes, written `audit.hashKeyRef`\nbeside the product's own audit settings.",
+      "description": "The key for the keyed references an audit record carries in place of raw\nidentifiers, written `audit.hashKeyRef` beside the product's own audit\nsettings.",
       "else": {
         "properties": {
           "path": {

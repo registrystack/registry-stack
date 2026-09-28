@@ -63,3 +63,31 @@ test('seats every published command page in command order', async (t) => {
     { label: 'bregctl data import', slug: 'reference/cli/bregctl/data/import' },
   ]);
 });
+
+test('omits every seat of a binary whose product the docset does not publish', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-cli-sidebar-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const index = resolve(root, 'index.mdx');
+
+  await writeFile(index, page('CLI reference'));
+  await writeFile(resolve(root, 'breg.mdx'), page('breg command reference'));
+  await writeFile(resolve(root, 'messaging.mdx'), page('messaging command reference'));
+  await writeFile(resolve(root, 'messagingctl.mdx'), page('messagingctl command reference'));
+  await mkdir(resolve(root, 'messagingctl'), { recursive: true });
+  await writeFile(resolve(root, 'messagingctl/migrate.mdx'), page('messagingctl migrate'));
+
+  assert.deepEqual(
+    cliReferenceSidebar(index)[0].items.map((item) => item.slug),
+    [
+      'reference/cli',
+      'reference/cli/breg',
+      'reference/cli/messaging',
+      'reference/cli/messagingctl',
+      'reference/cli/messagingctl/migrate',
+    ],
+  );
+  assert.deepEqual(
+    cliReferenceSidebar(index, { omit: ['messaging', 'messagingctl'] })[0].items.map((item) => item.slug),
+    ['reference/cli', 'reference/cli/breg'],
+  );
+});

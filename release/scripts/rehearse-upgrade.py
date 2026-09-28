@@ -49,6 +49,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import release_roster  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "registrystack/registry-stack"
@@ -81,7 +87,9 @@ PLATFORMS = ("linux-amd64", "macos-arm64")
 PRODUCTS = ("breg", "casework", "evidence", "messaging")
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
-PRODUCT_FIRST_RELEASE = {"messaging": (0, 35, 0)}
+# release_roster.MESSAGING_FIRST_RELEASE names Messaging's first release; while
+# it is None, Messaging has not joined a release and no starting release holds
+# Messaging state to upgrade.
 PRODUCT_PLATFORMS = {"messaging": ("linux-amd64",)}
 POSTGRES_IMAGE = (
     "postgres:17.11@sha256:"
@@ -181,11 +189,16 @@ def select_products(requested: list[str] | None, from_tag: str, platform: str,
     omitted: dict[str, str] = {}
     for product in requested or PRODUCTS:
         reason = None
-        first = PRODUCT_FIRST_RELEASE.get(product)
         platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
-        if first is not None and start < first:
-            reason = (f"{product} was first shipped in v{first[0]}.{first[1]}.{first[2]}, "
-                      f"so {from_tag} holds no {product} state to upgrade")
+        if product == "messaging" and not release_roster.messaging_in_release(start):
+            first = release_roster.MESSAGING_FIRST_RELEASE
+            if first is None:
+                reason = (f"{product} has not joined a release yet "
+                          "(release_roster.MESSAGING_FIRST_RELEASE is unset), "
+                          f"so {from_tag} holds no {product} state to upgrade")
+            else:
+                reason = (f"{product} was first shipped in v{first[0]}.{first[1]}.{first[2]}, "
+                          f"so {from_tag} holds no {product} state to upgrade")
         elif downloading and platform not in platforms:
             reason = f"{product} publishes no {platform} asset to download"
         if reason is None:
@@ -1688,7 +1701,8 @@ class Messaging:
         self.postgres = postgres
         self.secrets = private_directory(work / "secrets")
         self.audit = private_directory(work / "audit")
-        self.project = work / "package"
+        self.project = work / "project"
+        self.package = work / "package"
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         # Every message is scheduled a day out, so no dispatch attempt can
@@ -1735,11 +1749,13 @@ class Messaging:
 
     def author(self, side: Side) -> None:
         side.run("messagingctl", "init", str(self.project))
-        side.run("messagingctl", "check", "--package", str(self.project))
+        side.run("messagingctl", "check", "--project", str(self.project))
+        side.run("messagingctl", "package", str(self.project), "--output", str(self.package))
+        side.run("messagingctl", "check", "--package", str(self.package))
         dump_yaml(self.runtime, {
             "apiVersion": "registry.registrystack.org/messaging-runtime/v1alpha1",
             "kind": "MessagingRuntimeConfig",
-            "package": {"root": str(self.project)},
+            "package": {"root": str(self.package)},
             "listener": {"bind": f"127.0.0.1:{self.port}",
                          "tlsTermination": "development-loopback",
                          "networkExposure": "private-address"},

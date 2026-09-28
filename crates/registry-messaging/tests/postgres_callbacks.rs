@@ -30,16 +30,19 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_messaging::dispatch::{
     dispatcher, MessageDispatcher, MessageSender, MessageTransport, OutboundMessage, Transports,
 };
-use registry_messaging::messages::{OperatorAction, SettleOutcome};
-use registry_messaging::receipts::{MAXIMUM_STORED_RECEIPTS, RECEIPT_RECORDED_EVENT};
+use registry_messaging::messages::{MessageStoreError, OperatorAction, SettleOutcome};
+use registry_messaging::receipts::{
+    record_receipt, MAXIMUM_STORED_RECEIPTS, RECEIPT_RECORDED_EVENT,
+};
 use registry_messaging::retention::RetentionSweep;
-use registry_messaging_core::MessageStatus;
+use registry_messaging_core::{DeliveryReport, MessageStatus, Receipt};
+use registry_platform_audit::AuditWriter;
 use registry_platform_dispatch::postgres::DispatchOutcome;
 use registry_platform_dispatch::{ReceiverReference, SendOutcome};
 use serde_json::{json, Value};
 use support::{
-    assert_absent, assert_logs_clean, captured_logs, email_submission, sender_token,
-    sms_submission, Harness, NAME, OFFICE, RECIPIENT,
+    assert_absent, assert_logs_clean, captured_logs, email_submission, send_app, sender_token,
+    sms_submission, test_audit, Harness, RefusingAuditSink, NAME, OFFICE, RECIPIENT,
 };
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -160,6 +163,7 @@ async fn deployment(verifier: Verifier) -> Deployment {
         harness.store.clone(),
         &harness.isolated.schema,
         Arc::clone(&harness.transports),
+        Arc::clone(&harness.audit),
     )
     .unwrap();
     let sender = MessageSender::new(
@@ -364,10 +368,10 @@ impl Deployment {
             .collect()
     }
 
-    /// The receipt records in the outbox.
+    /// The accepted receipt response records.
     async fn receipt_records(&self) -> Vec<Value> {
         self.harness
-            .outbox()
+            .audit_responses()
             .await
             .into_iter()
             .filter(|record| record["event"] == RECEIPT_RECORDED_EVENT)
@@ -560,6 +564,99 @@ async fn duplicate_and_out_of_order_receipts_never_regress_the_report() {
 }
 
 #[tokio::test]
+async fn a_post_commit_callback_audit_refusal_retries_without_duplicate_history() {
+    let deployment = deployment(Verifier::Body).await;
+    let id = deployment.sent().await;
+    let reference = reference_for(id);
+    let sink = RefusingAuditSink::after(1);
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(sink.clone())));
+    let app = deployment.harness.app_with_audit(audit).await;
+
+    let (status, problem) = send_app(
+        app,
+        deployment.callback(&reference, "delivered", None, false),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert_eq!(
+        deployment.receipts(id).await,
+        vec![("delivered".to_owned(), None, true)]
+    );
+    assert_eq!(
+        deployment.stored_report(id).await.as_deref(),
+        Some("delivered")
+    );
+    let entries = sink.entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["phase"], "request");
+
+    let (status, body) = deployment.report(&reference, "delivered", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        deployment.receipts(id).await,
+        vec![("delivered".to_owned(), None, true)]
+    );
+    assert_eq!(
+        deployment.stored_report(id).await.as_deref(),
+        Some("delivered")
+    );
+    assert!(
+        deployment.receipt_records().await.is_empty(),
+        "the retry neither duplicates history nor fabricates a repair response"
+    );
+}
+
+/// A receipt whose request record is refused changes nothing; one whose
+/// outcome record is refused after the commit is applied, and each is
+/// reported as what it is rather than as a refused transition.
+#[tokio::test]
+async fn a_receipt_audit_failure_names_whether_the_receipt_was_applied() {
+    let deployment = deployment(Verifier::Body).await;
+    let id = deployment.sent().await;
+    let receipt = Receipt {
+        provider_reference: reference_for(id),
+        report: DeliveryReport::Delivered,
+        code: None,
+    };
+
+    let unavailable = record_receipt(
+        &deployment.harness.store,
+        &test_audit(AuditWriter::from_line_sink(Box::new(
+            RefusingAuditSink::after(0),
+        ))),
+        "sms-gateway",
+        &receipt,
+    )
+    .await
+    .expect_err("a receipt requires its request record");
+    assert!(
+        matches!(unavailable, MessageStoreError::AuditUnavailable),
+        "{unavailable}"
+    );
+    assert!(deployment.receipts(id).await.is_empty());
+
+    let unconfirmed = record_receipt(
+        &deployment.harness.store,
+        &test_audit(AuditWriter::from_line_sink(Box::new(
+            RefusingAuditSink::after(1),
+        ))),
+        "sms-gateway",
+        &receipt,
+    )
+    .await
+    .expect_err("the outcome record is written after the commit");
+    assert!(
+        matches!(unconfirmed, MessageStoreError::AuditUnconfirmed),
+        "{unconfirmed}"
+    );
+    assert_eq!(
+        deployment.stored_report(id).await.as_deref(),
+        Some("delivered")
+    );
+}
+
+#[tokio::test]
 async fn a_final_undelivered_report_is_not_replaced_by_a_late_delivered_one() {
     let deployment = deployment(Verifier::PathToken).await;
     let id = deployment.sent().await;
@@ -711,6 +808,7 @@ async fn receipt_resolution_waits_for_a_concurrent_reference_assignment() {
         deployment.harness.store.clone(),
         &deployment.harness.isolated.schema,
         Arc::clone(&transports),
+        Arc::clone(&deployment.harness.audit),
     )
     .unwrap();
     let sender = MessageSender::new(
@@ -789,8 +887,7 @@ async fn a_verified_callback_the_script_cannot_read_or_does_not_record() {
 /// send an operator settles, an operator's retry, a caller's cancellation,
 /// and a retention sweep, leaves no
 /// recipient, body, template datum, principal, or credential in the
-/// journal, the outbox, the operational log, or the metrics, and the
-/// journal's keyed chain verifies over all of it.
+/// audit stream, the operational log, or the metrics.
 #[tokio::test]
 async fn a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics() {
     let deployment = deployment(Verifier::Body).await;
@@ -948,6 +1045,7 @@ async fn a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics() 
         .await;
     let report = RetentionSweep::new(
         harness.store.clone(),
+        Arc::clone(&harness.audit),
         harness.config.retention,
         Arc::clone(&harness.metrics),
     )
@@ -985,14 +1083,14 @@ async fn a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics() 
     }
     assert_eq!(harness.verify_journal(), journal.len());
     assert_absent("the journal", &Value::Array(journal));
-    let outbox = harness.outbox().await;
+    let audit_responses = harness.audit_responses().await;
     assert!(
-        !serde_json::to_string(&outbox)
+        !serde_json::to_string(&audit_responses)
             .unwrap()
             .contains(&reference_for(sms)),
         "the provider reference is kept for receipts, never journaled"
     );
-    assert_absent("the outbox", &Value::Array(outbox));
+    assert_absent("the audit responses", &Value::Array(audit_responses));
     let scraped = harness.scrape().await;
     assert_absent("the metrics", &Value::String(scraped));
     assert_logs_clean();

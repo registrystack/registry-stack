@@ -1,0 +1,15 @@
+# AWS End User Messaging SMS SendTextMessage over its AWS JSON 1.0 API.
+# The runtime supplies application/x-amz-json-1.0 and signs the final request
+# with the regional credentials in connection.example.yaml.
+prepareScript: scripts/prepare.rhai
+interpretScript: scripts/interpret.rhai
+request:
+  method: post
+  headers: [x-amz-target]
+# AWS accepts a submission without a client request token and publishes
+# delivery events through separately configured event destinations. Therefore
+# this package declares neither idempotent submission nor direct receipts.
+capabilities:
+  receipts: none
+  concurrencyLimit: 16
+

@@ -10,6 +10,8 @@
 // trailingSlash enforcement, so this coexists with `trailingSlash: 'always'`.
 import { getCollection } from 'astro:content';
 import type { GetStaticPathsResult } from 'astro';
+import docsetsManifest from '../data/generated/docsets.json';
+import { resolveDocsetProductRegions, selectedDocset } from '../lib/docset-products.mjs';
 import { buildPageMarkdown, entrySlugToOutputPath } from '../lib/page-markdown';
 
 export const prerender = true;
@@ -27,7 +29,8 @@ export async function GET({ props }: { props: { entry: Awaited<ReturnType<typeof
   const body = buildPageMarkdown(
     entry.data.title,
     entry.data.description,
-    entry.body ?? '',
+    // Drop the <DocsetProduct> regions the rendered page omits for this docset.
+    resolveDocsetProductRegions(entry.body ?? '', selectedDocset(docsetsManifest, process.env)),
     import.meta.env.BASE_URL,
   );
   return new Response(body, {

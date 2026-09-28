@@ -1,0 +1,17 @@
+# Runtime settings for AWS End User Messaging SMS in Africa (Cape Town).
+# Change both baseUrl and region together for the AWS region you use. The
+# credentials are secret references resolved at startup, never package values.
+baseUrl: https://sms-voice.af-south-1.amazonaws.com/
+timeoutMilliseconds: 10000
+maximumResponseBytes: 65536
+concurrencyLimit: 8
+redirects: deny
+authentication:
+  kind: aws-sigv4
+  region: af-south-1
+  service: sms-voice
+  accessKeyIdRef: secret:file/aws-access-key-id
+  secretAccessKeyRef: secret:file/aws-secret-access-key
+  # Set this when the access key is part of temporary AWS credentials.
+  # sessionTokenRef: secret:file/aws-session-token
+

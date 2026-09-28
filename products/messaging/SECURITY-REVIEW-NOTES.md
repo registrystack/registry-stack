@@ -87,15 +87,13 @@ Every mapping in the runtime document and the package is closed, and an
 unknown key is refused with its path. Credentials are named only by
 `secret:env/NAME` or `secret:file/name` references in members ending in
 `Ref`, under a provider the document explicitly enables. `${VAR}`
-expansion is the shared `registry-platform-config` loader, run over the
-document text before parsing: a value filling a whole member is quoted as one
-string and a value embedded in longer text is refused when it could change
-the document's shape. Before expansion, the document as written is read once
-and an expression anywhere in or below a `Ref` member is refused, aliases
-included (MESSAGING-DEC-05). Refusal messages name the member, or the
-document root for an expansion failure, and never repeat the refused value,
-the substituted text, or a default. `Debug` output of the database and
-metrics settings is redacted.
+expansion uses the shared `RuntimeConfigLoader` after YAML parsing. It only
+substitutes string values; keys and comments stay literal, and substituted
+text cannot alter the document's structure. Expressions in or below `Ref`
+or `Refs` members and in secret-provider declarations are refused, including
+through aliases (MESSAGING-DEC-05). Diagnostics identify the field without
+revealing substituted or default values. Secret-bearing configuration blocks
+redact their `Debug` output.
 
 Tests: the `config.rs` unit tests, the `registry-platform-config`
 expansion and protected-member tests, and the checkpoint's `messagingctl
@@ -107,31 +105,30 @@ Threat: a file edited under `package.root` changes what a running or
 restarted deployment sends without anyone recording the change, or a
 deployment runs a package other than the one reviewed.
 
-The package digest covers `messaging.yaml` and every file under
-`templates/` and `providers/`, each by its own SHA-256 and size, in a canonical JSON
-listing. The loader refuses symbolic links anywhere in the package, bounds the
-entry count, each file, and the total, and reads nothing outside
-`package.root`. A pinned `package.expectedDigest` must equal the digest read,
-or the runtime and `messagingctl` refuse before reaching a database.
+Installed packages use the shared checksum envelope. `SHA256SUMS` determines
+the package digest and covers each admitted product file, with optional
+`REVISION` provenance. The loader verifies the envelope and pin before any
+database work. It then rebinds the sum file and revision to the verified
+identity, reads bounded files into owned buffers, checks each digest, and
+parses/compiles only those buffers. Later file replacements cannot change
+rendered or executed bytes. Symbolic links, unknown files, excessive sizes,
+and excessive file counts are refused.
+
 `messaging serve` refuses to start unless the ledger's active digest equals
-the package read; `messagingctl apply --apply` is the one writer of the
-ledger, under an advisory lock, so a change is recorded before it can serve
-and applies on restart (MESSAGING-DEC-06). The runtime reads the package
-once at startup, so a later edit changes nothing until the next restart,
-which then refuses the unrecorded digest. `/ready` asks the ledger on every
-call: once an operator applies another package, a running runtime answers
-`503` until it is restarted onto it, so a load balancer stops sending it
-traffic for a package the deployment no longer names (MESSAGING-DEC-23).
+the installed package. `messagingctl apply --apply` writes that product-owned
+ledger under its advisory lock, with request audit before mutation and an
+established outcome afterward. A new digest becomes served only after restart
+(MESSAGING-DEC-06). `/ready` checks the active ledger and writer health; a
+running process stops being ready when another package is activated.
 
-`messagingctl apply` does not write the audit journal: the runtime is its
-single writer, and the ledger row with its runtime version and time is the
-record of the change. The runtime start record names the package digest.
-
-Residual risks: the package is read twice at startup (once while the
-configuration is checked, once for serving), and only the second read is
-compared with the ledger, which is the one served. A ConfigMap-style mount
-that publishes files through symbolic links is refused; operators copy the
-package into place instead (MESSAGING-DEC-24).
+Editable projects remain separate from installed packages. Repackage and
+explicitly apply a new digest before restarting. Accepted messages keep their
+rendered payload, provider idempotency capability, and dispatch state. This
+unreleased transition changes package identity and audit schema; it does not
+authorize erasing an existing database or journal. A retained deployment needs
+an explicit migration before adopting this schema. ConfigMap-style symlink
+mounts remain refused; copy the installed package into place instead
+(MESSAGING-DEC-24).
 
 Tests: `config.rs::a_pinned_package_digest_must_equal_the_digest_of_the_package_read`,
 `runtime.rs::the_runtime_serves_only_the_package_the_ledger_names_active`,
@@ -178,49 +175,44 @@ which checks `/metrics` is absent from the public listener.
 
 ## Audit
 
-The journal is the platform keyed hash-chained sink under `audit.path`, keyed
-by `audit.hashKeyRef`. The runtime start carries the runtime version, the
-package digest, and the retention periods in force. A template preview
-carries the access profile, a keyed pseudonym of the verified issuer and
-subject, the package digest, the template reference when the package ships
-it, and the outcome with its problem code; never the data, the rendered
-parts, or the raw subject. A preview the journal cannot record is answered
-`503 service.unavailable`, not rendered. An unauthenticated or unprofiled
-request is not journaled, as for every route (MESSAGING-DEC-02). Listeners
-bind before the start record is written, so a taken address never leaves a
-start record for a runtime that did not serve.
+The shared `AuditWriter` emits minimized request and response envelopes to a
+per-process JSON Lines stream. File acceptance includes fsync; stdout is
+best-effort. The hash key still derives the same caller and recipient
+references, including caller-scoped idempotency tombstones. It no longer
+chains or signs log entries. Tamper evidence, aggregation, and complete
+retention outside local `retainDays` are deployment responsibilities.
 
-A message's audit records are written into `messaging_audit_outbox` inside
-the transaction that makes the change, and the runtime's publisher appends
-them to the journal in outbox order. So an accepted message, a transition,
-an attempt, a quarantine, or a settlement is recorded if and only if it
-committed, and `messagingctl`, which never opens the journal, records its
-operator actions the same way (MESSAGING-DEC-13). The events are
-`messaging.message.accepted`, `messaging.dispatch.transition` with its actor
-(`caller`, `worker`, or `operator-tool`), `messaging.attempt.started`,
-`messaging.attempt.finished`, `messaging.message.quarantined`, and
-`messaging.message.settled`, and `messaging.receipt.recorded` for a
-delivery receipt that moved a report or joined a message's history. A refused or replayed submission is journaled
-directly, as `messaging.message.refused` with its problem code or
-`messaging.message.replayed` with the message identifier. The records carry
-identifiers, classes, the principal pseudonym, and a keyed recipient
-reference; never a contact, a part, template data, or the provider's own
-message reference (MESSAGING-DEC-14).
+A fresh invocation correlation joins request and response. A caller's reusable
+Idempotency-Key is not that correlation. The writer must accept the request
+before a protected mutation, provider effect, or template render. Response
+records that announce committed state follow proof of that commit, and required
+response acceptance precedes returning success or rendered bytes. A failure
+after commit cannot undo the effect: the caller receives unavailable and must
+recover authoritative state through the operation's existing retry contract.
+Same-key submission replay returns the original stored receipt after recovery.
 
-The publisher appends a record and then marks it published, so a crash
-between the two leaves one record appended and unmarked. At start the
-journal reads back from its newest record to its newest outbox record and
-the publisher marks that one first. Every record read back is held to the
-chain head the keyed bootstrap verified, record by record, so an outbox
-record altered in an older sealed segment, which bootstrap does not read,
-refuses the start rather than naming the wrong record. The runtime drains
-every pending outbox batch before appending `messaging.runtime.started` or
-serving requests. A failed recovery pass refuses startup, preserving the
-order between committed pre-restart events and new runtime activity.
+Audit and PostgreSQL are separate systems. An accepted request can remain
+unmatched after process or destination loss. Dropping a live `AuditRequest`
+records an unfinished outcome while its process and writer survive. A COMMIT
+error must not be reported as rollback without proof; bounded readback
+separates committed, rolled-back, and unknown fate. Claim COMMIT errors do not
+immediately send, including when readback finds a lease. Owned dispatch work
+survives caller cancellation and captures caller/operator context before
+spawning. Attempts, provider-reference locks, job transitions, and receipts
+remain transactional domain state.
 
-Test: `postgres_package.rs`
-`startup_publishes_every_pending_outbox_batch_before_its_start_record`
-uses more than one pending publication batch.
+The runtime opens its writer before serving, and `/ready` includes the
+writer's sticky health. Failure requires restart. Applied operator commands
+use a separate `messagingctl` stream, or stderr when runtime audit uses stdout,
+so machine-readable command stdout remains valid. There is no total order
+across process streams and no audit outbox publisher or replay repair.
+
+Records carry identifiers, bounded classes, caller pseudonyms, and keyed
+recipient references. They never carry contacts, rendered parts, template
+data, credentials, or provider message references (MESSAGING-DEC-14).
+Authentication or access-profile refusals remain unaudited. Duplicate or
+no-op callbacks remain unaudited, and retention's existing empty-runtime and
+operator-preview policy remains unchanged.
 
 Reads are not journaled: the status route and `messagingctl messages list`
 and `show` leave no record (MESSAGING-DEC-15). Scheduling's appointment read
@@ -246,11 +238,9 @@ every audited operation in turn: a preview, an acceptance, a replay, a
 refusal, a delivered send, a dead-lettered send, a forged and a signed
 callback, a status read, an interrupted send an operator settles, an
 operator's retry, a caller's cancellation, and a retention sweep. It then
-searches the journal, the outbox, the captured operational log, and the
-metrics scrape for the recipient, the rendered and template values, the
-principal, and the credentials, finds none, finds no provider reference in the
-outbox, and verifies the journal's keyed chain over every record the journey
-wrote. The journey does not repeat the runtime start and quarantine records:
+searches the journal, the captured operational log, and the metrics scrape for the recipient, the rendered and template values, the
+principal, and the credentials, finds none, finds no provider reference in audit, and checks the emitted
+request/response envelopes. The journey does not repeat the runtime start and quarantine records:
 `postgres_migrate.rs` proves the start record carries no database URL or audit
 secret, and the dispatch absence test in `postgres_dispatch.rs` covers
 quarantines.
@@ -308,9 +298,13 @@ the daily count. A refusal is journaled like every refused submission, as
 `messaging.message.refused` with its problem code.
 
 A provider's `capabilities.ratePerSecond` paces the worker in-process: a
-leased attempt waits for the provider's next send slot, with a ten-second
-allowance added to its time budget, and an attempt whose slot does not open
-in it is transient and nothing is sent (MESSAGING-DEC-22).
+leased attempt waits for one of the connection's `concurrencyLimit` sends in
+flight, holds it through the send, and then waits for the provider's next
+send slot, so the rate holds for requests as they leave. The wait has a
+ten-second allowance added to its time budget and never outlasts the
+message's `expiresAt`; an attempt whose slot does not open in it is transient
+and nothing is sent, and no attempt reaches the provider once the message has
+expired (MESSAGING-DEC-22).
 
 Residual risk: a caller that keeps sending past its rate still makes the
 runtime authenticate each request and write one journal record for it. The
@@ -321,11 +315,14 @@ edge proxy for that.
 Tests: `limits.rs` (`a_caller_is_refused_past_its_profile_burst_with_the_wait_needed`,
 `callers_and_profiles_have_separate_budgets`,
 `an_unknown_profile_or_an_unusable_key_is_refused_as_unavailable`,
-`a_provider_starts_one_send_per_interval`), `http.rs`
+`a_provider_starts_one_send_per_interval`,
+`an_attempt_takes_its_turn_only_once_it_holds_an_in_flight_slot`), `http.rs`
 `a_caller_past_its_profile_rate_is_refused_with_the_wait_needed`, and the
 PostgreSQL suites' `a_profile_past_its_daily_limit_is_refused_across_a_restart`,
-`concurrent_submissions_never_take_more_than_the_daily_limit`, and
-`a_paced_provider_starts_one_send_per_interval`.
+`concurrent_submissions_never_take_more_than_the_daily_limit`,
+`a_paced_provider_starts_one_send_per_interval`,
+`a_paced_provider_below_the_worker_concurrency_still_sends_one_per_interval`,
+and `a_message_that_expires_before_its_pacing_slot_expires_unsent`.
 
 ## Dispatch
 
@@ -339,25 +336,47 @@ names the lease and the generation, so a stale worker's write is refused
 and changes nothing. An operator requeue starts a new generation.
 
 MESSAGING-SEC-06, enforced. A transport must finish within the attempt's
-budget; the worker stops waiting when it is spent and records the attempt as
-maybe sent (MESSAGING-DEC-10). A maybe-sent attempt, or a lease that lapsed
+budget and classifies its own deadline, since only it knows whether the
+request was written. The worker stops waiting one second after the budget is
+spent and records a transport that overran it as maybe sent
+(MESSAGING-DEC-10). A maybe-sent attempt, or a lease that lapsed
 mid-attempt, stops the message as `unknown` unless the sender profile set
 `onUncertain: retry`, which the package accepts only over a provider that
 declares `idempotentSubmit` or a profile that sets `acceptDuplicates`. A
 retry then carries the same provider idempotency key, derived from the
 message, its generation, and a digest of its content (MESSAGING-DEC-11).
+Because an operator requeue starts a new generation and so a new key, a
+retrying message whose attempts are spent, whose next retry would land past
+its expiry, or whose expiry passes while that retry waits, after an attempt
+that may have reached the provider stops `unknown`, never failed or expired;
+this holds whether the last attempt answered maybe-sent, failed transiently,
+or was refused permanently, since a later failure does not prove the earlier
+attempt did not land. So does such a row the worker quarantines, and a leased
+row it quarantines.
+The expiry sweep and the claim decide this under the row lock they already
+hold. A message never attempted, or one whose attempts all ended transient,
+still expires unsent.
 The provider capability is persisted with the accepted message, so removing
 `idempotentSubmit` from a later package does not withdraw that key from a
 previously accepted retry.
 Each provider kind decides whether a failure happened after the message
 left: an `smtp` drop, timeout, or unreadable reply once the end-of-data
 marker was written, and an `http` failure after the request was written,
-is maybe-sent; a failure before either is not sent and transient.
+is maybe-sent; a failure before either, a stalled resolution, connection,
+TLS handshake, token fetch, or wait for a send slot included, is not sent
+and transient. An `smtp` goodbye that fails after the relay accepted the
+message leaves it accepted. Without an interpret script an `http` status
+decides: `429` and `503` are transient, and `408` and every other `5xx`
+answer a request that was written and are maybe-sent.
 
 A cancel takes the job row's lock, so it and a claim serialize: a message is
-either cancelled before any attempt or refused `409 message.dispatch-started`
+cancelled only while no attempt of its current generation may have reached
+the provider, and otherwise refused `409 message.dispatch-started`
 (MESSAGING-DEC-09), which the `postgres_messages` race test proves across
-forty rounds. A message whose provider has no transport, or whose payload
+forty rounds. A message waiting to retry after attempts that all ended
+transient still cancels; one waiting after an attempt that ended maybe-sent
+or was interrupted by a lapsed lease is refused, and its retry keeps the
+generation's idempotency key. A message whose provider has no transport, or whose payload
 was erased, fails permanently without a send (MESSAGING-DEC-12).
 
 Tests: MESSAGING-SEC-05 and -06 in `contracts/security-test-traceability.yaml`
@@ -372,7 +391,14 @@ changes one by mistake.
 the status it would reach, and change nothing without `--apply`. Each checks
 the message's status in the same transaction that changes it, refuses with
 `message.not-eligible` or `message.changed` otherwise, and writes its
-`operator-tool` audit record into the outbox (MESSAGING-DEC-13). `list` and
+`operator-tool` request and established outcome to its separate stream
+(MESSAGING-DEC-13). A change whose commit cannot be confirmed is reported
+`message.outcome-unknown`, and one committed whose outcome record fails
+`audit.unconfirmed`; neither is reported as a refusal that changed nothing.
+`cancel` previews and applies the dispatcher's own rule (MESSAGING-DEC-09): a
+queued message an attempt of whose current generation may have reached its
+provider is refused with `message.dispatch-started`, as the HTTP API refuses
+it, in the preview and on `--apply` alike. `list` and
 `show` mask the recipient and never print a part, template data, or the
 submitter's subject. `messagingctl` reaches the database only through the
 runtime configuration's credential references.
@@ -409,8 +435,8 @@ Credentials are `secret:` references resolved at activation. No script sees
 a credential, a reference, the base URL, or a runtime-owned header: prepare
 receives the rendered message and the sender profile, interpret the status,
 the package's allowlisted response headers, and the JSON body read within
-`maximumResponseBytes`, and receipt the callback's method, form, query, and
-JSON body. Every script runs with a fresh scope, an operation budget, the
+`maximumResponseBytes`, and receipt the callback's method and those of its
+form, query, and JSON body the callback verifier authenticates. Every script runs with a fresh scope, an operation budget, the
 send deadline, and no `import`, `eval`, `print`, or `debug`; interpret and
 receipt output is refused above 64 KiB. A 2xx the interpret script cannot
 classify is `maybe-sent`, never accepted. Tracing records the stage, the HTTP
@@ -585,7 +611,11 @@ is not logged, so a flood cannot flood the log either; a limiter that cannot
 decide answers `503 service.unavailable`. The rate is fixed, not configured.
 
 A verified callback is read by the package's `receiptScript` on the blocking
-pool, under the same bounded Rhai engine and budget as `interpret`. A script
+pool, under the same bounded Rhai engine and budget as `interpret`. The
+script reads only what the verifier authenticated: under `hmac-sha256-body`
+the form fields and JSON read from the body and an empty query; under
+`hmac-sha1-url-form` the query and form fields and no JSON; under
+`path-token` all three, since the secret path authenticates the request. A script
 that throws or returns the wrong shape answers `422 callback.unreadable`; one
 that returns nothing (an intermediate state the runtime does not record)
 answers 204. The receipt names its message by the reference the provider
@@ -596,7 +626,8 @@ forward (none, `sent`, then `delivered` or `undelivered`, final once
 terminal); the receipt joins the message's history of at most sixteen
 distinct receipts unless the same report and code are already there; and a
 receipt that moved the report or joined the history writes
-`messaging.receipt.recorded` to the outbox in the same transaction, carrying
+a request before the mutation and `messaging.receipt.recorded` after its
+commit is established, carrying
 the message id, provider, report, the provider's code, whether it applied,
 and the report before and after. The record, the history row, and the logs
 never carry the reference, the recipient, a part, or the callback's body,
@@ -730,28 +761,36 @@ pseudonym and the key, so a repeat is still `410 idempotency.expired`
 so frees the keys spent under the previous one. Past `submissionReceiptDays` the stored receipt is
 dropped and a repeat of its key is `410 idempotency.expired`.
 
-One run is one transaction under a transaction advisory lock, with a
-five-second lock timeout and a sixty-second statement timeout; a run that
-exceeds either is rolled back whole. Each due terminal job is locked
+An applied run erases in batches of at most 1,000 of each kind, oldest
+first, and ends at the first batch shorter than that. Each batch is one
+transaction under a transaction advisory lock, with a five-second lock
+timeout and a sixty-second statement timeout; a batch that exceeds either is
+rolled back whole, and the batches committed before it stay erased and
+journaled. A preview is one transaction that counts everything due. Each due terminal job is locked
 `FOR UPDATE` before its payload is erased, and the predicate is read again
 under the lock, so an operator requeue that commits first keeps the payload,
 and one that comes after fails as `payload-erased` without a send
 (MESSAGING-DEC-12). The runtime runs retention at start and hourly under its
 own credential with the database's clock as the cutoff
-(MESSAGING-DEC-18). `messagingctl retention erase-expired --before` runs it
+(MESSAGING-DEC-18); on shutdown its sweep ends after the batch in progress
+commits, and the next start erases what is left. `messagingctl retention erase-expired --before` runs it
 under the migration credential, previews unless `--apply` is given, and
 refuses a cutoff later than the local clock before any input or output and
-later than the database's clock inside the run (MESSAGING-DEC-19). A run
-writes `messaging.retention.erased` into the outbox in its own transaction,
-carrying the cutoff, the three counts, the periods in force, and its actor
+later than the database's clock inside the run (MESSAGING-DEC-19). Each batch
+accepts request audit before erasure and records `messaging.retention.erased`
+after its commit is established,
+carrying the cutoff, the batch's three counts, the periods in force, and its actor
 (`runtime` or `operator-tool`), never an identifier of what it erased. The
-runtime's sweep writes it only when it erased something; an applied operator
-run always writes it; a preview writes nothing.
+runtime's sweep writes it only for a batch that erased something; an applied
+operator run always writes it for its first batch; a preview writes nothing.
+A batch whose commit cannot be confirmed is reported as an unknown outcome,
+and one whose outcome record fails after the commit as `audit.unconfirmed`,
+never as a failure that erased nothing.
 
-Residual risk: a run does not batch. A backlog large enough to exceed the
-statement timeout erases nothing until an operator runs the command against
-a cutoff that bounds the backlog. Published outbox rows, whose records carry
-no payload value, are not pruned by retention.
+Residual risk: a batch whose single statement exceeds the statement timeout
+erases nothing, so a backlog stalls only when one batch of 1,000 cannot
+complete in sixty seconds. Audit segment retention is independent of
+payload and record erasure; off-host shipping must precede local expiry.
 
 Tests: MESSAGING-SEC-10 in `contracts/security-test-traceability.yaml`.
 
@@ -795,3 +834,26 @@ running until the next start in the same project removes them.
 
 Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`, and
 `products/messaging/scripts/test-dev.sh`.
+
+## AWS SMS request signing
+
+The AWS End User Messaging provider uses the shared HTTP destination's typed
+AWS JSON signing template. Operator configuration binds the endpoint, region,
+service, and explicit secret references; the reviewed provider package shapes
+the action and JSON body. The transport retains destination confinement,
+DNS/address admission, no redirects, and one deadline. Signing occurs on the
+final root POST bytes, with JSON 1.0 content type, action, host, timestamp,
+payload digest, and optional session token covered by SigV4. Scripts cannot
+supply authorization or signing headers, and never receive signing keys.
+Secret owners and signature derivation buffers are zeroizing; diagnostic
+objects redact credentials. No environment/default SDK credential chain or
+metadata-service lookup is introduced.
+
+The SMS adapter does not declare provider submission idempotency or delivery
+receipts. Ambiguous send failures and malformed successful replies remain
+maybe-sent and follow the existing hold policy. Local fixture tests establish
+request/response compatibility, not a live AWS or carrier delivery claim.
+The required AWS IAM authority, origination registration, regional availability,
+and external secret rotation remain operator responsibilities. Temporary
+credentials are loaded at activation and require replacement plus restart
+before expiry. This does not relax the caller's Messaging access profile.

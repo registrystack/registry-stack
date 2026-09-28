@@ -17,12 +17,16 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+# Messaging has not joined a release (release_roster.MESSAGING_FIRST_RELEASE is
+# None). The inclusion fixtures patch a hypothetical first release so the
+# Messaging shard path stays covered without any production knob.
+HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
 # breg-mcp and breg-review have not joined a release
 # (release_roster.BREG_SERVICES_FIRST_RELEASE is None). The inclusion tests
 # patch a hypothetical first release so their shard path stays covered without
 # any production knob.
 HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)
-VERSION = "0.35.0"
+VERSION = "0.36.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
@@ -63,6 +67,13 @@ def digest(data: bytes) -> str:
 
 class MergeReleaseBinaryShardsTest(unittest.TestCase):
     def setUp(self) -> None:
+        roster_patch = mock.patch.object(
+            MODULE.release_roster,
+            "MESSAGING_FIRST_RELEASE",
+            HYPOTHETICAL_MESSAGING_FIRST_RELEASE,
+        )
+        roster_patch.start()
+        self.addCleanup(roster_patch.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -194,20 +205,20 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertIn("scheduling", dict(images_033))
         self.assertNotIn("scheduling-v0.33.0-linux-amd64", rosters_033["core"])
-        rosters_034, images_034 = MODULE.rosters("0.34.0")
-        self.assertEqual([], rosters_034["messaging"])
-        self.assertNotIn("messaging", dict(images_034))
         rosters_035, images_035 = MODULE.rosters("0.35.0")
+        self.assertEqual([], rosters_035["messaging"])
+        self.assertNotIn("messaging", dict(images_035))
+        rosters_036, images_036 = MODULE.rosters("0.36.0")
         self.assertEqual(
             [
-                "messaging-v0.35.0-linux-amd64",
-                "messagingctl-v0.35.0-linux-amd64",
+                "messaging-v0.36.0-linux-amd64",
+                "messagingctl-v0.36.0-linux-amd64",
             ],
-            rosters_035["messaging"],
+            rosters_036["messaging"],
         )
         self.assertEqual(
             ["discovery", "breg", "casework", "scheduling", "messaging", "evidence", "relay"],
-            [name for name, _ in images_035],
+            [name for name, _ in images_036],
         )
         rosters_035, images_035 = MODULE.rosters("0.35.0")
         self.assertEqual(
@@ -254,17 +265,39 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             [name for name, _ in images_037],
         )
 
-    def test_messaging_shard_is_required_from_v0_35_0_and_absent_before(self) -> None:
+    def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            MODULE.release_roster, "MESSAGING_FIRST_RELEASE", None
+        ):
+            for version in ("0.35.0", "0.36.0", "1.0.0"):
+                with self.subTest(version=version):
+                    rosters, images = MODULE.rosters(version)
+                    self.assertEqual([], rosters["messaging"])
+                    self.assertNotIn("messaging", dict(images))
+                    self.assertFalse(
+                        any(
+                            name.startswith("messaging")
+                            for names in rosters.values()
+                            for name in names
+                        )
+                    )
+
+    def test_messaging_shard_is_required_from_the_first_release_and_absent_before(
+        self,
+    ) -> None:
         self.messaging = None
         with self.assertRaisesRegex(
-            MODULE.ShardError, "messaging shard is required from version 0.35.0"
+            MODULE.ShardError,
+            "messaging shard is required for a release that ships Messaging",
         ):
             self.merge()
         self.assertFalse(self.output.exists())
 
-        version = "0.34.0"
+        version = "0.35.0"
         tag = f"v{version}"
-        fixture = self.root / "v0.34.0"
+        fixture = self.root / "v0.35.0"
         fixture.mkdir()
         original_root = self.root
         self.root = fixture

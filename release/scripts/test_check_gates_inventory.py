@@ -441,7 +441,9 @@ class GateInventoryTest(unittest.TestCase):
         protected_push = (
             "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
         )
-        upload_if = f"{protected_push} && needs.changes.outputs.platform == 'true'"
+        upload_if = (
+            f"{protected_push} && needs.changes.outputs.platform_coverage == 'true'"
+        )
         mutations = (
             (
                 "    steps:\n      - name: Checkout",
@@ -495,9 +497,12 @@ class GateInventoryTest(unittest.TestCase):
                 "      id-token: write\n    steps:",
                 "      id-token: write\n      issues: write\n    steps:",
             ),
+            # Coverage publishes from main and the nightly sweep; the upload
+            # must not hold the merge verdict.
             (
-                "      - platform-coverage-upload\n",
-                "",
+                "      - platform-quality\n      - platform-hygiene\n",
+                "      - platform-quality\n      - platform-coverage-upload\n"
+                "      - platform-hygiene\n",
             ),
         )
         for before, after in mutations:

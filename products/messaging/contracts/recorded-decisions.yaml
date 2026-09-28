@@ -62,11 +62,12 @@ decisions:
   - id: MESSAGING-DEC-05
     subject: Environment expressions are refused in credential references
     decision: >-
-      The runtime configuration expands ${VAR} expressions with the shared
-      registry-platform-config loader, over the document text before parsing,
-      as the other Registry Stack runtimes do. Before expanding, it reads the
-      document as written and refuses an expression in or below any member
-      whose name ends in Ref, since those members hold secret references.
+      The runtime configuration uses the shared RuntimeConfigLoader. It
+      parses YAML first, then substitutes expressions inside string values;
+      keys remain literal, and expressions in credential references and
+      secret-provider declarations are refused. This supersedes the pre-parse mechanism
+      reviewed before the shared loader transition, preserving the secret
+      reference and document-shape invariants.
     reasoning: >-
       A secret reference already names where the secret lives. Expanding
       into it would let an environment variable redirect the runtime to a
@@ -74,9 +75,9 @@ decisions:
       shared loader keeps an expanded value from changing the document's
       shape, so one expansion grammar holds across the stack.
     evidence:
-      - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_in_a_credential_field_is_refused}
+      - {path: crates/registry-messaging/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
       - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_reaching_a_credential_field_through_an_alias_is_refused}
-      - {path: crates/registry-platform-config/src/lib.rs, name: config_env_expression_is_refused_in_a_protected_member_and_below_it}
+      - {path: crates/registry-platform-config/src/loader_tests.rs, name: substitution_is_refused_in_every_reference_field}
   - id: MESSAGING-DEC-06
     subject: The package ledger names the package the runtime serves, and a change applies on restart
     decision: >-
@@ -94,7 +95,7 @@ decisions:
       the stack; the pin lets an operator bind a deployment to a reviewed
       package without trusting the directory.
     evidence:
-      - {path: crates/registry-messaging/src/config.rs, name: a_pinned_package_digest_must_equal_the_digest_of_the_package_read}
+      - {path: crates/registry-messaging/src/config.rs, name: runtime_package_digest_pin_reports_expected_and_found}
       - {path: crates/registry-messaging/src/runtime.rs, name: the_runtime_serves_only_the_package_the_ledger_names_active}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: apply_previews_by_default_records_once_and_is_idempotent}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: the_runtime_refuses_a_package_the_ledger_does_not_name_active}
@@ -133,31 +134,54 @@ decisions:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_is_visible_to_its_submitter_and_an_operator_only}
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: list_and_show_report_messages_with_the_contact_masked}
   - id: MESSAGING-DEC-09
-    subject: Only a queued message cancels; unknown answers dispatch-started
+    subject: Only a message nothing may have sent cancels; unknown answers dispatch-started
     decision: >-
-      Cancellation applies to a queued message only. A message being sent,
-      submitted to its provider, or in an unknown outcome answers 409
+      Cancellation applies to a queued message only when no attempt of its
+      current generation may have reached its provider: a message never
+      attempted, or one waiting to retry after attempts that all ended
+      transient, cancels. A message being sent, submitted to its provider,
+      in an unknown outcome, or waiting to retry after an attempt that ended
+      maybe-sent or was interrupted by a lapsed lease answers 409
       message.dispatch-started, and one in any other final state answers 409
       message.terminal.
     reasoning: >-
-      An unknown outcome may already have reached the recipient, so calling
-      it cancelled would tell the caller something nobody knows. The operator
-      settles it instead.
+      A maybe-sent or interrupted attempt, like an unknown outcome, may
+      already have reached the recipient, so calling the message cancelled
+      would tell the caller something nobody knows. Its retry carries the
+      same provider idempotency key, so letting it run is no second
+      delivery, and if it cannot run, because its attempts are spent or its
+      expiry passes first, the message stops unknown for the operator to
+      settle, never expired. A transient attempt is known not to have left, so
+      withdrawing its retry is still the truth.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_queued_message_cancels_once_and_a_claimed_one_does_not}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_retrying_after_transient_failures_cancels}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_retrying_after_an_attempt_that_may_have_been_sent_does_not_cancel}
+      - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: cancel_refuses_a_queued_message_whose_earlier_attempt_may_have_been_sent}
   - id: MESSAGING-DEC-10
-    subject: An attempt its timeout cuts off is maybe-sent, never transient
+    subject: The transport classifies its own timeout; an overrun is maybe-sent
     decision: >-
-      The dispatcher bounds every attempt by its transport's timeout, between
-      1 and 60 seconds, and records an attempt the timeout cuts off as
-      maybe-sent, which the default hold policy moves to unknown.
+      Every attempt has a budget of its transport's timeout, between 1 and 60
+      seconds. The transport enforces the budget itself: an attempt that runs
+      out of time before anything left is transient, and one cut off after
+      the request was written is maybe-sent. The dispatcher stops waiting one
+      second after the budget is spent and records a transport that overruns
+      it as maybe-sent, which the default hold policy moves to unknown and the
+      retry policy retries while attempts and time remain, then moves to
+      unknown.
     reasoning: >-
-      The dispatcher cannot tell whether a cut-off request reached the
-      provider. Treating it as transient would retry a send that may have
-      been delivered, which is the duplicate MESSAGING-SEC-06 exists to stop.
+      Only the transport knows whether its request was written, so only it
+      can call a timed-out attempt not sent; an outer cut-off alone would turn
+      a connection that never opened into an unknown message an operator must
+      settle. The dispatcher cannot tell whether an overrunning transport's
+      request reached the provider, and treating that as transient would
+      retry a send that may have been delivered, which is the duplicate
+      MESSAGING-SEC-06 exists to stop.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_hanging_send_is_cut_off_and_held_as_unknown}
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: a_dispatched_http_attempt_classifies_its_own_timeout_before_the_worker_stops_waiting}
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: a_dispatched_smtp_attempt_classifies_its_own_timeout_before_the_worker_stops_waiting}
       - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}
   - id: MESSAGING-DEC-11
     subject: The provider idempotency key changes with the generation
@@ -169,9 +193,27 @@ decisions:
     reasoning: >-
       An operator who retries a failed message or settles an unknown one as
       not sent is asking for another delivery; a provider that deduplicates
-      on the old key would silently drop it.
+      on the old key would silently drop it. Because that requeue sends
+      without deduplication, a message whose attempt may have reached its
+      provider never ends failed, expired, or cancelled on the dispatcher's
+      own decision: when `onUncertain: retry` has no attempt or time left,
+      its expiry passes while its retry waits, or the row is quarantined, it
+      stops unknown, and only an operator who settles it decides whether
+      another delivery is wanted. That holds when a later attempt failed
+      transiently or was refused permanently, since the later answer does
+      not prove the earlier attempt did not land. A message never attempted,
+      or whose attempts all ended transient or permanent, is known not to
+      have left and still fails or expires.
     evidence:
       - {path: crates/registry-messaging/src/dispatch.rs, name: the_provider_key_is_stable_per_generation_and_binds_the_content}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_that_spends_its_attempts_maybe_sent_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_spent_by_transient_failures_after_a_maybe_sent_attempt_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_refused_permanently_after_a_maybe_sent_attempt_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_without_a_maybe_sent_attempt_still_fails}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_lapsed_lease_that_cannot_be_recovered_is_quarantined_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_poisoned_retry_after_a_maybe_sent_attempt_is_quarantined_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_past_its_expiry_after_a_maybe_sent_attempt_ends_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_past_its_expiry_without_a_maybe_sent_attempt_expires}
   - id: MESSAGING-DEC-12
     subject: A provider without a transport fails its messages permanently
     decision: >-
@@ -187,18 +229,21 @@ decisions:
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_message_for_an_unconfigured_provider_fails_without_a_send}
   - id: MESSAGING-DEC-13
-    subject: Operator actions preview by default and journal through the outbox
+    subject: Operator actions preview by default and use a separate audit stream
     decision: >-
       messagingctl messages retry, settle, and cancel report what they would
       do and change nothing unless --apply is given; an action the message is
       not in the state for is refused either way. An applied action writes
-      its audit record into the outbox in the same transaction as the
-      change, attributed to the operator tool, and the running runtime
-      publishes it to the journal.
+      request to its process audit writer before the protected change and
+      records the outcome after the commit is established, attributed to the
+      operator tool. A failed response append after commit reports unavailable
+      without undoing or replaying the committed effect.
     reasoning: >-
-      The journal has one writer, the runtime, so a second process appending
-      to it would fork its chain. The outbox keeps the change and its record
-      atomic and leaves publication with that one writer.
+      Each process has one writer and its own stream. File acceptance is
+      durable, but audit and PostgreSQL are separate systems: an unmatched
+      request or unknown outcome is honest when a commit cannot be proven.
+      Runtime and operator streams have no total order. Operator stdout stays
+      reserved for command results.
     evidence:
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: actions_preview_by_default_and_change_the_message_only_with_apply}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: operator_actions_preview_by_default_and_apply_on_request}
@@ -288,16 +333,17 @@ decisions:
       messagingctl retention erase-expired --before <instant> reports what is
       due and erases nothing unless --apply is given, like every other
       messagingctl action. It connects with the migration credential, takes
-      the same advisory lock as the runtime's sweep, journals every applied
-      run through the outbox as operator-tool, and refuses a cutoff later
+      the same advisory lock as the runtime's sweep for each batch, journals
+      every applied run, batch by batch, through its process audit writer as
+      operator-tool, and refuses a cutoff later
       than the local clock before any input or output and later than the
       database's clock inside the run.
     reasoning: >-
       Base Registry Engine's bregctl evidence-retention erase-expired erases
       directly; messagingctl keeps its own convention (MESSAGING-DEC-13) so
       one tool does not mix previewing and immediate actions. The lock and
-      the outbox keep an operator run and the runtime's sweep from
-      interleaving or forking the journal.
+      each batch's database transaction keep an operator run and the runtime's
+      sweep from interleaving within a batch or forking the journal.
     evidence:
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}
@@ -339,17 +385,24 @@ decisions:
     subject: A provider's send rate paces the worker inside the lease
     decision: >-
       An http provider's capabilities.ratePerSecond is enforced in-process by
-      the worker: a leased attempt waits in turn for the provider's next
-      send slot, with a ten-second allowance added to its time budget, and
-      an attempt whose slot does not open in time is a transient failure
-      with nothing sent.
+      the worker: a leased attempt holds one of the connection's
+      concurrencyLimit sends in flight and then waits in turn for the
+      provider's next send slot, with a ten-second allowance added to its
+      time budget that never runs past the message's expiresAt, and an
+      attempt whose slot does not open in time is a transient failure with
+      nothing sent.
     reasoning: >-
       Pacing before the claim would hold the rate by delaying claims that a
       second provider's messages need. Pacing inside the lease keeps other
       providers moving, and the allowance keeps the wait from shortening
-      the send's own budget.
+      the send's own budget. Pacing only once an in-flight slot is held
+      spaces the requests as they leave: attempts paced first and then
+      queued behind a slow send would leave back to back.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_paced_provider_starts_one_send_per_interval}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_paced_provider_below_the_worker_concurrency_still_sends_one_per_interval}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_message_that_expires_before_its_pacing_slot_expires_unsent}
+      - {path: crates/registry-messaging/src/limits.rs, name: an_attempt_takes_its_turn_only_once_it_holds_an_in_flight_slot}
       - {path: crates/registry-messaging/src/limits.rs, name: a_slot_that_opens_after_the_deadline_is_refused_without_waiting}
   - id: MESSAGING-DEC-23
     subject: Readiness includes the package ledger

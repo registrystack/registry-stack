@@ -38,7 +38,7 @@ release manifests, and docs.
 
 ## What It Includes
 
-Registry Stack ships eight installable products on one release train. Each has
+Registry Stack ships seven installable products on one release train. Each has
 its own deployment contract and adopter tooling, and each one is optional.
 
 - **Base Registry Engine:** a configuration-defined writable registry backed by
@@ -75,12 +75,14 @@ its own deployment contract and adopter tooling, and each one is optional.
   subquotas, holds, and accountable appointments, with every capacity decision
   made inside one transaction under a task grant.
   Docs: [Registry Scheduling API](https://docs.registrystack.org/reference/apis/registry-scheduling/).
-- **Registry Messaging:** sends one email or SMS to one recipient for an
-  authorized caller, rendered from a reviewed template through a provider the
-  operator connected, and reports what is known about delivery. Why and when to
-  send, who the recipient is, and consent to be contacted stay with the
-  caller's source of record.
-  Docs: [Registry Messaging overview](https://docs.registrystack.org/dev/start/messaging/).
+
+Registry Messaging is in the repository but has not joined a release: it builds
+from source and has no published binary, image, or client yet. It sends one
+email or SMS to one recipient for an authorized caller, rendered from a
+reviewed template through a provider the operator connected, and reports what
+is known about delivery. Why and when to send, who the recipient is, and
+consent to be contacted stay with the caller's source of record. Docs:
+[`products/messaging`](products/messaging/README.md).
 
 Evidence Gateway can use a Base Registry Engine or Registry Relay API as one of
 its fixed sources, and keeps its own authorization either way. The stack also
@@ -114,10 +116,9 @@ installer: download `discovery-<tag>-linux-amd64` or
 [release page](https://github.com/registrystack/registry-stack/releases) and
 check it against the release checksum chain. Registry Scheduling publishes a
 container image only; it has no released binary or installer yet. Registry
-Messaging joins the release train at `v0.35.0` with
-`messaging-<tag>-linux-amd64` and `messagingctl-<tag>-linux-amd64` binaries
-and no installer. Container images for `breg`, `casework`, `scheduling`,
-`messaging`, `relay`, `evidence`, and `discovery` are published as `ghcr.io/registrystack/<name>:<tag>`. Which
+Messaging has not joined a release, so no release carries a Messaging binary,
+image, or installer. Container images for `breg`, `casework`, `scheduling`,
+`relay`, `evidence`, and `discovery` are published as `ghcr.io/registrystack/<name>:<tag>`. Which
 platforms each artifact supports, and what is not supported, is recorded in
 [known limitations](https://docs.registrystack.org/dev/explanation/known-limitations/#platform-support).
 

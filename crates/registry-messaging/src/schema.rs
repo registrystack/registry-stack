@@ -94,18 +94,19 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         }
         for (status, problems) in by_status {
             let codes: Vec<&str> = problems.iter().map(|problem| problem.code()).collect();
-            responses.insert(
-                status.to_string(),
-                json!({
-                    "description": format!("A problem: {}.", codes.join(", ")),
-                    "content": {"application/problem+json": {"schema": {
-                        "allOf": [
-                            {"$ref": "#/components/schemas/Problem"},
-                            {"properties": {"code": {"enum": codes}}}
-                        ]
-                    }}}
-                }),
-            );
+            let mut response = json!({
+                "description": format!("A problem: {}.", codes.join(", ")),
+                "content": {"application/problem+json": {"schema": {
+                    "allOf": [
+                        {"$ref": "#/components/schemas/Problem"},
+                        {"properties": {"code": {"enum": codes}}}
+                    ]
+                }}}
+            });
+            if let Some(headers) = problem_headers(status) {
+                response["headers"] = headers;
+            }
+            responses.insert(status.to_string(), response);
         }
         let mut entry = json!({
             "operationId": operation.operation_id,
@@ -304,7 +305,15 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                             "type": "object",
                             "additionalProperties": false,
                             "required": ["email"],
-                            "properties": {"email": {"type": "string", "minLength": 3, "maxLength": MAXIMUM_SENDER_BYTES}}
+                            "properties": {"email": {
+                                "type": "string",
+                                "minLength": 3,
+                                "maxLength": MAXIMUM_SENDER_BYTES,
+                                "pattern": "^[\\x21-\\x7e]+$",
+                                "description": "One address, local@domain, of visible ASCII, \
+                                                so its bound counts bytes and characters \
+                                                alike."
+                            }}
                         },
                         {
                             "type": "object",
@@ -391,8 +400,13 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                             "type": "string",
                             "minLength": 1,
                             "maxLength": MAXIMUM_CORRELATION_ID_BYTES,
-                            "description": "An opaque caller reference, stored, returned, and \
-                                            audited, never interpreted."
+                            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$",
+                            "description": format!(
+                                "An opaque caller reference, stored, returned, and audited, \
+                                 never interpreted. The runtime bounds it at \
+                                 {MAXIMUM_CORRELATION_ID_BYTES} UTF-8 bytes, not characters, \
+                                 and refuses control characters."
+                            )
                         }
                     }
                 },
@@ -501,6 +515,23 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 }
 
 /// The `{name}` segments of a route template, in order.
+/// The headers every problem answered with `status` carries.
+fn problem_headers(status: u16) -> Option<Value> {
+    match status {
+        401 => Some(json!({"WWW-Authenticate": {
+            "description": "The bearer challenge.",
+            "required": true,
+            "schema": {"type": "string", "const": "Bearer"}
+        }})),
+        429 | 503 => Some(json!({"Retry-After": {
+            "description": "Whole seconds to wait before trying again.",
+            "required": true,
+            "schema": {"type": "integer", "minimum": 1}
+        }})),
+        _ => None,
+    }
+}
+
 fn path_parameters(path: &str) -> impl Iterator<Item = &str> {
     path.split('/').filter_map(|segment| {
         segment
@@ -549,7 +580,7 @@ fn render(document: &Value) -> Result<String, serde_json::Error> {
 /// State in the schema the bounds `RuntimeConfig::check` enforces at load.
 fn install_runtime_constraints(schema: &mut Value) {
     for (definition, property) in [
-        ("RuntimePackageConfig", "root"),
+        ("PackageConfig", "root"),
         ("FileSecretProviderConfig", "root"),
         ("AuditConfig", "path"),
     ] {
@@ -569,6 +600,13 @@ fn install_runtime_constraints(schema: &mut Value) {
             json!("^secret:(?:env|file)/"),
         );
     }
+    set_definition_property(
+        schema,
+        "PackageConfig",
+        "expectedDigest",
+        "pattern",
+        json!("^sha256:[0-9a-f]{64}$"),
+    );
     for (property, minimum, maximum) in [
         ("payloadDays", 1, MAXIMUM_PAYLOAD_DAYS),
         ("recordDays", 1, MAXIMUM_RECORD_DAYS),
@@ -783,7 +821,7 @@ mod tests {
         let documents = runtime_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
         for (definition, property) in [
-            ("RuntimePackageConfig", "root"),
+            ("PackageConfig", "root"),
             ("FileSecretProviderConfig", "root"),
             ("AuditConfig", "path"),
         ] {
@@ -805,6 +843,11 @@ mod tests {
             );
         }
         assert_eq!(
+            document["$defs"]["PackageConfig"]["properties"]["expectedDigest"]["pattern"],
+            "^sha256:[0-9a-f]{64}$",
+            "package.expectedDigest must be a lowercase SHA-256 label"
+        );
+        assert_eq!(
             document["$defs"]["RetentionConfig"]["properties"]["payloadDays"]["maximum"],
             MAXIMUM_PAYLOAD_DAYS
         );
@@ -816,7 +859,16 @@ mod tests {
             document["$defs"]["OidcConfig"]["additionalProperties"], false,
             "unknown keys are refused"
         );
-        assert!(document["$defs"]["MetricsListenerConfig"].is_object());
+        for definition in ["ListenerConfig", "PrivateListenerConfig"] {
+            assert!(
+                document["$defs"][definition].is_object(),
+                "{definition} must be present"
+            );
+            assert_eq!(
+                document["$defs"][definition]["additionalProperties"], false,
+                "{definition} must refuse unknown keys"
+            );
+        }
     }
 
     #[test]
@@ -925,7 +977,7 @@ mod tests {
         let documents = openapi_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
         let schemas = &document["components"]["schemas"];
-        let package = crate::package::load_package(&crate::package::tests::starter_root())
+        let package = crate::package::load_project(&crate::package::tests::starter_root())
             .unwrap()
             .package;
         let request = registry_messaging_core::TemplatePreviewRequest {
@@ -1072,6 +1124,48 @@ mod tests {
         assert!(submit["responses"]["202"].is_object());
         assert!(submit["responses"]["409"].is_object());
         assert!(submit["responses"]["410"].is_object());
+    }
+
+    #[test]
+    fn openapi_publishes_the_headers_a_refusal_carries() {
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        for operation in OPERATIONS {
+            let responses = &document["paths"][operation.path][operation.method]["responses"];
+            for problem in operation.problems {
+                let status = problem.http_status();
+                let headers = &responses[status.to_string()]["headers"];
+                match status {
+                    401 => assert_eq!(
+                        headers["WWW-Authenticate"]["schema"]["const"], "Bearer",
+                        "{}",
+                        operation.operation_id
+                    ),
+                    429 | 503 => {
+                        let schema = &headers["Retry-After"]["schema"];
+                        assert_eq!(schema["type"], "integer", "{}", operation.operation_id);
+                        assert_eq!(schema["minimum"], 1, "{}", operation.operation_id);
+                    }
+                    _ => assert!(headers.is_null(), "{}", operation.operation_id),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn openapi_states_contact_and_correlation_bounds_in_bytes() {
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        let schemas = &document["components"]["schemas"];
+        let correlation = &schemas["SubmitMessageRequest"]["properties"]["correlationId"];
+        assert_eq!(correlation["pattern"], "^[^\\x00-\\x1f\\x7f-\\x9f]+$");
+        assert!(correlation["description"]
+            .as_str()
+            .unwrap()
+            .contains("UTF-8 bytes"));
+        let email = &schemas["Recipient"]["oneOf"][0]["properties"]["email"];
+        assert_eq!(email["pattern"], "^[\\x21-\\x7e]+$");
+        assert!(email["description"].as_str().unwrap().contains("bytes"));
     }
 
     #[test]

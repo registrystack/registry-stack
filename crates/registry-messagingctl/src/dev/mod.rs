@@ -30,7 +30,9 @@ use std::time::{Duration, Instant};
 use clap::{Args, Subcommand};
 use registry_messaging::config::RuntimeConfig;
 use registry_messaging::dispatch::Transports;
-use registry_messaging::package::{load_package, LoadedPackage};
+use registry_messaging::package::{
+    load_package, load_project, package_inputs, write_package_inputs, LoadedPackage,
+};
 use registry_messaging::runtime::{
     apply_package, migrate_from_path, operational_log_level, serve_from_path,
 };
@@ -39,7 +41,8 @@ use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 use super::{
-    finish, render_human, Outcome, OutputFormat, View, OPERATIONAL_FAILURE_EXIT, REFUSAL_EXIT,
+    completed, finish, render_human, report, Outcome, OutputFormat, View, DOMAIN_REFUSAL_EXIT,
+    OPERATIONAL_FAILURE_EXIT,
 };
 
 const DATABASE_NAME: &str = "messaging_dev";
@@ -131,7 +134,7 @@ fn failed(message: String) -> DevFailure {
 /// The project or the request cannot be run as asked.
 fn refused(message: String) -> DevFailure {
     DevFailure {
-        exit: REFUSAL_EXIT,
+        exit: DOMAIN_REFUSAL_EXIT,
         code: "dev.refused",
         message,
     }
@@ -151,6 +154,14 @@ impl DevFailure {
     }
 }
 
+/// The subcommand path a `dev` invocation selected, as its report names it.
+pub(crate) fn command_path(args: &DevArgs) -> &'static str {
+    match args.action {
+        Some(DevAction::Token(_)) => "dev token",
+        None => "dev",
+    }
+}
+
 /// Run `messagingctl dev` or `messagingctl dev token`.
 pub(crate) fn run(
     args: DevArgs,
@@ -161,7 +172,7 @@ pub(crate) fn run(
     match args.action {
         Some(DevAction::Token(token_args)) => {
             let outcome = token(&token_args).unwrap_or_else(|failure| failure.outcome());
-            finish(&outcome, format, stdout, stderr)
+            finish(&outcome, "dev token", format, stdout, stderr)
         }
         None => start(&args.start, format, stdout, stderr),
     }
@@ -174,9 +185,10 @@ fn project_directory(project: &Path) -> DevResult<PathBuf> {
             project.display()
         ))
     })?;
-    // The generated runtime configuration is expanded from the environment
-    // before it is parsed, so a path that reads as an expression would not
-    // name this project.
+    // The runtime configuration loader substitutes environment expressions
+    // in the string values of the parsed document, so a project path in the
+    // generated configuration that reads as an expression would not name
+    // this project.
     if project.to_string_lossy().contains("${") {
         return Err(refused(
             "the project path contains `${`, which the runtime configuration would read as an environment expression; move the project".to_owned(),
@@ -186,9 +198,28 @@ fn project_directory(project: &Path) -> DevResult<PathBuf> {
 }
 
 fn package(project: &Path) -> DevResult<LoadedPackage> {
-    load_package(project).map_err(|error| {
+    load_project(project).map_err(|error| {
         refused(format!(
-            "the package does not pass its checks; run messagingctl check --package: {error}"
+            "the project does not pass its checks; run messagingctl check --project: {error}"
+        ))
+    })
+}
+
+fn install_project(project: &Path, root: &Path) -> DevResult<LoadedPackage> {
+    let inputs = package_inputs(project).map_err(|error| {
+        refused(format!(
+            "the project does not pass its checks; run messagingctl check --project: {error}"
+        ))
+    })?;
+    let installed = root.join("package");
+    write_package_inputs(&installed, &inputs, None).map_err(|error| {
+        failed(format!(
+            "the development package could not be written: {error}"
+        ))
+    })?;
+    load_package(&installed).map_err(|error| {
+        failed(format!(
+            "the development package could not be loaded: {error}"
         ))
     })
 }
@@ -199,11 +230,15 @@ fn session_directory(project: &Path) -> PathBuf {
 
 fn token(args: &TokenArgs) -> DevResult<Outcome> {
     let project = project_directory(&args.project)?;
-    let loaded = package(&project)?;
     let root = session_directory(&project);
     private::check(&root, true).map_err(|error| {
         refused(format!(
             "no development session exists in this project ({error}); start one with messagingctl dev"
+        ))
+    })?;
+    let loaded = load_package(&root.join("package")).map_err(|error| {
+        refused(format!(
+            "the running session package is unavailable ({error}); start messagingctl dev again"
         ))
     })?;
     let signed = config::token(&root, &loaded, &args.client)?;
@@ -334,18 +369,22 @@ fn start(
         Ok((project, loaded))
     }) {
         Ok(found) => found,
-        Err(failure) => return finish(&failure.outcome(), format, stdout, stderr),
+        Err(failure) => return finish(&failure.outcome(), "dev", format, stdout, stderr),
     };
-    let (project, loaded) = project;
+    let (project, _) = project;
     let (_lock, root) = match fresh_session(&project, &docker) {
         Ok(session) => session,
-        Err(failure) => return finish(&failure.outcome(), format, stdout, stderr),
+        Err(failure) => return finish(&failure.outcome(), "dev", format, stdout, stderr),
+    };
+    let loaded = match install_project(&project, &root) {
+        Ok(loaded) => loaded,
+        Err(failure) => return finish(&failure.outcome(), "dev", format, stdout, stderr),
     };
     let stop = Arc::new(AtomicBool::new(false));
     for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
         if let Err(error) = signal_hook::flag::register(signal, Arc::clone(&stop)) {
             let failure = failed(format!("the stop signal could not be handled: {error}"));
-            return finish(&failure.outcome(), format, stdout, stderr);
+            return finish(&failure.outcome(), "dev", format, stdout, stderr);
         }
     }
     let mut session = Session {
@@ -355,7 +394,6 @@ fn start(
     };
     let served = run_session(
         args,
-        &project,
         &loaded,
         &docker,
         &mut session,
@@ -381,11 +419,12 @@ fn start(
         let mut outcome = failure.outcome();
         outcome.report["containersRemoved"] = json!(removed_all);
         outcome.report["sessionDirectory"] = json!(root);
-        return finish(&outcome, format, stdout, stderr);
+        return finish(&outcome, "dev", format, stdout, stderr);
     }
     let outcome = Outcome::new(
         json!({
             "ok": true,
+            "status": "stopped",
             "state": "stopped",
             "sessionDirectory": root,
             "containersRemoved": true,
@@ -408,9 +447,7 @@ fn print_report(
 ) -> io::Result<()> {
     match format {
         OutputFormat::Json => {
-            let mut line = serde_json::to_vec(&outcome.report).map_err(io::Error::other)?;
-            line.push(b'\n');
-            stdout.write_all(&line)?;
+            report::write_line(&completed(&outcome.report, "dev", outcome.exit), stdout)?;
         }
         OutputFormat::Human => render_human(outcome, stdout, stderr)?,
     }
@@ -420,7 +457,6 @@ fn print_report(
 #[allow(clippy::too_many_arguments)]
 fn run_session(
     args: &StartArgs,
-    project: &Path,
     loaded: &LoadedPackage,
     docker: &docker::Docker,
     session: &mut Session,
@@ -497,13 +533,17 @@ fn run_session(
             gateway_port: gateway_address.port(),
         };
         let runtime_config = root.join("runtime.yaml");
-        let document =
-            serde_norway::to_string(&config::runtime_config(project, &root, loaded, &endpoints))
-                .map_err(|error| {
-                    failed(format!(
-                        "the runtime configuration could not be written: {error}"
-                    ))
-                })?;
+        let document = serde_norway::to_string(&config::runtime_config(
+            &root.join("package"),
+            &root,
+            loaded,
+            &endpoints,
+        ))
+        .map_err(|error| {
+            failed(format!(
+                "the runtime configuration could not be written: {error}"
+            ))
+        })?;
         private::create(&runtime_config, document.as_bytes()).map_err(|error| {
             failed(format!(
                 "the runtime configuration could not be written: {error}"
@@ -533,6 +573,7 @@ fn run_session(
 
         let ready = json!({
             "ok": true,
+            "status": "ready",
             "state": "ready",
             "api": origin,
             "metrics": format!("http://127.0.0.1:{}/metrics", args.metrics_port),

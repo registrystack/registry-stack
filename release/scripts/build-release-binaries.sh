@@ -63,8 +63,12 @@ include_operator_tools=0
 if ((version_major > 0 || version_minor >= 36)); then
   include_operator_tools=1
 fi
+# release_roster.py names the first release that ships Messaging; until it
+# does, no version builds or stages the Messaging binaries.
 include_messaging=0
-if ((version_major > 0 || version_minor >= 35)); then
+messaging_in_release="$(python3 "${script_dir}/release_roster.py" \
+  messaging-in-release "${version}")"
+if [[ "${messaging_in_release}" == true ]]; then
   include_messaging=1
 fi
 

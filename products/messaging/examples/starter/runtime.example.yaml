@@ -3,23 +3,20 @@
 # read, and `messagingctl check --runtime-config` checks offline. Copy it to
 # runtime.yaml, set every absolute path to this deployment's real location,
 # and point the secret references at secrets the configured provider can
-# resolve. Messaging reads the authored package at package.root/messaging.yaml
-# and refuses to start when that file is missing or does not pass its checks.
+# resolve. Messaging verifies the installed package's SHA256SUMS envelope and
+# refuses to start when any listed file is missing, added, or changed.
 #
-# Environment expressions are expanded over this text before the YAML is
-# parsed, comments included: a dollar sign and braces around VAR,
-# VAR:-default, or VAR:?message (RUNTIME-CONFIG.md spells them out). A value
-# filling a whole member is quoted as one string; one embedded in a longer
-# value is refused if it could change the document's shape. A member whose
-# name ends in Ref names a secret and refuses an environment expression: use
-# a secret:env/NAME or secret:file/name reference instead.
+# Environment expressions are substituted in parsed string values only:
+# a dollar sign and braces around VAR, VAR:-default, or VAR:?message
+# (RUNTIME-CONFIG.md spells them out). Expressions in keys, non-string values,
+# secret reference fields, and secretProviders are refused.
 # Unknown keys are refused, with the path of the first one found.
 apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
 kind: MessagingRuntimeConfig
 package:
-  # The directory holding messaging.yaml and its templates/ tree. Setting
-  # `expectedDigest` to the sha256: digest `messagingctl check` reports pins
-  # the package: a package with any other digest is refused.
+  # The immutable directory produced by `messagingctl package`. Setting
+  # `expectedDigest` to the sha256: digest the package command reports pins
+  # the package: any other verified package is refused.
   root: /srv/registry-messaging/package
 listener:
   bind: 127.0.0.1:8107
@@ -80,6 +77,7 @@ authentication:
     #   kind: static
     #   documentRef: secret:file/jwks.json
 audit:
+  destination: file
   path: /var/lib/registry-messaging/audit.ndjson
   hashKeyRef: secret:file/messaging-audit-key
 retention:
@@ -128,7 +126,7 @@ providers:
       header: x-signature
       encoding: hex
       secretRef: secret:file/sms-gateway-callback-key
-    # Trust a private certificate authority instead of the public web roots.
+    # Trust a private certificate authority in addition to the system roots.
     # tlsTrustProfile: gateway-ca
 # Named PEM trust bundles an http provider's tlsTrustProfile selects.
 # tlsTrustProfiles:

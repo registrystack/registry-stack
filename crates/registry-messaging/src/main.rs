@@ -25,8 +25,9 @@ async fn main() {
     }
 }
 
-/// JSON lines on standard output, from the Messaging crates only, so a
-/// dependency's own logging never reaches the operational stream.
+/// JSON lines on standard error, from the Messaging crates only, so a
+/// dependency's own logging never reaches the operational stream and a
+/// `stdout` audit destination carries audit entries alone.
 fn initialize_logging(level: LevelFilter) {
     let filter = Targets::new()
         .with_target("registry_messaging", level)
@@ -38,7 +39,8 @@ fn initialize_logging(level: LevelFilter) {
                 .json()
                 .with_target(false)
                 .with_current_span(false)
-                .with_span_list(false),
+                .with_span_list(false)
+                .with_writer(std::io::stderr),
         )
         .init();
 }

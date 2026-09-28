@@ -413,24 +413,33 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             module._candidate_image_names("0.33.0"),
             module._candidate_image_names("0.34.0"),
         )
-        self.assertEqual(
-            {
-                "breg",
-                "casework",
-                "discovery",
-                "evidence",
-                "messaging",
-                "relay",
-                "scheduling",
-            },
-            module._candidate_image_names("0.35.0"),
-        )
-        for version in ("0.36.0", "0.37.0"):
+        # Neither Messaging nor breg-mcp and breg-review join a release until
+        # release_roster names their first one.
+        for version in ("0.35.0", "0.36.0", "0.37.0", "1.0.0"):
             with self.subTest(version=version):
                 self.assertEqual(
-                    module._candidate_image_names("0.35.0"),
+                    module._candidate_image_names("0.33.0"),
                     module._candidate_image_names(version),
                 )
+        with mock.patch.object(
+            module.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
+        ):
+            self.assertEqual(
+                module._candidate_image_names("0.33.0"),
+                module._candidate_image_names("0.35.0"),
+            )
+            self.assertEqual(
+                {
+                    "breg",
+                    "casework",
+                    "discovery",
+                    "evidence",
+                    "messaging",
+                    "relay",
+                    "scheduling",
+                },
+                module._candidate_image_names("0.36.0"),
+            )
         self.assertFalse(
             any(
                 "registry-notary" in name
@@ -680,6 +689,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             operator_tools,
         )
         self.assertIn('"dist/image-bin/${operator_tool}" --version', operator_tools)
+        messaging_gate = (
+            'messaging_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  messaging-in-release "${{ needs.validate.outputs.version }}")"\n'
+            'if [[ "${messaging_in_release}" == true ]]; then\n'
+        )
+        self.assertIn(messaging_gate, merge)
+        messaging_smoke = merge.split(messaging_gate, 1)[1].split("fi", 1)[0]
+        for binary in ("messaging", "messagingctl"):
+            self.assertIn(
+                f'"dist/bin/{binary}-${{{{ needs.validate.outputs.tag }}}}-linux-amd64" --version',
+                messaging_smoke,
+            )
+            self.assertIn(
+                f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
+                messaging_smoke,
+            )
         breg_services = merge.split(
             'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
             '  breg-services-in-release "${{ needs.validate.outputs.version }}")"\n'
@@ -694,18 +719,6 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             merge,
         )
         self.assertIn('dist/image-bin/${breg_service}" --version', merge)
-        messaging_smoke = merge.split(
-            "if (( release_major > 0 || release_minor >= 35 )); then", 1
-        )[1].split("fi", 1)[0]
-        for binary in ("messaging", "messagingctl"):
-            self.assertIn(
-                f'"dist/bin/{binary}-${{{{ needs.validate.outputs.tag }}}}-linux-amd64" --version',
-                messaging_smoke,
-            )
-            self.assertIn(
-                f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
-                messaging_smoke,
-            )
         assemble_download = next(
             step
             for step in document["jobs"]["assemble"]["steps"]
@@ -1440,70 +1453,17 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
 
 
 class MessagingClientWorkflowStructureTest(unittest.TestCase):
-    MESSAGING_LOCK = "crates/registry-messaging-client-node/package-lock.json"
+    """The unified clients carry no Messaging namespace until Messaging joins a
+    release; the change that names its first release adds it back."""
 
-    def test_candidate_builds_messaging_clients_from_version_0_35(self) -> None:
-        _, document = workflow("release-candidate.yml")
-        clients = document["jobs"]["clients"]
-        setup_node = next(
-            step for step in clients["steps"] if step.get("name") == "Setup Node"
-        )
-        self.assertIn(
-            self.MESSAGING_LOCK,
-            setup_node["with"]["cache-dependency-path"].splitlines(),
-        )
-        cargo_cache = next(
-            step
-            for step in clients["steps"]
-            if step.get("name") == "Restore native client Cargo cache"
-        )
-        self.assertIn(f"'{self.MESSAGING_LOCK}'", cargo_cache["with"]["key"])
-
-        gate = "if (( client_major > 0 || client_minor >= 35 )); then\n  include_messaging=1\nfi"
-        python = step_run(document, "clients", "Build Python client wheels")
-        node = step_run(document, "clients", "Build Node client packages")
-        for build in (python, node):
-            self.assertIn(gate, build)
-            self.assertIn(
-                'if [[ "${include_messaging}" -eq 1 ]]; then\n  clients+=(messaging)\nfi',
-                build,
-            )
-        self.assertIn("wheel_stem=registry_messaging_client_native", python)
-        self.assertIn("--messaging-wheel", python)
-        self.assertIn('"${messaging_wheel_args[@]}"', python)
-        self.assertIn(
-            'if [[ "${include_messaging}" -eq 1 ]]; then\n'
-            "    platform_clients+=(messaging)\n"
-            "  fi",
-            node,
-        )
-        smoke = step_run(document, "clients", "Smoke Node client packages")
-        self.assertIn("if (( major > 0 || minor >= 35 )); then", smoke)
-        self.assertIn(
-            'if [[ "${include_messaging}" -eq 1 ]]; then\n'
-            "      expected_addons=$((expected_addons + 1))",
-            smoke,
-        )
-
-    def test_rehearsal_builds_messaging_into_the_unified_node_client(self) -> None:
-        _, document = workflow("release-rehearsal.yml")
-        clients = document["jobs"]["node-clients"]
-        setup_node = next(
-            step for step in clients["steps"] if step.get("name") == "Setup Node"
-        )
-        self.assertIn(
-            self.MESSAGING_LOCK,
-            setup_node["with"]["cache-dependency-path"].splitlines(),
-        )
-        build = step_run(
-            document, "node-clients", "Build, package, and smoke Linux Node clients"
-        )
-        self.assertIn("clients+=(breg casework messaging)", build)
-        self.assertIn(
-            "for client in discovery evidence relay breg casework messaging; do",
-            build,
-        )
-        self.assertIn("-maxdepth 1 -name '*.node' | wc -l)\" -eq 6", build)
+    def test_release_client_jobs_package_no_messaging_client(self) -> None:
+        for name, job in (
+            ("release-candidate.yml", "clients"),
+            ("release-rehearsal.yml", "node-clients"),
+        ):
+            with self.subTest(workflow=name, job=job):
+                _, document = workflow(name)
+                self.assertNotIn("messaging", repr(document["jobs"][job]).lower())
 
 
 class MacOSFipsWorkflowStructureTest(unittest.TestCase):
@@ -2256,12 +2216,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
+            # Neither Messaging nor breg-mcp and breg-review has joined a
+            # release, so no later version, including a hypothetical 1.0.0,
+            # adds their images to the roster.
             "v0.35.0": [
                 "breg",
                 "casework",
                 "discovery",
                 "evidence",
-                "messaging",
                 "relay",
                 "scheduling",
             ],
@@ -2270,7 +2232,6 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "casework",
                 "discovery",
                 "evidence",
-                "messaging",
                 "relay",
                 "scheduling",
             ],
@@ -2279,7 +2240,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "casework",
                 "discovery",
                 "evidence",
-                "messaging",
+                "relay",
+                "scheduling",
+            ],
+            "v1.0.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
                 "relay",
                 "scheduling",
             ],
@@ -2351,6 +2319,29 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
+        for tag in ("v0.35.0", "v0.36.0", "v1.0.0"):
+            with self.subTest(tag=tag, unexpected="messaging"):
+                with_messaging = dict(manifests[tag])
+                with_messaging["images"] = [
+                    *with_messaging["images"],
+                    {
+                        "name": "messaging",
+                        "digest": "sha256:fixture",
+                        "final_ref": f"ghcr.io/registrystack/messaging:{tag}",
+                        "candidate_ref": (
+                            "ghcr.io/registrystack/messaging-candidate@sha256:fixture"
+                        ),
+                    },
+                ]
+                rejected = subprocess.run(
+                    ["jq", "-e", "--arg", "tag", tag, jq_filter],
+                    input=json.dumps(with_messaging),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, rejected.returncode)
+
         for tag in ("v0.36.0", "v0.37.0"):
             for service in ("breg-mcp", "breg-review"):
                 with self.subTest(tag=tag, unexpected=service):
@@ -2376,30 +2367,18 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                     )
                     self.assertNotEqual(0, rejected.returncode)
 
-        missing_messaging = dict(manifests["v0.35.0"])
-        missing_messaging["images"] = [
-            image
-            for image in missing_messaging["images"]
-            if image["name"] != "messaging"
-        ]
-        rejected = subprocess.run(
-            ["jq", "-e", "--arg", "tag", "v0.35.0", jq_filter],
-            input=json.dumps(missing_messaging),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertNotEqual(0, rejected.returncode)
-
         self.assertIn(
             "breg|casework|discovery|evidence|messaging|mint|relay|scheduling)",
             verify,
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
+        self.assertNotIn("Registry Messaging joins at", verify)
+        self.assertIn("Registry Messaging has not joined a release", verify)
+        self.assertIn("`MESSAGING_FIRST_RELEASE` in\n`release/scripts/release_roster.py`", verify)
+        self.assertIn("shared platform activation crate\n(issue #1731)", verify)
         self.assertNotIn("breg|breg-mcp", verify)
         self.assertIn("`BREG_SERVICES_FIRST_RELEASE`", verify)
-        self.assertIn("Registry Messaging joins at `v0.35.0`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
@@ -2627,6 +2606,183 @@ class NightlyRustCoverageWorkflowStructureTest(unittest.TestCase):
         for name in module.SHARDS.keys() - {"platform", "manifest", "developer-tools"}:
             with self.subTest(shard=name):
                 self.assertEqual(flags[name], name)
+
+
+
+MESSAGING_ROSTER = "release/scripts/release_roster.py"
+# Every script and workflow that decides whether a release ships Messaging.
+MESSAGING_ROSTER_CONSUMERS = (
+    "release/scripts/merge-release-binary-shards.py",
+    "release/scripts/registry-release",
+    "release/scripts/release_candidate.py",
+    "release/scripts/rehearse-upgrade.py",
+    "release/scripts/build-release-binaries.sh",
+    ".github/workflows/release-candidate.yml",
+    ".github/workflows/release-rehearsal.yml",
+)
+# A release version written into code: a version tuple, an X.Y.Z comparison,
+# a major or minor comparison, or a named minimum or first-release constant.
+VERSION_LITERAL = re.compile(
+    r"\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)"
+    r"|(?:>=|<=|>|<)\s*[\"']?v?\d+\.\d+\.\d+"
+    r"|\b\w*(?:major|minor)\b[}\"'\s]*(?:>=|<=|>|<|==|-ge|-gt|-le|-lt|-eq)\s*\d+"
+    r"|\w*_MINIMUM_VERSION\b|\w*_FIRST_RELEASE\b"
+)
+# A numeric gate: a comparison against a version number written in place.
+NUMERIC_VERSION_GATE = re.compile(
+    r"(?:>=|<=|>|<)\s*\(\s*\d+\s*,"
+    r"|(?:>=|<=|>|<)\s*[\"']?v?\d+\.\d+\.\d+"
+    r"|\b\w*(?:major|minor)\b[}\"'\s]*(?:>=|<=|>|<|==|-ge|-gt|-le|-lt|-eq)\s*\d+"
+)
+# A mention of the roster's constant that does not assign it.
+ROSTER_CONSTANT_READ = re.compile(r"MESSAGING_FIRST_RELEASE(?!\s*(?::[^=\n]*)?=(?!=))")
+# How many indented lines after a numeric gate count as its body.
+GATE_BODY_LINES = 3
+
+
+def indentation(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def gate_body(lines: list[str], index: int) -> list[str]:
+    """Return the first lines indented under the gate at ``index``."""
+    body = []
+    for line in lines[index + 1 :]:
+        if line.strip() and indentation(line) <= indentation(lines[index]):
+            break
+        body.append(line)
+        if len(body) == GATE_BODY_LINES:
+            break
+    return body
+
+
+def messaging_version_literals(text: str) -> list[tuple[int, str]]:
+    """Return lines that tie Messaging to a version written in place.
+
+    A line carrying both a release version and Messaging is one finding; a
+    numeric gate whose body mentions Messaging is another. Naming
+    ``MESSAGING_FIRST_RELEASE`` without assigning it is the one allowed
+    mention, so prose and code may point at the roster.
+    """
+    lines = text.splitlines()
+    findings = []
+    for index, line in enumerate(lines):
+        allowed = ROSTER_CONSTANT_READ.sub("", line)
+        if VERSION_LITERAL.search(allowed) and "messaging" in allowed.lower():
+            findings.append((index + 1, line.strip()))
+        elif NUMERIC_VERSION_GATE.search(line) and any(
+            "messaging" in body.lower()
+            for body in gate_body(lines, index)
+        ):
+            findings.append((index + 1, line.strip()))
+    return findings
+
+
+class MessagingRosterStructureTest(unittest.TestCase):
+    def scanned_files(self) -> list[Path]:
+        paths = []
+        for directory in ("release/scripts", ".github/workflows", ".github/scripts"):
+            for path in sorted((ROOT / directory).iterdir()):
+                if (
+                    path.is_file()
+                    and not path.name.startswith("test_")
+                    and path.suffix != ".pyc"
+                    and path.relative_to(ROOT).as_posix() != MESSAGING_ROSTER
+                ):
+                    paths.append(path)
+        return paths
+
+    def test_no_script_or_workflow_carries_its_own_messaging_version(self) -> None:
+        scanned = self.scanned_files()
+        self.assertTrue(
+            {ROOT / relative for relative in MESSAGING_ROSTER_CONSUMERS} <= set(scanned)
+        )
+        findings = []
+        for path in scanned:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            findings.extend(
+                f"{path.relative_to(ROOT)}:{line}: {content}"
+                for line, content in messaging_version_literals(text)
+            )
+        self.assertEqual([], findings)
+
+    def test_the_scan_catches_hand_written_messaging_gates(self) -> None:
+        for sample in (
+            "MESSAGING_RELEASE_MINIMUM_VERSION = (0, 35, 0)\n",
+            "if parsed >= MESSAGING_CLIENT_MINIMUM_VERSION:\n",
+            '    "messaging": (0, 35, 0),\n',
+            "if parsed >= (0, 35, 0):\n    groups.append('messaging')\n",
+            "if ((version_major > 0 || version_minor >= 35)); then\n"
+            "  include_messaging=true\n",
+            "  (( release_minor >= 35 )) && products+=(messaging)\n",
+            'if [[ "${minor}" -ge 35 ]]; then\n  echo messaging\nfi\n',
+            'if version >= "0.35.0":\n    roster.add("messaging")\n',
+            "MESSAGING_FIRST_RELEASE = (0, 36, 0)\n",
+            "MESSAGING_FIRST_RELEASE: tuple[int, int, int] = (0, 36, 0)\n",
+        ):
+            with self.subTest(sample=sample):
+                self.assertNotEqual([], messaging_version_literals(sample))
+        for sample in (
+            "if release_roster.messaging_in_release(parsed):\n",
+            "first = release_roster.MESSAGING_FIRST_RELEASE\n",
+            'messaging_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  messaging-in-release "${version}")"\n',
+        ):
+            with self.subTest(sample=sample):
+                self.assertEqual([], messaging_version_literals(sample))
+
+    def test_every_messaging_gate_reads_the_roster(self) -> None:
+        for relative in MESSAGING_ROSTER_CONSUMERS:
+            with self.subTest(path=relative):
+                text = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn("release_roster", text)
+                self.assertIn("messaging", text.lower())
+
+    def test_the_roster_cli_names_no_release_until_messaging_joins_one(self) -> None:
+        for version in ("0.35.0", "0.36.0", "1.0.0", "v1.0.0"):
+            with self.subTest(version=version):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / MESSAGING_ROSTER),
+                        "messaging-in-release",
+                        version,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("false\n", result.stdout)
+                self.assertEqual("", result.stderr)
+        refused = subprocess.run(
+            [sys.executable, str(ROOT / MESSAGING_ROSTER), "messaging-in-release", "0.36"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, refused.returncode)
+        self.assertEqual("", refused.stdout)
+        self.assertIn("release version must be X.Y.Z", refused.stderr)
+
+    def test_the_roster_includes_messaging_from_a_named_first_release(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "release_roster_under_test", ROOT / MESSAGING_ROSTER
+        )
+        assert spec is not None and spec.loader is not None
+        roster = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(roster)
+        self.assertIsNone(roster.MESSAGING_FIRST_RELEASE)
+        for version in ((0, 35, 0), (0, 36, 0), (1, 0, 0)):
+            with self.subTest(version=version, first_release=None):
+                self.assertFalse(roster.messaging_in_release(version))
+        with mock.patch.object(roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)):
+            self.assertFalse(roster.messaging_in_release((0, 35, 9)))
+            self.assertTrue(roster.messaging_in_release((0, 36, 0)))
+            self.assertTrue(roster.messaging_in_release((1, 0, 0)))
 
 
 
