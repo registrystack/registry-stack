@@ -448,8 +448,12 @@ it grants the runtime role USAGE on the schema, SELECT, INSERT, UPDATE, and
 DELETE on its tables, use of its sequences, and EXECUTE on its functions,
 then revokes INSERT, UPDATE, DELETE, and TRUNCATE on the ledger and on
 `scheduling_schema_migrations`, and revokes all ledger privileges from
-PUBLIC, all inside the activation transaction. It never grants or revokes
-TRIGGER. A TRIGGER privilege the runtime role holds is refused with the
+PUBLIC, all inside the activation transaction. The grants name each
+`scheduling_*` object and each platform hook delivery object Scheduling
+installs, never every object in the schema, so an object another
+application keeps in a shared schema such as `public` stays out of the
+runtime role's reach, and a split runtime role missing a grant on such an
+object is not drift. It never grants or revokes TRIGGER. A TRIGGER privilege the runtime role holds is refused with the
 `REVOKE TRIGGER` to run, and a default privilege of the migration role that
 would grant it TRIGGER on the tables a migration creates is refused before
 any migration, naming `ALTER DEFAULT PRIVILEGES ... REVOKE TRIGGER ON TABLES
