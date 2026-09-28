@@ -1890,8 +1890,9 @@ async fn finish_activation(
 /// Enforcement: the request entry is accepted before the first activation
 /// write, and a refused request refuses the activation; the response follows
 /// the commit (`applied`) or durable state that shows the target did not
-/// become active (`failed`). An attempt whose end the durable state cannot
-/// show is answered `unfinished` when its handle is dropped.
+/// become active or that maintenance failed (`failed`). An attempt whose end
+/// the durable state cannot show is answered `unfinished` when its handle is
+/// dropped.
 struct ActivationAttempt {
     request: AuditRequest,
     record: Value,
@@ -1961,10 +1962,12 @@ fn outcome_record(record: &Value, phase: &'static str, outcome: &'static str) ->
 }
 
 /// Answer the audit request of an activation that returned an error:
-/// `failed` when the durable state shows the target is not active and no
-/// longer applying, or no registry state exists; otherwise the dropped
-/// handle answers `unfinished`. An error does not prove the transaction
-/// rolled back, so the durable state decides.
+/// `failed` when the durable state shows maintenance failed, or the target
+/// is not active and no longer applying, or no registry state exists;
+/// otherwise the dropped handle answers `unfinished`. A failed initial
+/// activation leaves the state row naming its own target, so the failed
+/// status alone decides it. An error does not prove the transaction rolled
+/// back, so the durable state decides.
 async fn answer_unlanded(
     connection: &mut VerifiedPackageApplyConnection,
     attempt: ActivationAttempt,
@@ -1972,8 +1975,9 @@ async fn answer_unlanded(
 ) {
     let failed = match connection.maintenance_snapshot().await {
         Ok(snapshot) => {
-            snapshot.identity.activation_id != target.activation_id
-                && snapshot.maintenance_status != "applying"
+            snapshot.maintenance_status == "failed"
+                || (snapshot.identity.activation_id != target.activation_id
+                    && snapshot.maintenance_status != "applying")
         }
         Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => true,
         Err(_) => false,

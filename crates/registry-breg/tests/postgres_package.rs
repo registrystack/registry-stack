@@ -1587,6 +1587,30 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
     assert_eq!(ledger[0].0, None);
     assert_eq!(ledger[0].1, package.package_digest());
     assert_eq!(ledger[0].4, "failed");
+    // The state row of a failed initial activation names the target itself,
+    // yet the durable state shows it failed, so the attempt's audit request
+    // is answered failed rather than unfinished.
+    let audited = database
+        .activation_audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-activation-audit/v1")
+        .map(|entry| {
+            (
+                entry["phase"].as_str().unwrap_or_default().to_owned(),
+                entry["record"]["outcome"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        audited,
+        vec![
+            ("request".to_owned(), "started".to_owned()),
+            ("response".to_owned(), "failed".to_owned()),
+        ]
+    );
 
     let pool = database
         .runtime_config
