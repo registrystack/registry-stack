@@ -32,7 +32,10 @@ use crate::mutation::{install_mutation_schema, MutationError};
 use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
-    catalog::{install_registry_state_schema, verify_managed_catalog, ExpectedManagedCatalog},
+    catalog::{
+        install_registry_state_schema, live_schema_fingerprint, managed_schema_fingerprint,
+        registry_state_shape, verify_managed_catalog, ExpectedManagedCatalog, RegistryStateShape,
+    },
     config::ConnectionTls,
     migration_ledger::{
         in_flight_activation, migration_phase_state, record_applied, record_chunk_progress,
@@ -89,6 +92,16 @@ pub(crate) struct MaintenanceSnapshot {
     pub identity: ExpectedRegistryIdentity,
     pub maintenance_status: String,
     pub maintenance_target_package_digest: Option<String>,
+}
+
+/// What a release before the activation ledger recorded about the package it
+/// serves, read under the exclusive apply lock before an adoption.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreLedgerState {
+    pub package_id: String,
+    pub database_id: String,
+    /// No activation was left in maintenance.
+    pub ready: bool,
 }
 
 /// How far a reviewed plan durably progressed for one pinned target.
@@ -1591,6 +1604,241 @@ impl DedicatedApplyConnection {
         }
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// The kernel state shape this database holds.
+    pub(crate) async fn registry_state_shape(&mut self) -> Result<RegistryStateShape> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        Ok(registry_state_shape(&self.client).await?)
+    }
+
+    /// The state a release before the activation ledger recorded, or `None`
+    /// when this database does not have the pre-ledger shape.
+    pub(crate) async fn pre_ledger_state(&mut self) -> Result<Option<PreLedgerState>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        if registry_state_shape(&self.client).await? != RegistryStateShape::PreLedger {
+            return Ok(None);
+        }
+        let row = self
+            .client
+            .query_opt(
+                "SELECT package_id, database_id,
+                        maintenance_status = 'ready' AND maintenance_target_revision IS NULL
+                   FROM registry_internal.registry_state
+                  WHERE singleton",
+                &[],
+            )
+            .await?
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        Ok(Some(PreLedgerState {
+            package_id: row.try_get(0)?,
+            database_id: row.try_get(1)?,
+            ready: row.try_get(2)?,
+        }))
+    }
+
+    /// Adopts a database a release before the activation ledger kept, as it
+    /// stands, in one transaction: the kernel tables take this release's
+    /// shapes, the live managed catalog must then be the package's catalog,
+    /// and the adoption becomes the first activation the ledger records.
+    ///
+    /// Threat: an adoption could bind a package whose catalog is not the one
+    /// the database runs, or leave the kernel half reshaped. Enforcement: the
+    /// reshape, the fingerprint comparison, the exact catalog verification,
+    /// and the state and ledger rows commit together or not at all, and no
+    /// model DDL runs. The old ledger history is dropped; the claim the
+    /// pre-ledger claim table holds is carried into the state row, and every
+    /// open import authority is superseded.
+    pub(crate) async fn adopt_pre_ledger_database(
+        &mut self,
+        registry: &CompiledRegistry,
+        target: &ExpectedRegistryIdentity,
+        transition: MaintenanceTransition<'_>,
+        acknowledge_retired_audit_discard: bool,
+    ) -> Result<Vec<Value>> {
+        let MaintenanceTransition {
+            ledger,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        } = transition;
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        ledger.validate()?;
+        if ledger.plan_kind != ActivationPlanKind::Adopted
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+        {
+            return Err(PostgresKernelError::Configuration(
+                "adopted package and migration ledger differ",
+            ));
+        }
+        let mut transaction = self.client.transaction().await?;
+        if registry_state_shape(&transaction).await? != RegistryStateShape::PreLedger {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let adopted = transaction
+            .execute(
+                "SELECT 1 FROM registry_internal.registry_state
+                  WHERE singleton AND package_id = $1 AND database_id = $2
+                    AND maintenance_status = 'ready'
+                    AND maintenance_target_revision IS NULL
+                  FOR UPDATE",
+                &[&target.package_id, &target.database_id],
+            )
+            .await?;
+        if adopted != 1 {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let claim = if transaction
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_instance_claim') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .try_get::<_, bool>(0)?
+        {
+            transaction
+                .query_opt(
+                    "SELECT system_identifier, database_oid, epoch, claimed_at
+                       FROM registry_internal.registry_instance_claim
+                      WHERE singleton",
+                    &[],
+                )
+                .await?
+        } else {
+            None
+        };
+        // Import authorities name the activation they were opened under. The
+        // revision a pre-ledger authority names has no activation, so each
+        // takes the adoption's, which supersedes every open one below.
+        let authorities_name_a_revision = transaction
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid = to_regclass('registry_internal.registry_import_authorities')
+                        AND attname = 'activation_revision'
+                        AND NOT attisdropped
+                 )",
+                &[],
+            )
+            .await?
+            .try_get::<_, bool>(0)?;
+        if authorities_name_a_revision {
+            transaction
+                .batch_execute(&format!(
+                    "ALTER TABLE registry_internal.registry_import_authorities
+                         DROP CONSTRAINT IF EXISTS registry_import_authorities_activation_revision_check;
+                     ALTER TABLE registry_internal.registry_import_authorities
+                         RENAME COLUMN activation_revision TO activation_id;
+                     ALTER TABLE registry_internal.registry_import_authorities
+                         ALTER COLUMN activation_id TYPE uuid USING '{}'::uuid;",
+                    target.activation_uuid()?.hyphenated(),
+                ))
+                .await?;
+        }
+        transaction
+            .batch_execute(
+                "DROP TABLE IF EXISTS registry_internal.registry_migration_steps;
+                 DROP TABLE IF EXISTS registry_internal.registry_migrations;
+                 DROP TABLE IF EXISTS registry_internal.registry_instance_claim;
+                 DROP TABLE registry_internal.registry_state;",
+            )
+            .await?;
+        install_registry_state_schema(&transaction, runtime_role).await?;
+        install_mutation_schema(
+            &transaction,
+            runtime_role,
+            acknowledge_retired_audit_discard,
+        )
+        .await
+        .map_err(|error| match error {
+            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+            _ => PostgresKernelError::Connection,
+        })?;
+        install_history_schema_store(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        install_history_commit_schema(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        // The package's access rules are reconciled over the catalog as it
+        // stands; when that or the exact catalog check refuses, the refusal
+        // names the live fingerprint unless the catalog is the package's.
+        let catalog = transaction.savepoint("breg_adoption_catalog").await?;
+        let verified = match reconcile_compiled_runtime_acl(&catalog, registry, runtime_role).await
+        {
+            Ok(()) => managed_schema_fingerprint(&catalog, runtime_role, expected_catalog).await,
+            Err(error) => Err(error),
+        };
+        match verified {
+            Ok(live) if live == target.schema_fingerprint => catalog.commit().await?,
+            Ok(live) => return Err(PostgresKernelError::AdoptionFingerprintMismatch { live }),
+            Err(error) => {
+                catalog.rollback().await?;
+                let live = live_schema_fingerprint(&transaction, runtime_role).await?;
+                if live != target.schema_fingerprint {
+                    return Err(PostgresKernelError::AdoptionFingerprintMismatch { live });
+                }
+                return Err(error);
+            }
+        }
+        let (system_identifier, database_oid, epoch, claimed_at) = match &claim {
+            Some(row) => (
+                row.try_get::<_, Option<i64>>(0)?,
+                Some(row.try_get::<_, u32>(1)?),
+                row.try_get::<_, i64>(2)?,
+                Some(row.try_get::<_, std::time::SystemTime>(3)?),
+            ),
+            None => (None, None, 0, None),
+        };
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_state (
+                     singleton, package_id, database_id, active_package_digest,
+                     active_activation_id, schema_fingerprint, maintenance_status,
+                     system_identifier, database_oid, epoch, claimed_at
+                 ) VALUES (true, $1, $2, $3, $4, $5, 'ready', $6, $7, $8, $9)",
+                &[
+                    &target.package_id,
+                    &target.database_id,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                    &system_identifier,
+                    &database_oid,
+                    &epoch,
+                    &claimed_at,
+                ],
+            )
+            .await?;
+        record_started(&transaction, ledger).await?;
+        record_applied(&transaction, ledger).await?;
+        crate::instance_claim::record_if_unclaimed(&transaction).await?;
+        // The runtime reads the history descriptor of the active activation;
+        // the descriptors of earlier revisions stay as the history they
+        // describe.
+        retain_descriptor(&transaction, registry, &target.activation_id)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        let mut superseded = Vec::new();
+        crate::import_authority::supersede_every_open(
+            &transaction,
+            &mut superseded,
+            &target.activation_id,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        verify_managed_catalog(
+            &transaction,
+            target,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(superseded)
     }
 
     /// Reconciles product-owned control tables before a successor enters

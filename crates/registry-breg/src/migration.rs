@@ -108,6 +108,20 @@ pub enum MigrationError {
     /// record it under.
     #[error("the operator reference is refused")]
     OperatorReference,
+    /// The database was installed by a release before the activation ledger
+    /// and has not been adopted into it.
+    #[error("the database predates the activation ledger and has not been adopted")]
+    PreLedgerDatabase,
+    /// Adoption refused: the release that installed the database left an
+    /// activation in maintenance.
+    #[error("the database was left in maintenance and cannot be adopted")]
+    AdoptionNotReady,
+    /// Adoption refused: the live managed catalog is not the catalog the
+    /// adopting package declares.
+    #[error(
+        "the live managed schema fingerprint `{live}` differs from the package's `{package}`; rebuild the package from the project that is deployed, with this release's `bregctl package`"
+    )]
+    AdoptionFingerprintMismatch { live: String, package: String },
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -325,6 +339,10 @@ pub enum ApplyPrecondition<'a> {
     RoleChange {
         current: &'a ExpectedRegistryIdentity,
     },
+    /// Adopt a database a release before the activation ledger installed, as
+    /// it stands: the package must declare the live managed catalog, no model
+    /// DDL runs, and the adoption is the first activation the ledger records.
+    Adoption,
 }
 
 /// The configured least-privilege database roles used by one apply.
@@ -420,7 +438,18 @@ pub async fn read_recorded_registry_state(
     )
     .await
     .map_err(refusal_before_maintenance)?;
-    let snapshot = connection.maintenance_snapshot().await;
+    let shape = connection.registry_state_shape().await;
+    if matches!(shape, Ok(crate::postgres::RegistryStateShape::PreLedger)) {
+        connection
+            .release()
+            .await
+            .map_err(refusal_before_maintenance)?;
+        return Err(MigrationError::PreLedgerDatabase);
+    }
+    let snapshot = match shape {
+        Ok(_) => connection.maintenance_snapshot().await,
+        Err(error) => Err(error),
+    };
     connection
         .release()
         .await
@@ -643,10 +672,13 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
 pub async fn apply_verified_package(
     request: ApplyVerifiedPackageRequest<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
+    if matches!(request.precondition, ApplyPrecondition::Adoption) {
+        return adopt_verified_package(request).await;
+    }
     let manifest = request.package.manifest();
     let role_change = matches!(request.precondition, ApplyPrecondition::RoleChange { .. });
     let current = match request.precondition {
-        ApplyPrecondition::InitialActivation => None,
+        ApplyPrecondition::InitialActivation | ApplyPrecondition::Adoption => None,
         ApplyPrecondition::Successor { current } => {
             verify_successor_package_binding(
                 request.package,
@@ -783,6 +815,19 @@ pub async fn apply_verified_package(
     )
     .await
     .map_err(refusal_before_maintenance)?;
+    // A database a release before the activation ledger installed is
+    // adopted into the ledger first; no other activation reshapes it.
+    match connection.registry_state_shape().await {
+        Ok(crate::postgres::RegistryStateShape::PreLedger) => {
+            let _ = connection.release().await;
+            return Err(MigrationError::PreLedgerDatabase);
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let _ = connection.release().await;
+            return Err(refusal_before_maintenance(error));
+        }
+    }
     // Prerequisites are administrator-owned. Refuse a missing extension or
     // spatial role before the existing registry enters maintenance.
     if connection
@@ -809,15 +854,11 @@ pub async fn apply_verified_package(
     // The ledger keeps the operator's reference only as a keyed hash scoped
     // to this activation, so the text never reaches the database.
     if let Some(reference) = request.operator_reference {
-        match request.audit.profile().key_hasher().audit_reference_hash(
-            "breg-activation-operator-reference-v1",
-            &ledger.activation_id.to_string(),
-            reference,
-        ) {
+        match operator_reference_hash(&request.audit, ledger.activation_id, reference) {
             Ok(hash) => ledger.operator_reference_hash = Some(hash),
-            Err(_) => {
+            Err(error) => {
                 let _ = connection.release().await;
-                return Err(MigrationError::OperatorReference);
+                return Err(error);
             }
         }
     }
@@ -1145,6 +1186,171 @@ pub async fn apply_verified_package(
         .await;
     let Ok(superseded) = activation_result else {
         return fail_and_release(connection, &target, &ledger).await;
+    };
+    finish_activation(connection, &request.audit, superseded, target).await
+}
+
+/// The keyed hash the ledger records for an operator reference, scoped to one
+/// activation so the same reference never links two activations.
+fn operator_reference_hash(
+    audit: &RegistryAudit,
+    activation_id: uuid::Uuid,
+    reference: &str,
+) -> Result<String> {
+    audit
+        .profile()
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-activation-operator-reference-v1",
+            &activation_id.to_string(),
+            reference,
+        )
+        .map_err(|_| MigrationError::OperatorReference)
+}
+
+/// Adopts a database a release before the activation ledger installed into
+/// the ledger, as it stands.
+///
+/// Threat: an operator adopts with a package whose catalog is not the one the
+/// database runs, adopts a database the release left mid-activation, or
+/// adopts a database of another registry or deployment. Enforcement: under
+/// the apply lock the recorded package id and database id must be the
+/// package's and the deployment's and maintenance must be ready, and inside
+/// the one adoption transaction the live managed catalog must verify as the
+/// package's exact catalog; any refusal rolls the whole reshape back.
+async fn adopt_verified_package(
+    request: ApplyVerifiedPackageRequest<'_>,
+) -> Result<ExpectedRegistryIdentity> {
+    let manifest = request.package.manifest();
+    let declares_encrypted_fields = request
+        .package
+        .registry()
+        .entities()
+        .values()
+        .any(|entity| {
+            entity
+                .fields
+                .values()
+                .any(|field| field.encryption.is_some())
+        });
+    if declares_encrypted_fields && request.field_encryption.is_none() {
+        return Err(MigrationError::PackageBinding);
+    }
+    if let Some(reference) = request.operator_reference {
+        if !operator_reference_is_well_formed(reference)
+            || !crate::audit::profile_is_keyed(request.audit.profile())
+        {
+            return Err(MigrationError::OperatorReference);
+        }
+    }
+    let mut ledger = MigrationLedgerEntry {
+        activation_id: uuid::Uuid::new_v4(),
+        package_digest: request.package.package_digest().to_owned(),
+        predecessor_package_digest: None,
+        registry_revision: request.package.registry().revision().to_owned(),
+        plan_kind: ActivationPlanKind::Adopted,
+        migration_kind: MigrationKind::MetadataOnly,
+        role_mode: RoleMode::from_roles(request.roles.migration, request.roles.runtime),
+        runtime_role: request.roles.runtime.as_str().to_owned(),
+        operator_reference_hash: None,
+        statement_checksums: Vec::new(),
+        artifact_bindings: Vec::new(),
+        backup_references: Vec::new(),
+        steps: Vec::new(),
+    };
+    ledger
+        .validate_plan()
+        .map_err(|_| MigrationError::PackageBinding)?;
+    if let Some(reference) = request.operator_reference {
+        ledger.operator_reference_hash = Some(operator_reference_hash(
+            &request.audit,
+            ledger.activation_id,
+            reference,
+        )?);
+    }
+
+    let lock_key =
+        RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
+    let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
+        request.config,
+        lock_key,
+        request.roles.migration,
+        request.timeouts.lock,
+        request.timeouts.statement,
+    )
+    .await
+    .map_err(refusal_before_maintenance)?;
+    if connection
+        .verify_compiled_prerequisites(request.package.registry(), request.roles.runtime)
+        .await
+        .is_err()
+    {
+        let _ = connection.release().await;
+        return Err(MigrationError::ApplyFailed);
+    }
+    let recorded = match connection.pre_ledger_state().await {
+        Ok(Some(recorded)) => recorded,
+        Ok(None) => {
+            let _ = connection.release().await;
+            return Err(MigrationError::PackageBinding);
+        }
+        Err(error) => {
+            let _ = connection.release().await;
+            return Err(refusal_before_maintenance(error));
+        }
+    };
+    let refused = if recorded.package_id != manifest.package_id {
+        Some(MigrationError::PackageBinding)
+    } else if recorded.database_id != request.deployment.database_id() {
+        Some(MigrationError::DatabaseMismatch)
+    } else if !recorded.ready {
+        Some(MigrationError::AdoptionNotReady)
+    } else {
+        None
+    };
+    if let Some(refused) = refused {
+        let _ = connection.release().await;
+        return Err(refused);
+    }
+    let target = target_package_identity(
+        request.package,
+        request.deployment.database_id(),
+        ledger.activation_id,
+    );
+    let expected_catalog = ExpectedManagedCatalog::compiled(request.package.registry());
+    let adopted = connection
+        .adopt_pre_ledger_database(
+            request.package.registry(),
+            &target,
+            MaintenanceTransition {
+                ledger: &ledger,
+                expected_catalog: &expected_catalog,
+                migration_role: request.roles.migration,
+                runtime_role: request.roles.runtime,
+            },
+            request.acknowledge_retired_audit_discard,
+        )
+        .await;
+    let superseded = match adopted {
+        Ok(superseded) => superseded,
+        Err(error) => {
+            let _ = connection.release().await;
+            return Err(match error {
+                crate::postgres::PostgresKernelError::AdoptionFingerprintMismatch { live } => {
+                    MigrationError::AdoptionFingerprintMismatch {
+                        live,
+                        package: manifest.schema_fingerprint.clone(),
+                    }
+                }
+                crate::postgres::PostgresKernelError::RetiredAuditRowsPresent => {
+                    MigrationError::RetiredAuditRowsPresent
+                }
+                crate::postgres::PostgresKernelError::Statement(failure) => {
+                    MigrationError::StatementFailed(failure)
+                }
+                _ => MigrationError::ApplyFailed,
+            });
+        }
     };
     finish_activation(connection, &request.audit, superseded, target).await
 }
