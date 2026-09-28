@@ -152,7 +152,7 @@ assert-json-diff = { version = "2" }
 async-trait = { version = "0.1" }
 aws-lc-rs = { version = "1", features = ["fips"] }
 axum = { version = "0.8" }
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 # simd-unsafe (a default feature since 0.23) adds SIMD engines no call site
 # uses; leaving it off keeps base64 compiled with forbid(unsafe_code).
 base64 = { version = "0.23", default-features = false, features = ["std"] }
@@ -164,8 +164,8 @@ clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 csv = { version = "1" }
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1"] }
-ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
-fake = { version = "=4.4.0", default-features = false }
+ed25519-dalek = { version = "3", features = ["pkcs8", "rand_core"] }
+fake = { version = "=5.1.0", default-features = false }
 fs2 = { version = "0.4" }
 futures = { version = "0.3" }
 futures-core = { version = "0.3" }
@@ -179,22 +179,22 @@ ipnet = { version = "2" }
 # Default features pull an HTTP client for remote $ref resolution and a command
 # line parser for the bundled CLI. Every consumer here compiles schemas it
 # already holds in memory, so neither belongs in the dependency graph.
-jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+jsonschema = { version = "0.24", default-features = false, features = ["draft202012"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
-p256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 pg_query = { version = "=6.2.0", default-features = false }
 pkcs1 = { version = "0.7", features = ["alloc"] }
-pkcs8 = { version = "0.10" }
+pkcs8 = { version = "0.11" }
 proptest = { version = "1" }
 pyo3 = { version = "0.29.1", features = ["abi3-py310"] }
 pyo3-build-config = { version = "0.29.1" }
-rand = { version = "0.9" }
-rand_chacha = { version = "0.9" }
+rand = { version = "0.10" }
+rand_chacha = { version = "0.10" }
 rand_core = { version = "0.6", features = ["std"] }
-rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "zeroize"] }
 # Pattern evaluation for encrypted fields happens in Rust before sealing, so
 # no regex engine besides this one ever sees the plaintext. The default
 # features stay off: Unicode tables are wanted, but the code generator and
@@ -217,7 +217,7 @@ serde_norway = { version = "0.9" }
 serde_path_to_error = { version = "0.1" }
 serde_yaml_ng = { version = "0.10.0" }
 sha2 = { version = "0.11" }
-signal-hook = { version = "0.3" }
+signal-hook = { version = "0.4" }
 subtle = { version = "2" }
 tempfile = { version = "3" }
 thiserror = { version = "2" }
@@ -228,7 +228,7 @@ tokio-postgres-rustls = { version = "=0.14.0", default-features = false, feature
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tower = { version = "0.5" }
 tower-lsp-server = { version = "0.23" }
-tree-sitter = { version = "0.26" }
+tree-sitter = { version = "0.27" }
 tree-sitter-yaml = { version = "0.7.2" }
 tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
@@ -240,10 +240,10 @@ typst-pdf = { version = "0.15.1" }
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 comemo = { version = "0.5" }
 ttf-parser = { version = "0.25" }
-ulid = { version = "1" }
-ureq = { version = "2" }
+ulid = { version = "3" }
+ureq = { version = "3" }
 url = { version = "2" }
-utoipa = { version = "5" }
+utoipa = { version = "6" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
 zeroize = { version = "1", features = ["derive"] }
