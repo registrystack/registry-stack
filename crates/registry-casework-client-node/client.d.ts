@@ -170,9 +170,24 @@ export interface AttemptReservedHistoryEntry extends HistoryEntryBase {
   kind: 'attempt_reserved'
   detail: JsonObject & { attemptId: string; bindingReference: string; operation: OperationName }
 }
+/**
+ * An attempt_uncertain detail takes one of three shapes: recovery left the
+ * attempt uncertain, the source definitively refused it, or an operator marked
+ * an expired pending attempt uncertain. reason is the original decision reason.
+ */
+export type AttemptUncertainHistoryDetail = JsonObject & {
+  attemptId: string
+  bindingReference: string
+  operation: OperationName
+  reason?: string
+} & (
+  | { sourceRevision?: string | null; definitivelyRefused?: never; operatorReason?: never }
+  | { definitivelyRefused: true; operatorReason?: never }
+  | { operatorReason: string; decidedBy: string; originalActor: IssuerPrincipal; originalProfileId: string; definitivelyRefused?: never }
+)
 export interface AttemptUncertainHistoryEntry extends HistoryEntryBase {
   kind: 'attempt_uncertain'
-  detail: JsonObject & { attemptId: string; bindingReference: string; sourceRevision?: string | null; definitivelyRefused?: boolean }
+  detail: AttemptUncertainHistoryDetail
 }
 export interface ActionCompletedHistoryEntry extends HistoryEntryBase {
   kind: 'action_completed'

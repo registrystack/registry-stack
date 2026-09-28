@@ -213,6 +213,25 @@ function settlementDecision(entry: HistoryEntry): string | undefined {
 }
 void settlementDecision
 
+function uncertaintyAccountability(entry: HistoryEntry): string | undefined {
+  if (entry.kind !== 'attempt_uncertain') return undefined
+  const operation: string = entry.detail.operation
+  const reason: string | undefined = entry.detail.reason
+  if (entry.detail.operatorReason !== undefined) {
+    const operatorReason: string = entry.detail.operatorReason
+    const decidedBy: string = entry.detail.decidedBy
+    const originalActor: { issuer: string; subject: string } = entry.detail.originalActor
+    const originalProfileId: string = entry.detail.originalProfileId
+    return `${operation}:${operatorReason}:${decidedBy}:${originalActor.subject}:${originalProfileId}:${reason ?? ''}`
+  }
+  if (entry.detail.definitivelyRefused === true) {
+    return `${operation}:refused:${reason ?? ''}`
+  }
+  const sourceRevision: string | null | undefined = entry.detail.sourceRevision
+  return `${operation}:${sourceRevision ?? ''}`
+}
+void uncertaintyAccountability
+
 function recoveryReference(error: CaseworkClientError): string | undefined {
   const code: CaseworkProblemCode | undefined = error.code
   return code === 'work-item.recovery-pending' ? error.originalAttemptId : undefined
