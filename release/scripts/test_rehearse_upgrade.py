@@ -282,6 +282,169 @@ class CaseworkPackageTest(unittest.TestCase):
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class BregLedgerTest(unittest.TestCase):
+    DIGEST = "sha256:" + "a" * 64
+
+    def breg(self, root: Path) -> object:
+        breg = MODULE.Breg.__new__(MODULE.Breg)
+        breg.work = root
+        breg.secrets = root / "secrets"
+        breg.project = root / "project"
+        breg.identity = {"instanceId": "rehearsal-instance", "sourceRevision": "starter-0.1.0"}
+        breg.instance_id = "rehearsal-instance"
+        breg.clients = [MODULE.BREG_CLIENT]
+        return breg
+
+    def test_a_ledger_runtime_names_only_the_package_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.breg(root).write_runtime(root / "runtime.yaml", "registry", root / "pkg",
+                                          8000)
+            self.assertEqual(load_json(root / "runtime.yaml")["package"],
+                             {"root": str(root / "pkg")})
+
+    def test_a_signing_release_runtime_names_its_trust_anchor_and_active_package(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.breg(root).write_runtime(root / "runtime.yaml", "registry", root / "pkg",
+                                          8000, signed=(self.DIGEST, 1))
+            self.assertEqual(load_json(root / "runtime.yaml")["package"], {
+                "root": str(root / "pkg"),
+                "trustAnchorPath": str(root / "trust-anchor.json"),
+                "compilerSourceRevision": "starter-0.1.0",
+                "activeRevision": self.DIGEST, "activeSequence": 1})
+
+    def test_retiring_the_package_identity_keeps_the_source_revision(self) -> None:
+        registry = {"package": {"environment": "staging", "instanceId": "a",
+                                "sequence": 1, "sourceRevision": "starter-0.1.0"}}
+        self.assertEqual(MODULE.retire_package_identity(registry),
+                         ["environment", "instanceId", "sequence"])
+        self.assertEqual(registry, {"package": {"sourceRevision": "starter-0.1.0"}})
+        self.assertEqual(MODULE.retire_package_identity(registry), [])
+
+    def test_a_signing_release_is_told_apart_by_its_package_flags(self) -> None:
+        side = unittest.mock.Mock()
+        side.run.return_value.stdout = "  --signatures <PATH>\n"
+        self.assertTrue(MODULE.signs_packages(side))
+        side.run.assert_called_once_with("bregctl", "package", "--help")
+        side.run.return_value.stdout = "  --baseline-package <DIR>\n"
+        self.assertFalse(MODULE.signs_packages(side))
+
+    def test_a_ledger_package_is_tested_and_built_against_its_baseline_unsigned(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root)
+            breg.create_database = unittest.mock.Mock()
+            breg.credentials = unittest.mock.Mock()
+            side = unittest.mock.Mock()
+            side.has_legacy_breg_audit.return_value = False
+            side.run_json.side_effect = [{"ok": True}, {"ok": True, "packageDigest": self.DIGEST}]
+            baseline = root / "build-1" / "out" / "package"
+            package, digest = breg.package(side, root / "build-2", baseline=baseline)
+            self.assertEqual((package, digest), (root / "build-2" / "out" / "package", self.DIGEST))
+            breg.create_database.assert_called_once_with("schematest")
+            tested, packaged = (call.args for call in side.run_json.call_args_list)
+            self.assertEqual(tested[3], "test")
+            self.assertEqual(packaged[3], "package")
+            for arguments in (tested, packaged):
+                self.assertIn("--baseline-package", arguments)
+                self.assertEqual(arguments[arguments.index("--baseline-package") + 1],
+                                 str(baseline))
+                self.assertFalse([flag for flag in arguments if "signature" in flag])
+            self.assertEqual(load_json(root / "build-2" / "runtime-test.yaml")["package"],
+                             {"root": str(root / "build-2" / "empty-package-root")})
+
+    def test_a_ledger_package_without_a_digest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            breg = self.breg(Path(directory))
+            breg.create_database = unittest.mock.Mock()
+            breg.credentials = unittest.mock.Mock()
+            side = unittest.mock.Mock()
+            side.has_legacy_breg_audit.return_value = False
+            side.run_json.side_effect = [{"ok": True}, {"ok": True}]
+            with self.assertRaisesRegex(Error, "packageDigest"):
+                breg.package(side, Path(directory) / "build")
+
+    def author(self, root: Path, package: dict[str, Any], help_text: str) -> tuple[object, object]:
+        breg = self.breg(root)
+        breg.keys = unittest.mock.Mock()
+        breg.operator = {}
+
+        def run(binary: str, *arguments: str) -> object:
+            if arguments[0] == "init":
+                (breg.project / "tests").mkdir(parents=True)
+                dump_json(breg.project / "registry.yaml", {"package": dict(package)})
+                dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": [
+                    {"id": "j", "steps": [{"id": "s", "accessProfile": "operator",
+                                           "claims": {"principal": "p"}}]}]})
+            return unittest.mock.Mock(stdout=help_text)
+
+        side = unittest.mock.Mock()
+        side.run.side_effect = run
+        with unittest.mock.patch.object(MODULE.Keys, "ed25519_x", return_value="x"):
+            breg.author(side)
+        return breg, load_json(breg.project / "registry.yaml")
+
+    def test_a_signing_release_starter_gets_an_environment_and_a_trust_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg, registry = self.author(root, {"instanceId": "starter", "sequence": 1},
+                                         "--signatures")
+            self.assertEqual(registry["package"]["environment"], MODULE.BREG_ENVIRONMENT)
+            self.assertEqual(breg.instance_id, "starter")
+            self.assertEqual(load_json(root / "trust-anchor.json")["instanceId"], "starter")
+
+    def test_a_ledger_release_starter_is_left_without_retired_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg, registry = self.author(root, {"sourceRevision": "starter-0.1.0"},
+                                         "--baseline-package")
+            self.assertEqual(registry["package"], {"sourceRevision": "starter-0.1.0"})
+            self.assertEqual(breg.instance_id, MODULE.BREG_INSTANCE_ID)
+            self.assertFalse((root / "trust-anchor.json").exists())
+
+    def test_a_plan_must_name_the_expected_pending_activation(self) -> None:
+        plan = {"pending": True, "activation": "adopted", "packageDigest": self.DIGEST}
+        MODULE.expect_plan(plan, "adopted", self.DIGEST)
+        for changed in ({"pending": False}, {"activation": "successor"},
+                        {"packageDigest": "sha256:" + "b" * 64}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(Error, "plan"):
+                MODULE.expect_plan({**plan, **changed}, "adopted", self.DIGEST)
+
+    def ledger(self) -> dict[str, Any]:
+        second = "sha256:" + "b" * 64
+        return {"activePackageDigest": second, "activationId": "two",
+                "maintenanceStatus": "ready",
+                "ledger": [
+                    {"applyOrder": 2, "planKind": "successor", "outcome": "applied",
+                     "packageDigest": second, "predecessorPackageDigest": self.DIGEST,
+                     "activationId": "two"},
+                    {"applyOrder": 1, "planKind": "adopted", "outcome": "applied",
+                     "packageDigest": self.DIGEST, "predecessorPackageDigest": None,
+                     "activationId": "one"}]}
+
+    def test_the_ledger_lists_each_activation_in_apply_order(self) -> None:
+        status = self.ledger()
+        self.assertEqual(MODULE.expect_ledger(status, "sha256:" + "b" * 64),
+                         ["adopted:applied", "successor:applied"])
+
+    def test_a_ledger_whose_active_package_is_not_the_last_applied_is_refused(self) -> None:
+        cases = {
+            "another active package": {"activePackageDigest": self.DIGEST},
+            "maintenance": {"maintenanceStatus": "failed"},
+            "another activation": {"activationId": "one"},
+        }
+        for name, changed in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(Error, "ledger|active"):
+                MODULE.expect_ledger({**self.ledger(), **changed}, "sha256:" + "b" * 64)
+        unchained = self.ledger()
+        unchained["ledger"][0]["predecessorPackageDigest"] = "sha256:" + "c" * 64
+        with self.assertRaisesRegex(Error, "chain"):
+            MODULE.expect_ledger(unchained, "sha256:" + "b" * 64)
+
+
+@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class EvidencePackageTest(unittest.TestCase):
     def test_a_sealed_installed_package_is_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -510,6 +673,23 @@ class StateComparisonTest(unittest.TestCase):
 
     def test_only_retired_audit_tables_can_be_replaced_by_an_archive(self) -> None:
         self.assertTrue(MODULE.row_count_losses({"public.records": 3}, {}, {"public.records": 3}))
+
+    def test_a_relocated_table_may_disappear_only_when_named(self) -> None:
+        before = {"registry_internal.registry_instance_claim": 1, "public.a": 2}
+        self.assertEqual(MODULE.row_count_losses(
+            before, {"public.a": 2}, relocated={"registry_internal.registry_instance_claim"}), [])
+        self.assertTrue(MODULE.row_count_losses(before, {"public.a": 2}))
+        self.assertTrue(MODULE.row_count_losses(
+            before, {"public.a": 1}, relocated={"registry_internal.registry_instance_claim"}))
+
+    def test_adoption_carries_the_instance_claim_over_or_records_one(self) -> None:
+        claim = {"systemIdentifier": "7", "databaseOid": 16384, "epoch": 1,
+                 "claimedAt": "2026-09-28T00:00:00Z"}
+        self.assertEqual(MODULE.claim_differences(claim, dict(claim)), [])
+        self.assertEqual(MODULE.claim_differences(None, claim), [])
+        self.assertTrue(MODULE.claim_differences(claim, {**claim, "epoch": 2}))
+        self.assertTrue(MODULE.claim_differences(claim, None))
+        self.assertTrue(MODULE.claim_differences(None, None))
 
     def test_successor_preserves_record_state_while_etags_change(self) -> None:
         before = {"records/1": {"etag": "old-package", "domainData": {"code": "a"}, "revision": "r1"}}
