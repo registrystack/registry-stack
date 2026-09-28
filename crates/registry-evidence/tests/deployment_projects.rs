@@ -834,7 +834,7 @@ async fn execute_response(
                         .unwrap_or_else(|_| panic!("{label}: subject binding failed")),
                 })
                 .collect();
-            let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+            let evidence_id = format!("urn:ulid:{}", ulid::Ulid::generate());
             let evidence = kernel
                 .construct_evidence(
                     &requirement.id,

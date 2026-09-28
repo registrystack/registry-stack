@@ -45,7 +45,7 @@ fn pseudonym(seed: u8) -> String {
 fn sample_event() -> EvidenceAuditEvent {
     EvidenceAuditEvent::new(
         AssuranceProfile::EvidenceGrade,
-        ulid::Ulid::new().to_string(),
+        ulid::Ulid::generate().to_string(),
         AuditPhase::AccessAttempt,
         "urn:example:fixture:requirement:adult-status:v1".to_string(),
         BENCH_BUNDLE_REVISION.to_string(),

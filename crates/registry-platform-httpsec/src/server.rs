@@ -51,7 +51,7 @@ impl TraceContext {
 
     #[must_use]
     pub fn server_created() -> Self {
-        let value = u128::from(Ulid::new());
+        let value = u128::from(Ulid::generate());
         Self {
             trace_id: TraceId::parse(&format!("{value:032x}"))
                 .expect("a nonzero ULID is a canonical trace identifier"),
@@ -103,7 +103,7 @@ fn parse_traceparent(value: &str) -> Option<TraceContext> {
 }
 
 fn fresh_span_id() -> String {
-    let value = u128::from(Ulid::new());
+    let value = u128::from(Ulid::generate());
     let span = u64::try_from(value & u128::from(u64::MAX)).unwrap_or(1);
     format!("{:016x}", span.max(1))
 }
