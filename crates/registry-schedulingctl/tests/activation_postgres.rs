@@ -576,6 +576,8 @@ async fn apply_refuses_the_active_package_and_a_foreign_database_without_writing
     );
     let report = plan(&foreign);
     assert_eq!(report["databaseIdCheck"], "mismatch");
+    // A plan apply would refuse records no activation.
+    assert_eq!(report["changesPending"], false, "{report}");
     assert_eq!(
         report["refusals"][0]["code"],
         "schedulingctl.activation.database-id-mismatch"
@@ -640,6 +642,7 @@ async fn plan_reports_the_unpublished_audit_apply_refuses() {
         ["schedulingctl.activation.unpublished-audit"],
         "{report}"
     );
+    assert_eq!(report["changesPending"], false, "{report}");
     assert!(
         report["refusals"][0]["message"]
             .as_str()
