@@ -138,9 +138,9 @@ pub struct ReconcileReport {
     pub outcome: ReconcileOutcome,
     /// The durable maintenance status, absent when the lock was already held.
     pub maintenance_status: Option<String>,
-    pub maintenance_target_revision: Option<String>,
-    pub active_package_revision: Option<String>,
-    pub target_package_revision: String,
+    pub maintenance_target_package_digest: Option<String>,
+    pub active_package_digest: Option<String>,
+    pub target_package_digest: String,
     /// The managed-catalog invariant that differs from the pinned target's
     /// expected catalog, absent when the catalog is exactly the target's.
     pub target_catalog_finding: Option<&'static str>,
@@ -265,9 +265,9 @@ pub async fn reconcile_failed_migration(
             return Ok(ReconcileReport {
                 outcome: ReconcileOutcome::InProgress,
                 maintenance_status: None,
-                maintenance_target_revision: None,
-                active_package_revision: None,
-                target_package_revision: ledger.package_digest.clone(),
+                maintenance_target_package_digest: None,
+                active_package_digest: None,
+                target_package_digest: ledger.package_digest.clone(),
                 target_catalog_finding: None,
                 active_catalog_finding: None,
                 unresolvable_reason: None,
@@ -298,9 +298,9 @@ async fn reconcile_under_lock(
     let mut report = ReconcileReport {
         outcome: ReconcileOutcome::Unresolvable,
         maintenance_status: Some(snapshot.maintenance_status.clone()),
-        maintenance_target_revision: snapshot.maintenance_target_package_digest.clone(),
-        active_package_revision: Some(snapshot.identity.package_digest.clone()),
-        target_package_revision: ledger.package_digest.clone(),
+        maintenance_target_package_digest: snapshot.maintenance_target_package_digest.clone(),
+        active_package_digest: Some(snapshot.identity.package_digest.clone()),
+        target_package_digest: ledger.package_digest.clone(),
         target_catalog_finding: None,
         active_catalog_finding: None,
         unresolvable_reason: None,
@@ -695,9 +695,9 @@ mod tests {
         ReconcileReport {
             outcome: ReconcileOutcome::Unresolvable,
             maintenance_status: Some("failed".to_owned()),
-            maintenance_target_revision: Some("rev-2".to_owned()),
-            active_package_revision: Some("rev-1".to_owned()),
-            target_package_revision: "rev-2".to_owned(),
+            maintenance_target_package_digest: Some("rev-2".to_owned()),
+            active_package_digest: Some("rev-1".to_owned()),
+            target_package_digest: "rev-2".to_owned(),
             target_catalog_finding,
             active_catalog_finding,
             unresolvable_reason: None,

@@ -116,6 +116,10 @@
   - Reconciliation audits under `breg-migration-reconcile-audit/v3`, naming
     `packageDigest`, `targetPackageDigest`, and `activationId` instead of
     `packageRevision`, `targetPackageRevision`, and `packageSequence`.
+  - `bregctl migration reconcile` reports `maintenanceTargetPackageDigest`,
+    `activePackageDigest`, and `targetPackageDigest` instead of
+    `maintenanceTargetRevision`, `activePackageRevision`, and
+    `targetPackageRevision`.
   - Webhook events take their `source` from the runtime `identity.instanceId`.
   - `breg` refuses to start on a database that records no activated package,
     naming `bregctl apply --package DIR --initial`, and on a database that
