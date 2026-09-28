@@ -1118,6 +1118,62 @@ async fn moving_to_split_and_rotating_the_runtime_role_reapply_the_active_packag
 }
 
 #[tokio::test]
+async fn plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply() {
+    let fixture = Fixture::single("plan_rotated").await;
+    let project = project();
+    let first = digest('a');
+    let (one, _one_store) = fixture.login_role().await;
+    fixture
+        .apply_as(&one, &candidate(&project, &first, &[]))
+        .await
+        .expect("split-role apply");
+    let (two, two_store) = fixture.login_role().await;
+    let expected = format!(
+        "the Casework runtime role cannot read the activation ledger in schema {}; run `caseworkctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `caseworkctl plan --runtime-config FILE`",
+        fixture.schema
+    );
+
+    // Without USAGE on the schema the ledger is invisible, which must not
+    // read as an empty database.
+    let error = two_store
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .expect_err("a role that cannot see the ledger is refused");
+    assert!(
+        matches!(error, StoreError::LedgerUnreadable { .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), expected);
+
+    // With USAGE but without SELECT on the ledger tables.
+    fixture
+        .client
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA {} TO {two}",
+            fixture.schema
+        ))
+        .await
+        .expect("grant schema usage");
+    let error = two_store
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .expect_err("a role that cannot read the ledger is refused");
+    assert_eq!(error.to_string(), expected);
+
+    fixture
+        .apply_as(&two, &candidate(&project, &first, &[]))
+        .await
+        .expect("apply grants the rotated runtime role");
+    let plan = two_store
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .expect("the rotated runtime role plans after apply");
+    assert!(!plan.changes_pending, "{:?}", plan.refusals);
+    drop((_one_store, two_store));
+    fixture.drop_roles(&[&one, &two]).await;
+}
+
+#[tokio::test]
 async fn an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock() {
     let fixture = Fixture::single("lockorder").await;
     let project = project();

@@ -1750,7 +1750,8 @@ impl From<StoreError> for HttpError {
             StoreError::Unavailable
             | StoreError::AuditUnavailable
             | StoreError::Postgres(_)
-            | StoreError::SchemaNotCurrent { .. } => Self::ServiceUnavailable,
+            | StoreError::SchemaNotCurrent { .. }
+            | StoreError::LedgerUnreadable { .. } => Self::ServiceUnavailable,
             StoreError::Configuration
             | StoreError::SecretConfiguration(_)
             | StoreError::Corrupt

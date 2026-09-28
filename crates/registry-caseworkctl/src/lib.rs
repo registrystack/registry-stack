@@ -844,9 +844,25 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
         }
         CommandKind::Activation => {
             // An activation refusal carries its own diagnostics; this arm
-            // names only a source binding the adapters could not be built
+            // names only a runtime role that cannot read the activation
+            // ledger and a source binding the adapters could not be built
             // from. A database that cannot be reached stays an operational
             // failure.
+            if let Some(store @ StoreError::LedgerUnreadable { .. }) = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<StoreError>())
+            {
+                return Some(json!({
+                    "severity": "error",
+                    "code": "casework.activation.ledger-unreadable",
+                    "artifact": "operator_action",
+                    "path": "runtime.yaml:/database/runtimeUrlRef",
+                    "message": store.to_string(),
+                    "suggestedAction": "Run caseworkctl apply --runtime-config FILE with the \
+                        migration credential so it grants the runtime role its privileges, then \
+                        run caseworkctl plan --runtime-config FILE again.",
+                }));
+            }
             let runtime = error
                 .chain()
                 .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeError>())?;
@@ -2145,6 +2161,26 @@ mod tests {
             refusal("already-active"),
             refusal("stranded-work")
         ]));
+    }
+
+    #[test]
+    fn a_plan_whose_runtime_role_cannot_read_the_ledger_is_a_refusal_naming_apply() {
+        let error = anyhow::Error::new(StoreError::LedgerUnreadable {
+            schema: "casework".to_owned(),
+        })
+        .context("planning the Casework package activation");
+        let (exit, diagnostic) = classify_failure(CommandKind::Activation, &error);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.activation.ledger-unreadable");
+        assert_eq!(diagnostic["path"], "runtime.yaml:/database/runtimeUrlRef");
+        assert_eq!(
+            diagnostic["message"],
+            "the Casework runtime role cannot read the activation ledger in schema casework; run `caseworkctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `caseworkctl plan --runtime-config FILE`"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Run caseworkctl apply --runtime-config FILE with the migration credential so it grants the runtime role its privileges, then run caseworkctl plan --runtime-config FILE again."
+        );
     }
 
     #[test]
