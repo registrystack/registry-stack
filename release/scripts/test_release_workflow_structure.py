@@ -410,7 +410,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(
             module._candidate_image_names("0.33.0"),
-            module._candidate_image_names("0.34.0"),
+            module._candidate_image_names("0.35.0"),
         )
         self.assertEqual(
             {
@@ -423,7 +423,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             },
-            module._candidate_image_names("0.35.0"),
+            module._candidate_image_names("0.36.0"),
         )
         self.assertFalse(
             any(
@@ -670,7 +670,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             operator_tools,
         )
         self.assertIn('"dist/image-bin/${operator_tool}" --version', operator_tools)
-        self.assertIn("if (( release_major > 0 || release_minor >= 35 )); then", merge)
+        self.assertIn("if (( release_major > 0 || release_minor >= 36 )); then", merge)
         self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
         self.assertIn(
             'dist/bin/${breg_service}-${{ needs.validate.outputs.tag }}-linux-amd64',
@@ -2152,7 +2152,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
-            "v0.34.0": [
+            "v0.35.0": [
                 "breg",
                 "casework",
                 "discovery",
@@ -2160,7 +2160,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
-            "v0.35.0": [
+            "v0.36.0": [
                 "breg",
                 "breg-mcp",
                 "breg-review",
@@ -2240,14 +2240,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
 
         for service in ("breg-mcp", "breg-review"):
             with self.subTest(missing=service):
-                missing_service = dict(manifests["v0.35.0"])
+                missing_service = dict(manifests["v0.36.0"])
                 missing_service["images"] = [
                     image
                     for image in missing_service["images"]
                     if image["name"] != service
                 ]
                 rejected = subprocess.run(
-                    ["jq", "-e", "--arg", "tag", "v0.35.0", jq_filter],
+                    ["jq", "-e", "--arg", "tag", "v0.36.0", jq_filter],
                     input=json.dumps(missing_service),
                     capture_output=True,
                     text=True,
@@ -2261,7 +2261,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
-        self.assertIn("Base Registry Engine, join at `v0.35.0`", verify)
+        self.assertIn("Base Registry Engine, join at `v0.36.0`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")

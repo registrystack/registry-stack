@@ -19,7 +19,7 @@ MINT_RETIREMENT_VERSION = (0, 31, 0)
 # From this version schedulingctl is published and each stateful product image
 # carries its operator tool beside the runtime binary.
 OPERATOR_TOOL_VERSION = (0, 36, 0)
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)
 
 
 class ShardError(ValueError):

@@ -71,7 +71,7 @@ IMAGE_OPERATOR_TOOLS = {
     "scheduling": "schedulingctl",
 }
 # The citizen MCP gateway and its review page ship in the BReg release set.
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)
 BREG_SERVICES_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {
     "breg-mcp",
     "breg-review",

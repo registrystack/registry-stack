@@ -77,7 +77,7 @@ fi
 # They depend on the engine only through its client, so they build in the
 # bregctl group rather than beside the runtime.
 include_breg_services=0
-if ((version_major > 0 || version_minor >= 35)); then
+if ((version_major > 0 || version_minor >= 36)); then
   include_breg_services=1
 fi
 include_casework=0

@@ -413,14 +413,14 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
-    def test_v0_35_roster_includes_the_breg_citizen_services(self) -> None:
+    def test_v0_36_roster_includes_the_breg_citizen_services(self) -> None:
         result = subprocess.run(
             [
                 "python3",
                 str(ROOT / "release/scripts/release_candidate.py"),
                 "image-names",
                 "--version",
-                "0.35.0",
+                "0.36.0",
             ],
             check=True,
             capture_output=True,

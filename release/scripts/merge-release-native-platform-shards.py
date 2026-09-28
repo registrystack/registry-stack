@@ -25,7 +25,7 @@ MACOS_FIPS_ARCHIVE_MINIMUM_VERSION = (0, 33, 0)
 # The Scheduling runtime ships only inside its image; its operator tool is a
 # release binary from this version.
 SCHEDULINGCTL_MINIMUM_VERSION = (0, 36, 0)
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)
 
 
 class ShardError(ValueError):

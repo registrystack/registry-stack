@@ -40,7 +40,7 @@ if ((version_major > 0 || version_minor >= 26)); then
 fi
 # The citizen MCP gateway and its review page ship in the BReg release set.
 include_breg_services=0
-if ((version_major > 0 || version_minor >= 35)); then
+if ((version_major > 0 || version_minor >= 36)); then
   include_breg_services=1
 fi
 include_casework=0

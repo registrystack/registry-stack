@@ -2916,10 +2916,10 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
-    def test_breg_services_release_surface_begins_after_v0_34(self) -> None:
+    def test_breg_services_release_surface_begins_after_v0_35(self) -> None:
         module = load_registry_release()
         published = {
-            name: "0.34.0"
+            name: "0.35.0"
             for name in (
                 module.RELAY_V2_ARTIFACT_INVENTORY
                 | {
@@ -2944,23 +2944,23 @@ class RegistryReleaseTest(TestCase):
                 "evidence-client-python",
             }
         }
-        self.assertEqual([], module.artifact_inventory_errors("0.34.0", published))
-        future = {name: "0.35.0" for name in published}
-        future["breg-mcp"] = "0.35.0"
-        future["breg-review"] = "0.35.0"
-        self.assertEqual([], module.artifact_inventory_errors("0.35.0", future))
+        self.assertEqual([], module.artifact_inventory_errors("0.35.0", published))
+        future = {name: "0.36.0" for name in published}
+        future["breg-mcp"] = "0.36.0"
+        future["breg-review"] = "0.36.0"
+        self.assertEqual([], module.artifact_inventory_errors("0.36.0", future))
         for service in ("breg-mcp", "breg-review"):
             with self.subTest(service=service):
                 self.assertNotEqual(
                     [],
                     module.artifact_inventory_errors(
-                        "0.34.0", published | {service: "0.34.0"}
+                        "0.35.0", published | {service: "0.35.0"}
                     ),
                 )
                 missing = dict(future)
                 del missing[service]
                 self.assertNotEqual(
-                    [], module.artifact_inventory_errors("0.35.0", missing)
+                    [], module.artifact_inventory_errors("0.36.0", missing)
                 )
 
         recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
@@ -4538,7 +4538,7 @@ def write_manifest(
         artifacts["scheduling"] = version
     if version_tuple >= (0, 36, 0):
         artifacts["schedulingctl"] = version
-    if version_tuple >= (0, 35, 0):
+    if version_tuple >= (0, 36, 0):
         artifacts["breg-mcp"] = version
         artifacts["breg-review"] = version
     manifest = {

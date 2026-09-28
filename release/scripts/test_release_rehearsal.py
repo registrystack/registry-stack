@@ -285,7 +285,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("for operator_tool in bregctl caseworkctl schedulingctl", merge)
         self.assertIn('"dist/image-bin/${operator_tool}" --version', merge)
         self.assertIn(
-            "if (( release_major > 0 || release_minor >= 35 )); then", merge
+            "if (( release_major > 0 || release_minor >= 36 )); then", merge
         )
         self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
         self.assertIn(

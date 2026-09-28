@@ -370,7 +370,7 @@ jobs:
             test "$("dist/bin/bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "bregctl ${{ needs.validate.outputs.version }}"
           fi
-          if (( release_major > 0 || release_minor >= 35 )); then
+          if (( release_major > 0 || release_minor >= 36 )); then
             for breg_service in breg-mcp breg-review; do
               test "$("dist/bin/${breg_service}-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
                 "${breg_service} ${{ needs.validate.outputs.version }}"
@@ -546,7 +546,7 @@ jobs:
               --target "${{ matrix.target }}"
           fi
           include_breg_services=0
-          if (( release_major > 0 || release_minor >= 35 )); then
+          if (( release_major > 0 || release_minor >= 36 )); then
             include_breg_services=1
             cargo build --release --locked \
               -p registry-breg-mcp --bin breg-mcp \
