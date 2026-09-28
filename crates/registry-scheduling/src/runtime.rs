@@ -302,7 +302,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             let mut interval = worker_timer();
             loop {
                 interval.tick().await;
-                let now = Utc::now();
+                let now = expiry_store.observed_now();
                 match expiry_store.expire_due_holds(now, HOLD_EXPIRY_BATCH).await {
                     Ok(expired) if expired > 0 => {
                         tracing::info!(expired, "Scheduling hold expiry pass retired due holds");
@@ -374,7 +374,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             if ticks != 0 {
                 continue;
             }
-            let now = Utc::now();
+            let now = retention_store.observed_now();
             if let Err(error) = retention_store.erase_expired_cursors(now).await {
                 tracing::warn!(error = %error, "Scheduling cursor retention pass did not complete");
             }
@@ -720,11 +720,11 @@ fn delivery_of(status: u16) -> Delivery {
 }
 
 /// The backoff before the next attempt of one intent, exponential from the
-/// base and capped at the hour.
-fn next_attempt(attempts: i32) -> DateTime<Utc> {
+/// base and capped at the hour, counted from `now`.
+fn next_attempt(now: DateTime<Utc>, attempts: i32) -> DateTime<Utc> {
     let shift = (attempts.max(1) - 1).min(7) as u32;
     let seconds = (REMINDER_RETRY_BASE_SECONDS << shift).min(REMINDER_RETRY_MAX_SECONDS);
-    Utc::now() + TimeDelta::seconds(seconds)
+    now + TimeDelta::seconds(seconds)
 }
 
 /// Claim every due intent and give each one dispatch attempt. A transport
@@ -751,7 +751,7 @@ pub async fn dispatch_due_intents(
     scheduling_id: &str,
     transport: Option<&ReminderTransport>,
 ) -> Result<(), StoreError> {
-    let now = Utc::now();
+    let now = store.observed_now();
     let lease = TimeDelta::seconds(INTENT_DISPATCH_LEASE_SECONDS);
     for row in store.claim_due_intents(now, REMINDER_BATCH, lease).await? {
         let Some(transport) = transport else {
@@ -793,7 +793,7 @@ pub async fn dispatch_due_intents(
                 store
                     .retry_intent(
                         row.outbox_id,
-                        next_attempt(row.attempts),
+                        next_attempt(store.observed_now(), row.attempts),
                         row.attempts,
                         row.attempts,
                     )
@@ -850,7 +850,7 @@ pub async fn dispatch_due_intents(
                 store
                     .retry_intent(
                         row.outbox_id,
-                        next_attempt(row.attempts),
+                        next_attempt(store.observed_now(), row.attempts),
                         REMINDER_ATTEMPTS_CEILING,
                         row.attempts,
                     )
@@ -868,7 +868,7 @@ pub async fn dispatch_due_intents(
                 store
                     .retry_intent(
                         row.outbox_id,
-                        next_attempt(row.attempts),
+                        next_attempt(store.observed_now(), row.attempts),
                         row.attempts,
                         row.attempts,
                     )
@@ -942,9 +942,15 @@ mod tests {
     #[test]
     fn retry_backoff_grows_exponentially_and_caps_at_the_hour() {
         let now = Utc::now();
-        let first = next_attempt(1).signed_duration_since(now).num_seconds();
-        let second = next_attempt(2).signed_duration_since(now).num_seconds();
-        let ceiling = next_attempt(50).signed_duration_since(now).num_seconds();
+        let first = next_attempt(now, 1)
+            .signed_duration_since(now)
+            .num_seconds();
+        let second = next_attempt(now, 2)
+            .signed_duration_since(now)
+            .num_seconds();
+        let ceiling = next_attempt(now, 50)
+            .signed_duration_since(now)
+            .num_seconds();
         assert_eq!(first, REMINDER_RETRY_BASE_SECONDS);
         assert_eq!(second, 2 * REMINDER_RETRY_BASE_SECONDS);
         assert_eq!(ceiling, REMINDER_RETRY_MAX_SECONDS);
