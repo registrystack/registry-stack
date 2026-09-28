@@ -5265,6 +5265,8 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
         "--schema-fingerprint <SHA256>",
         "--test-receipt <ABSOLUTE_FILE>",
         "--output <DIRECTORY>",
+        "The package is the promotable unit `bregctl apply` activates",
+        "`caseworkctl package` is a different verb",
     ] {
         assert!(package_help.contains(required), "{package_help}");
     }
@@ -5546,7 +5548,10 @@ fn human_usage_errors_name_the_offending_argument() {
     assert_eq!(missing_argument.status.code(), Some(2));
     assert!(missing_argument.stdout.is_empty());
     let rendered = String::from_utf8_lossy(&missing_argument.stderr).into_owned();
-    assert!(rendered.contains("<PROJECT>"), "{rendered}");
+    assert!(
+        rendered.contains("<PROJECT|--package <DIRECTORY>>"),
+        "{rendered}"
+    );
 }
 
 #[test]

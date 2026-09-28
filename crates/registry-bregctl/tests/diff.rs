@@ -473,6 +473,92 @@ struct PublishedPackage {
     package: PathBuf,
 }
 
+#[test]
+fn check_reports_the_registry_revision_of_a_project_and_of_a_verified_package() {
+    let directory = TestDirectory::create();
+    let package = publish_package(&directory.path, "package", "internal");
+    let project = write_project(&directory.path, "project", "internal");
+
+    let checked = run(&["--format", "json", "check", path(&project)]);
+    assert!(checked.status.success(), "{checked:?}");
+    let checked = json_stdout(&checked);
+    let registry_revision = checked["registryRevision"]
+        .as_str()
+        .expect("check names the registry revision");
+    assert!(registry_revision.starts_with("sha256:"), "{checked}");
+    assert_eq!(checked["revision"], registry_revision);
+
+    // The package the same sources built rederives the same revision, with
+    // no database, runtime configuration, or receipt.
+    let verified = run(&[
+        "--format",
+        "json",
+        "check",
+        "--package",
+        path(&package.package),
+    ]);
+    assert!(verified.status.success(), "{verified:?}");
+    assert!(verified.stderr.is_empty());
+    let verified = json_stdout(&verified);
+    assert_eq!(verified["ok"], true);
+    assert_eq!(verified["command"], "check");
+    assert_eq!(
+        verified["registryRevision"], registry_revision,
+        "{verified}"
+    );
+
+    let human = run(&["check", "--package", path(&package.package)]);
+    assert!(human.status.success(), "{human:?}");
+    assert!(String::from_utf8_lossy(&human.stdout).contains(registry_revision));
+
+    let changed = publish_package(&directory.path, "changed", "public");
+    let other = json_stdout(&run(&[
+        "--format",
+        "json",
+        "check",
+        "--package",
+        path(&changed.package),
+    ]));
+    assert_ne!(other["registryRevision"], registry_revision, "{other}");
+
+    // A package whose bytes no longer match its sums is refused, naming no
+    // packaged value or path.
+    fs::write(
+        package.package.join("source/modules/core/module.yaml"),
+        VALUE_CANARY,
+    )
+    .expect("package closure is tampered");
+    let tampered = run(&[
+        "--format",
+        "json",
+        "check",
+        "--package",
+        path(&package.package),
+    ]);
+    assert_eq!(tampered.status.code(), Some(1));
+    assert!(tampered.stderr.is_empty());
+    let rendered = String::from_utf8_lossy(&tampered.stdout);
+    assert!(!rendered.contains(VALUE_CANARY));
+    assert!(!rendered.contains(path(&package.package)));
+    let refused = json_stdout(&tampered);
+    assert_eq!(refused["command"], "check");
+    assert_eq!(
+        refused["diagnostics"][0]["code"],
+        "check.package.integrity_refused"
+    );
+    assert_tool_diagnostic(
+        &refused["diagnostics"][0],
+        "verified_package",
+        "verify_package_integrity",
+    );
+
+    // A project and a package together, or neither, is a usage error.
+    let both = run(&["check", path(&project), "--package", path(&changed.package)]);
+    assert_eq!(both.status.code(), Some(2), "{both:?}");
+    let neither = run(&["check"]);
+    assert_eq!(neither.status.code(), Some(2), "{neither:?}");
+}
+
 fn publish_package(parent: &Path, name: &str, classification: &str) -> PublishedPackage {
     let module_bytes = module_bytes(classification);
     let module = parse_module_json(&module_bytes).expect("package module parses");
