@@ -1484,6 +1484,100 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
 /// under the successor's activation id once that transaction commits. The
 /// authority keeps the activation id it was opened under.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash() {
+    const REFERENCE: &str = "change ticket that must not reach the ledger";
+    let (database, initial) = initial_package_database().await;
+    let active = apply_verified_package(
+        request(&database, &initial, ApplyPrecondition::InitialActivation)
+            .with_operator_reference(REFERENCE),
+    )
+    .await
+    .expect("the initial package activates with an operator reference");
+
+    let row = database
+        .admin
+        .query_one(
+            "SELECT operator_reference_hash, row_to_json(migration)::text
+             FROM registry_internal.registry_migrations AS migration
+             WHERE activation_id = $1::text::uuid",
+            &[&active.activation_id],
+        )
+        .await
+        .expect("the activation's ledger row reads");
+    let expected = AuditProfile::production_from_secret_bytes(vec![7; 32].into())
+        .expect("the activation audit key is valid")
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-activation-operator-reference-v1",
+            &active.activation_id,
+            REFERENCE,
+        )
+        .expect("the reference hashes");
+    assert_eq!(row.get::<_, Option<String>>(0), Some(expected));
+    assert!(!row.get::<_, String>(1).contains(REFERENCE));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_refused_operator_reference_leaves_the_database_unactivated() {
+    let (database, initial) = initial_package_database().await;
+    let too_long = "r".repeat(513);
+    for (reference, audit) in [
+        ("", database.activation_audit()),
+        (too_long.as_str(), database.activation_audit()),
+        ("line one\nline two", database.activation_audit()),
+        (
+            "change-1",
+            database
+                .activation_audit_capture()
+                .audit(AuditProfile::unkeyed_dev_only()),
+        ),
+    ] {
+        let refused = apply_verified_package(
+            ApplyVerifiedPackageRequest::new(
+                &database.migration_config,
+                &initial,
+                deployment(),
+                ApplyPrecondition::InitialActivation,
+                ApplyRoles::new(&database.migration_role, &database.runtime_role),
+                ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+                    .expect("test timeouts are bounded"),
+                audit,
+            )
+            .with_operator_reference(reference),
+        )
+        .await
+        .expect_err("the operator reference is refused");
+        assert!(matches!(refused, MigrationError::OperatorReference));
+    }
+    let ledger = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_migrations') IS NULL",
+            &[],
+        )
+        .await
+        .expect("the catalog reads");
+    assert!(
+        ledger.get::<_, bool>(0),
+        "no refused apply creates the ledger"
+    );
+    assert!(database.activation_audit_entries().is_empty());
+}
+
+async fn initial_package_database() -> (TestDatabase, VerifiedPackage) {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+    let base = compile_variant(Variant::Base);
+    let initial_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &initial_fingerprint);
+    (database, initial)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_successor_activation_supersedes_every_open_import_authority() {
     let (database, active, authority_id, package) = successor_over_an_open_import_authority().await;
     let activated = apply(

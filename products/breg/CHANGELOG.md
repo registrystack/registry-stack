@@ -42,6 +42,11 @@
     recorded identity, and `bregctl instance-claim` refuses a package root the
     runtime `package.expectedDigest` does not pin before it connects.
 
+- `bregctl apply --operator-reference TEXT` binds an operator's change
+  reference to the activation. The text must be 1 to 512 bytes without control
+  characters, and the audit profile must be keyed: the ledger row records only
+  its keyed hash, scoped to the activation id, never the text.
+
 - `bregctl instance-claim adopt` also runs on a database the instance claim
   already names, as after a point-in-time recovery, a snapshot, or a base
   backup, which keep the claim matching and reopen every import authority

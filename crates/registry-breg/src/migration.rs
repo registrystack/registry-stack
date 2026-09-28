@@ -37,6 +37,7 @@ const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
 const MAX_BACKUP_BINDING_BYTES: u64 = 64 * 1024;
+const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 
 /// Value-free apply failures. Authored identifiers cross this boundary, and
 /// a refused statement adds its SQLSTATE and the object names PostgreSQL
@@ -102,6 +103,11 @@ pub enum MigrationError {
     /// the activation stands and its audit trail is incomplete.
     #[error("the activation committed but the audit refused a record it owed")]
     ActivationAuditIncomplete,
+    /// The operator reference is empty, longer than 512 bytes, or carries a
+    /// control character, or the audit profile derives no keyed hash to
+    /// record it under.
+    #[error("the operator reference is refused")]
+    OperatorReference,
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -692,6 +698,14 @@ pub async fn apply_verified_package(
         verify_destructive_backup_evidence(reviewed_plan, current, request.backup_evidence).await?;
     ledger.backup_references = backup_references;
 
+    if let Some(reference) = request.operator_reference {
+        if !operator_reference_is_well_formed(reference)
+            || !crate::audit::profile_is_keyed(request.audit.profile())
+        {
+            return Err(MigrationError::OperatorReference);
+        }
+    }
+
     let lock_key =
         RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
     let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
@@ -726,6 +740,21 @@ pub async fn apply_verified_package(
             return Err(refusal_before_maintenance(error));
         }
     };
+    // The ledger keeps the operator's reference only as a keyed hash scoped
+    // to this activation, so the text never reaches the database.
+    if let Some(reference) = request.operator_reference {
+        match request.audit.profile().key_hasher().audit_reference_hash(
+            "breg-activation-operator-reference-v1",
+            &ledger.activation_id.to_string(),
+            reference,
+        ) {
+            Ok(hash) => ledger.operator_reference_hash = Some(hash),
+            Err(_) => {
+                let _ = connection.release().await;
+                return Err(MigrationError::OperatorReference);
+            }
+        }
+    }
     let target = target_package_identity(
         request.package,
         request.deployment.database_id(),
@@ -1205,6 +1234,15 @@ fn predecessor_baselines_match(
         && target.routes == verified.routes
         && target.access == verified.access
         && target.queries == verified.queries
+}
+
+/// Whether an operator reference is one to 512 bytes without a control
+/// character, the shape an activation records a keyed hash of.
+#[must_use]
+pub fn operator_reference_is_well_formed(reference: &str) -> bool {
+    !reference.is_empty()
+        && reference.len() <= MAX_OPERATOR_REFERENCE_BYTES
+        && !reference.chars().any(char::is_control)
 }
 
 /// The binding paths an apply of this plan requires backup evidence for, in
