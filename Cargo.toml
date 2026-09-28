@@ -152,7 +152,7 @@ assert-json-diff = { version = "2" }
 async-trait = { version = "0.1" }
 aws-lc-rs = { version = "1", features = ["fips"] }
 axum = { version = "0.8" }
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 # simd-unsafe (a default feature since 0.23) adds SIMD engines no call site
 # uses; leaving it off keeps base64 compiled with forbid(unsafe_code).
 base64 = { version = "0.23", default-features = false, features = ["std"] }
