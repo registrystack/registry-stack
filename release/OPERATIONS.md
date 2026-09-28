@@ -1088,9 +1088,11 @@ docset rebuilt archives mark indexable.
      --published-releases published-releases.json
    ```
 
-The docs test allows one prepared candidate ahead of the selector. If this step
-is skipped, the next release preparation fails `npm test` until every published
-release before it is promoted.
+The docs test and `validate-docsets` allow one prepared candidate ahead of the
+selector. If this step is skipped, the next release preparation fails `npm test`
+and `validate-docsets`, and the Pages deployment fails once a published release
+other than that newest candidate is newer than the selector, until every
+published release before it is promoted.
 
 ## Failure handling
 

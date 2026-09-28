@@ -3255,6 +3255,178 @@ class RegistryReleaseTest(TestCase):
             result.stderr,
         )
 
+    def test_validate_docsets_rejects_selector_behind_unpromoted_release(self) -> None:
+        """A published release that was never promoted fails the Pages gate.
+
+        v0.9.0 is public but its docset is still a candidate and the selector
+        still names v0.8.0, while v0.10.0 is already prepared. Only the newest
+        prepared candidate may be ahead of the selector.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            write_prepared_next_release(root, manifest_dir, docsets)
+            write_prepared_next_release(
+                root, manifest_dir, docsets, version="0.10.0", release_id="beta-8"
+            )
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+            published = write_published_releases(root, "v0.8.0", "v0.9.0")
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+                "--published-releases",
+                str(published),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docsets.yaml released selector 'v0.8.0' is behind published "
+            "release v0.9.0; promote each published release "
+            '(release/OPERATIONS.md, "Promote the published documentation")',
+            result.stderr,
+        )
+
+    def test_validate_docsets_rejects_selector_behind_release_without_docset(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+            published = write_published_releases(
+                root, "v0.8.0", "v0.9.0", "v0.10.0"
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+                "--published-releases",
+                str(published),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docsets.yaml released selector 'v0.8.0' is behind published "
+            "releases v0.9.0, v0.10.0; promote each published release "
+            '(release/OPERATIONS.md, "Promote the published documentation")',
+            result.stderr,
+        )
+
+    def test_validate_docsets_rejects_two_docsets_ahead_of_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            write_prepared_next_release(root, manifest_dir, docsets)
+            write_prepared_next_release(
+                root, manifest_dir, docsets, version="0.10.0", release_id="beta-8"
+            )
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docsets.yaml released selector 'v0.8.0' is behind docsets "
+            "v0.9.0, v0.10.0; only the newest prepared candidate may be ahead "
+            "of it; promote each published release (release/OPERATIONS.md, "
+            '"Promote the published documentation")',
+            result.stderr,
+        )
+
+    def test_validate_docsets_rejects_released_docset_ahead_of_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            write_prepared_next_release(root, manifest_dir, docsets)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
+            data["docsets"][1]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docsets.yaml released selector 'v0.8.0' is behind docset "
+            "v0.9.0; only the newest prepared candidate may be ahead of it",
+            result.stderr,
+        )
+
+    def test_validate_docsets_accepts_one_prepared_candidate_ahead(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            write_prepared_next_release(root, manifest_dir, docsets)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+            unpublished = write_published_releases(root, "v0.7.0", "v0.8.0")
+            unpublished_result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+                "--published-releases",
+                str(unpublished),
+            )
+            offline_result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertEqual(0, unpublished_result.returncode, unpublished_result.stderr)
+        self.assertEqual(0, offline_result.returncode, offline_result.stderr)
+
     def test_validate_docsets_rejects_unusable_published_release_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4309,8 +4481,14 @@ def write_published_releases(root: Path, *tags: str) -> Path:
     return path
 
 
-def write_prepared_next_release(root: Path, manifest_dir: Path, docsets: Path) -> None:
-    """Add a prepared v0.9.0 note, manifest, and docset to a docset fixture.
+def write_prepared_next_release(
+    root: Path,
+    manifest_dir: Path,
+    docsets: Path,
+    version: str = "0.9.0",
+    release_id: str = "beta-7",
+) -> None:
+    """Add a prepared release note, manifest, and docset to a docset fixture.
 
     Release preparation writes the note and the manifest before the tag
     exists, so nothing here is published. The released selector must not
@@ -4319,19 +4497,19 @@ def write_prepared_next_release(root: Path, manifest_dir: Path, docsets: Path) -
 
     notes_dir = root / "notes"
     notes_dir.mkdir(exist_ok=True)
-    (notes_dir / "v0.9.0.md").write_text("# v0.9.0\n", encoding="utf-8")
-    prepared = write_manifest(manifest_dir, version="0.9.0", status="draft")
-    prepared.rename(manifest_dir / "registry-stack-beta-7.yaml")
+    (notes_dir / f"v{version}.md").write_text(f"# v{version}\n", encoding="utf-8")
+    prepared = write_manifest(manifest_dir, version=version, status="draft")
+    prepared.rename(manifest_dir / f"registry-stack-{release_id}.yaml")
     data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
     data["docsets"].append(
         {
-            "id": "v0.9.0",
+            "id": f"v{version}",
             "status": "draft",
             "availability": "candidate",
-            "source": "registry-stack-v0.9.0",
+            "source": f"registry-stack-v{version}",
             "products": {
                 "registry-stack": {
-                    "version": "v0.9.0",
+                    "version": f"v{version}",
                     "ref": "f30a541df539c2e16de09733c5944c744a60493c",
                 },
                 "crosswalk": {
