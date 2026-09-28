@@ -490,7 +490,10 @@ reports the active activation, the candidate `packageDigest`, whether the databa
 file's `identity.databaseId`, the schema version and the migrations still pending, the source
 generations and task templates the activation would change, the work it would strand, the runtime
 role mode, and `changesPending`. On a fresh database it reports an initial activation even before
-the runtime role can use the schema.
+the runtime role can use the schema. Once a ledger exists, a runtime role that cannot read it, such
+as one rotated in before any apply granted it, is refused with
+`casework.activation.ledger-unreadable`, naming `caseworkctl apply` with the migration credential
+to grant it, then `plan` again.
 
 `apply` loads the same runtime file, verifies the package, and resolves `migrationUrlRef`. It
 appends an audit request entry before it opens the database; an audit destination that refuses it
@@ -531,6 +534,7 @@ migrations, and whenever the package or a source binding changes.
 {/* Evidence: crates/registry-casework/src/activation.rs, plan_activation(), apply_activation(),
     lock_runtime_order(), and observe_role(); crates/registry-caseworkctl/src/lib.rs,
     activation_failure(); crates/registry-casework/tests/activation_postgres.rs,
+    plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply(),
     a_refused_audit_request_leaves_the_database_untouched(),
     a_concurrent_apply_waits_for_the_migration_lock(),
     the_same_operator_reference_in_two_activations_is_stored_under_different_hashes(), and
@@ -604,6 +608,35 @@ through unchanged.
     crates/registry-caseworkctl/src/project.rs, source_readiness_failure();
     crates/registry-casework-breg/tests/source_boundary.rs,
     a_breg_engine_from_another_release_is_refused_naming_both_versions(). */}
+
+### Check a BReg source's pinned revision
+
+Each imported BReg source description pins the `sourceRevision` of the registry it was imported
+from. At startup Casework reads the revision each BReg source serves and refuses to start when a
+pin differs, naming the check, the repin, and the package, plan, and apply that follow. A source
+that cannot be read at startup is not refused there; its reads refuse the same drift once it
+answers.
+
+Before you deploy, compare a pin with the BReg package you are about to activate:
+
+```sh
+caseworkctl check ./casework --against-breg-package /srv/breg/package --source-id registry
+```
+
+`check` verifies the package through the `bregctl` of the same release, found on `PATH` or named by
+`--bregctl-bin`, and compares the registry revision it rederives with the source's pinned
+`sourceRevision`. A match adds `bregPackage` to the report. A mismatch is refused with
+`casework.source-revision.stale`, naming `caseworkctl source add BREG_PROJECT --project ./casework
+--source-id registry --apply` to repin from the BReg project that built the package, then the same
+check again. A project with several BReg sources needs `--source-id`; `check` never picks one.
+
+{/* Evidence: crates/registry-caseworkctl/src/breg_package.rs, compare();
+    crates/registry-casework/src/runtime.rs, check_source_revisions() and
+    RuntimeError::SourceRevisionStale;
+    crates/registry-caseworkctl/src/cli_contract_tests.rs,
+    check_against_a_breg_package_refuses_a_stale_pin_naming_the_check_and_the_repin();
+    crates/registry-casework/src/runtime.rs,
+    startup_refuses_a_pinned_source_revision_the_source_no_longer_serves(). */}
 
 ### Upgrade from a release that chained the audit file
 
@@ -939,6 +972,8 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `the active Casework package was applied split-role, but the runtime credential can now write the activation ledger` | The runtime role gained ledger authority, a trigger no Casework migration creates is attached to a Casework table, or the credential now names the migration role. Run the `REASSIGN OWNED`, `REVOKE`, or `DROP TRIGGER` statement the message names and do what it says next, or remove the extra grant or membership, then run `caseworkctl apply` to reissue the grants or record the single-role mode. |
 | `the active Casework package was applied split-role, but the runtime role no longer holds the grants apply issues it` | A `REASSIGN OWNED` or a manual revoke took the runtime role's grants. Run `caseworkctl apply` to reissue them. |
 | `casework.activation.role-mode-weakened` | The runtime role owns a Casework object, can create one in the schema, or can attach a trigger, or a trigger no Casework migration creates is attached to a Casework table. Run the statements the refusal names as the migration role, then apply after a `REASSIGN OWNED`, or rerun the refused command after a revoke or a drop. |
+| `casework.activation.ledger-unreadable` | `plan` connected as a runtime role that cannot read the activation ledger, such as one rotated in after the last apply. Run `caseworkctl apply --runtime-config FILE` with the migration credential to grant it, then `caseworkctl plan --runtime-config FILE` again. |
+| `source ID pins sourceRevision X, but the source serves registry revision Y`, or `casework.source-revision.stale` | The imported BReg source description no longer matches the registry the source serves, or the package `check` compared. Run the `caseworkctl check PROJECT --against-breg-package DIR --source-id ID` the message names with the package the source serves, repin with `caseworkctl source add`, then package, plan, and apply as [Check a BReg source's pinned revision](#check-a-breg-sources-pinned-revision) describes. |
 | `casework.activation.already-active` | The active package is applied with nothing to change. Nothing needs applying. |
 | `casework.activation.audit-unavailable` | The audit destination refused the request entry, so nothing was applied. Restore the destination named at `audit`, then apply again. |
 | `casework.activation.applied-unaudited` | The package is active but its response entry did not reach the audit destination. Do not apply again; restore the destination and record the activation `caseworkctl status` names. |

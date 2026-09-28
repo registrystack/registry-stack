@@ -55,6 +55,30 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidencectl/tests/ctl_convention.rs, the_retired_project_flag_still_selects_the_project;
     crates/registry-evidencectl/tests/fixtures.rs, junit_output_carries_one_testcase_per_traced_case_on_stdout. */}
 
+- BREAKING: Registry Casework activates a package in the database with
+  `caseworkctl plan` and `caseworkctl apply`, recorded in an activation
+  ledger, and `casework serve` only reads that activation. `casework migrate`
+  and `caseworkctl db migrate` are removed and exit 2 naming the two
+  commands. `runtime.yaml` requires `identity.databaseId`. In split-role mode,
+  apply, plan, and startup refuse a runtime role that owns a Casework object,
+  can create in the schema, or holds TRIGGER, and any trigger no Casework
+  migration creates, naming the statement to run. Startup refuses a Base
+  Registry Engine (BReg) source whose pinned `sourceRevision` differs from the
+  registry revision it serves, and `caseworkctl check PROJECT --against-breg-package DIR`
+  compares a pin with a closed BReg package before deployment. `plan` refuses
+  a runtime role that cannot read the ledger, naming `caseworkctl apply`. A
+  `caseworkctl dev` session created by this release connects with one
+  database role. To upgrade, add `identity.databaseId`, repin each BReg
+  source after upgrading BReg, then plan and apply once before starting the
+  runtime; with split roles, a trigger an operator added to a Casework table
+  blocks startup until it is dropped. See
+  [plan, apply, and serve](../operate/casework/#plan-apply-and-serve).
+
+{/* Evidence: crates/registry-casework/src/activation.rs, plan_activation() and
+    apply_activation(); crates/registry-casework/src/runtime.rs,
+    check_source_revisions(); crates/registry-caseworkctl/src/breg_package.rs,
+    compare(); crates/registry-casework/tests/activation_postgres.rs. */}
+
 ## v0.35.0 beta-47
 
 - BREAKING: Base Registry Engine (BReg) gives every `reference` field a btree
