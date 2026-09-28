@@ -2209,8 +2209,10 @@ impl PostgresStore {
             )
             .await?;
         let mut item = row_to_item(&item_row)?;
-        let item_state = transition(item.state, OccurrenceEvent::AttemptUncertain)
-            .map_err(|_| AttemptSettlementError::ItemNotSynchronizing(state_name(item.state)))?;
+        let item_state =
+            transition(item.state, OccurrenceEvent::AttemptUncertain).map_err(|_| {
+                AttemptSettlementError::ItemCannotBecomeUncertain(state_name(item.state))
+            })?;
         let displayed_binding: SourceBinding = serde_json::from_value(row.get(3))?;
         let mut report = AttemptUncertainMarkingReport {
             attempt_id,
@@ -4408,6 +4410,11 @@ pub enum AttemptSettlementError {
     LeaseLive,
     #[error("the work item is {0}; only a work item awaiting its source outcome can be settled")]
     ItemNotSynchronizing(&'static str),
+    #[error(
+        "the work item is {0}; only a work item awaiting its source outcome can have its \
+         attempt marked uncertain"
+    )]
+    ItemCannotBecomeUncertain(&'static str),
     #[error(
         "--{field} must be non-empty text of at most {maximum} bytes without control characters"
     )]
