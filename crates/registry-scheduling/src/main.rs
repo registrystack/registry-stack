@@ -13,6 +13,12 @@ async fn main() {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+    if let Some(error) =
+        registry_scheduling::runtime::removed_command_refusal(std::env::args_os().skip(1))
+    {
+        eprintln!("scheduling: {error}");
+        std::process::exit(error.exit_code());
+    }
     let matches = registry_scheduling::runtime::command().get_matches();
     if let Err(error) = registry_scheduling::runtime::run(&matches).await {
         eprintln!("scheduling: {error}");

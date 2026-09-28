@@ -101,6 +101,31 @@ pub fn command() -> Command {
         .subcommand(Command::new("serve").about("Run the Scheduling HTTP service"))
 }
 
+/// The refusal for a removed `scheduling` subcommand named in `args` (the
+/// arguments after the program name), found before the command line is
+/// parsed so it answers even without the otherwise required
+/// `--runtime-config`.
+#[must_use]
+pub fn removed_command_refusal<I, S>(args: I) -> Option<RuntimeError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let arg = arg.as_ref();
+        if arg == "--runtime-config" {
+            args.next();
+            continue;
+        }
+        if arg.to_string_lossy().starts_with('-') {
+            continue;
+        }
+        return (arg == "migrate").then_some(RuntimeError::RemovedCommand);
+    }
+    None
+}
+
 pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
