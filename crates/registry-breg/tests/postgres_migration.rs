@@ -2014,6 +2014,112 @@ async fn real_postgres_a_failed_role_change_activation_keeps_the_serving_runtime
     database.cleanup().await;
 }
 
+/// A role change refused before it enters maintenance leaves the runtime
+/// role it would have served with no grant, so the registry keeps the exact
+/// catalog its serving roles verify.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_role_change_refused_before_maintenance_grants_the_new_runtime_role_nothing(
+) {
+    let (database, package) = initial_package_database().await;
+    let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("the initial package activates with one role");
+    let runtime = database.runtime_role.as_str();
+    assert_eq!(retired_role_privileges(&database, runtime).await, 0);
+    // The successor begin refuses an unready history coverage before its
+    // first write.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET coverage_ready = false
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("administrator marks history coverage unready");
+
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &single },
+    )
+    .await
+    .expect_err("the role change refuses the unready coverage");
+    assert_eq!(refused, MigrationError::HistoryCoverage);
+
+    assert_eq!(
+        retired_role_privileges(&database, runtime).await,
+        0,
+        "the runtime role the refused activation would have served with holds nothing"
+    );
+    let applied = ledger_roles(&database)
+        .await
+        .into_iter()
+        .filter(|row| row.0 == single.activation_id)
+        .collect::<Vec<_>>();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].4, "single");
+    database.cleanup().await;
+}
+
+/// A role change still activates when the runtime role the ledger names no
+/// longer exists under that name, as after an administrator renames it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_role_change_activates_when_the_recorded_runtime_role_is_gone() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let recorded = database.runtime_role.as_str();
+    let renamed = registry_breg::postgres::SqlIdentifier::parse(&format!("{recorded}_renamed"))
+        .expect("the renamed runtime role is an identifier");
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER ROLE \"{recorded}\" RENAME TO \"{}\"",
+            renamed.as_str()
+        ))
+        .await
+        .expect("administrator renames the runtime role");
+
+    let changed = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::RoleChange { current: &initial },
+        ApplyRoles::new(&database.migration_role, &renamed),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await;
+
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER ROLE \"{}\" RENAME TO \"{recorded}\"",
+            renamed.as_str()
+        ))
+        .await
+        .expect("administrator restores the runtime role name");
+    let changed = changed.expect("the role change activates under the renamed role");
+    assert_ne!(changed.activation_id, initial.activation_id);
+    let rows = ledger_roles(&database).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].5, renamed.as_str());
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation() {
     let (database, package) = initial_package_database().await;
