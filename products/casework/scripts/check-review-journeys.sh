@@ -49,11 +49,21 @@ fi
 
 cd "$repo_root"
 
+# Cargo builds under CARGO_TARGET_DIR, CARGO_BUILD_TARGET_DIR or the workspace
+# `target` directory, so ask it where rather than assuming the last.
+target_directory=$(
+  cargo metadata --format-version 1 --no-deps |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+) || {
+  echo "cargo metadata did not report the Cargo target directory" >&2
+  exit 2
+}
+
 if [ -z "${CASEWORK_BIN:-}" ] || [ -z "${CASEWORKCTL_BIN:-}" ]; then
   registry_cargo_build "$repo_root" --locked -p registry-casework -p registry-caseworkctl
 fi
-CASEWORK_BIN=${CASEWORK_BIN:-"$repo_root/target/debug/casework"}
-CASEWORKCTL_BIN=${CASEWORKCTL_BIN:-"$repo_root/target/debug/caseworkctl"}
+CASEWORK_BIN=${CASEWORK_BIN:-"$target_directory/debug/casework"}
+CASEWORKCTL_BIN=${CASEWORKCTL_BIN:-"$target_directory/debug/caseworkctl"}
 export CASEWORK_BIN CASEWORKCTL_BIN
 for binary in "$CASEWORK_BIN" "$CASEWORKCTL_BIN"; do
   if [ ! -x "$binary" ]; then
@@ -75,7 +85,7 @@ CASEWORK_NODE_FACADE_ROOT="$repo_root/crates/registry-stack-client-node"
 CASEWORK_NODE_NATIVE="$repo_root/crates/registry-casework-client-node/casework-client.$node_platform.node"
 CASEWORK_PYTHON_FACADE_ROOT="$repo_root/crates/registry-stack-client-py/python/registry_client"
 CASEWORK_PYTHON_PRODUCT_ROOT="$repo_root/crates/registry-casework-client-py/python/registry_casework_client"
-CASEWORK_PYTHON_NATIVE="$repo_root/target/debug/libregistry_casework_client.$python_library_extension"
+CASEWORK_PYTHON_NATIVE="$target_directory/debug/libregistry_casework_client.$python_library_extension"
 export CASEWORK_NODE_FACADE_ROOT CASEWORK_NODE_NATIVE
 export CASEWORK_PYTHON_FACADE_ROOT CASEWORK_PYTHON_PRODUCT_ROOT CASEWORK_PYTHON_NATIVE
 
