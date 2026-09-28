@@ -37,7 +37,7 @@ use crate::postgres::{
     inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity, BaselineAdvisory,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
     PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
-    RegistryLockKey, RuntimePool, SqlIdentifier,
+    RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookWorker};
@@ -89,6 +89,27 @@ pub enum StartupError {
     /// claim names, as a restored copy is until an operator adopts it.
     #[error("the Registry database is not the instance its claim names")]
     InstanceClaimMismatch,
+    /// A separate runtime role can write the activation ledger or the
+    /// registry state. The apply names the object and the exact fix, so the
+    /// serving log carries no catalog detail.
+    #[error(
+        "the Registry runtime role can write the activation ledger or the registry state; run \
+         `bregctl apply --package DIR` to name the fix"
+    )]
+    RuntimeWriteAuthority,
+    /// A separate runtime role lacks a grant the active package gives it.
+    #[error(
+        "the Registry runtime role is missing grants the active package gives it; run `bregctl \
+         apply --package DIR` to reissue them"
+    )]
+    RuntimeGrantsMissing,
+    /// The runtime file names one role for a database the ledger records as
+    /// activated for a separate runtime role.
+    #[error(
+        "the Registry database was activated for a separate runtime role but the runtime file \
+         names one role; run `bregctl apply --package DIR` to activate it for one role"
+    )]
+    RoleModeChanged,
     /// Authored field address only, never the expression or database diagnostic.
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
@@ -234,6 +255,8 @@ pub enum OperationalEvent {
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
     PostgresBaselineAdvisory(BaselineAdvisory),
+    /// The role mode the runtime file selects, logged once at startup.
+    RoleMode(RoleMode),
 }
 
 impl OperationalEvent {
@@ -267,6 +290,23 @@ impl OperationalEvent {
                 message: "Base Registry Engine stopped",
                 error: Some(error.operational_message()),
                 code: None,
+            },
+            Self::RoleMode(RoleMode::Single) => OperationalLogRecord {
+                level: OperationalLogLevel::Info,
+                target: "registry_breg::startup",
+                message: "Base Registry Engine serves with the migration role (roleMode single); \
+                          the activation ledger check catches mistakes but not someone holding \
+                          that credential",
+                error: None,
+                code: Some("startup.role_mode.single"),
+            },
+            Self::RoleMode(RoleMode::Split) => OperationalLogRecord {
+                level: OperationalLogLevel::Info,
+                target: "registry_breg::startup",
+                message:
+                    "Base Registry Engine serves with a separate runtime role (roleMode split)",
+                error: None,
+                code: Some("startup.role_mode.split"),
             },
             Self::WebhookWorkerIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -316,6 +356,10 @@ impl OperationalEvent {
         match self {
             Self::StartupBegan | Self::Listening => {
                 tracing::info!(target: "registry_breg::startup", message = record.message);
+            }
+            Self::RoleMode(_) => {
+                let code = record.code.expect("role mode records have a code");
+                tracing::info!(target: "registry_breg::startup", code, message = record.message);
             }
             Self::Stopped => {
                 tracing::error!(target: "registry_breg::startup", message = record.message);
@@ -392,6 +436,15 @@ impl StartupError {
             Self::InstanceClaimMismatch => {
                 "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
             }
+            Self::RuntimeWriteAuthority => {
+                "the Registry runtime role can write the activation ledger or the registry state; run `bregctl apply --package DIR` to name the fix"
+            }
+            Self::RuntimeGrantsMissing => {
+                "the Registry runtime role is missing grants the active package gives it; run `bregctl apply --package DIR` to reissue them"
+            }
+            Self::RoleModeChanged => {
+                "the Registry database was activated for a separate runtime role but the runtime file names one role; run `bregctl apply --package DIR` to activate it for one role"
+            }
             Self::FieldPatternSyntax { .. } => {
                 "a persisted field pattern has invalid PostgreSQL syntax"
             }
@@ -462,6 +515,7 @@ pub struct PreparedServer {
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
     postgres_advisories: Vec<BaselineAdvisory>,
+    role_mode: RoleMode,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
 }
@@ -488,6 +542,12 @@ impl PreparedServer {
     #[must_use]
     pub fn postgres_advisories(&self) -> &[BaselineAdvisory] {
         &self.postgres_advisories
+    }
+
+    /// The role mode the runtime file selects and startup verified.
+    #[must_use]
+    pub fn role_mode(&self) -> RoleMode {
+        self.role_mode
     }
 
     /// The runtime pool the verified startup path built, so a test can check
@@ -523,6 +583,7 @@ impl PreparedServer {
             review_worker: None,
             metrics: None,
             postgres_advisories: Vec::new(),
+            role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
             #[cfg(feature = "tooling")]
@@ -548,6 +609,7 @@ impl PreparedServer {
             review_worker: None,
             metrics: None,
             postgres_advisories: Vec::new(),
+            role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
             #[cfg(feature = "tooling")]
@@ -583,7 +645,7 @@ pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
 /// run beside a serving process that holds the destination. The discarded
 /// state is built over a writer that refuses every entry, so nothing it holds
 /// can append.
-pub async fn check(config_path: &Path) -> Result<Vec<BaselineAdvisory>> {
+pub async fn check(config_path: &Path) -> Result<CheckedStartup> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
     let shared = config
         .verify_package_envelope()
@@ -599,7 +661,18 @@ pub async fn check(config_path: &Path) -> Result<Vec<BaselineAdvisory>> {
         .map_err(map_runtime_config_error)?;
     prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
         .await
-        .map(|prepared| prepared.postgres_advisories().to_vec())
+        .map(|prepared| CheckedStartup {
+            postgres_advisories: prepared.postgres_advisories().to_vec(),
+            role_mode: prepared.role_mode(),
+        })
+}
+
+/// What a startup check that passed decided without refusing: the
+/// PostgreSQL baseline advisories and the role mode it verified.
+#[derive(Debug, Clone)]
+pub struct CheckedStartup {
+    pub postgres_advisories: Vec<BaselineAdvisory>,
+    pub role_mode: RoleMode,
 }
 
 /// Prepare the clean database capability consumed by the production pre-sign
@@ -1314,6 +1387,10 @@ async fn finish_prepared_server(
         review_worker,
         metrics,
         postgres_advisories,
+        role_mode: RoleMode::from_roles(
+            config.database().roles().migration(),
+            config.database().roles().runtime(),
+        ),
         #[cfg(feature = "wasm")]
         wasm_runtime: Some(wasm_runtime),
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
@@ -1772,9 +1849,16 @@ async fn verify_opened_startup(
         }
         crate::postgres::RegistryStateShape::Ledger => {}
     }
-    verify_configured_runtime_role(&transaction, migration_role, runtime_role)
-        .await
-        .map_err(|_| StartupError::DatabaseUnready)?;
+    verify_configured_runtime_role(&transaction, migration_role, runtime_role).await?;
+    // A separate runtime role missing its grants may not even read the state
+    // the checks below read, so the grants are checked first.
+    verify_runtime_grants(
+        &transaction,
+        &expected_catalog,
+        migration_role,
+        runtime_role,
+    )
+    .await?;
     if package.registry().ddl().requires_postgis {
         crate::postgres::verify_postgis(&transaction, migration_role, runtime_role)
             .await
@@ -1787,6 +1871,7 @@ async fn verify_opened_startup(
         verify_instance_claim(&transaction).await?;
     }
     let expected = recorded_startup_identity(&transaction, &package, database_id).await?;
+    verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
     verify_catalog_identity_for_catalog(
         &transaction,
         &expected,
@@ -1961,6 +2046,64 @@ impl ReadinessProbe for DynamicRuntimeReadiness {
     }
 }
 
+/// Bind a separate runtime role to the grants the active package gives it.
+///
+/// Threat: a separate runtime role serving without the grants the package
+/// issues, as after a one-role activation or a reassignment, would fail
+/// request by request instead of refusing. Enforcement: the role must hold
+/// every runtime grant the compiled package issues; the refusal names the
+/// apply that reissues them. The separate runtime role cannot read the
+/// activation ledger, so its grants are what bind it to the activation.
+async fn verify_runtime_grants(
+    client: &impl GenericClient,
+    expected_catalog: &ExpectedManagedCatalog,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if migration_role == runtime_role {
+        return Ok(());
+    }
+    if crate::postgres::runtime_grants_missing(client, runtime_role, expected_catalog)
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+    {
+        return Err(StartupError::RuntimeGrantsMissing);
+    }
+    Ok(())
+}
+
+/// Bind a one-role runtime file to an activation recorded for one role.
+///
+/// Threat: one role serving a database the ledger records as guarded by a
+/// separate runtime role would drop that separation without an activation
+/// recording it. Enforcement: the active activation must record the single
+/// role mode; the refusal names the apply that activates it for one role.
+async fn verify_single_role_activation(
+    client: &impl GenericClient,
+    expected: &ExpectedRegistryIdentity,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if migration_role != runtime_role {
+        return Ok(());
+    }
+    let recorded: String = client
+        .query_opt(
+            "SELECT role_mode
+               FROM registry_internal.registry_migrations
+              WHERE activation_id = $1::text::uuid",
+            &[&expected.activation_id],
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+        .ok_or(StartupError::DatabaseUnready)?
+        .get(0);
+    if recorded != RoleMode::Single.as_str() {
+        return Err(StartupError::RoleModeChanged);
+    }
+    Ok(())
+}
+
 async fn verify_configured_runtime_role(
     client: &impl GenericClient,
     migration_role: &SqlIdentifier,
@@ -2003,6 +2146,17 @@ async fn verify_configured_runtime_role(
     let actual_role: String = row.get(0);
     if actual_role != runtime_role.as_str() {
         return Err(StartupError::DatabaseUnready);
+    }
+    // A separate runtime role that can write the activation ledger or the
+    // registry state is named, so the operator runs the apply that names the
+    // object and the fix.
+    if migration_role != runtime_role
+        && crate::postgres::find_runtime_write_authority(client, migration_role, runtime_role)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?
+            .is_some()
+    {
+        return Err(StartupError::RuntimeWriteAuthority);
     }
     // Superuser, row-security bypass, role and database creation are refused in
     // either role mode. In single-role mode the runtime role is the migration

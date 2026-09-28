@@ -3,9 +3,8 @@
 
 use std::path::Path;
 
-use registry_breg::postgres::BaselineAdvisory;
 use registry_breg::runtime_config::RuntimeConfigError;
-use registry_breg::startup::{check, StartupError};
+use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -25,11 +24,11 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
 ];
 
 /// Run the startup dependency check without binding a listener, keeping only
-/// the PostgreSQL baseline advisories it decided. It verifies the dependencies
+/// the PostgreSQL baseline advisories and the role mode it decided. It verifies the dependencies
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<Vec<BaselineAdvisory>, Diagnostic> {
+pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, Diagnostic> {
     if !runtime_config.is_absolute() {
         return Err(diagnostic(
             "startup.runtime_config.path_invalid",
@@ -160,6 +159,21 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not the instance the Registry's claim names, as a restored copy is: once the original is retired, run bregctl instance-claim adopt",
         ),
+        StartupError::RuntimeWriteAuthority => (
+            "startup.runtime_role.can_write",
+            "database",
+            "the runtime role can write the activation ledger or the registry state: run bregctl apply --package DIR to name the object and the fix",
+        ),
+        StartupError::RuntimeGrantsMissing => (
+            "startup.runtime_role.grants_missing",
+            "database",
+            "the runtime role is missing grants the active package gives it: run bregctl apply --package DIR to reissue them",
+        ),
+        StartupError::RoleModeChanged => (
+            "startup.role_mode.changed",
+            "database",
+            "the database was activated for a separate runtime role but the runtime file names one role: run bregctl apply --package DIR to activate it for one role",
+        ),
         StartupError::Audit => (
             "startup.audit.refused",
             "audit",
@@ -286,6 +300,9 @@ mod tests {
             StartupError::DatabaseUninitialized,
             StartupError::PreLedgerDatabase,
             StartupError::InstanceClaimMismatch,
+            StartupError::RuntimeWriteAuthority,
+            StartupError::RuntimeGrantsMissing,
+            StartupError::RoleModeChanged,
             StartupError::DatabaseIdentityMismatch,
             StartupError::ActivePackageMismatch,
             StartupError::Audit,
@@ -405,6 +422,21 @@ mod tests {
             (
                 StartupError::InstanceClaimMismatch,
                 "startup.instance_claim.mismatch",
+                "database",
+            ),
+            (
+                StartupError::RuntimeWriteAuthority,
+                "startup.runtime_role.can_write",
+                "database",
+            ),
+            (
+                StartupError::RuntimeGrantsMissing,
+                "startup.runtime_role.grants_missing",
+                "database",
+            ),
+            (
+                StartupError::RoleModeChanged,
+                "startup.role_mode.changed",
                 "database",
             ),
             (StartupError::Audit, "startup.audit.refused", "audit"),

@@ -33,7 +33,7 @@ pub use catalog::{
     verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
-pub(crate) use catalog::{registry_state_shape, RegistryStateShape};
+pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
 pub(crate) use config::MAX_POOL_TIMEOUT;
 pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::{
@@ -81,12 +81,13 @@ pub use rehearsal::{
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
+pub(crate) use roles::find_runtime_write_authority;
 #[doc(hidden)]
 pub use roles::RuntimeRevoke;
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
-    verify_runtime_role, SqlIdentifier,
+    verify_runtime_role, RuntimeWriteAuthority, SqlIdentifier,
 };
 pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;

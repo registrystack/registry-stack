@@ -1245,7 +1245,9 @@ async fn assert_startup_refuses_runtime_bbox_membership_drift(
         &database.runtime_role,
     )
     .await;
-    assert_eq!(refused.err(), Some(StartupError::DatabaseUnready));
+    // The bbox role owns the spatial candidate view, so membership in it lets
+    // the runtime role alter that view, and startup names that authority.
+    assert_eq!(refused.err(), Some(StartupError::RuntimeWriteAuthority));
     drop(runtime);
 
     database

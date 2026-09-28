@@ -220,6 +220,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActivationAuditIncomplete
             | MigrationError::PreLedgerDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
+            MigrationError::RuntimeWriteAuthority(_) => Self::MigrationAuthority,
         }
     }
 }

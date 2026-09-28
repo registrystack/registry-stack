@@ -1612,6 +1612,28 @@ impl DedicatedApplyConnection {
         Ok(registry_state_shape(&self.client).await?)
     }
 
+    /// The first way the split-role runtime role could write the activation
+    /// ledger or the registry state, read under the apply lock.
+    pub(crate) async fn runtime_write_authority(
+        &mut self,
+        migration_role: &SqlIdentifier,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<Option<super::RuntimeWriteAuthority>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        super::find_runtime_write_authority(&self.client, migration_role, runtime_role).await
+    }
+
+    /// Whether the split-role runtime role lacks a grant the compiled catalog
+    /// gives it, read under the apply lock.
+    pub(crate) async fn runtime_grants_missing(
+        &mut self,
+        runtime_role: &SqlIdentifier,
+        expected_catalog: &ExpectedManagedCatalog,
+    ) -> Result<bool> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        super::runtime_grants_missing(&self.client, runtime_role, expected_catalog).await
+    }
+
     /// The state a release before the activation ledger recorded, or `None`
     /// when this database does not have the pre-ledger shape.
     pub(crate) async fn pre_ledger_state(&mut self) -> Result<Option<PreLedgerState>> {

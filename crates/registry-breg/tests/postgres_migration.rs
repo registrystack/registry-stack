@@ -1653,6 +1653,295 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
     assert_eq!(state.identity, split);
 }
 
+/// Threat: a split-role runtime role that owns a registry table can add a
+/// deferred constraint trigger that runs as the migration role when an apply
+/// commits and writes the activation ledger. Enforcement: split apply refuses
+/// that ownership before the registry enters maintenance, naming the
+/// reassignment and then the apply that reissues the runtime grants the
+/// reassignment strips.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_split_apply_refuses_a_runtime_role_that_owns_a_model_table() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let table = first_model_table(&database).await;
+    let runtime = database.runtime_role.as_str();
+    let migration = database.migration_role.as_str();
+    database
+        .admin
+        .batch_execute(&format!("ALTER TABLE {table} OWNER TO {runtime}"))
+        .await
+        .expect("the administrator hands a model table to the runtime role");
+    let before = split_refusal_state(&database).await;
+
+    let refusal = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &initial },
+    )
+    .await
+    .expect_err("a runtime role that owns a model table is refused");
+    let MigrationError::RuntimeWriteAuthority(finding) = refusal else {
+        panic!("ownership is named as runtime write authority: {refusal:?}");
+    };
+    let message = finding.to_string();
+    assert!(message.contains(&format!("TABLE {table}")), "{message}");
+    assert!(
+        message.contains(&format!("`REASSIGN OWNED BY {runtime} TO {migration}`")),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("then `bregctl apply --package DIR` to reissue the runtime grants"),
+        "{message}"
+    );
+    assert_eq!(split_refusal_state(&database).await, before);
+
+    database
+        .admin
+        .batch_execute(&format!("REASSIGN OWNED BY {runtime} TO {migration}"))
+        .await
+        .expect("the administrator runs the named reassignment");
+    let reissued = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &initial },
+    )
+    .await
+    .expect("the apply after the reassignment reissues the runtime grants");
+    assert_ne!(reissued.activation_id, initial.activation_id);
+    assert!(matches!(
+        apply(
+            &database,
+            &package,
+            ApplyPrecondition::RoleChange { current: &reissued },
+        )
+        .await,
+        Err(MigrationError::AlreadyActive)
+    ));
+    database.cleanup().await;
+}
+
+/// Threat: a split-role runtime role that may create objects in a registry
+/// schema can add objects apply then runs beside. Enforcement: split apply
+/// refuses CREATE on a registry schema whether the runtime role or PUBLIC
+/// holds it, naming the exact revoke.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_split_apply_refuses_a_runtime_role_that_holds_schema_create() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let runtime = database.runtime_role.as_str();
+    let before = split_refusal_state(&database).await;
+
+    for (grantee, fix) in [
+        (
+            runtime.to_owned(),
+            format!("`REVOKE CREATE ON SCHEMA registry_data FROM {runtime}`"),
+        ),
+        (
+            "PUBLIC".to_owned(),
+            "`REVOKE CREATE ON SCHEMA registry_data FROM PUBLIC`".to_owned(),
+        ),
+    ] {
+        database
+            .admin
+            .batch_execute(&format!(
+                "GRANT CREATE ON SCHEMA registry_data TO {grantee}"
+            ))
+            .await
+            .expect("the administrator grants schema CREATE");
+        let refusal = apply(
+            &database,
+            &package,
+            ApplyPrecondition::RoleChange { current: &initial },
+        )
+        .await
+        .expect_err("schema CREATE is refused");
+        let MigrationError::RuntimeWriteAuthority(finding) = refusal else {
+            panic!("schema CREATE is named as runtime write authority: {refusal:?}");
+        };
+        let message = finding.to_string();
+        assert!(message.contains(&fix), "{message}");
+        assert!(
+            message.ends_with("then rerun the refused command"),
+            "{message}"
+        );
+        assert_eq!(split_refusal_state(&database).await, before);
+        database
+            .admin
+            .batch_execute(&format!(
+                "REVOKE CREATE ON SCHEMA registry_data FROM {grantee}"
+            ))
+            .await
+            .expect("the administrator runs the named revoke");
+    }
+    assert!(matches!(
+        apply(
+            &database,
+            &package,
+            ApplyPrecondition::RoleChange { current: &initial },
+        )
+        .await,
+        Err(MigrationError::AlreadyActive)
+    ));
+    database.cleanup().await;
+}
+
+/// Each remaining way a split-role runtime role could write the activation
+/// ledger or the registry state is refused by split apply before maintenance,
+/// naming the one statement that removes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_split_apply_names_the_fix_for_every_runtime_write_authority() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let table = first_model_table(&database).await;
+    let runtime = database.runtime_role.as_str();
+    let migration = database.migration_role.as_str();
+    let intruder = database.intruder_role.as_str();
+    let before = split_refusal_state(&database).await;
+
+    let cases = [
+        (
+            format!("ALTER ROLE {runtime} SUPERUSER"),
+            format!("ALTER ROLE {runtime} NOSUPERUSER"),
+            format!("`ALTER ROLE {runtime} NOSUPERUSER`, then rerun the refused command"),
+        ),
+        (
+            format!("GRANT {migration} TO {runtime}"),
+            format!("REVOKE {migration} FROM {runtime}"),
+            format!("`REVOKE {migration} FROM {runtime}`, then rerun the refused command"),
+        ),
+        (
+            format!(
+                "CREATE FUNCTION registry_data.foreign_helper() RETURNS integer \
+                 LANGUAGE sql AS 'SELECT 1'; \
+                 ALTER FUNCTION registry_data.foreign_helper() OWNER TO {runtime}"
+            ),
+            "DROP FUNCTION registry_data.foreign_helper()".to_owned(),
+            format!(
+                "FUNCTION registry_data.foreign_helper() and can write the activation ledger \
+                 through it; run `REASSIGN OWNED BY {runtime} TO {migration}`, then \
+                 `bregctl apply --package DIR` to reissue the runtime grants"
+            ),
+        ),
+        (
+            format!("ALTER TABLE {table} OWNER TO {intruder}; GRANT {intruder} TO {runtime}"),
+            format!("REVOKE {intruder} FROM {runtime}; ALTER TABLE {table} OWNER TO {migration}"),
+            format!("`REVOKE {intruder} FROM {runtime}`, then rerun the refused command"),
+        ),
+        (
+            format!("GRANT INSERT ON registry_internal.registry_migrations TO {runtime}"),
+            format!("REVOKE INSERT ON registry_internal.registry_migrations FROM {runtime}"),
+            format!(
+                "`REVOKE INSERT ON TABLE registry_internal.registry_migrations FROM {runtime}`, \
+                 then rerun the refused command"
+            ),
+        ),
+        (
+            "GRANT UPDATE ON registry_internal.registry_state TO PUBLIC".to_owned(),
+            "REVOKE UPDATE ON registry_internal.registry_state FROM PUBLIC".to_owned(),
+            "`REVOKE UPDATE ON TABLE registry_internal.registry_state FROM PUBLIC`, then rerun \
+             the refused command"
+                .to_owned(),
+        ),
+        (
+            format!(
+                "GRANT UPDATE (maintenance_status) ON registry_internal.registry_state TO {runtime}"
+            ),
+            format!(
+                "REVOKE UPDATE (maintenance_status) ON registry_internal.registry_state \
+                 FROM {runtime}"
+            ),
+            format!(
+                "`REVOKE UPDATE (maintenance_status) ON TABLE registry_internal.registry_state \
+                 FROM {runtime}`, then rerun the refused command"
+            ),
+        ),
+        (
+            format!("GRANT TRIGGER ON {table} TO {runtime}"),
+            format!("REVOKE TRIGGER ON {table} FROM {runtime}"),
+            format!(
+                "`REVOKE TRIGGER ON TABLE {table} FROM {runtime}`, then rerun the refused command"
+            ),
+        ),
+        (
+            format!(
+                "CREATE FUNCTION public.foreign_trigger() RETURNS trigger LANGUAGE plpgsql \
+                 AS 'BEGIN RETURN NEW; END'; \
+                 CREATE TRIGGER foreign_trigger BEFORE INSERT ON {table} \
+                 FOR EACH ROW EXECUTE FUNCTION public.foreign_trigger()"
+            ),
+            format!(
+                "DROP TRIGGER foreign_trigger ON {table}; DROP FUNCTION public.foreign_trigger()"
+            ),
+            format!("`DROP TRIGGER foreign_trigger ON {table}`, then rerun the refused command"),
+        ),
+    ];
+    for (grant, undo, fix) in cases {
+        database
+            .admin
+            .batch_execute(&grant)
+            .await
+            .unwrap_or_else(|error| panic!("the administrator runs {grant}: {error}"));
+        let refusal = apply(
+            &database,
+            &package,
+            ApplyPrecondition::RoleChange { current: &initial },
+        )
+        .await
+        .expect_err("runtime write authority is refused");
+        let MigrationError::RuntimeWriteAuthority(finding) = refusal else {
+            panic!("{grant} is named as runtime write authority: {refusal:?}");
+        };
+        let message = finding.to_string();
+        assert!(message.ends_with(&fix), "{grant}: {message}");
+        assert_eq!(split_refusal_state(&database).await, before, "{grant}");
+        database
+            .admin
+            .batch_execute(&undo)
+            .await
+            .unwrap_or_else(|error| panic!("the administrator runs {undo}: {error}"));
+    }
+    database.cleanup().await;
+}
+
+/// One registry model table, schema-qualified as a fix names it.
+async fn first_model_table(database: &TestDatabase) -> String {
+    database
+        .admin
+        .query_one(
+            "SELECT format('%I.%I', schemaname, tablename)
+             FROM pg_catalog.pg_tables
+             WHERE schemaname = 'registry_data'
+             ORDER BY tablename
+             LIMIT 1",
+            &[],
+        )
+        .await
+        .expect("the registry has a model table")
+        .get(0)
+}
+
+/// What a refused split apply must leave as it was: the ledger rows and the
+/// maintenance state.
+async fn split_refusal_state(database: &TestDatabase) -> (i64, String) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM registry_internal.registry_migrations),
+                    (SELECT maintenance_status FROM registry_internal.registry_state
+                      WHERE singleton)",
+            &[],
+        )
+        .await
+        .expect("the ledger and state read");
+    (row.get(0), row.get(1))
+}
+
 /// A registry whose state row records no claim, as one upgraded from a release
 /// before the claim does, is claimed by its next activation, so an in-place
 /// upgrade starts without an operator adopting the database.
@@ -3286,18 +3575,17 @@ async fn row_count_mismatch_is_closed() {
     );
     let entity = &base.entities()["asset"];
     let table = quote(&entity.physical_table);
-    let rank = quote(&entity.fields["rank"].physical_name);
+    // A split apply refuses a trigger its migrations do not create before
+    // any step runs, so the fault that makes the backfill update touch no row
+    // is a rule the administrator installs.
     database
         .admin
         .batch_execute(&format!(
-            "CREATE FUNCTION registry_data.migration_test_skip_update() RETURNS trigger
-                 LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END';
-             CREATE TRIGGER migration_test_skip_update
-                 BEFORE UPDATE OF {rank} ON registry_data.{table}
-                 FOR EACH ROW EXECUTE FUNCTION registry_data.migration_test_skip_update()"
+            "CREATE RULE migration_test_skip_update AS
+                 ON UPDATE TO registry_data.{table} DO INSTEAD NOTHING"
         ))
         .await
-        .expect("administrator installs a row-count fault trigger");
+        .expect("administrator installs a row-count fault rule");
     let refused = apply(
         &database,
         &package,

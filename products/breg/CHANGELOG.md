@@ -67,6 +67,28 @@
   activation `role_change`. Under the roles the database already serves with,
   it is refused as `apply.package.already_active`, naming `bregctl status`.
 
+- BREAKING: the role mode is `single` when `database.roles.migration` and
+  `database.roles.runtime` name one role and `split` otherwise, and each mode's
+  privileges are asserted. In split mode `breg` and `bregctl apply` refuse a
+  runtime role that can write the activation ledger or the registry state: a
+  superuser, a member of the migration role, an owner of any registry schema,
+  table, sequence, view, or function or a member of its owner, a holder of
+  CREATE on a registry schema, of TRIGGER on a registry table or view, or of a
+  write privilege on the ledger or state tables, directly or through PUBLIC,
+  and a table carrying a trigger the migrations never created. `bregctl
+  apply` refuses as `apply.runtime_role.can_write`, naming the object and the
+  fix: `REASSIGN OWNED BY` then `bregctl apply --package DIR`, or the exact
+  `REVOKE` or `DROP TRIGGER` then rerunning the refused command. `breg`
+  refuses as `startup.runtime_role.can_write`, naming `bregctl apply
+  --package DIR`, and refuses a runtime role missing the grants the active
+  package gives it as `startup.runtime_role.grants_missing`; the apply of the
+  active package reissues them. A one-role runtime file over a database
+  activated for a separate runtime role is refused as
+  `startup.role_mode.changed` until `bregctl apply --package DIR` activates it
+  for one role. `breg` logs the role mode at startup, and `bregctl doctor`
+  reports it as `roleMode`; in single mode both say the activation ledger
+  check catches mistakes but not someone holding that credential.
+
 - `bregctl apply --operator-reference TEXT` binds an operator's change
   reference to the activation. The text must be 1 to 512 bytes without control
   characters, and the audit profile must be keyed: the ledger row records only
