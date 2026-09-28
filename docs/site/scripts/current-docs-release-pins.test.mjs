@@ -84,8 +84,8 @@ const EXCLUDED_PAGES = new Set(['changelog.mdx']);
 const EXTRA_OPERATOR_DOCS = ['docker/README.md'];
 
 // Mentions that match a target rule on purpose: a past release named as history, or an example
-// version that illustrates a naming scheme. Keep this narrow: every entry needs a reason, and an
-// entry that no longer matches fails the suite.
+// version that illustrates a naming scheme. Keep this narrow: every entry needs a reason, covers
+// exactly one occurrence in its file, and fails the suite once it no longer matches.
 const HISTORICAL_ALLOWLIST = [
   {
     file: 'docs/site/src/content/docs/products/registry-evidence/index.md',
@@ -107,7 +107,17 @@ function listContentPages(dir = contentRoot) {
   return pages.sort();
 }
 
-function isOperatorPage(page) {
+// Generated product pages carry the doc_type repo-docs.yaml declares; a how-to or tutorial there
+// is an operator page like any under operate/ or tutorials/.
+const OPERATOR_DOC_TYPES = new Set(['how-to', 'tutorial']);
+
+function frontmatterDocType(text) {
+  const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  return frontmatter?.[1].match(/^doc_type:\s*(\S+)\s*$/m)?.[1];
+}
+
+function isOperatorPage(page, text) {
+  if (page.startsWith('products/')) return OPERATOR_DOC_TYPES.has(frontmatterDocType(text));
   if (GENERATED_PREFIXES.some((prefix) => page.startsWith(prefix))) return false;
   return OPERATOR_PAGE_PREFIXES.some((prefix) => page.startsWith(prefix)) || OPERATOR_PAGES.has(page);
 }
@@ -130,14 +140,35 @@ export function findReleasePins(text, { operator }) {
   return findings;
 }
 
+// Each allowlist entry absorbs one occurrence of its match in its file; any further occurrence,
+// such as a real download instruction reusing an allowlisted example, is a violation.
+export function checkDocuments(documents, allowlist) {
+  const remaining = allowlist.map(() => 1);
+  const violations = [];
+  for (const document of documents) {
+    for (const finding of findReleasePins(document.text, { operator: document.operator })) {
+      const allowed = allowlist.findIndex(
+        (entry, index) =>
+          remaining[index] > 0 && entry.file === document.file && entry.match === finding.match,
+      );
+      if (allowed === -1) {
+        violations.push(`${document.file}:${finding.line}: ${finding.rule}: ${finding.match}`);
+      } else {
+        remaining[allowed] -= 1;
+      }
+    }
+  }
+  const stale = allowlist.filter((_, index) => remaining[index] > 0);
+  return { violations, stale };
+}
+
 function currentDocuments() {
   const pages = listContentPages()
     .filter(isCurrentPage)
-    .map((page) => ({
-      file: `docs/site/src/content/docs/${page}`,
-      text: readFileSync(resolve(contentRoot, page), 'utf8'),
-      operator: isOperatorPage(page),
-    }));
+    .map((page) => {
+      const text = readFileSync(resolve(contentRoot, page), 'utf8');
+      return { file: `docs/site/src/content/docs/${page}`, text, operator: isOperatorPage(page, text) };
+    });
   const extras = EXTRA_OPERATOR_DOCS.map((file) => ({
     file,
     text: readFileSync(resolve(repoRoot, file), 'utf8'),
@@ -216,27 +247,42 @@ test('current docs carry no exact release pin as an install or download target',
     );
   }
 
-  const usedAllowlist = new Set();
-  const violations = [];
-  for (const document of documents) {
-    for (const finding of findReleasePins(document.text, { operator: document.operator })) {
-      const allowed = HISTORICAL_ALLOWLIST.findIndex(
-        (entry) => entry.file === document.file && entry.match === finding.match,
-      );
-      if (allowed === -1) {
-        violations.push(`${document.file}:${finding.line}: ${finding.rule}: ${finding.match}`);
-      } else {
-        usedAllowlist.add(allowed);
-      }
-    }
-  }
-
+  const { violations, stale } = checkDocuments(documents, HISTORICAL_ALLOWLIST);
   assert.deepEqual(
     violations,
     [],
     'Current docs must name `<tag>` and point at https://github.com/registrystack/registry-stack/releases/latest '
       + 'instead of pinning an exact release; pins belong only in archived docsets.',
   );
-  const stale = HISTORICAL_ALLOWLIST.filter((_, index) => !usedAllowlist.has(index));
   assert.deepEqual(stale, [], 'remove allowlist entries that no longer match');
+});
+
+test('an allowlist entry absorbs one occurrence and no more', () => {
+  const file = 'docs/site/src/content/docs/products/example/index.md';
+  const entry = { file, match: 'evidence-v1.2.0-linux-amd64', reason: 'naming example' };
+  const once = 'named `<bin>-<tag>-<os>-<arch>` (for example `evidence-v1.2.0-linux-amd64`)';
+  const twice = `${once}\ncurl -fsSLO .../evidence-v1.2.0-linux-amd64`;
+
+  assert.deepEqual(checkDocuments([{ file, text: once, operator: false }], [entry]), {
+    violations: [],
+    stale: [],
+  });
+  assert.deepEqual(checkDocuments([{ file, text: twice, operator: false }], [entry]), {
+    violations: [`${file}:2: release-asset-name: evidence-v1.2.0-linux-amd64`],
+    stale: [],
+  });
+  assert.deepEqual(checkDocuments([{ file, text: 'no pins here', operator: false }], [entry]), {
+    violations: [],
+    stale: [entry],
+  });
+});
+
+test('generated product how-to and tutorial pages are operator pages', () => {
+  const page = (docType) => `---\ntitle: Example\ndoc_type: ${docType}\n---\n\nBody.\n`;
+  assert.equal(isOperatorPage('products/registry-manifest/validate-and-render.md', page('how-to')), true);
+  assert.equal(isOperatorPage('products/registry-evidence/tutorial.md', page('tutorial')), true);
+  assert.equal(isOperatorPage('products/registry-evidence/index.md', page('explanation')), false);
+  assert.equal(isOperatorPage('products/registry-evidence/authoring-form.md', page('reference')), false);
+  assert.equal(isOperatorPage('reference/cli/relay.mdx', page('how-to')), false);
+  assert.equal(isOperatorPage('operate/index.mdx', 'no frontmatter'), true);
 });
