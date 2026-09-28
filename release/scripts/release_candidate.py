@@ -62,6 +62,14 @@ CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casewor
 THIRD_PARTY_NOTICES_MINIMUM_VERSION = (0, 33, 0)
 MACOS_FIPS_BUNDLE_MINIMUM_VERSION = (0, 33, 0)
 SCHEDULING_RUNTIME_IMAGE_NAMES = CASEWORK_RUNTIME_IMAGE_NAMES | {"scheduling"}
+# From this version schedulingctl is a published binary and each stateful
+# product image carries its operator tool beside the runtime binary.
+OPERATOR_TOOL_MINIMUM_VERSION = (0, 36, 0)
+IMAGE_OPERATOR_TOOLS = {
+    "breg": "bregctl",
+    "casework": "caseworkctl",
+    "scheduling": "schedulingctl",
+}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -134,6 +142,20 @@ def _candidate_image_names(version: str) -> set[str]:
     if parsed < SCHEDULING_RELEASE_MINIMUM_VERSION:
         return CASEWORK_RUNTIME_IMAGE_NAMES
     return SCHEDULING_RUNTIME_IMAGE_NAMES
+
+
+def image_operator_tools(version: str) -> dict[str, str]:
+    """Return the operator tool each version-selected image carries."""
+
+    parsed = tuple(int(part) for part in version.split("."))
+    if parsed < OPERATOR_TOOL_MINIMUM_VERSION:
+        return {}
+    image_names = _candidate_image_names(version)
+    return {
+        image_name: tool
+        for image_name, tool in IMAGE_OPERATOR_TOOLS.items()
+        if image_name in image_names
+    }
 
 
 def _literal_string_roster(path: Path, name: str) -> set[str]:
@@ -234,18 +256,24 @@ def check_image_onboarding(
     candidate_packages = _literal_string_roster(cleanup_path, "CANDIDATE_PACKAGES")
     public_packages = _literal_string_roster(cleanup_path, "PUBLIC_PACKAGES")
 
+    operator_tools = image_operator_tools(version)
     for image_name in sorted(image_names):
         dockerfile = root / f"release/docker/Dockerfile.{image_name}"
         _require_regular_file(dockerfile, f"{image_name} release Dockerfile")
-        staging_path = re.escape(f"dist/image-bin/{image_name}")
-        if re.search(
-            rf"^\s*cp\b[^\n]*{staging_path}(?:\s|$)",
-            binary_recipe,
-            flags=re.MULTILINE,
-        ) is None:
-            raise CandidateError(
-                f"canonical binary recipe must stage dist/image-bin/{image_name}"
-            )
+        staged_names = [image_name]
+        if image_name in operator_tools:
+            staged_names.append(operator_tools[image_name])
+        for staged_name in staged_names:
+            staging_path = re.escape(f"dist/image-bin/{staged_name}")
+            if re.search(
+                rf"^\s*cp\b[^\n]*{staging_path}(?:\s|$)",
+                binary_recipe,
+                flags=re.MULTILINE,
+            ) is None:
+                raise CandidateError(
+                    "canonical binary recipe must stage "
+                    f"dist/image-bin/{staged_name}"
+                )
         if image_name not in supported_image_names:
             raise CandidateError(
                 f"release image recipe does not recognize {image_name}"
@@ -404,6 +432,10 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"caseworkctl-{tag}-{platform}"] = "binary"
         inventory[f"casework-{tag}-install.sh"] = "installer"
         inventory["casework-install.sh"] = "installer"
+    if version_tuple >= OPERATOR_TOOL_MINIMUM_VERSION:
+        # The Scheduling runtime ships only inside its image.
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            inventory[f"schedulingctl-{tag}-{platform}"] = "binary"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:
@@ -1696,6 +1728,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     image_names = subparsers.add_parser("image-names")
     image_names.add_argument("--version", required=True)
 
+    operator_tools = subparsers.add_parser("image-operator-tools")
+    operator_tools.add_argument("--version", required=True)
+
     check_onboarding = subparsers.add_parser("check-image-onboarding")
     check_onboarding.add_argument("--version", required=True)
     check_onboarding.add_argument("--root", type=Path, required=True)
@@ -1774,6 +1809,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "image-names":
             print(" ".join(sorted(_candidate_image_names(args.version))))
+            return 0
+        if args.command == "image-operator-tools":
+            if VERSION.fullmatch(args.version) is None:
+                raise CandidateError(
+                    "version must be canonical semantic version text"
+                )
+            pairs = sorted(image_operator_tools(args.version).items())
+            if pairs:
+                print(" ".join(f"{image}={tool}" for image, tool in pairs))
             return 0
         if args.command == "check-image-onboarding":
             image_names = check_image_onboarding(
