@@ -29,7 +29,7 @@ use registry_breg::import_authority::{
     ImportAuthority, ImportAuthorityCloseRequest, ImportAuthorityError, ImportAuthorityOpenRequest,
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
-use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+use registry_breg::instance_claim::InstanceClaimService;
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
@@ -1288,6 +1288,75 @@ async fn adopting_a_restored_copy_supersedes_every_open_authority() {
         .await;
 }
 
+/// A physical restore (point-in-time recovery, a snapshot, a base backup)
+/// keeps the system identifier and the database oid, so the claim still
+/// names the restored database and an authority closed after the backup
+/// point is open again. Adopting the database the claim already names is the
+/// post-restore step: it raises the epoch and supersedes every open
+/// authority, audited as a re-claim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reclaiming_after_a_physical_restore_supersedes_every_reopened_authority() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    harness.close(widget.authority_id).await;
+    // The restore brings back the row as it stood at the backup point.
+    harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_import_authorities
+                SET status = 'open', closed_at = NULL
+              WHERE authority_id = $1",
+            &[&widget.authority_id],
+        )
+        .await
+        .expect("test simulates a physical restore");
+    let claims = harness.claims();
+    let restored = claims.status().await.expect("the claim reads");
+    assert!(restored.matches, "a physical restore keeps the claim");
+
+    let reclaim = claims
+        .adopt()
+        .await
+        .expect("the operator re-claims the restored database");
+    assert_eq!(reclaim.previous.map(|claim| claim.epoch), Some(1));
+    assert_eq!(reclaim.current.epoch, 2);
+    assert_eq!(reclaim.current.identity, restored.live);
+    assert_eq!(reclaim.superseded_import_authorities, [widget.authority_id]);
+    assert_eq!(harness.authority(widget.authority_id).await.0, "superseded");
+    let transitions: Vec<Value> = harness
+        .authority_records(widget.authority_id)
+        .await
+        .iter()
+        .map(|record| record["transition"].clone())
+        .collect();
+    assert_eq!(
+        transitions,
+        [json!("opened"), json!("closed"), json!("superseded")]
+    );
+    let responses: Vec<Value> = harness
+        .database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == "breg-instance-claim-audit/v1" && entry["phase"] == "response"
+        })
+        .map(|entry| entry["record"].clone())
+        .collect();
+    assert_eq!(responses.len(), 1, "one re-claim answers its request once");
+    assert_eq!(responses[0]["outcome"], "committed");
+    assert_eq!(responses[0]["event"], "reclaimed");
+    assert_eq!(responses[0]["previous"]["epoch"], 1);
+    assert_eq!(responses[0]["current"]["epoch"], 2);
+    assert_eq!(
+        responses[0]["supersededImportAuthorities"],
+        json!([widget.authority_id.to_string()])
+    );
+    harness
+        .refused_run("widgets", "loader", &plan("after-physical-restore", 1))
+        .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
     let harness = Harness::create().await;
@@ -1314,11 +1383,6 @@ async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
     assert_eq!(adoption.current.epoch, 1);
     assert_eq!(adoption.current.identity, missing.live);
     assert!(claims.status().await.expect("the claim reads").matches);
-    assert_eq!(
-        claims.adopt().await.err(),
-        Some(InstanceClaimError::AlreadyCurrent),
-        "the database the claim names has nothing to adopt"
-    );
     let adoptions: Vec<(Value, Value)> = harness
         .database
         .audit_entries()
@@ -1331,10 +1395,8 @@ async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
         [
             (json!("request"), Value::Null),
             (json!("response"), json!("committed")),
-            (json!("request"), Value::Null),
-            (json!("response"), json!("refused")),
         ],
-        "each adoption answers its request once"
+        "the adoption answers its request once"
     );
 }
 

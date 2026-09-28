@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `bregctl instance-claim adopt` also runs on a database the instance claim
+  already names, as after a point-in-time recovery, a snapshot, or a base
+  backup, which keep the claim matching and reopen every import authority
+  closed after the backup point. It claims the database again with a raised
+  epoch and supersedes every open import authority in one transaction,
+  audited under `breg-instance-claim-audit/v1` with the event `reclaimed`.
+  Run it once after any restore, before the database serves. The
+  `instance_claim.already_current` refusal is gone.
+
 - A runtime file refused as `runtime_config.document` says which field is
   wrong and why, such as an unknown `audit.destination` and the destinations
   it accepts, without repeating the refused value, in `bregctl doctor`,
