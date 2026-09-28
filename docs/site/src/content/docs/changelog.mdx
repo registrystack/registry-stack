@@ -79,6 +79,24 @@ relevant product pages on this site rather than duplicating release notes.
     check_source_revisions(); crates/registry-caseworkctl/src/breg_package.rs,
     compare(); crates/registry-casework/tests/activation_postgres.rs. */}
 
+- BREAKING: Registry Scheduling activates a package with `schedulingctl plan`
+  and `schedulingctl apply`, recorded in an activation ledger, and
+  `scheduling serve` writes no activation state. `scheduling migrate` is
+  removed and exits 2 naming the two commands. `runtime.yaml` requires
+  `identity.databaseId`. In split-role mode, plan, apply, and startup refuse a
+  runtime role that owns a Scheduling object, can create in the schema, or
+  holds TRIGGER, and any trigger attached to a `scheduling_*` table, naming
+  the statement to run; apply never revokes TRIGGER itself. `plan` refuses a
+  runtime role that cannot read the ledger, naming `schedulingctl apply`. To
+  upgrade, add `identity.databaseId` and run `schedulingctl apply` once before
+  starting the runtime; with split roles, a trigger an operator added to a
+  Scheduling table blocks startup until it is dropped. See
+  `products/scheduling/CHANGELOG.md`.
+
+{/* Evidence: crates/registry-scheduling/src/store/activation.rs;
+    crates/registry-schedulingctl/src/activation.rs;
+    crates/registry-schedulingctl/tests/activation_postgres.rs. */}
+
 ## v0.35.0 beta-47
 
 - BREAKING: Base Registry Engine (BReg) gives every `reference` field a btree
