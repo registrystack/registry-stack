@@ -2396,6 +2396,37 @@ async fn cursors_page_their_own_listing_and_refuse_foreign_contexts() {
     assert_eq!(problem["code"], "cursor.invalid");
 }
 
+/// A caller may name a start at the far edge of what the date-time parser
+/// admits. The range the service derives from it saturates at the last
+/// representable instant instead of panicking the request: availability
+/// answers an empty page, and explain answers the refusal a booking there
+/// would meet.
+#[tokio::test]
+async fn a_start_at_the_edge_of_representable_time_answers_instead_of_panicking() {
+    let fx = fixture().await;
+    let edge = "%2B262142-12-31T00:00:00Z";
+    let (status, page) = fx
+        .get(
+            &format!("/v1/availability?offering={OFFERING}&start={edge}"),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"], json!([]), "nothing is published that late");
+
+    let (status, explained) = fx
+        .get(
+            &format!("/v1/availability/explain?offering={OFFERING}&start={edge}"),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{explained}");
+    assert!(
+        explained["publicCode"].is_string(),
+        "a start past every opening explains as a refusal: {explained}"
+    );
+}
+
 #[tokio::test]
 async fn the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations() {
     let fx = fixture().await;

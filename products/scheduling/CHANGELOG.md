@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Answer availability for an offering whose `horizonDays` reaches past the
+  last representable instant instead of panicking the request: such a horizon
+  bounds nothing. A caller-supplied availability or explain `start` at the
+  edge of the calendar is answered the same way.
+
 ## v0.36.0 - 2026-09-29
 
 - Write operational logs to standard error instead of standard output, so a
