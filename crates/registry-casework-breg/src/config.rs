@@ -468,13 +468,13 @@ fn read_description(project_root: &Path, relative: &str) -> Result<Vec<u8>, Sour
 fn validate_description(
     source: &SourcePolicy,
     bytes: &[u8],
-) -> Result<ValidatedDescription, SourceAdapterError> {
+) -> Result<ValidatedDescription, DescriptionRefusal> {
     let root = decode_exact_json(bytes).map_err(|_| SourceAdapterError::Invalid)?;
     let object = root.as_object().ok_or(SourceAdapterError::Invalid)?;
     let requests_key = match root["apiVersion"].as_str() {
         Some(DESCRIPTION_API_VERSION) => "request",
         Some(DESCRIPTION_API_VERSION_REQUESTS) => "requests",
-        _ => return Err(SourceAdapterError::Invalid),
+        _ => return Err(DescriptionRefusal::ContractMismatch),
     };
     let expected = [
         "apiVersion",
@@ -496,7 +496,7 @@ fn validate_description(
             .as_str()
             .is_some_and(|value| valid_scalar(value, 512))
     {
-        return Err(SourceAdapterError::Invalid);
+        return Err(DescriptionRefusal::ContractMismatch);
     }
     let expected_registry_revision = root["sourceRevision"]
         .as_str()
@@ -508,37 +508,46 @@ fn validate_description(
             .iter()
             .map(|request| request.as_object().ok_or(SourceAdapterError::Invalid))
             .collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(SourceAdapterError::Invalid),
+        _ => return Err(DescriptionRefusal::ContractMismatch),
     };
     // The description and the policy pair exactly the same request entities:
     // an undeclared description entry is as much drift as a missing one.
     if described.len() != source.requests.len() {
-        return Err(SourceAdapterError::Invalid);
+        return Err(DescriptionRefusal::ContractMismatch);
     }
     let mut by_entity = BTreeMap::new();
     for request in described {
         let entity = string_field(request, "requestEntity")?;
         if by_entity.insert(entity, request).is_some() {
-            return Err(SourceAdapterError::Invalid);
+            return Err(DescriptionRefusal::ContractMismatch);
         }
     }
-    let requests = source
+    // Every paired entry is held to the closed contract before any policy
+    // field is resolved against it, so a description that drifted is always
+    // reported as drift, never as a field the policy names.
+    let described = source
         .requests
         .iter()
         .map(|policy| {
             let request = by_entity
                 .get(policy.entity.as_str())
                 .ok_or(SourceAdapterError::Invalid)?;
-            validate_description_request(policy, request)
+            validate_description_request(request)
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    let requests = source
+        .requests
+        .iter()
+        .zip(described)
+        .enumerate()
+        .map(|(index, (policy, described))| resolve_policy_fields(index, policy, described))
         .collect::<Result<Vec<_>, _>>()?;
     Ok((requests, expected_registry_revision))
 }
 
 fn validate_description_request(
-    policy: &SourceRequestPolicy,
     request: &serde_json::Map<String, Value>,
-) -> Result<BregRequestConfig, SourceAdapterError> {
+) -> Result<DescribedRequest, SourceAdapterError> {
     let entity = string_field(request, "requestEntity")?;
     let route = string_field(request, "requestRoute")?;
     string_field(request, "contractFingerprint")?;
@@ -552,42 +561,105 @@ fn validate_description_request(
         .get("application")
         .and_then(Value::as_object)
         .ok_or(SourceAdapterError::Invalid)?;
-    let (routing_metadata, fields_by_name) = routing_metadata(request, &policy.projection)?;
+    Ok(DescribedRequest {
+        entity: entity.to_owned(),
+        route: route.to_owned(),
+        fields: published_fields(request)?,
+    })
+}
+
+/// One paired description entry that already meets the closed contract,
+/// before the policy's field names are resolved against it.
+struct DescribedRequest {
+    entity: String,
+    route: String,
+    fields: BTreeMap<String, RoutingFieldDescriptor>,
+}
+
+/// Resolve every field the policy's request `index` names against the
+/// fields its paired description entry publishes.
+fn resolve_policy_fields(
+    index: usize,
+    policy: &SourceRequestPolicy,
+    described: DescribedRequest,
+) -> Result<BregRequestConfig, DescriptionRefusal> {
+    let published = |field: &String, path: String| {
+        described.fields.get(field).cloned().ok_or_else(|| {
+            DescriptionRefusal::UnpublishedPolicyField {
+                path: format!("requests[{index}].{path}"),
+                field: field.clone(),
+            }
+        })
+    };
+    let fields = policy
+        .projection
+        .iter()
+        .enumerate()
+        .map(|(position, field)| published(field, format!("projection[{position}]")))
+        .collect::<Result<Vec<_>, _>>()?;
     let context_projection = policy
         .context_projection
         .iter()
-        .map(|field| {
-            fields_by_name
-                .get(field)
-                .cloned()
-                .ok_or(SourceAdapterError::Invalid)
-        })
+        .enumerate()
+        .map(|(position, field)| published(field, format!("contextProjection[{position}]")))
         .collect::<Result<Vec<_>, _>>()?;
     let display_reference = policy
         .display_reference
         .as_ref()
         .map(|configured| {
-            let descriptor = fields_by_name
-                .get(&configured.field)
-                .cloned()
-                .ok_or(SourceAdapterError::Invalid)?;
+            let descriptor = published(&configured.field, "displayReference.field".to_owned())?;
             let schema = descriptor
                 .schema
                 .as_object()
-                .ok_or(SourceAdapterError::Invalid)?;
+                .ok_or(DescriptionRefusal::ContractMismatch)?;
             if schema.get("type").and_then(Value::as_str) != Some("string") {
-                return Err(SourceAdapterError::Invalid);
+                return Err(DescriptionRefusal::ContractMismatch);
             }
             Ok(descriptor)
         })
         .transpose()?;
     Ok(BregRequestConfig {
-        entity: entity.to_owned(),
-        route: route.to_owned(),
-        routing_metadata,
+        entity: described.entity,
+        route: described.route,
+        routing_metadata: RoutingSourceMetadata {
+            stages: Vec::new(),
+            fields,
+        },
         context_projection,
         display_reference,
     })
+}
+
+/// Why an imported source description was refused for one source policy.
+///
+/// Neither variant carries a description value: a field name is authored
+/// policy configuration, and a key path names where the policy wrote it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DescriptionRefusal {
+    /// The description meets the closed adapter contract, but the policy
+    /// names a field the description does not publish for that request. The
+    /// `path` is relative to the source policy entry, as
+    /// `requests[<index>].contextProjection[<index>]`,
+    /// `requests[<index>].projection[<index>]`, or
+    /// `requests[<index>].displayReference.field`.
+    UnpublishedPolicyField { path: String, field: String },
+    /// The description is not exactly the closed BReg adapter contract for
+    /// this source: malformed, drifted, or paired with other request
+    /// entities.
+    ContractMismatch,
+}
+
+impl From<SourceAdapterError> for DescriptionRefusal {
+    fn from(_: SourceAdapterError) -> Self {
+        Self::ContractMismatch
+    }
+}
+
+impl From<DescriptionRefusal> for SourceAdapterError {
+    fn from(_: DescriptionRefusal) -> Self {
+        Self::Invalid
+    }
 }
 
 /// Validate an imported description with the same strict decoder used by
@@ -598,6 +670,16 @@ pub fn validate_description_input(
     source: &SourcePolicy,
     bytes: &[u8],
 ) -> Result<BTreeMap<String, RoutingSourceMetadata>, SourceAdapterError> {
+    check_description_input(source, bytes).map_err(SourceAdapterError::from)
+}
+
+/// Validate an imported description as [`validate_description_input`] does,
+/// distinguishing a policy that names a field the description does not
+/// publish from a description that does not meet the adapter contract.
+pub fn check_description_input(
+    source: &SourcePolicy,
+    bytes: &[u8],
+) -> Result<BTreeMap<String, RoutingSourceMetadata>, DescriptionRefusal> {
     let (requests, _) = validate_description(source, bytes)?;
     Ok(requests
         .into_iter()
@@ -630,16 +712,10 @@ fn validate_on_approved(value: &Value) -> Result<(), SourceAdapterError> {
     }
 }
 
-fn routing_metadata(
+/// Read one paired entry's published fields, keyed by logical field name.
+fn published_fields(
     request: &serde_json::Map<String, Value>,
-    projection: &[String],
-) -> Result<
-    (
-        RoutingSourceMetadata,
-        BTreeMap<String, RoutingFieldDescriptor>,
-    ),
-    SourceAdapterError,
-> {
+) -> Result<BTreeMap<String, RoutingFieldDescriptor>, SourceAdapterError> {
     let fields = request
         .get("fields")
         .and_then(Value::as_array)
@@ -675,22 +751,7 @@ fn routing_metadata(
             return Err(SourceAdapterError::Invalid);
         }
     }
-    let fields = projection
-        .iter()
-        .map(|field| {
-            by_logical_name
-                .get(field)
-                .cloned()
-                .ok_or(SourceAdapterError::Invalid)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((
-        RoutingSourceMetadata {
-            stages: Vec::new(),
-            fields,
-        },
-        by_logical_name,
-    ))
+    Ok(by_logical_name)
 }
 
 fn string_field<'a>(
@@ -1094,8 +1155,15 @@ mod tests {
             json!({"type":"string","enum":["north","south"]})
         );
 
-        source.requests[0].projection = vec!["not-imported".to_owned()];
-        assert!(validate_description(&source, &description("correction")).is_err());
+        source.requests[0].projection = vec!["region".to_owned(), "not-imported".to_owned()];
+        assert_eq!(
+            check_description_input(&source, &description("correction")).unwrap_err(),
+            DescriptionRefusal::UnpublishedPolicyField {
+                path: "requests[0].projection[1]".to_owned(),
+                field: "not-imported".to_owned(),
+            }
+        );
+        assert!(validate_description_input(&source, &description("correction")).is_err());
 
         source.requests[0].projection = vec!["region".to_owned()];
         let mut duplicate: Value = serde_json::from_slice(&description("correction")).unwrap();
@@ -1122,7 +1190,13 @@ mod tests {
         assert_eq!(reference.api_name, "serviceRegion");
 
         source.requests[0].display_reference.as_mut().unwrap().field = "missing".to_owned();
-        assert!(validate_description(&source, &description("correction")).is_err());
+        assert_eq!(
+            check_description_input(&source, &description("correction")).unwrap_err(),
+            DescriptionRefusal::UnpublishedPolicyField {
+                path: "requests[0].displayReference.field".to_owned(),
+                field: "missing".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1136,7 +1210,25 @@ mod tests {
         assert_eq!(context[0].api_name, "serviceRegion");
 
         source.requests[0].context_projection = vec!["not-imported".to_owned()];
-        assert!(validate_description(&source, &description("correction")).is_err());
+        assert_eq!(
+            check_description_input(&source, &description("correction")).unwrap_err(),
+            DescriptionRefusal::UnpublishedPolicyField {
+                path: "requests[0].contextProjection[0]".to_owned(),
+                field: "not-imported".to_owned(),
+            }
+        );
+
+        // Drift in the description is reported as drift even when the
+        // policy also names a field the description does not publish.
+        let mut drifted: Value = serde_json::from_slice(&description("correction")).unwrap();
+        drifted["request"]
+            .as_object_mut()
+            .unwrap()
+            .remove("contractFingerprint");
+        assert_eq!(
+            check_description_input(&source, &serde_json::to_vec(&drifted).unwrap()).unwrap_err(),
+            DescriptionRefusal::ContractMismatch
+        );
     }
 
     fn generation(binding: &BregBinding, source: &SourcePolicy) -> String {
