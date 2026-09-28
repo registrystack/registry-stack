@@ -28,7 +28,7 @@ subjectBinding:
   keyVersion: 1
 rateLimits:
   requestsPerPrincipalPerMinute: 60
-  burstPerPrincipal: 10
+  burstPerPrincipal: 16
   failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
 signing:
   format: flattened-jws-json

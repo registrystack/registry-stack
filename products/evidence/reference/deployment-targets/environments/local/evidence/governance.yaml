@@ -19,7 +19,7 @@ authentication:
     revokedKeyIds: []
 audit: {hashKeyRef: secret:file/evidence-audit-hmac, hashKeyVersion: 1}
 subjectBinding: {secretRef: secret:file/evidence-subject-binding, keyVersion: 1}
-rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 16, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing:
   format: flattened-jws-json
   algorithm: ES256

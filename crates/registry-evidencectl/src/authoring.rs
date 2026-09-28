@@ -3828,7 +3828,7 @@ fn render_local_bundle(
         },
         "rateLimits": {
             "requestsPerPrincipalPerMinute": 60,
-            "burstPerPrincipal": 10,
+            "burstPerPrincipal": 16,
             "failedSelectorAttemptsPerPrincipalAuthorityPerMinute": 10,
         },
         "signing": {
