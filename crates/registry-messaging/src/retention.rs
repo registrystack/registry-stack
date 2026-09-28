@@ -22,9 +22,13 @@
 //! operator requeue either happens first, and the message is skipped, or
 //! after, and the requeued message fails as `payload-erased` without a send.
 //!
-//! One run is one transaction under one advisory lock, so two runs never
-//! interleave, and it writes its audit record into the outbox in that
-//! transaction. The runtime runs it on an interval with its own credential;
+//! An applied run erases in bounded batches, oldest message first. Each
+//! batch is its own transaction under one advisory lock, so two runs never
+//! interleave within a batch, and each batch writes its audit request
+//! before erasure and its outcome after commit. The run ends at the first
+//! batch shorter than the bound; a run that fails part way keeps the
+//! batches it committed, and the next run continues from there. A preview
+//! is one transaction that counts everything due. The runtime runs it on an interval with its own credential;
 //! `messagingctl retention erase-expired` runs it with the migration
 //! credential, as a preview unless applied. A cutoff later than the
 //! database's clock is refused: retention erases what has expired, never
@@ -39,11 +43,11 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio_postgres::Transaction;
 
+use crate::audit::MessagingAudit;
 use crate::config::RetentionConfig;
 use crate::dispatch::Actor;
 use crate::messages::format_instant;
 use crate::metrics::{Metrics, RetentionRun};
-use crate::outbox;
 use crate::store::{PostgresStore, StoreError};
 
 /// The event a retention run journals.
@@ -59,9 +63,13 @@ const RETENTION_LOCK_KEY: i64 = 0x6d73_6772_6574_6e74;
 /// How long a run waits for a row another transaction holds.
 const LOCK_TIMEOUT: &str = "5s";
 
-/// How long any one statement of a run may take. A run that takes longer
+/// How long any one statement of a run may take. A batch that takes longer
 /// is rolled back whole and erases nothing.
 const STATEMENT_TIMEOUT: &str = "60s";
+
+/// The most messages, payloads, or submission receipts of each kind one
+/// batch of an applied run erases.
+pub const RETENTION_BATCH: u32 = 1_000;
 
 /// The job states a message ends in. Only these are ever erased.
 const TERMINAL: &str = "('delivered', 'dead_lettered', 'expired', 'cancelled')";
@@ -114,6 +122,16 @@ pub enum RetentionError {
     Store(#[from] StoreError),
     #[error("the Messaging retention run could not write its audit record")]
     Audit,
+    /// A batch committed, and the audit record of its outcome could not be
+    /// written.
+    #[error(
+        "the Messaging retention batch was erased, and its audit outcome could not be recorded"
+    )]
+    AuditUnconfirmed,
+    /// The commit of a batch could not be confirmed, so the batch may or
+    /// may not have been erased.
+    #[error("the Messaging retention batch may have been erased; its commit could not be confirmed: {0}")]
+    OutcomeUnknown(#[source] tokio_postgres::Error),
 }
 
 impl From<tokio_postgres::Error> for RetentionError {
@@ -123,9 +141,10 @@ impl From<tokio_postgres::Error> for RetentionError {
 }
 
 /// Count what expired by `before` under `retention`, and with `apply` erase
-/// it, in one transaction under the retention lock. With no `before`, the
-/// cutoff is the database's clock at the start of the run, so a runtime
-/// whose clock runs ahead of the database's never has its sweep refused.
+/// it in batches of [`RETENTION_BATCH`], each under the retention lock.
+/// With no `before`, the cutoff is the database's clock at the start of the
+/// run, so a runtime whose clock runs ahead of the database's never has its
+/// sweep refused.
 ///
 /// An applied run by the operator tool is always journaled; one by the
 /// runtime only when it erased something, so the hourly sweep does not
@@ -133,16 +152,118 @@ impl From<tokio_postgres::Error> for RetentionError {
 ///
 /// # Errors
 ///
-/// [`RetentionError::FutureCutoff`] when `before` is later than the
-/// database clock, and the store's error when a statement fails, in which
-/// case nothing was erased.
+/// As [`erase_expired_in_batches`].
 pub async fn erase_expired(
     store: &PostgresStore,
+    audit: Option<&MessagingAudit>,
     retention: RetentionConfig,
     before: Option<SystemTime>,
     apply: bool,
     actor: RetentionActor,
 ) -> Result<RetentionReport, RetentionError> {
+    erase_expired_in_batches(
+        store,
+        audit,
+        retention,
+        before,
+        apply,
+        actor,
+        RETENTION_BATCH,
+        None,
+    )
+    .await
+}
+
+/// [`erase_expired`] with at most `batch` rows of each kind erased per
+/// transaction. Every batch resolves the same cutoff, writes its own
+/// audit request and outcome, and the run ends at the first batch that
+/// erased fewer than `batch` of every kind, or, once `stop` turns true,
+/// after the batch in progress commits; the next run erases what is left.
+/// The report sums the batches.
+///
+/// # Errors
+///
+/// [`RetentionError::FutureCutoff`] when `before` is later than the
+/// database clock; [`RetentionError::Audit`] when a batch's audit request
+/// is refused, and [`RetentionError::Store`] when a statement fails, in
+/// which case that batch erased nothing; [`RetentionError::OutcomeUnknown`]
+/// when a batch's commit could not be confirmed; and
+/// [`RetentionError::AuditUnconfirmed`] when a batch committed and its
+/// audit outcome could not be written. Batches committed before the
+/// failure stay erased and journaled.
+#[allow(clippy::too_many_arguments)]
+pub async fn erase_expired_in_batches(
+    store: &PostgresStore,
+    audit: Option<&MessagingAudit>,
+    retention: RetentionConfig,
+    before: Option<SystemTime>,
+    apply: bool,
+    actor: RetentionActor,
+    batch: u32,
+    stop: Option<&watch::Receiver<bool>>,
+) -> Result<RetentionReport, RetentionError> {
+    let limit = if apply {
+        i64::from(batch.max(1))
+    } else {
+        i64::MAX
+    };
+    let full = |batch: &Batch| {
+        [batch.payloads, batch.records, batch.submission_receipts]
+            .into_iter()
+            .any(|erased| i64::try_from(erased).is_ok_and(|erased| erased >= limit))
+    };
+    let mut batch = erase_batch(store, audit, retention, before, apply, actor, true, limit).await?;
+    let mut total = RetentionReport {
+        before: batch.before.clone(),
+        applied: apply,
+        payloads: batch.payloads,
+        records: batch.records,
+        submission_receipts: batch.submission_receipts,
+    };
+    let stopped = || stop.is_some_and(|stop| *stop.borrow());
+    while apply && full(&batch) && !stopped() {
+        batch = erase_batch(
+            store,
+            audit,
+            retention,
+            Some(batch.cutoff),
+            apply,
+            actor,
+            false,
+            limit,
+        )
+        .await?;
+        total.payloads += batch.payloads;
+        total.records += batch.records;
+        total.submission_receipts += batch.submission_receipts;
+    }
+    Ok(total)
+}
+
+/// One batch: what it counted or erased, and the cutoff it resolved.
+struct Batch {
+    before: String,
+    cutoff: SystemTime,
+    payloads: u64,
+    records: u64,
+    submission_receipts: u64,
+}
+
+/// Count, and with `apply` erase, at most `limit` rows of each kind in one
+/// transaction under the retention lock. An operator run journals its
+/// first batch even when it finds nothing; every other batch is journaled
+/// only when it finds something.
+#[allow(clippy::too_many_arguments)]
+async fn erase_batch(
+    store: &PostgresStore,
+    audit: Option<&MessagingAudit>,
+    retention: RetentionConfig,
+    before: Option<SystemTime>,
+    apply: bool,
+    actor: RetentionActor,
+    first: bool,
+    limit: i64,
+) -> Result<Batch, RetentionError> {
     let mut client = store.client().await?;
     let transaction = client.transaction().await?;
     transaction
@@ -168,52 +289,92 @@ pub async fn erase_expired(
     let before: SystemTime = row.get(0);
     let payload_days = i32::from(retention.payload_days);
     let record_days = i32::from(retention.record_days);
-    let (payloads, submission_receipts, records) = if apply {
-        (
-            erase_payloads(&transaction, before, payload_days).await?,
-            expire_submission_receipts(&transaction, before).await?,
-            delete_records(&transaction, before, record_days).await?,
+    let candidates = (
+        count(
+            &transaction,
+            &payloads_due(""),
+            before,
+            Some(payload_days),
+            limit,
+        )
+        .await?,
+        count(
+            &transaction,
+            &submission_receipts_due(""),
+            before,
+            None,
+            limit,
+        )
+        .await?,
+        count(
+            &transaction,
+            &records_due(""),
+            before,
+            Some(record_days),
+            limit,
+        )
+        .await?,
+    );
+    let should_audit = apply
+        && ((first && actor == RetentionActor::OperatorTool)
+            || candidates.0 != 0
+            || candidates.1 != 0
+            || candidates.2 != 0);
+    let mut audit_request = if should_audit {
+        Some(
+            audit
+                .ok_or(RetentionError::Audit)?
+                .begin(json!({
+                    "event": "messaging.retention.requested",
+                    "before": format_instant(before),
+                    "retention": retention,
+                    "actor": actor.to_json(),
+                }))
+                .await
+                .map_err(|_| RetentionError::Audit)?,
         )
     } else {
-        (
-            count(&transaction, &payloads_due(""), before, Some(payload_days)).await?,
-            count(&transaction, SUBMISSION_RECEIPTS_DUE, before, None).await?,
-            count(&transaction, &records_due(""), before, Some(record_days)).await?,
-        )
+        None
     };
-    let report = RetentionReport {
+    let (payloads, submission_receipts, records) = if apply {
+        (
+            erase_payloads(&transaction, before, payload_days, limit).await?,
+            expire_submission_receipts(&transaction, before, limit).await?,
+            delete_records(&transaction, before, record_days, limit).await?,
+        )
+    } else {
+        (candidates.0, candidates.1, candidates.2)
+    };
+    let batch = Batch {
         before: format_instant(before),
-        applied: apply,
+        cutoff: before,
         payloads,
         records,
         submission_receipts,
     };
-    let journaled = match actor {
-        RetentionActor::OperatorTool => apply,
-        RetentionActor::Runtime => apply && report.erased_anything(),
-    };
-    if journaled {
-        outbox::write(
-            &transaction,
-            json!({
+    transaction
+        .commit()
+        .await
+        .map_err(RetentionError::OutcomeUnknown)?;
+    if let Some(request) = audit_request.as_mut() {
+        request
+            .respond(json!({
                 "event": RETENTION_ERASED_EVENT,
-                "before": report.before,
-                "payloads": report.payloads,
-                "records": report.records,
-                "submissionReceipts": report.submission_receipts,
+                "before": batch.before,
+                "payloads": batch.payloads,
+                "records": batch.records,
+                "submissionReceipts": batch.submission_receipts,
                 "retention": retention,
                 "actor": actor.to_json(),
-            }),
-        )
-        .await
-        .map_err(|_| RetentionError::Audit)?;
+            }))
+            .await
+            .map_err(|_| RetentionError::AuditUnconfirmed)?;
     }
-    transaction.commit().await?;
-    Ok(report)
+    Ok(batch)
 }
 
-/// The terminal jobs whose payload is past its period and not yet erased,
-/// with `lock` appended to the query.
+/// The oldest terminal jobs, at most `$3`, whose payload is past its period
+/// and not yet erased, with `lock` appended to the query.
 fn payloads_due(lock: &str) -> String {
     format!(
         "SELECT job.message_id \
@@ -221,33 +382,51 @@ fn payloads_due(lock: &str) -> String {
            JOIN messaging_message_payloads AS payload USING (message_id) \
           WHERE job.state IN {TERMINAL} \
             AND job.updated_at <= $1::timestamptz - make_interval(days => $2) \
-            AND payload.erased_at IS NULL{lock}"
+            AND payload.erased_at IS NULL \
+          ORDER BY job.updated_at, job.message_id \
+          LIMIT $3{lock}"
     )
 }
 
-/// The terminal jobs whose record is past its period, with `lock` appended.
+/// The oldest terminal jobs, at most `$3`, whose record is past its period,
+/// with `lock` appended.
 fn records_due(lock: &str) -> String {
     format!(
         "SELECT job.message_id \
            FROM messaging_dispatch_jobs AS job \
           WHERE job.state IN {TERMINAL} \
-            AND job.updated_at <= $1::timestamptz - make_interval(days => $2){lock}"
+            AND job.updated_at <= $1::timestamptz - make_interval(days => $2) \
+          ORDER BY job.updated_at, job.message_id \
+          LIMIT $3{lock}"
     )
 }
 
-const SUBMISSION_RECEIPTS_DUE: &str = "SELECT 1 FROM messaging_idempotency \
-      WHERE erased_at IS NULL AND expires_at <= $1::timestamptz";
+/// The earliest expired submission receipts, at most `$2`, with `lock`
+/// appended.
+fn submission_receipts_due(lock: &str) -> String {
+    format!(
+        "SELECT principal, operation, idempotency_key FROM messaging_idempotency \
+          WHERE erased_at IS NULL AND expires_at <= $1::timestamptz \
+          ORDER BY expires_at, principal, operation, idempotency_key \
+          LIMIT $2{lock}"
+    )
+}
 
 async fn count(
     transaction: &Transaction<'_>,
     due: &str,
     before: SystemTime,
     days: Option<i32>,
+    limit: i64,
 ) -> Result<u64, RetentionError> {
     let query = format!("SELECT count(*) FROM ({due}) AS due");
     let row = match days {
-        Some(days) => transaction.query_one(&query, &[&before, &days]).await?,
-        None => transaction.query_one(&query, &[&before]).await?,
+        Some(days) => {
+            transaction
+                .query_one(&query, &[&before, &days, &limit])
+                .await?
+        }
+        None => transaction.query_one(&query, &[&before, &limit]).await?,
     };
     Ok(u64::try_from(row.get::<_, i64>(0)).unwrap_or(0))
 }
@@ -259,6 +438,7 @@ async fn erase_payloads(
     transaction: &Transaction<'_>,
     before: SystemTime,
     days: i32,
+    limit: i64,
 ) -> Result<u64, RetentionError> {
     let due = payloads_due(" FOR UPDATE OF job");
     Ok(transaction
@@ -271,7 +451,7 @@ async fn erase_payloads(
                    FROM due \
                   WHERE payload.message_id = due.message_id"
             ),
-            &[&before, &days],
+            &[&before, &days, &limit],
         )
         .await?)
 }
@@ -281,13 +461,18 @@ async fn erase_payloads(
 async fn expire_submission_receipts(
     transaction: &Transaction<'_>,
     before: SystemTime,
+    limit: i64,
 ) -> Result<u64, RetentionError> {
+    let due = submission_receipts_due(" FOR UPDATE");
     Ok(transaction
         .execute(
-            "UPDATE messaging_idempotency \
-                SET status_code = NULL, receipt = NULL, erased_at = transaction_timestamp() \
-              WHERE erased_at IS NULL AND expires_at <= $1::timestamptz",
-            &[&before],
+            &format!(
+                "UPDATE messaging_idempotency \
+                    SET status_code = NULL, receipt = NULL, \
+                        erased_at = transaction_timestamp() \
+                  WHERE (principal, operation, idempotency_key) IN ({due})"
+            ),
+            &[&before, &limit],
         )
         .await?)
 }
@@ -300,6 +485,7 @@ async fn delete_records(
     transaction: &Transaction<'_>,
     before: SystemTime,
     days: i32,
+    limit: i64,
 ) -> Result<u64, RetentionError> {
     let due = records_due(" FOR UPDATE OF job");
     Ok(transaction
@@ -316,7 +502,7 @@ async fn delete_records(
                   USING due \
                   WHERE message.message_id = due.message_id"
             ),
-            &[&before, &days],
+            &[&before, &days, &limit],
         )
         .await?)
 }
@@ -325,6 +511,7 @@ async fn delete_records(
 /// current time on every interval, the first at startup.
 pub struct RetentionSweep {
     store: PostgresStore,
+    audit: Arc<MessagingAudit>,
     retention: RetentionConfig,
     metrics: Arc<Metrics>,
 }
@@ -340,9 +527,15 @@ impl std::fmt::Debug for RetentionSweep {
 
 impl RetentionSweep {
     #[must_use]
-    pub fn new(store: PostgresStore, retention: RetentionConfig, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        store: PostgresStore,
+        audit: Arc<MessagingAudit>,
+        retention: RetentionConfig,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         Self {
             store,
+            audit,
             retention,
             metrics,
         }
@@ -355,12 +548,24 @@ impl RetentionSweep {
     ///
     /// As [`erase_expired`].
     pub async fn pass(&self) -> Result<RetentionReport, RetentionError> {
-        let result = erase_expired(
+        self.pass_until(None).await
+    }
+
+    /// [`RetentionSweep::pass`], ending after the batch in progress once
+    /// `stop` turns true.
+    async fn pass_until(
+        &self,
+        stop: Option<&watch::Receiver<bool>>,
+    ) -> Result<RetentionReport, RetentionError> {
+        let result = erase_expired_in_batches(
             &self.store,
+            Some(&self.audit),
             self.retention,
             None,
             true,
             RetentionActor::Runtime,
+            RETENTION_BATCH,
+            stop,
         )
         .await;
         self.metrics.record_retention_run(match &result {
@@ -371,13 +576,15 @@ impl RetentionSweep {
         result
     }
 
-    /// Run a pass every `interval` until `shutdown` turns true. A failed
-    /// pass is logged once until a pass succeeds again, and the next
-    /// interval retries it; nothing it would have erased is lost.
+    /// Run a pass every `interval` until `shutdown` turns true. A pass in
+    /// progress when it does ends after the batch it is erasing commits,
+    /// and the next start erases what is left. A failed pass is logged
+    /// once until a pass succeeds again, and the next interval retries it;
+    /// nothing it would have erased is lost.
     pub async fn run(self, interval: Duration, mut shutdown: watch::Receiver<bool>) {
         let mut failing = false;
         loop {
-            match self.pass().await {
+            match self.pass_until(Some(&shutdown)).await {
                 Ok(report) => {
                     if std::mem::take(&mut failing) {
                         tracing::info!("Messaging retention recovered");

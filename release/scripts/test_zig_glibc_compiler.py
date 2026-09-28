@@ -306,6 +306,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         docker.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, pathlib, sys\n"
+            "sys.path.insert(0, str(pathlib.Path(os.environ['FIXTURE_ROOT']) / 'release/scripts'))\n"
+            "import release_roster\n"
             "args = sys.argv[1:]\n"
             "with open(os.environ['DOCKER_LOG'], 'a') as log:\n"
             "    log.write(json.dumps(args) + '\\n')\n"
@@ -328,7 +330,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else []) + "
             "(['scheduling'] if parsed >= (0, 33, 0) and group in ('all', 'scheduling') else []) + "
             "(['schedulingctl'] if parsed >= (0, 36, 0) and group in ('all', 'scheduling') else []) + "
-            "(['messaging', 'messagingctl'] if parsed >= (0, 35, 0) and group in ('all', 'messaging') else [])\n"
+            "(['messaging', 'messagingctl'] if release_roster.messaging_in_release(parsed) and group in ('all', 'messaging') else [])\n"
             "for name in selected:\n"
             "    if name != 'scheduling' or group == 'scheduling':\n"
             "        (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
@@ -357,6 +359,25 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         }
         for relative in ("dist/bin", "dist/image-bin"):
             (self.root / relative).mkdir(parents=True)
+
+    def set_messaging_first_release(self, first_release: tuple[int, int, int]) -> None:
+        """Name a hypothetical first Messaging release in the fixture's roster.
+
+        Messaging has not joined a release, so the production roster is None.
+        Rewriting the fixture's copy covers the inclusion path without any
+        production knob.
+        """
+        roster = self.scripts / "release_roster.py"
+        unset = "MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = None\n"
+        text = roster.read_text(encoding="utf-8")
+        self.assertIn(unset, text)
+        roster.write_text(
+            text.replace(
+                unset,
+                f"MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = {first_release!r}\n",
+            ),
+            encoding="utf-8",
+        )
 
     def run_payload(
         self,
@@ -582,12 +603,34 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                             (self.root / "dist/image-bin" / name).read_text(),
                         )
 
-    def test_messaging_group_builds_both_exact_binary_targets_from_v0_35(self) -> None:
-        result, calls = self.run_payload(version="0.34.0", group="messaging")
+    def test_no_version_builds_messaging_until_the_roster_names_a_first_release(
+        self,
+    ) -> None:
+        for version in ("0.35.0", "0.36.0", "1.0.0"):
+            for group in ("messaging", "all"):
+                with self.subTest(version=version, group=group):
+                    result, calls = self.run_payload(version=version, group=group)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(
+                        any("registry-messaging" in call["args"] for call in calls)
+                    )
+                    self.assertFalse(
+                        any(
+                            path.name.startswith("messaging")
+                            for relative in ("dist/bin", "dist/image-bin")
+                            for path in (self.root / relative).iterdir()
+                        )
+                    )
+
+    def test_messaging_group_builds_both_exact_binary_targets_from_its_first_release(
+        self,
+    ) -> None:
+        self.set_messaging_first_release((0, 36, 0))
+        result, calls = self.run_payload(version="0.35.0", group="messaging")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([], calls)
         self.assertEqual([], list((self.root / "dist/bin").iterdir()))
-        result, calls = self.run_payload(version="0.35.0", group="messaging")
+        result, calls = self.run_payload(version="0.36.0", group="messaging")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             [
@@ -613,7 +656,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [call["args"] for call in calls],
         )
         self.assertEqual(
-            ["messaging-v0.35.0-linux-amd64", "messagingctl-v0.35.0-linux-amd64"],
+            ["messaging-v0.36.0-linux-amd64", "messagingctl-v0.36.0-linux-amd64"],
             sorted(path.name for path in (self.root / "dist/bin").iterdir()),
         )
         self.assertEqual(
@@ -740,12 +783,20 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertFalse(any(path.name.startswith("breg-") for path in (output / "bin").iterdir()))
 
     def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
+        groups_with_messaging = ("core", "breg", "casework", "scheduling", "messaging")
         for version, groups in (
             ("0.31.0", ("core", "breg", "casework")),
-            ("0.35.0", ("core", "breg", "casework", "scheduling", "messaging")),
+            # Messaging has not joined a release, so its shard is empty.
+            ("0.35.0", groups_with_messaging),
         ):
             with self.subTest(version=version):
                 self.assert_merged_groups_equivalent_to_all(version, groups)
+        self.set_messaging_first_release((0, 36, 0))
+        with self.subTest(version="0.36.0", messaging_first_release=(0, 36, 0)):
+            self.assert_merged_groups_equivalent_to_all("0.36.0", groups_with_messaging)
+            self.assertTrue(
+                (self.root / "merge-0.36.0/merged-groups/image-bin/messaging").is_file()
+            )
 
     def test_v0_36_merged_groups_with_operator_tools_are_equivalent_to_all(
         self,

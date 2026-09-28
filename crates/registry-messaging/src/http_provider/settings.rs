@@ -24,8 +24,8 @@ use ipnet::IpNet;
 use registry_messaging_core::{valid_header_name, CallbackVerifierConfig};
 use registry_platform_config::{ProtectedSecret, SecretReference, SecretResolver};
 use registry_platform_httputil::destination::{
-    is_script_writable_request_header_name, MAX_DESTINATION_OPERATION_TIMEOUT,
-    MAX_DESTINATION_PRIVATE_CIDRS,
+    is_script_visible_response_header_name, is_script_writable_request_header_name,
+    MAX_DESTINATION_OPERATION_TIMEOUT, MAX_DESTINATION_PRIVATE_CIDRS,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -146,9 +146,10 @@ pub struct HttpProviderSettings {
     /// target a script returns is relative to it and stays under it.
     /// `https` in production; `http` only to a loopback host.
     pub base_url: String,
-    /// The operator-declared trust bundle the provider's certificate chains
-    /// to, instead of the public web roots. The runtime resolves the name to
-    /// PEM and passes it to [`HttpProviderSettings::activate`].
+    /// The operator-declared trust bundle the provider's certificate may
+    /// chain to. Its roots are trusted in addition to the system roots, not
+    /// instead of them. The runtime resolves the name to PEM and passes it to
+    /// [`HttpProviderSettings::activate`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
     /// One send's whole budget: resolution, connection, request, and
@@ -245,6 +246,16 @@ pub enum HttpProviderAuthentication {
         parameter_name: String,
         value_ref: String,
     },
+    /// AWS Signature Version 4 for a JSON API. Rust signs the final request;
+    /// credentials are never exposed to provider scripts.
+    AwsSigv4 {
+        region: String,
+        service: String,
+        access_key_id_ref: String,
+        secret_access_key_ref: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_token_ref: Option<String>,
+    },
     /// An OAuth 2.0 client-credentials bearer token, fetched from
     /// `tokenEndpoint` and cached.
     Oauth2ClientCredentials {
@@ -281,6 +292,7 @@ impl HttpProviderAuthentication {
             Self::StaticApiKey { .. } => "static-api-key",
             Self::StaticApiKeyQuery { .. } => "static-api-key-query",
             Self::Oauth2ClientCredentials { .. } => "oauth2-client-credentials",
+            Self::AwsSigv4 { .. } => "aws-sigv4",
         }
     }
 }
@@ -339,10 +351,18 @@ impl HttpProviderPackage {
         if let Some(path) = &self.receipt_script {
             check_script_path("receiptScript", path)?;
         }
-        check_header_names("request.headers", &self.request.headers, |name| {
-            is_script_writable_request_header_name(name) && name != "content-type"
-        })?;
-        check_header_names("responseHeaders", &self.response_headers, |_| true)?;
+        check_header_names(
+            "request.headers",
+            &self.request.headers,
+            |name| is_script_writable_request_header_name(name) && name != "content-type",
+            "is set by the runtime and cannot be named",
+        )?;
+        check_header_names(
+            "responseHeaders",
+            &self.response_headers,
+            is_script_visible_response_header_name,
+            "is withheld by the runtime; scripts cannot read it",
+        )?;
         let capabilities = &self.capabilities;
         if !(1..=MAXIMUM_CONCURRENCY_LIMIT).contains(&capabilities.concurrency_limit) {
             return Err(invalid(
@@ -401,6 +421,7 @@ fn check_header_names(
     field: &'static str,
     names: &[String],
     allowed: impl Fn(&str) -> bool,
+    refused: &str,
 ) -> Result<(), HttpProviderError> {
     if names.len() > MAXIMUM_SCRIPT_HEADERS {
         return Err(invalid(
@@ -413,10 +434,7 @@ fn check_header_names(
             return Err(invalid(field, "every name must be a lowercase header name"));
         }
         if !allowed(name) {
-            return Err(invalid(
-                field,
-                format!("`{name}` is set by the runtime and cannot be named"),
-            ));
+            return Err(invalid(field, format!("`{name}` {refused}")));
         }
         if names[..index].contains(name) {
             return Err(invalid(field, format!("`{name}` is named twice")));
@@ -450,6 +468,15 @@ pub(crate) enum ResolvedAuthentication {
         value: Zeroizing<Vec<u8>>,
     },
     OAuth2(ResolvedOAuth2),
+    AwsSigv4(ResolvedAwsSigv4),
+}
+
+pub(crate) struct ResolvedAwsSigv4 {
+    pub region: String,
+    pub service: String,
+    pub access_key_id: Zeroizing<Vec<u8>>,
+    pub secret_access_key: Zeroizing<Vec<u8>>,
+    pub session_token: Option<Zeroizing<Vec<u8>>>,
 }
 
 pub(crate) struct ResolvedOAuth2 {
@@ -481,6 +508,24 @@ impl HttpProviderSettings {
             HttpProviderAuthentication::StaticApiKey { value_ref, .. }
             | HttpProviderAuthentication::StaticApiKeyQuery { value_ref, .. } => {
                 vec![("authentication.valueRef", value_ref.as_str())]
+            }
+            HttpProviderAuthentication::AwsSigv4 {
+                access_key_id_ref,
+                secret_access_key_ref,
+                session_token_ref,
+                ..
+            } => {
+                let mut references = vec![
+                    ("authentication.accessKeyIdRef", access_key_id_ref.as_str()),
+                    (
+                        "authentication.secretAccessKeyRef",
+                        secret_access_key_ref.as_str(),
+                    ),
+                ];
+                if let Some(reference) = session_token_ref {
+                    references.push(("authentication.sessionTokenRef", reference.as_str()));
+                }
+                references
             }
             HttpProviderAuthentication::Oauth2ClientCredentials {
                 client_id_ref,
@@ -736,6 +781,82 @@ impl HttpProviderSettings {
                     value: resolve_bounded(secrets, "authentication.valueRef", value_ref)?,
                 })
             }
+            HttpProviderAuthentication::AwsSigv4 {
+                region,
+                service,
+                access_key_id_ref,
+                secret_access_key_ref,
+                session_token_ref,
+            } => {
+                for (field, value) in [
+                    ("authentication.region", region),
+                    ("authentication.service", service),
+                ] {
+                    if value.is_empty()
+                        || value.len() > 64
+                        || !value.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                        })
+                    {
+                        return Err(invalid(
+                            field,
+                            "must be 1 to 64 lowercase ASCII letters, digits, or hyphens",
+                        ));
+                    }
+                }
+                if package.request.method != HttpSendMethod::Post {
+                    return Err(invalid(
+                        "authentication",
+                        "aws-sigv4 requires a JSON POST provider",
+                    ));
+                }
+                let access_key_id =
+                    resolve_bounded(secrets, "authentication.accessKeyIdRef", access_key_id_ref)?;
+                if access_key_id.len() > 128 {
+                    return Err(invalid("authentication.accessKeyIdRef", "the resolved access key identifier must be 1 to 128 ASCII letters or digits"));
+                }
+                check_aws_credential(
+                    "authentication.accessKeyIdRef",
+                    access_key_id_ref,
+                    &access_key_id,
+                    u8::is_ascii_alphanumeric,
+                    "ASCII letters or digits",
+                )?;
+                let secret_access_key = resolve_bounded(
+                    secrets,
+                    "authentication.secretAccessKeyRef",
+                    secret_access_key_ref,
+                )?;
+                check_aws_credential(
+                    "authentication.secretAccessKeyRef",
+                    secret_access_key_ref,
+                    &secret_access_key,
+                    |byte| matches!(byte, 0x21..=0x7e),
+                    "printable ASCII without spaces",
+                )?;
+                let session_token = session_token_ref
+                    .as_deref()
+                    .map(|reference| {
+                        let token =
+                            resolve_bounded(secrets, "authentication.sessionTokenRef", reference)?;
+                        check_aws_credential(
+                            "authentication.sessionTokenRef",
+                            reference,
+                            &token,
+                            |byte| matches!(byte, 0x21..=0x7e),
+                            "printable ASCII without spaces",
+                        )?;
+                        Ok::<_, HttpProviderError>(token)
+                    })
+                    .transpose()?;
+                Ok(ResolvedAuthentication::AwsSigv4(ResolvedAwsSigv4 {
+                    region: region.clone(),
+                    service: service.clone(),
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                }))
+            }
             HttpProviderAuthentication::Oauth2ClientCredentials {
                 token_endpoint,
                 client_id_ref,
@@ -911,6 +1032,31 @@ fn resolve_bounded(
         ));
     }
     Ok(Zeroizing::new(value.expose_secret().to_vec()))
+}
+
+/// Refuse a resolved AWS credential with a byte the signature cannot carry,
+/// naming the reference and the byte class but never the value. A secret
+/// file written with `echo` ends in a line break; that is refused, not
+/// trimmed, so the file on disk stays the value that is signed.
+fn check_aws_credential(
+    field: &'static str,
+    reference: &str,
+    value: &[u8],
+    allowed: impl Fn(&u8) -> bool,
+    rule: &str,
+) -> Result<(), HttpProviderError> {
+    if value.iter().all(&allowed) {
+        return Ok(());
+    }
+    let problem = if value.iter().any(u8::is_ascii_whitespace) {
+        "it contains whitespace or a line break; write the secret without a trailing newline"
+    } else {
+        "it contains a character outside that set"
+    };
+    Err(invalid(
+        field,
+        format!("the secret {reference} must be {rule}, but {problem}"),
+    ))
 }
 
 fn encode_basic(joined: &[u8]) -> Zeroizing<Vec<u8>> {

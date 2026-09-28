@@ -25,6 +25,10 @@ IMAGE_DIGEST = "sha256:" + "c" * 64
 CONFIG_DIGEST = "sha256:" + "d" * 64
 LAYER_DIGEST = "sha256:" + "e" * 64
 ATTESTATION_DIGEST = "sha256:" + "f" * 64
+# Messaging has not joined a release (release_roster.MESSAGING_FIRST_RELEASE is
+# None). Fixtures patch a hypothetical first release so the Messaging roster
+# paths stay covered without any production knob.
+HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
 # breg-mcp and breg-review have not joined a release
 # (release_roster.BREG_SERVICES_FIRST_RELEASE is None). Fixtures patch a
 # hypothetical first release so their roster paths stay covered without any
@@ -140,6 +144,13 @@ def security_evidence_tar(
 class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
+        roster_patch = mock.patch.object(
+            self.module.release_roster,
+            "MESSAGING_FIRST_RELEASE",
+            HYPOTHETICAL_MESSAGING_FIRST_RELEASE,
+        )
+        roster_patch.start()
+        self.addCleanup(roster_patch.stop)
         roster_patch = mock.patch.object(
             self.module.release_roster,
             "BREG_SERVICES_FIRST_RELEASE",
@@ -1046,22 +1057,22 @@ class ReleaseCandidateTest(TestCase):
                         self.module.check_image_onboarding(ROOT, version),
                     )
 
-    def test_messaging_joins_only_the_v0_35_rosters(self) -> None:
+    def test_messaging_joins_only_the_rosters_from_its_first_release(self) -> None:
         self.assertEqual(
             self.module._candidate_image_names("0.33.0"),
-            self.module._candidate_image_names("0.34.0"),
-        )
-        self.assertEqual(
-            self.module._candidate_image_names("0.34.0") | {"messaging"},
             self.module._candidate_image_names("0.35.0"),
         )
-        historical = self.module._relay_v2_payload_inventory("0.34.0")
+        self.assertEqual(
+            self.module._candidate_image_names("0.35.0") | {"messaging"},
+            self.module._candidate_image_names("0.36.0"),
+        )
+        historical = self.module._relay_v2_payload_inventory("0.35.0")
         self.assertFalse(any(name.startswith("messaging") for name in historical))
-        current = self.module._relay_v2_payload_inventory("0.35.0")
+        current = self.module._relay_v2_payload_inventory("0.36.0")
         self.assertEqual(
             {
-                "messaging-v0.35.0-linux-amd64": "binary",
-                "messagingctl-v0.35.0-linux-amd64": "binary",
+                "messaging-v0.36.0-linux-amd64": "binary",
+                "messagingctl-v0.36.0-linux-amd64": "binary",
             },
             {
                 name: kind
@@ -1069,6 +1080,34 @@ class ReleaseCandidateTest(TestCase):
                 if name.startswith("messaging")
             },
         )
+
+    def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            self.module.release_roster, "MESSAGING_FIRST_RELEASE", None
+        ):
+            for version in ("0.35.0", "0.36.0", "1.0.0"):
+                with self.subTest(version=version):
+                    self.assertEqual(
+                        self.module.SCHEDULING_RUNTIME_IMAGE_NAMES,
+                        self.module._candidate_image_names(version),
+                    )
+                    self.assertFalse(
+                        any(
+                            name.startswith("messaging")
+                            for name in self.module._relay_v2_payload_inventory(
+                                version
+                            )
+                        )
+                    )
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = self.module.main(
+                            ["image-names", "--version", version]
+                        )
+                    self.assertEqual(0, result)
+                    self.assertNotIn("messaging", stdout.getvalue().split())
 
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
@@ -1094,8 +1133,9 @@ class ReleaseCandidateTest(TestCase):
             ("0.32.0", "breg casework discovery evidence relay\n"),
             ("0.33.0", "breg casework discovery evidence relay scheduling\n"),
             ("0.34.0", "breg casework discovery evidence relay scheduling\n"),
+            ("0.35.0", "breg casework discovery evidence relay scheduling\n"),
             (
-                "0.35.0",
+                "0.36.0",
                 "breg casework discovery evidence messaging relay scheduling\n",
             ),
             (
@@ -1260,7 +1300,7 @@ class ReleaseCandidateTest(TestCase):
             self.module.check_image_onboarding(root, "0.36.0"),
         )
 
-    def test_v0_35_messaging_onboarding_stays_closed_until_external_setup(self) -> None:
+    def test_messaging_onboarding_stays_closed_until_external_setup(self) -> None:
         root = self.onboarding_repository()
         for image_name in ("scheduling", "messaging"):
             shutil.copy2(
@@ -1275,13 +1315,13 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "messaging advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.35.0")
+            self.module.check_image_onboarding(root, "0.36.0")
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "CANDIDATE_PACKAGES must contain messaging-candidate",
         ):
             self.module.check_image_onboarding(
-                root, "0.35.0", allow_missing_baseline=True
+                root, "0.36.0", allow_missing_baseline=True
             )
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
         cleanup.write_text(
@@ -1292,9 +1332,9 @@ class ReleaseCandidateTest(TestCase):
             encoding="utf-8",
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.35.0"),
+            self.module._candidate_image_names("0.36.0"),
             self.module.check_image_onboarding(
-                root, "0.35.0", allow_missing_baseline=True
+                root, "0.36.0", allow_missing_baseline=True
             ),
         )
 

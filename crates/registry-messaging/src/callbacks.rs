@@ -196,7 +196,6 @@ async fn receive_callback(
         }
     };
     let recorded = service
-        .messages()
         .record_receipt(provider_id, &receipt)
         .await
         .map_err(|error| {

@@ -125,8 +125,8 @@ class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
         self.assertTrue(shipped == self.licence, CASEWORK_PYTHON_LICENCE)
 
     def test_the_messaging_binding_licences_are_gated(self) -> None:
-        # Both Messaging bindings are assembled into the unified packages, so
-        # their licences are held by the same gate as the other bindings.
+        # Both Messaging bindings compare their licence copies with the root
+        # LICENSE in their own checks, so the same gate holds them.
         for licence in MESSAGING_LICENCES:
             with self.subTest(licence=licence):
                 self.assertIn(licence, self.gated)

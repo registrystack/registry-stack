@@ -63,6 +63,7 @@ async fn three_messages(harness: &Harness) -> (Uuid, Uuid, Uuid) {
         harness.store.clone(),
         &harness.isolated.schema,
         Arc::clone(&transports),
+        Arc::clone(&harness.audit),
     )
     .unwrap();
     let sender = MessageSender::new(dispatcher.clone(), transports, Arc::clone(&harness.metrics));
@@ -107,6 +108,8 @@ async fn list_and_show_report_messages_with_the_contact_masked() {
 
     let (code, report) = json(&runtime, &["messages", "list"]);
     assert_eq!(code, 0, "{report}");
+    assert_eq!(report["command"], "messages list");
+    assert_eq!(report["status"], "complete");
     let listed: Vec<(&str, &str)> = report["messages"]
         .as_array()
         .unwrap()
@@ -136,6 +139,8 @@ async fn list_and_show_report_messages_with_the_contact_masked() {
 
     let (code, report) = json(&runtime, &["messages", "show", &unknown.to_string()]);
     assert_eq!(code, 0, "{report}");
+    assert_eq!(report["command"], "messages show");
+    assert_eq!(report["status"], "complete");
     assert_eq!(report["message"]["id"], unknown.to_string());
     assert_eq!(report["message"]["status"], "unknown");
     assert_eq!(report["message"]["dispatch"], "unknown");
@@ -185,6 +190,9 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
 
     let (code, report) = json(&runtime, &["messages", "retry", &failed_id]);
     assert_eq!(code, 0, "{report}");
+    assert_eq!(report["command"], "messages retry");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["messageStatus"], "failed");
     assert_eq!(report["eligible"], true);
     assert_eq!(report["applied"], false);
     assert_eq!(report["nextStatus"], "queued");
@@ -200,6 +208,7 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
 
     let (code, report) = json(&runtime, &["messages", "retry", &queued_id, "--apply"]);
     assert_eq!(code, 1);
+    assert_eq!(report["status"], "domain-refusal");
     assert_eq!(report["diagnostics"][0]["code"], "message.not-eligible");
     let refusal = report["diagnostics"][0]["message"].as_str().unwrap();
     assert!(
@@ -214,6 +223,8 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
         &["messages", "settle", &unknown_id, "--outcome", "sent"],
     );
     assert_eq!(code, 0, "{report}");
+    assert_eq!(report["command"], "messages settle");
+    assert_eq!(report["messageStatus"], "unknown");
     assert_eq!(report["outcome"], "sent");
     assert_eq!(report["nextStatus"], "submitted");
     assert_eq!(harness.state(unknown).await, "unknown");
@@ -245,14 +256,21 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
     assert_eq!(code, 1);
     assert_eq!(report["diagnostics"][0]["code"], "message.not-found");
 
-    // Each applied action wrote one operator-tool record into the outbox,
-    // which the running runtime publishes to the journal.
+    // Each applied action wrote one operator-tool record directly to the
+    // configured audit destination.
     harness.publish().await;
     let operator_records: Vec<Value> = harness
         .journal()
         .into_iter()
+        .filter(|entry| entry["phase"] == "response")
         .map(|entry| entry["record"].clone())
         .filter(|record| record["actor"]["kind"] == "operator-tool")
+        .filter(|record| {
+            matches!(
+                record["event"].as_str(),
+                Some("messaging.dispatch.transition" | "messaging.message.settled")
+            )
+        })
         .collect();
     let events: Vec<(&str, &str)> = operator_records
         .iter()
@@ -273,6 +291,63 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
     );
     for record in &operator_records {
         assert_absent("an operator-tool record", record);
+    }
+}
+
+/// A queued message waiting to retry after an attempt that may have
+/// reached its provider cannot be cancelled: the preview refuses it the way
+/// the cancel would, with the HTTP API's `message.dispatch-started`, so the
+/// preview never promises what `--apply` refuses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_refuses_a_queued_message_whose_earlier_attempt_may_have_been_sent() {
+    let harness = Harness::start_with(Value::Null, |package| {
+        let path = package.join("messaging.yaml");
+        let source = std::fs::read_to_string(&path).unwrap();
+        let mut manifest: Value = serde_norway::from_str(&source).unwrap();
+        manifest["senderProfiles"][1]["onUncertain"] = Value::String("retry".to_owned());
+        std::fs::write(path, serde_norway::to_string(&manifest).unwrap()).unwrap();
+    })
+    .await;
+    let transports = Arc::new(Transports::new());
+    let dispatcher = dispatcher(
+        harness.store.clone(),
+        &harness.isolated.schema,
+        Arc::clone(&transports),
+        Arc::clone(&harness.audit),
+    )
+    .unwrap();
+    let interrupted = harness.accepted(&sms_submission()).await;
+    let leased = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(leased.key.id(), interrupted);
+    drop(leased);
+    let changed = harness
+        .execute(
+            "UPDATE messaging_dispatch_jobs \
+                SET attempt_started_at = now() - interval '2 minutes', \
+                    lease_expires_at = now() - interval '1 minute' \
+              WHERE message_id = $1 AND state = 'leased'",
+            &[&interrupted],
+        )
+        .await;
+    assert_eq!(changed, 1);
+    assert!(dispatcher.claim().await.unwrap().leased().is_none());
+    assert_eq!(harness.state(interrupted).await, "pending");
+    let runtime = harness.runtime_path();
+    let id = interrupted.to_string();
+
+    for arguments in [
+        vec!["messages", "cancel", id.as_str()],
+        vec!["messages", "cancel", id.as_str(), "--apply"],
+    ] {
+        let (code, report) = json(&runtime, &arguments);
+        assert_eq!(code, 1, "{report}");
+        assert_eq!(
+            report["diagnostics"][0]["code"], "message.dispatch-started",
+            "{report}"
+        );
+        let refusal = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(refusal.contains("can no longer be cancelled"), "{refusal}");
+        assert_eq!(harness.state(interrupted).await, "pending");
     }
 }
 
@@ -299,6 +374,8 @@ async fn retention_previews_by_default_and_erases_only_expired_terminal_messages
         &["retention", "erase-expired", "--before", &before],
     );
     assert_eq!(code, 0, "{preview}");
+    assert_eq!(preview["command"], "retention erase-expired");
+    assert_eq!(preview["status"], "complete");
     assert_eq!(preview["applied"], false);
     assert_eq!(preview["payloads"], 1);
     assert_eq!(preview["records"], 0);
@@ -325,9 +402,9 @@ async fn retention_previews_by_default_and_erases_only_expired_terminal_messages
         .get(0);
     assert!(kept, "an unknown or queued payload was erased");
     let records: Vec<Value> = harness
-        .outbox()
-        .await
+        .journal()
         .into_iter()
+        .map(|entry| entry["record"].clone())
         .filter(|record| record["event"] == "messaging.retention.erased")
         .collect();
     assert_eq!(records.len(), 1);

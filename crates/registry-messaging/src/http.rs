@@ -21,10 +21,10 @@
 //! The submission route authenticates, requires the sender role and an
 //! `Idempotency-Key`, and hands the body to [`crate::messages`], which
 //! checks the closed shape, authorizes the sender profile and template,
-//! renders at acceptance, and records the message. An acceptance is audited
-//! through the outbox in the transaction that records it; a refusal after
-//! authentication and a replayed receipt are journaled here, by metadata
-//! only. The status and cancel routes answer the submitter and operator
+//! renders at acceptance, and records the message. The route writes an audit
+//! request before reading the body and a response after the submission
+//! transaction commits; refusals and replayed receipts carry metadata only.
+//! The status and cancel routes answer the submitter and operator
 //! profiles alone, and a message anyone else asks for answers exactly like
 //! one that does not exist.
 //!
@@ -34,6 +34,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::rejection::PathRejection;
 use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
@@ -55,7 +56,7 @@ use registry_platform_httpsec::{
 };
 use serde::Serialize;
 
-use crate::audit::AuditJournal;
+use crate::audit::MessagingAudit;
 use crate::auth::{AuthenticationError, MessagingAuthenticator};
 use crate::callbacks;
 use crate::limits::{CallbackLimits, CallerLimits, LimitRefusal};
@@ -81,6 +82,7 @@ pub enum Readiness {
     Store {
         store: PostgresStore,
         package_digest: String,
+        audit: Arc<MessagingAudit>,
     },
     /// A fixed answer, for tests of the HTTP surface without a database.
     #[cfg(test)]
@@ -93,7 +95,12 @@ impl Readiness {
             Self::Store {
                 store,
                 package_digest,
+                audit,
             } => {
+                if !audit.ready().await {
+                    tracing::warn!("the Messaging audit destination is not ready");
+                    return false;
+                }
                 let active = match store.ready().await {
                     Ok(()) => store.active_package_digest().await,
                     Err(error) => Err(error),
@@ -128,7 +135,7 @@ pub struct HttpState {
     pub package: Arc<Package>,
     /// The request rate of each of the package's access profiles.
     pub limits: Arc<CallerLimits>,
-    pub audit: Arc<AuditJournal>,
+    pub audit: Arc<MessagingAudit>,
     /// The message store, absent only in tests of the HTTP surface without
     /// a database, where every route that needs it answers unavailable.
     pub messages: Option<Arc<MessageService>>,
@@ -312,6 +319,7 @@ pub const OPERATIONS: &[Operation] = &[
             ProblemCode::TemplateDataInvalid,
             ProblemCode::TemplateLocaleUnavailable,
             ProblemCode::TemplateRenderRefused,
+            ProblemCode::ContentTooLarge,
             ProblemCode::ServiceUnavailable,
         ],
     },
@@ -465,27 +473,45 @@ async fn submit_message(
     request: Request,
 ) -> Result<Response, HttpError> {
     let caller = authenticate(&state, request.headers()).await?;
+    let requested = SubmissionRecord::new(&state, &caller, "messaging.message.requested")?;
+    let mut audit = state
+        .audit
+        .begin(serde_json::to_value(requested).map_err(|_| {
+            HttpError(ProblemCode::ServiceUnavailable)
+        })?)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = %error, "the Messaging audit destination refused a submission request");
+            HttpError(ProblemCode::ServiceUnavailable)
+        })?;
     let result = match admit_submission(&state, &caller, request.headers()).await {
-        Ok(key) => {
-            let body = read_request_body(request).await?;
-            accept_submission(&state, &caller, &key, &body).await
-        }
+        Ok(key) => match read_request_body(request).await {
+            Ok(body) => accept_submission(&state, &caller, &key, &body).await,
+            Err(HttpError(problem)) => Err(problem.into()),
+        },
         Err(refusal) => Err(refusal),
     };
     let record = match &result {
-        Ok(answer) if !answer.replayed => None,
-        Ok(answer) => Some(SubmissionRecord::replayed(&state, &caller, answer)?),
+        Ok(answer) if !answer.replayed => answer
+            .audit_record
+            .clone()
+            .ok_or(HttpError(ProblemCode::ServiceUnavailable))?,
+        Ok(answer) => serde_json::to_value(SubmissionRecord::replayed(&state, &caller, answer)?)
+            .map_err(|_| HttpError(ProblemCode::ServiceUnavailable))?,
+        Err(refusal) if refusal.problem == ProblemCode::ServiceUnavailable => {
+            count_limit_refusal(&state.metrics, refusal.problem);
+            return Ok(refusal_response(*refusal));
+        }
         Err(refusal) => {
             count_limit_refusal(&state.metrics, refusal.problem);
-            Some(SubmissionRecord::refused(&state, &caller, refusal.problem)?)
+            serde_json::to_value(SubmissionRecord::refused(&state, &caller, refusal.problem)?)
+                .map_err(|_| HttpError(ProblemCode::ServiceUnavailable))?
         }
     };
-    if let Some(record) = record {
-        if let Err(error) = state.audit.append(record).await {
-            tracing::error!(error = %error, "the Messaging audit journal refused a submission record");
-            return Err(HttpError(ProblemCode::ServiceUnavailable));
-        }
-    }
+    audit.respond(record).await.map_err(|error| {
+        tracing::error!(error = %error, "the Messaging audit destination refused a submission response");
+        HttpError(ProblemCode::ServiceUnavailable)
+    })?;
     let answer = match result {
         Ok(answer) => answer,
         Err(refusal) => return Ok(refusal_response(refusal)),
@@ -569,8 +595,7 @@ async fn check_caller_rate(state: &HttpState, caller: &Caller) -> Result<(), Sub
 
 /// The journal record of a refused or replayed submission. It names the
 /// caller's profile and pseudonym and the outcome only: the body is the
-/// caller's text until the package accepts it, and an acceptance is
-/// recorded through the outbox instead.
+/// caller's text until the package accepts it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SubmissionRecord {
@@ -627,10 +652,11 @@ impl SubmissionRecord {
 
 async fn get_message(
     State(state): State<HttpState>,
-    Path(message_id): Path<String>,
+    message_id: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
 ) -> Result<Json<MessageView>, HttpError> {
     let caller = authenticate(&state, &headers).await?;
+    let message_id = message_path(message_id)?;
     let service = visible_service(&state, &message_id)?;
     let message = service
         .visible_message(&caller, &message_id)
@@ -641,16 +667,27 @@ async fn get_message(
 
 async fn cancel_message(
     State(state): State<HttpState>,
-    Path(message_id): Path<String>,
+    message_id: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
 ) -> Result<Json<MessageView>, HttpError> {
     let caller = authenticate(&state, &headers).await?;
+    let message_id = message_path(message_id)?;
     let service = visible_service(&state, &message_id)?;
     let view = service
         .cancel(&caller, &message_id)
         .await
         .map_err(HttpError)?;
     Ok(Json(view))
+}
+
+/// The identifier a message route names. A segment that does not decode
+/// to text names no message, so it is not visible, like any other
+/// identifier no message can carry, and is refused only after the caller
+/// authenticated.
+fn message_path(extracted: Result<Path<String>, PathRejection>) -> Result<String, HttpError> {
+    extracted
+        .map(|Path(message_id)| message_id)
+        .map_err(|_| HttpError(ProblemCode::MessageNotVisible))
 }
 
 /// The message service for a route naming `message_id`. An identifier no
@@ -688,25 +725,57 @@ pub fn preview_json(preview: &TemplatePreview) -> Result<Vec<u8>, serde_json::Er
 
 async fn preview_template(
     State(state): State<HttpState>,
-    Path((template_id, version)): Path<(String, String)>,
+    template: Result<Path<(String, String)>, PathRejection>,
     request: Request,
 ) -> Result<Response, HttpError> {
     let caller = authenticate(&state, request.headers()).await?;
-    let headers = request.headers().clone();
-    let body = read_request_body(request).await?;
-    let outcome = render_preview(
-        &state.package,
-        &caller,
-        &template_id,
-        &version,
-        &headers,
-        &body,
-    );
-    let record = PreviewRecord::new(&state, &caller, &template_id, &version, &outcome)?;
-    if let Err(error) = state.audit.append(record).await {
-        tracing::error!(error = %error, "the Messaging audit journal refused a preview record");
-        return Err(HttpError(ProblemCode::ServiceUnavailable));
+    // A path that does not decode names no template the package ships, so
+    // it is answered like one, after authentication.
+    let (template_id, version) = template.map(|Path(named)| named).unwrap_or_default();
+    let mut requested = serde_json::json!({
+        "event": "messaging.template.preview.requested",
+        "accessProfile": caller.profile.id,
+        "packageDigest": state.package.digest(),
+    });
+    // Like the response record, the request names only a template version
+    // the active package ships, never the caller's path text.
+    if let Some(shipped) = state.package.template(&template_id, &version) {
+        requested["templateId"] = shipped.id().into();
+        requested["templateVersion"] = shipped.version().into();
     }
+    let mut audit = state
+        .audit
+        .begin(requested)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = %error, "the Messaging audit destination refused a preview request");
+            HttpError(ProblemCode::ServiceUnavailable)
+        })?;
+    let headers = request.headers().clone();
+    let outcome = match read_request_body(request).await {
+        Ok(body) => render_preview(
+            &state.package,
+            &caller,
+            &template_id,
+            &version,
+            &headers,
+            &body,
+        ),
+        Err(HttpError(problem)) => PreviewOutcome {
+            locale: None,
+            result: Err(problem),
+        },
+    };
+    let record = PreviewRecord::new(&state, &caller, &template_id, &version, &outcome)?;
+    audit
+        .respond(serde_json::to_value(record).map_err(|_| {
+            HttpError(ProblemCode::ServiceUnavailable)
+        })?)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = %error, "the Messaging audit destination refused a preview response");
+            HttpError(ProblemCode::ServiceUnavailable)
+        })?;
     let preview = outcome.result.map_err(HttpError)?;
     let body = preview_json(&preview).map_err(|error| {
         tracing::error!(error = %error, "a Messaging preview could not be serialized");
@@ -976,7 +1045,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn starter_package() -> Package {
-        crate::package::load_package(&crate::package::tests::starter_root())
+        crate::package::load_project(&crate::package::tests::starter_root())
             .unwrap()
             .package
     }
@@ -988,7 +1057,7 @@ mod tests {
     fn state_over(
         authenticator: MessagingAuthenticator,
         ready: bool,
-        audit: AuditJournal,
+        audit: MessagingAudit,
     ) -> HttpState {
         let package = starter_package();
         HttpState {
@@ -1081,7 +1150,7 @@ mod tests {
     }
 
     fn journal(sink: &MemorySink) -> Vec<serde_json::Value> {
-        sink.records.lock().unwrap().clone()
+        sink.records()
     }
 
     fn app() -> (Router, Arc<Metrics>) {
@@ -1524,6 +1593,10 @@ mod tests {
             ),
         ];
         for (uri, content_type, body, expected) in cases {
+            assert!(
+                declared("previewTemplate").contains(&expected),
+                "{expected:?}"
+            );
             expect_problem(
                 post(app.clone(), uri, Some(&sender), content_type, body).await,
                 expected,
@@ -1560,6 +1633,211 @@ mod tests {
         )
         .await;
         assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
+    }
+
+    #[tokio::test]
+    async fn a_preview_terminal_audit_refusal_returns_no_preview_bytes() {
+        let (app, sink) = preview_app();
+        sink.refuse_after(1);
+        let headers = expect_problem(
+            post_json(
+                app,
+                PREVIEW,
+                Some(&token(sender_claims())),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::ServiceUnavailable,
+        )
+        .await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
+        let entries = sink.entries();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0]["phase"], "request");
+        assert_eq!(
+            entries[0]["record"]["event"],
+            "messaging.template.preview.requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_preview_request_record_names_only_a_template_the_package_ships() {
+        let (app, sink) = preview_app();
+        let sender = token(sender_claims());
+        expect_problem(
+            post_json(
+                app.clone(),
+                "/v1/templates/canary-template/versions/canary-version/preview",
+                Some(&sender),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::ProfileNotAuthorized,
+        )
+        .await;
+        expect_problem(
+            post_json(
+                app.clone(),
+                "/v1/templates/appointment-reminder/versions/canary-version/preview",
+                Some(&sender),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::TemplateNotFound,
+        )
+        .await;
+        // The package ships this version, so both phases name it, even for a
+        // caller the role check then refuses.
+        expect_problem(
+            post_json(
+                app,
+                PREVIEW,
+                Some(&token(operator_claims())),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::OperationNotAuthorized,
+        )
+        .await;
+        let requests: Vec<serde_json::Value> = sink
+            .entries()
+            .into_iter()
+            .filter(|entry| entry["phase"] == "request")
+            .map(|entry| entry["record"].clone())
+            .collect();
+        assert_eq!(requests.len(), 3);
+        for record in &requests[..2] {
+            assert!(record.get("templateId").is_none(), "{record}");
+            assert!(record.get("templateVersion").is_none(), "{record}");
+        }
+        assert_eq!(requests[2]["templateId"], "appointment-reminder");
+        assert_eq!(requests[2]["templateVersion"], "1");
+        let written = serde_json::to_string(&sink.entries()).unwrap();
+        assert!(!written.contains("canary"), "{written}");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_journaled_as_a_refusal_with_its_problem() {
+        let (app, sink) = preview_app();
+        let sender = token(sender_claims());
+        expect_problem(
+            submit(
+                app.clone(),
+                &sender,
+                Some("key-1"),
+                Some("application/json"),
+                body_poll_canary(),
+            )
+            .await,
+            ProblemCode::RequestBodyTooLarge,
+        )
+        .await;
+        expect_problem(
+            post(
+                app,
+                PREVIEW,
+                Some(&sender),
+                Some("application/json"),
+                body_poll_canary(),
+            )
+            .await,
+            ProblemCode::RequestBodyTooLarge,
+        )
+        .await;
+        let records = journal(&sink);
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert_eq!(records[0]["event"], MESSAGE_REFUSED_EVENT);
+        assert_eq!(
+            records[0]["problem"],
+            ProblemCode::RequestBodyTooLarge.code()
+        );
+        assert_eq!(records[1]["event"], TEMPLATE_PREVIEWED_EVENT);
+        assert_eq!(records[1]["outcome"], "refused");
+        assert_eq!(
+            records[1]["problem"],
+            ProblemCode::RequestBodyTooLarge.code()
+        );
+    }
+
+    /// The problems `operation_id` declares in the published contract.
+    fn declared(operation_id: &str) -> &'static [ProblemCode] {
+        OPERATIONS
+            .iter()
+            .find(|operation| operation.operation_id == operation_id)
+            .expect("a catalogued operation")
+            .problems
+    }
+
+    #[tokio::test]
+    async fn a_preview_whose_rendered_part_is_too_large_is_refused_as_declared() {
+        let root = tempfile::tempdir().unwrap();
+        crate::package::tests::copy_starter(root.path());
+        std::fs::write(
+            root.path()
+                .join("templates/appointment-reminder/1/en/subject.j2"),
+            "{{ name }}{{ name }}{{ name }}",
+        )
+        .unwrap();
+        let (_, journal_handle) = memory_journal();
+        let mut state = state_over(authenticator(), true, journal_handle);
+        state.package = Arc::new(crate::package::load_project(root.path()).unwrap().package);
+        let body = json!({
+            "locale": "en",
+            "data": {"name": "x".repeat(200), "day": "2026-10-01", "office": "B"}
+        });
+        expect_problem(
+            post_json(router(state), PREVIEW, Some(&token(sender_claims())), &body).await,
+            ProblemCode::ContentTooLarge,
+        )
+        .await;
+        assert!(declared("previewTemplate").contains(&ProblemCode::ContentTooLarge));
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_message_identifier_is_not_visible_after_authentication() {
+        let (app, _) = app();
+        let sender = token(sender_claims());
+        for (method, uri, operation_id) in [
+            ("GET", "/v1/messages/%FF", "getMessage"),
+            ("POST", "/v1/messages/%FF/cancel", "cancelMessage"),
+        ] {
+            expect_problem(
+                call(app.clone(), method, uri, Some(&sender)).await,
+                ProblemCode::MessageNotVisible,
+            )
+            .await;
+            expect_problem(
+                call(app.clone(), method, uri, None).await,
+                ProblemCode::AuthenticationRefused,
+            )
+            .await;
+            assert!(declared(operation_id).contains(&ProblemCode::MessageNotVisible));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_template_path_is_refused_after_authentication() {
+        let (app, _) = app();
+        let uri = "/v1/templates/%FF/versions/1/preview";
+        // Like any template the package does not ship, it is refused on the
+        // caller's profile.
+        expect_problem(
+            post_json(
+                app.clone(),
+                uri,
+                Some(&token(sender_claims())),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::ProfileNotAuthorized,
+        )
+        .await;
+        expect_problem(
+            post_json(app, uri, None, &sample_request()).await,
+            ProblemCode::AuthenticationRefused,
+        )
+        .await;
+        assert!(declared("previewTemplate").contains(&ProblemCode::ProfileNotAuthorized));
     }
 
     fn submission() -> serde_json::Value {
@@ -1846,6 +2124,10 @@ mod tests {
         ];
         let count = cases.len();
         for (key, content_type, body, expected) in cases {
+            assert!(
+                declared("submitMessage").contains(&expected),
+                "{expected:?}"
+            );
             expect_problem(
                 submit(app.clone(), &sender, key, content_type, body).await,
                 expected,
@@ -1858,17 +2140,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_submission_that_passes_every_check_needs_the_store() {
-        let (app, sink) = preview_app();
+    async fn an_unavailable_submission_has_an_unfinished_audit_fate() {
+        let (sink, audit) = memory_journal();
+        let audit_wait = audit.clone();
+        let app = router(state_over(authenticator(), true, audit));
         let headers = expect_problem(
             submit_json(app, &token(sender_claims()), &submission()).await,
             ProblemCode::ServiceUnavailable,
         )
         .await;
         assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
+        audit_wait.wait_for_detached_entries();
         let records = journal(&sink);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["problem"], "service.unavailable");
+        assert_eq!(records[0]["event"], "messaging.message.requested");
+        assert_eq!(records[0]["outcome"], "unfinished");
+        assert!(records[0].get("problem").is_none());
         assert_no_submission_values(&records);
     }
 

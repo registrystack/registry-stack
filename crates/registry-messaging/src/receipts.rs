@@ -14,8 +14,9 @@
 //! - the receipt joins the message's bounded history unless the same report
 //!   and code are already there or the history is full, so a provider
 //!   repeating itself cannot grow the store;
-//! - a receipt that changed either is audited through the outbox in the same
-//!   transaction, by identifiers, the report, and the provider's code only.
+//! - a receipt that will change either writes its audit request before the
+//!   mutation and its response after commit, by identifiers, the report, and
+//!   the provider's code only.
 //!   The reference, the recipient, the parts, and the callback's body never
 //!   reach the record.
 //!
@@ -27,8 +28,8 @@ use registry_messaging_core::{advance_report, DeliveryReport, Receipt, ReportAdv
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::audit::MessagingAudit;
 use crate::messages::MessageStoreError;
-use crate::outbox;
 use crate::store::PostgresStore;
 
 /// The audited event for a receipt that changed a message's report or
@@ -79,10 +80,13 @@ pub(crate) async fn lock_provider_reference(
 ///
 /// # Errors
 ///
-/// The store's error when it cannot answer, and
-/// [`MessageStoreError::Refused`] when the audit record cannot be written.
+/// The store's error when it cannot answer,
+/// [`MessageStoreError::AuditUnavailable`] when the request record is
+/// refused and nothing changed, and [`MessageStoreError::AuditUnconfirmed`]
+/// when the receipt was applied and its outcome record could not be written.
 pub async fn record_receipt(
     store: &PostgresStore,
+    audit: &MessagingAudit,
     provider: &str,
     receipt: &Receipt,
 ) -> Result<ReceiptOutcome, MessageStoreError> {
@@ -130,7 +134,36 @@ pub async fn record_receipt(
         ReportAdvance::Advance(report) => Some(report),
         ReportAdvance::NoChange => None,
     };
-    let stored = transaction
+    let duplicate: bool = transaction
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM messaging_receipts \
+             WHERE message_id = $1 AND report = $2 AND coalesce(code, '') = coalesce($3, ''))",
+            &[&message_id, &receipt.report.as_str(), &receipt.code],
+        )
+        .await?
+        .get(0);
+    let count: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM messaging_receipts WHERE message_id = $1",
+            &[&message_id],
+        )
+        .await?
+        .get(0);
+    let will_store = !duplicate && count < MAXIMUM_STORED_RECEIPTS;
+    if !will_store && advanced.is_none() {
+        transaction.commit().await?;
+        return Ok(ReceiptOutcome::Unchanged { message_id });
+    }
+    let mut audit_request = audit
+        .begin(json!({
+            "event": "messaging.receipt.requested",
+            "messageId": message_id.to_string(),
+            "provider": provider,
+            "report": receipt.report.as_str(),
+        }))
+        .await
+        .map_err(|_| MessageStoreError::AuditUnavailable)?;
+    let _stored = transaction
         .execute(
             "INSERT INTO messaging_receipts \
                     (message_id, sequence, received_at, report, code, applied) \
@@ -161,23 +194,20 @@ pub async fn record_receipt(
             return Err(MessageStoreError::Refused);
         }
     }
-    if stored || advanced.is_some() {
-        outbox::write(
-            &transaction,
-            json!({
-                "event": RECEIPT_RECORDED_EVENT,
-                "messageId": message_id.to_string(),
-                "provider": provider,
-                "report": receipt.report.as_str(),
-                "code": receipt.code,
-                "applied": advanced.is_some(),
-                "from": current.map_or(Value::Null, |report| Value::from(report.as_str())),
-                "disposition": advanced.or(current).map(DeliveryReport::as_str),
-            }),
-        )
-        .await?;
-    }
     transaction.commit().await?;
+    audit_request
+        .respond(json!({
+            "event": RECEIPT_RECORDED_EVENT,
+            "messageId": message_id.to_string(),
+            "provider": provider,
+            "report": receipt.report.as_str(),
+            "code": receipt.code,
+            "applied": advanced.is_some(),
+            "from": current.map_or(Value::Null, |report| Value::from(report.as_str())),
+            "disposition": advanced.or(current).map(DeliveryReport::as_str),
+        }))
+        .await
+        .map_err(|_| MessageStoreError::AuditUnconfirmed)?;
     Ok(match advanced {
         Some(report) => ReceiptOutcome::Applied { message_id, report },
         None => ReceiptOutcome::Unchanged { message_id },

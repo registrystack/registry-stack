@@ -30,10 +30,11 @@ if [[ ! -x "$messagingctl_bin" ]]; then
   exit 2
 fi
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/messaging-checkpoint.XXXXXX")
+temporary_root=$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)
+work=$(mktemp -d "$temporary_root/messaging-checkpoint.XXXXXX")
 cleanup() {
   case "$work" in
-    "${TMPDIR:-/tmp}"/messaging-checkpoint.*) rm -rf -- "$work" ;;
+    "$temporary_root"/messaging-checkpoint.*) rm -rf -- "$work" ;;
     *) exit 1 ;;
   esac
 }
@@ -44,10 +45,11 @@ trap cleanup EXIT HUP INT TERM
 starter="$repo_root/products/messaging/examples/starter"
 variant() {
   local name=$1 change=$2
-  mkdir -p "$work/$name/package"
-  cp "$starter/messaging.yaml" "$work/$name/package/messaging.yaml"
-  cp -R "$starter/templates" "$work/$name/package/templates"
-  cp -R "$starter/providers" "$work/$name/package/providers"
+  mkdir -p "$work/$name/project"
+  cp "$starter/messaging.yaml" "$work/$name/project/messaging.yaml"
+  cp -R "$starter/templates" "$work/$name/project/templates"
+  cp -R "$starter/providers" "$work/$name/project/providers"
+  "$messagingctl_bin" package "$work/$name/project" --output "$work/$name/package" >/dev/null
   python3 - "$starter/runtime.example.yaml" "$work/$name" "$change" <<'PY'
 import sys
 from pathlib import Path
@@ -99,7 +101,9 @@ starter_digest=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["pa
 # digest the runtime configuration above reported.
 "$messagingctl_bin" --format json init "$work/init" >/dev/null
 diff -r "$starter" "$work/init"
-report=$("$messagingctl_bin" --format json check --package "$work/init")
+"$messagingctl_bin" --format json check --project "$work/init" >/dev/null
+"$messagingctl_bin" package "$work/init" --output "$work/installed" >/dev/null
+report=$("$messagingctl_bin" --format json check --package "$work/installed")
 python3 - "$report" "$starter_digest" <<'PY'
 import json
 import sys
@@ -126,7 +130,7 @@ PY
 # preview renders the sample offline, byte-stable across runs, and refuses a
 # locale the template does not declare with its problem code.
 sms_sample="$starter/templates/appointment-reminder-sms/1/sample.json"
-"$messagingctl_bin" --format json preview --package "$work/init" \
+"$messagingctl_bin" --format json preview --package "$work/installed" \
   appointment-reminder-sms 1 --locale en --data "$sms_sample" >"$work/preview-1.json"
 "$messagingctl_bin" --format json preview --runtime-config "$work/starter/runtime.yaml" \
   appointment-reminder-sms 1 --locale en --data "$sms_sample" >"$work/preview-2.json"
@@ -144,7 +148,7 @@ assert "Ada Lovelace" in preview["parts"]["text"], preview
 assert preview["sms"]["segments"] == 1, preview
 PY
 status=0
-report=$("$messagingctl_bin" --format json preview --package "$work/init" \
+report=$("$messagingctl_bin" --format json preview --package "$work/installed" \
   appointment-reminder 1 --locale de --data "$sms_sample") || status=$?
 if [[ "$status" -ne 1 ]]; then
   printf 'messagingctl preview exited %s for an undeclared locale, expected 1\n' "$status" >&2

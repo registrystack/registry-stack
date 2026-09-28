@@ -16,8 +16,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Columns, Decoded, DispatchConnection, DispatchEvent, DispatchSql,
-    DispatchStore, Disposition, ExpirySql, JobKey, JobState, LapsedJob, LeasedJob, SelectSql,
-    TargetAction, Transition, TransitionAudit, TransitionCode,
+    DispatchStore, Disposition, ExpirySql, JobKey, JobState, LapsedJob, LeasedJob, ReplayAudit,
+    ReplayOutcome, SelectSql, TargetAction, Transition, TransitionAudit, TransitionCode,
+    TransitionOutcome,
 };
 use registry_platform_dispatch::{
     AttemptTimeoutBound, DispatchError, JobPolicy, RetrySchedule, Sent, UncertainOutcome,
@@ -119,12 +120,14 @@ impl From<DeliveryError> for DispatchError {
 
 /// What a claim decodes for the send: the revision the row was captured
 /// under and the handler kind it binds.
+#[derive(Clone)]
 pub(super) struct HookJob {
     pub(super) package_revision: String,
     pub(super) handler_kind: HookHandlerKind,
 }
 
 /// What a recovery, expiry, or replay row decodes for its audit.
+#[derive(Clone)]
 pub(super) struct HookRecord {
     package_revision: String,
 }
@@ -221,8 +224,11 @@ const fn audit_disposition(
         Disposition::DeadLettered => Ok(DeliveryAuditDisposition::DeadLettered),
         Disposition::Expired => Ok(DeliveryAuditDisposition::Expired),
         Disposition::ReplayPending => Ok(DeliveryAuditDisposition::ReplayPending),
-        // Hook delivery holds no attempt as unknown and cancels nothing.
-        Disposition::Unknown | Disposition::Cancelled => Err(DispatchError::Unavailable),
+        // A failed lease/finalize COMMIT whose fate cannot be read claims no
+        // database state through the neutral unknown disposition.
+        Disposition::Unknown => Ok(DeliveryAuditDisposition::Unknown),
+        // Hook delivery cancels nothing.
+        Disposition::Cancelled => Err(DispatchError::Unavailable),
     }
 }
 
@@ -256,6 +262,9 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
     type Job = HookJob;
     type Record = HookRecord;
     type Detail = AttemptResult;
+    type Context = ();
+
+    fn capture_context(&self) -> Self::Context {}
 
     async fn connection(&self) -> Result<DispatchConnection, DispatchError> {
         Ok(self.seams.connection().await?)
@@ -359,9 +368,9 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
 
     async fn record_attempt_audit(
         &self,
-        transaction: &Transaction<'_>,
         job: &LeasedJob<HookJob>,
         audit: AttemptAudit<'_, AttemptResult>,
+        _context: &(),
     ) -> Result<(), DispatchError> {
         let (phase, outcome, disposition) = match audit {
             AttemptAudit::Started => (
@@ -374,30 +383,36 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
                 sent.detail.outcome,
                 audit_disposition(disposition)?,
             ),
+            AttemptAudit::Interrupted { disposition } => (
+                DeliveryAuditPhase::Terminal,
+                DeliveryAuditOutcome::WorkerInterrupted,
+                audit_disposition(disposition)?,
+            ),
         };
         Ok(self
             .seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id: job.key.id(),
-                    compiled_delivery_id: job.key.part(),
-                    package_revision: &job.job.package_revision,
-                    generation: job.generation,
-                    attempt: job.attempt,
-                    phase,
-                    outcome,
-                    disposition,
-                },
-            )
+            .record_audit(DeliveryAuditRecord {
+                event_id: job.key.id(),
+                compiled_delivery_id: job.key.part(),
+                package_revision: &job.job.package_revision,
+                generation: job.generation,
+                attempt: job.attempt,
+                phase,
+                outcome,
+                disposition,
+            })
             .await?)
     }
 
     async fn record_transition_audit(
         &self,
-        transaction: &Transaction<'_>,
-        audit: TransitionAudit<'_, HookRecord>,
+        audit: &TransitionAudit<HookRecord>,
+        outcome: TransitionOutcome,
+        _context: &(),
     ) -> Result<(), DispatchError> {
+        if outcome != TransitionOutcome::Committed {
+            return Ok(());
+        }
         let (phase, outcome) = match audit.transition {
             Transition::LeaseLapsed(_) => (
                 DeliveryAuditPhase::Terminal,
@@ -407,27 +422,58 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
                 DeliveryAuditPhase::Terminal,
                 DeliveryAuditOutcome::PayloadExpired,
             ),
-            Transition::Replayed { .. } => (
-                DeliveryAuditPhase::Replay,
-                DeliveryAuditOutcome::ReplayRequested,
-            ),
             Transition::Cancelled => return Err(DispatchError::Unavailable),
         };
         Ok(self
             .seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id: audit.key.id(),
-                    compiled_delivery_id: audit.key.part(),
-                    package_revision: &audit.record.package_revision,
-                    generation: audit.generation,
-                    attempt: audit.attempt,
-                    phase,
-                    outcome,
-                    disposition: audit_disposition(audit.transition.disposition())?,
-                },
-            )
+            .record_audit(DeliveryAuditRecord {
+                event_id: audit.key.id(),
+                compiled_delivery_id: audit.key.part(),
+                package_revision: &audit.record.package_revision,
+                generation: audit.generation,
+                attempt: audit.attempt,
+                phase,
+                outcome,
+                disposition: audit_disposition(audit.transition.disposition())?,
+            })
+            .await?)
+    }
+
+    async fn record_replay_audit(
+        &self,
+        audit: &ReplayAudit<HookRecord>,
+        _context: &(),
+    ) -> Result<(), DispatchError> {
+        let (outcome, disposition) = match audit.outcome {
+            ReplayOutcome::Requested => (
+                DeliveryAuditOutcome::ReplayRequested,
+                DeliveryAuditDisposition::ReplayPending,
+            ),
+            ReplayOutcome::Committed => (
+                DeliveryAuditOutcome::ReplayCommitted,
+                DeliveryAuditDisposition::ReplayPending,
+            ),
+            ReplayOutcome::Refused => (
+                DeliveryAuditOutcome::ReplayRefused,
+                DeliveryAuditDisposition::DeadLettered,
+            ),
+            ReplayOutcome::Unfinished => (
+                DeliveryAuditOutcome::ReplayUnfinished,
+                DeliveryAuditDisposition::ReplayPending,
+            ),
+        };
+        Ok(self
+            .seams
+            .record_audit(DeliveryAuditRecord {
+                event_id: audit.key.id(),
+                compiled_delivery_id: audit.key.part(),
+                package_revision: &audit.record.package_revision,
+                generation: audit.generation,
+                attempt: 0,
+                phase: DeliveryAuditPhase::Replay,
+                outcome,
+                disposition,
+            })
             .await?)
     }
 

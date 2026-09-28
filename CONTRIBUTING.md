@@ -136,8 +136,11 @@ the heavy integration tier and the Casework review examples:
   `docs/site/scripts/` and the modules they import, and the docset, archive
   lock and repository-docs data. A change to `ci.yml` alone does not rebuild
   history there; the nightly sweep and a manual full run do.
+- The Casework tutorial job's step that verifies the Base Registry Engine,
+  payment and standalone review examples runs only in the nightly sweep and a
+  full manual run.
 
-Main pushes and merge-queue checks select affected work using the event's exact
+Merge-queue checks and main pushes select affected work using the event's exact
 before/after commits, including every commit in a multi-commit push and both
 owners of a renamed path. Shared build and CI inputs still select the broad
 matrix. A `Cargo.lock` change without them selects the workspace packages that

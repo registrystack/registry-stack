@@ -20,10 +20,11 @@
 //! beside `messaging.yaml` at the root, such as a README or the runtime
 //! example, are not package content and are neither read nor digested.
 //!
-//! The package digest is SHA-256 over the canonical JSON of the sorted file
-//! list, each file named by its `/`-separated path under the root with its
-//! own SHA-256 and length. The same bytes always give the same digest, and
-//! changing, adding, or removing any package file changes it.
+//! `messagingctl package` writes those authored inputs into the shared
+//! immutable package envelope. The runtime verifies `SHA256SUMS`, optional
+//! revision metadata, and every consumed file before parsing product data.
+//! Changing, adding, removing, or swapping any installed package byte is
+//! therefore refused.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
@@ -31,8 +32,14 @@ use std::path::Path;
 
 use registry_messaging_core::{
     LocaleSources, MessagingPackage, Package, PackageError, PartKind, ProviderKind,
-    TemplateDocument, TemplateSource, MAXIMUM_TEMPLATE_SOURCE_BYTES, MESSAGING_PACKAGE_API_VERSION,
-    MESSAGING_PACKAGE_KIND, PACKAGE_FILE,
+    TemplateDocument, TemplateSource, MAXIMUM_TEMPLATE_SOURCE_BYTES, PACKAGE_FILE,
+};
+use registry_platform_config::package::is_envelope_file;
+use registry_platform_config::{
+    plan_package, reject_environment_expressions_in_authored_yaml, verify_package, write_package,
+    PackageConfig, PackageError as SharedPackageError, PackageErrorKind as SharedPackageErrorKind,
+    PackageLimits, RuntimeConfigError as AuthoredConfigError, VerifiedPackage, REVISION_FILE,
+    SUM_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -70,6 +77,21 @@ pub const MAXIMUM_TEMPLATE_FILE_BYTES: u64 = MAXIMUM_TEMPLATE_SOURCE_BYTES as u6
 pub const MAXIMUM_PACKAGE_ENTRIES: usize = 4096;
 /// The most bytes all package files may hold together.
 pub const MAXIMUM_PACKAGE_BYTES: u64 = 32 * 1024 * 1024;
+const MAXIMUM_ENVELOPE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Remediation named by shared package refusals.
+pub const PACKAGE_COMMAND: &str = "registry-messagingctl package";
+
+#[must_use]
+pub const fn package_limits() -> PackageLimits {
+    PackageLimits {
+        max_files: MAXIMUM_PACKAGE_ENTRIES,
+        max_file_bytes: MAXIMUM_MANIFEST_BYTES,
+        max_total_bytes: MAXIMUM_PACKAGE_BYTES,
+        max_depth: 16,
+        max_path_bytes: 512,
+    }
+}
 
 /// One file the digest covers.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -90,6 +112,7 @@ pub struct LoadedPackage {
     pub package: Package,
     pub providers: BTreeMap<String, HttpProviderSource>,
     pub files: Vec<PackageFile>,
+    inputs: BTreeMap<String, Vec<u8>>,
 }
 
 impl LoadedPackage {
@@ -158,6 +181,18 @@ impl PackageLoadError {
         Self { path, reason }
     }
 
+    fn envelope(error: SharedPackageError) -> Self {
+        let path = if matches!(error.kind(), SharedPackageErrorKind::DigestMismatch(_)) {
+            "package.expectedDigest".to_owned()
+        } else {
+            "package.root".to_owned()
+        };
+        Self {
+            path,
+            reason: PackageLoadReason::Envelope(Box::new(error)),
+        }
+    }
+
     /// The refused entry, written `package.root/<path>`.
     #[must_use]
     pub fn path(&self) -> &str {
@@ -172,13 +207,28 @@ impl PackageLoadError {
     /// Whether the package could not be read at all, rather than read and
     /// refused.
     #[must_use]
-    pub const fn is_read_failure(&self) -> bool {
+    pub fn is_read_failure(&self) -> bool {
         matches!(self.reason, PackageLoadReason::Read(_))
+            || matches!(
+                self.reason,
+                PackageLoadReason::Envelope(ref error)
+                    if matches!(
+                        error.kind(),
+                        SharedPackageErrorKind::RootInvalid { .. }
+                            | SharedPackageErrorKind::Io { .. }
+                    )
+            )
     }
 }
 
 #[derive(Debug, Error)]
 pub enum PackageLoadReason {
+    #[error("does not satisfy the shared package envelope: {0}")]
+    Envelope(#[source] Box<SharedPackageError>),
+    #[error("contains an authored configuration refusal: {0}")]
+    Authored(#[source] AuthoredConfigError),
+    #[error("changed after its package digest was verified")]
+    Changed,
     #[error("could not be read")]
     Read(#[source] std::io::Error),
     #[error("is not part of the package layout")]
@@ -201,23 +251,82 @@ pub enum PackageLoadReason {
     Provider(HttpProviderError),
 }
 
-/// Read the package under `root`, compute its digest, and check it.
+/// Verify and load the installed package under `root`.
 pub fn load_package(root: &Path) -> Result<LoadedPackage, PackageLoadError> {
+    let verified = verify_package(root, &package_limits(), PACKAGE_COMMAND)
+        .map_err(PackageLoadError::envelope)?;
+    load_contents(root, Some(&verified))
+}
+
+/// Verify the runtime package and its optional configured digest pin before
+/// parsing any product file.
+pub fn load_runtime_package(config: &PackageConfig) -> Result<LoadedPackage, PackageLoadError> {
+    let verified = config
+        .verify_package(&package_limits(), PACKAGE_COMMAND)
+        .map_err(PackageLoadError::envelope)?;
+    load_contents(&config.root, Some(&verified))
+}
+
+/// Load and validate an editable authoring project before it is packaged.
+pub fn load_project(root: &Path) -> Result<LoadedPackage, PackageLoadError> {
+    load_contents(root, None)
+}
+
+/// Validate an editable authoring project and return exactly the files copied
+/// into an installed package. Runtime settings, secrets, tool state and root
+/// documentation are never package inputs.
+pub fn package_inputs(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackageLoadError> {
+    let loaded = load_project(root)?;
+    Ok(loaded.inputs)
+}
+
+/// Compute the shared package digest for validated inputs without writing.
+pub fn plan_package_inputs(
+    project: &Path,
+    inputs: &BTreeMap<String, Vec<u8>>,
+    revision: Option<&str>,
+) -> Result<String, SharedPackageError> {
+    plan_package(
+        project,
+        inputs,
+        revision,
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )
+}
+
+/// Write validated inputs as a new shared package directory.
+pub fn write_package_inputs(
+    output: &Path,
+    inputs: &BTreeMap<String, Vec<u8>>,
+    revision: Option<&str>,
+) -> Result<VerifiedPackage, SharedPackageError> {
+    write_package(output, inputs, revision, &package_limits(), PACKAGE_COMMAND)
+}
+
+fn load_contents(
+    root: &Path,
+    verified: Option<&VerifiedPackage>,
+) -> Result<LoadedPackage, PackageLoadError> {
+    if let Some(verified) = verified {
+        rebind_envelope(root, verified)?;
+    }
     let mut reader = Reader {
         root,
+        verified,
         files: Vec::new(),
+        inputs: BTreeMap::new(),
         bytes: 0,
         entries: 0,
     };
     let manifest_text = reader.read_file(PACKAGE_FILE, MAXIMUM_MANIFEST_BYTES)?;
+    reject_authored_expressions(PACKAGE_FILE, &manifest_text)?;
     let deserializer = serde_norway::Deserializer::from_str(&manifest_text);
     let manifest: MessagingPackage =
         serde_path_to_error::deserialize(deserializer).map_err(|error| {
             let (at, cause) = refused_yaml(error);
             PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Parse { at, cause })
         })?;
-    // The manifest's own checks run first so the provider directories are
-    // read only for identifiers already known to be valid.
     manifest
         .check()
         .map_err(|error| PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Invalid(error)))?;
@@ -229,9 +338,27 @@ pub fn load_package(root: &Path) -> Result<LoadedPackage, PackageLoadError> {
         .map(|provider| provider.id.clone())
         .collect();
     let providers = reader.read_providers(&http_providers)?;
+    if let Some(verified) = verified {
+        if let Some(unread) = verified
+            .files()
+            .find(|path| !is_envelope_file(path) && !reader.inputs.contains_key(*path))
+        {
+            return Err(PackageLoadError::new(unread, PackageLoadReason::Unexpected));
+        }
+    }
     let mut files = reader.files;
     files.sort_by(|left, right| left.path.cmp(&right.path));
-    let digest = package_digest(&files);
+    let digest = match verified {
+        Some(verified) => verified.digest().to_owned(),
+        None => plan_package(
+            root,
+            &reader.inputs,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .map_err(|error| PackageLoadError::new("", PackageLoadReason::Envelope(Box::new(error))))?,
+    };
     let package = Package::assemble(&manifest, sources, digest).map_err(|error| {
         let file = match &error {
             PackageError::Template { id, version, .. }
@@ -247,22 +374,73 @@ pub fn load_package(root: &Path) -> Result<LoadedPackage, PackageLoadError> {
         package,
         providers,
         files,
+        inputs: reader.inputs,
     })
 }
 
-/// The digest of a sorted file list.
-#[must_use]
-pub fn package_digest(files: &[PackageFile]) -> String {
-    let identity = serde_json::json!({
-        "apiVersion": MESSAGING_PACKAGE_API_VERSION,
-        "kind": MESSAGING_PACKAGE_KIND,
-        "files": files,
-    });
-    // Every value is a string or an integer far below 2^53, so the
-    // canonical form always exists.
-    let canonical = registry_platform_canonical_json::canonicalize_json(&identity)
-        .expect("a package file list is canonical JSON");
-    sha256(&canonical)
+fn rebind_envelope(root: &Path, verified: &VerifiedPackage) -> Result<(), PackageLoadError> {
+    let sums = read_rebound_bytes(root, SUM_FILE, MAXIMUM_ENVELOPE_BYTES)?;
+    if sha256(&sums) != verified.digest() {
+        return Err(PackageLoadError::new(SUM_FILE, PackageLoadReason::Changed));
+    }
+    match verified.revision() {
+        Some(revision) => {
+            let bytes = read_rebound_bytes(root, REVISION_FILE, MAXIMUM_ENVELOPE_BYTES)?;
+            let digest = sha256(&bytes);
+            if verified.file_digest(REVISION_FILE).as_deref() != Some(&digest)
+                || bytes != format!("{revision}\n").as_bytes()
+            {
+                return Err(PackageLoadError::new(
+                    REVISION_FILE,
+                    PackageLoadReason::Changed,
+                ));
+            }
+        }
+        None if std::fs::symlink_metadata(root.join(REVISION_FILE)).is_ok() => {
+            return Err(PackageLoadError::new(
+                REVISION_FILE,
+                PackageLoadReason::Changed,
+            ));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn read_rebound_bytes(root: &Path, path: &str, limit: u64) -> Result<Vec<u8>, PackageLoadError> {
+    let full = root.join(path);
+    let read = |error| PackageLoadError::new(path, PackageLoadReason::Read(error));
+    let before = std::fs::symlink_metadata(&full).map_err(read)?;
+    if before.file_type().is_symlink() {
+        return Err(PackageLoadError::new(path, PackageLoadReason::Symlink));
+    }
+    if !before.is_file() {
+        return Err(PackageLoadError::new(path, PackageLoadReason::Unexpected));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&full)
+        .and_then(|file| file.take(limit + 1).read_to_end(&mut bytes))
+        .map_err(read)?;
+    if bytes.len() as u64 > limit {
+        return Err(PackageLoadError::new(
+            path,
+            PackageLoadReason::FileTooLarge(limit),
+        ));
+    }
+    let after = std::fs::symlink_metadata(&full).map_err(read)?;
+    if before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+        || !after.is_file()
+        || after.file_type().is_symlink()
+    {
+        return Err(PackageLoadError::new(path, PackageLoadReason::Changed));
+    }
+    Ok(bytes)
+}
+
+fn reject_authored_expressions(path: &str, text: &str) -> Result<(), PackageLoadError> {
+    reject_environment_expressions_in_authored_yaml(text)
+        .map_err(|error| PackageLoadError::new(path, PackageLoadReason::Authored(error)))
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -285,7 +463,9 @@ enum EntryKind {
 
 struct Reader<'a> {
     root: &'a Path,
+    verified: Option<&'a VerifiedPackage>,
     files: Vec<PackageFile>,
+    inputs: BTreeMap<String, Vec<u8>>,
     bytes: u64,
     entries: usize,
 }
@@ -343,6 +523,7 @@ impl Reader<'_> {
             match (name.as_str(), kind) {
                 (TEMPLATE_FILE, EntryKind::File) => {
                     let text = self.read_file(&path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
+                    reject_authored_expressions(&path, &text)?;
                     let deserializer = serde_norway::Deserializer::from_str(&text);
                     let parsed: TemplateDocument = serde_path_to_error::deserialize(deserializer)
                         .map_err(|error| {
@@ -462,6 +643,7 @@ impl Reader<'_> {
         let directory = format!("{PROVIDERS_DIRECTORY}/{id}");
         let manifest_path = format!("{directory}/{PROVIDER_FILE}");
         let text = self.read_file(&manifest_path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
+        reject_authored_expressions(&manifest_path, &text)?;
         let deserializer = serde_norway::Deserializer::from_str(&text);
         let package: HttpProviderPackage =
             serde_path_to_error::deserialize(deserializer).map_err(|error| {
@@ -632,11 +814,19 @@ impl Reader<'_> {
         if self.bytes > MAXIMUM_PACKAGE_BYTES {
             return Err(PackageLoadError::new("", PackageLoadReason::TooLarge));
         }
+        let digest = sha256(&bytes);
+        if self
+            .verified
+            .is_some_and(|verified| verified.file_digest(path).as_deref() != Some(&digest))
+        {
+            return Err(PackageLoadError::new(path, PackageLoadReason::Changed));
+        }
         self.files.push(PackageFile {
             path: path.to_owned(),
-            sha256: sha256(&bytes),
+            sha256: digest,
             bytes: length,
         });
+        self.inputs.insert(path.to_owned(), bytes.clone());
         String::from_utf8(bytes)
             .map_err(|_| PackageLoadError::new(path, PackageLoadReason::NotUtf8))
     }
@@ -693,7 +883,7 @@ pub(crate) mod tests {
     }
 
     fn refusal(root: &Path) -> PackageLoadError {
-        load_package(root).unwrap_err()
+        load_project(root).unwrap_err()
     }
 
     const REMINDER: &str = "templates/appointment-reminder/1";
@@ -702,14 +892,18 @@ pub(crate) mod tests {
     #[test]
     fn the_starter_package_loads_with_a_digest_over_its_sorted_files() {
         let root = starter_copy();
-        let loaded = load_package(root.path()).unwrap();
+        let loaded = load_project(root.path()).unwrap();
         let paths: Vec<&str> = loaded.files.iter().map(|file| file.path.as_str()).collect();
         let mut sorted = paths.clone();
         sorted.sort_unstable();
         assert_eq!(paths, sorted);
         assert_eq!(paths.first(), Some(&PACKAGE_FILE));
         assert!(paths.contains(&"templates/appointment-reminder/1/fr/html.j2"));
-        assert_eq!(loaded.package.digest(), package_digest(&loaded.files));
+        let inputs = package_inputs(root.path()).unwrap();
+        assert_eq!(
+            loaded.package.digest(),
+            plan_package_inputs(root.path(), &inputs, None).unwrap()
+        );
         assert!(registry_messaging_core::valid_package_digest(
             loaded.package.digest()
         ));
@@ -723,24 +917,90 @@ pub(crate) mod tests {
     #[test]
     fn the_digest_is_reproducible_and_covers_exactly_the_package_files() {
         let root = starter_copy();
-        let digest = load_package(root.path())
+        let digest = load_project(root.path())
             .unwrap()
             .package
             .digest()
             .to_owned();
         let again = starter_copy();
-        assert_eq!(load_package(again.path()).unwrap().package.digest(), digest);
+        assert_eq!(load_project(again.path()).unwrap().package.digest(), digest);
 
         std::fs::write(root.path().join("README.md"), "notes").unwrap();
         std::fs::write(root.path().join("runtime.yaml"), "kind: x").unwrap();
-        assert_eq!(load_package(root.path()).unwrap().package.digest(), digest);
+        assert_eq!(load_project(root.path()).unwrap().package.digest(), digest);
 
         let text = root.path().join(REMINDER).join("en/text.j2");
         let original = std::fs::read_to_string(&text).unwrap();
         std::fs::write(&text, format!("{original} ")).unwrap();
-        assert_ne!(load_package(root.path()).unwrap().package.digest(), digest);
+        assert_ne!(load_project(root.path()).unwrap().package.digest(), digest);
         std::fs::write(&text, original).unwrap();
-        assert_eq!(load_package(root.path()).unwrap().package.digest(), digest);
+        assert_eq!(load_project(root.path()).unwrap().package.digest(), digest);
+    }
+
+    #[test]
+    fn an_installed_package_verifies_and_rebinds_its_envelope_and_product_files() {
+        let project = starter_copy();
+        let inputs = package_inputs(project.path()).unwrap();
+        let installed = tempfile::tempdir().unwrap();
+        let root = installed.path().join("package");
+        write_package_inputs(&root, &inputs, Some("test-revision")).unwrap();
+        let verified = verify_package(&root, &package_limits(), PACKAGE_COMMAND).unwrap();
+        let loaded = load_contents(&root, Some(&verified)).unwrap();
+        assert_eq!(loaded.package.digest(), verified.digest());
+
+        std::fs::write(root.join(SUM_FILE), b"changed\n").unwrap();
+        let error = rebind_envelope(&root, &verified).unwrap_err();
+        assert_eq!(error.path(), "package.root/SHA256SUMS");
+        assert!(matches!(error.reason(), PackageLoadReason::Changed));
+
+        write_package_inputs(
+            &installed.path().join("second"),
+            &inputs,
+            Some("test-revision"),
+        )
+        .unwrap();
+        let second = installed.path().join("second");
+        let verified = verify_package(&second, &package_limits(), PACKAGE_COMMAND).unwrap();
+        std::fs::write(second.join(REVISION_FILE), b"other-revision\n").unwrap();
+        let error = rebind_envelope(&second, &verified).unwrap_err();
+        assert_eq!(error.path(), "package.root/REVISION");
+        assert!(matches!(error.reason(), PackageLoadReason::Changed));
+
+        write_package_inputs(&installed.path().join("third"), &inputs, None).unwrap();
+        let third = installed.path().join("third");
+        let verified = verify_package(&third, &package_limits(), PACKAGE_COMMAND).unwrap();
+        std::fs::write(third.join(REMINDER).join("en/text.j2"), b"swapped").unwrap();
+        let error = load_contents(&third, Some(&verified)).unwrap_err();
+        assert_eq!(
+            error.path(),
+            "package.root/templates/appointment-reminder/1/en/text.j2"
+        );
+        assert!(matches!(error.reason(), PackageLoadReason::Changed));
+    }
+
+    #[test]
+    fn authored_project_environment_expressions_are_refused_in_structured_yaml() {
+        for (path, from, to) in [
+            (PACKAGE_FILE, "role: sender", "role: ${ROLE}"),
+            (
+                "providers/sms-gateway/provider.yaml",
+                "prepareScript: scripts/prepare.rhai",
+                "prepareScript: ${SCRIPT}",
+            ),
+            (
+                "templates/appointment-reminder/1/template.yaml",
+                "channel: email",
+                "channel: ${CHANNEL}",
+            ),
+        ] {
+            let project = starter_copy();
+            let file = project.path().join(path);
+            let text = std::fs::read_to_string(&file).unwrap().replace(from, to);
+            std::fs::write(file, text).unwrap();
+            let error = load_project(project.path()).unwrap_err();
+            assert_eq!(error.path(), format!("package.root/{path}"));
+            assert!(matches!(error.reason(), PackageLoadReason::Authored(_)));
+        }
     }
 
     #[test]
@@ -757,7 +1017,7 @@ pub(crate) mod tests {
             ),
         )
         .unwrap();
-        let loaded = load_package(root.path()).unwrap();
+        let loaded = load_project(root.path()).unwrap();
         assert_eq!(loaded.files.len(), 1);
         assert_eq!(loaded.package.templates().count(), 0);
     }
@@ -931,7 +1191,7 @@ pub(crate) mod tests {
     #[test]
     fn the_starter_package_ships_its_http_provider_digested() {
         let root = starter_copy();
-        let loaded = load_package(root.path()).unwrap();
+        let loaded = load_project(root.path()).unwrap();
         let paths: Vec<&str> = loaded.files.iter().map(|file| file.path.as_str()).collect();
         for file in [
             "providers/sms-gateway/provider.yaml",
@@ -961,7 +1221,7 @@ pub(crate) mod tests {
         let script = root.path().join(GATEWAY).join("scripts/prepare.rhai");
         let original = std::fs::read_to_string(&script).unwrap();
         std::fs::write(&script, format!("{original}\n")).unwrap();
-        assert_ne!(load_package(root.path()).unwrap().package.digest(), digest);
+        assert_ne!(load_project(root.path()).unwrap().package.digest(), digest);
     }
 
     #[test]

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_messaging_core::{
-    CallbackRequest, CallbackVerifierConfig, Channel, DeliveryReport, Receipt, RenderedParts,
-    SenderProfile, UncertainPolicy,
+    CallbackBodyEncoding, CallbackRequest, CallbackVerifierConfig, Channel, DeliveryReport,
+    Receipt, RenderedParts, SenderProfile, UncertainPolicy,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome};
@@ -665,10 +665,14 @@ async fn without_an_interpret_script_the_status_classifies_the_response() {
         (401, permanent_code("http.401")),
         (404, permanent_code("http.404")),
         (422, permanent_code("http.422")),
-        (408, SendOutcome::Transient { retry_after: None }),
         (429, SendOutcome::Transient { retry_after: None }),
-        (500, SendOutcome::Transient { retry_after: None }),
         (503, SendOutcome::Transient { retry_after: None }),
+        // The request was written and the provider may have acted on it.
+        (408, SendOutcome::MaybeSent),
+        (500, SendOutcome::MaybeSent),
+        (502, SendOutcome::MaybeSent),
+        (504, SendOutcome::MaybeSent),
+        (507, SendOutcome::MaybeSent),
     ];
     for (status, expected) in cases {
         let upstream = MockHttpUpstream::start().await;
@@ -707,7 +711,7 @@ async fn retry_after_is_honoured_in_delta_seconds_and_capped() {
         ),
         (503, "Wed, 21 Oct 2026 07:28:00 GMT", None),
         (429, "0", None),
-        (408, "5", Some(Duration::from_secs(5))),
+        (503, "5", Some(Duration::from_secs(5))),
     ];
     for (status, value, expected) in cases {
         let upstream = MockHttpUpstream::start().await;
@@ -791,7 +795,8 @@ async fn a_success_the_script_cannot_classify_is_maybe_sent_and_a_failure_falls_
     let throwing = "fn interpret(response) { if response.body == () { throw \"unreadable\"; } #{ outcome: \"accepted\" } }";
     for (status, expected) in [
         (200, SendOutcome::MaybeSent),
-        (500, SendOutcome::Transient { retry_after: None }),
+        (503, SendOutcome::Transient { retry_after: None }),
+        (500, SendOutcome::MaybeSent),
         (404, permanent_code("http.404")),
     ] {
         let upstream = MockHttpUpstream::start().await;
@@ -1740,6 +1745,12 @@ async fn the_form_sms_example_sends_a_form_and_reads_recorded_shape_responses() 
             json_response(201, r#"{"sid":"SM1","error_code":30007}"#),
             SendOutcome::MaybeSent,
         ),
+        (
+            json_response(503, "{}"),
+            SendOutcome::Transient { retry_after: None },
+        ),
+        (json_response(500, "{}"), SendOutcome::MaybeSent),
+        (json_response(408, "{}"), SendOutcome::MaybeSent),
     ];
     for (response, expected) in cases {
         let upstream = MockHttpUpstream::start().await;
@@ -1884,9 +1895,11 @@ async fn the_mock_example_sends_json_with_an_idempotency_key_and_reads_its_answe
             permanent_code("gateway.rejected"),
         ),
         (
-            json_response(502, "{}"),
+            json_response(503, "{}"),
             SendOutcome::Transient { retry_after: None },
         ),
+        (json_response(502, "{}"), SendOutcome::MaybeSent),
+        (json_response(408, "{}"), SendOutcome::MaybeSent),
     ] {
         let upstream = MockHttpUpstream::start().await;
         upstream
@@ -1939,6 +1952,83 @@ async fn the_mock_example_reads_a_json_delivery_report() {
     );
 }
 
+/// Names what the receipt script saw of each part, or `none`.
+const VIEW_RECEIPT: &str = r#"
+fn receipt(request) {
+    let query = if request.query.len() == 0 { "none" } else { request.query.ref };
+    let form = if request.form.len() == 0 { "none" } else { request.form.sid };
+    let json = if type_of(request.json) == "()" { "none" } else { request.json.id };
+    #{ providerReference: request.method + "/" + query + "/" + form + "/" + json, report: "delivered" }
+}
+"#;
+
+#[test]
+fn a_receipt_script_reads_only_what_the_callback_verifier_authenticated() {
+    let secrets = secrets(&[("callback-key", b"callback-key-value")]);
+    let mut package = plain_package(false);
+    package.capabilities.receipts = ReceiptCapability::Callback;
+    package.receipt_script = Some("receipt.rhai".to_owned());
+    let cases = [
+        (
+            CallbackVerifierConfig::HmacSha256Body {
+                header: "x-signature".to_owned(),
+                encoding: CallbackBodyEncoding::Hex,
+                secret_ref: "secret:file/callback-key".to_owned(),
+            },
+            // The signature covers the body alone, not the query string.
+            "POST/none/f/j",
+        ),
+        (
+            CallbackVerifierConfig::HmacSha1UrlForm {
+                url: "https://messaging.example.org/v1/provider-callbacks/gateway".to_owned(),
+                header: "x-signature".to_owned(),
+                secret_ref: "secret:file/callback-key".to_owned(),
+            },
+            // The signature covers the URL and the form fields, not a JSON body.
+            "POST/q/f/none",
+        ),
+        (
+            CallbackVerifierConfig::PathToken {
+                token_ref: "secret:file/callback-key".to_owned(),
+            },
+            // The secret path authenticates the whole request.
+            "POST/q/f/j",
+        ),
+    ];
+    for (verifier, expected) in cases {
+        let mut settings = settings("http://127.0.0.1:9/v1/", NONE);
+        settings.callback_verifier = Some(verifier);
+        let provider = settings
+            .activate(
+                "gateway",
+                &package,
+                HttpProviderScripts {
+                    prepare: JSON_PREPARE,
+                    interpret: None,
+                    receipt: Some(VIEW_RECEIPT),
+                },
+                None,
+                &secrets.resolver,
+            )
+            .expect("provider activates");
+
+        let receipt = provider.receipt(&CallbackRequest {
+            method: "POST",
+            url: "https://messaging.example.org/v1/provider-callbacks/gateway?ref=q",
+            form_parameters: &[("sid", "f")],
+            body: br#"{"id":"j"}"#,
+            headers: &[],
+            path_token: None,
+        });
+
+        assert_eq!(
+            receipt.map(|read| read.map(|read| read.provider_reference)),
+            Ok(Some(expected.to_owned())),
+            "{expected}"
+        );
+    }
+}
+
 #[test]
 fn a_receipt_is_refused_by_a_provider_without_a_receipt_script() {
     let provider = activate(
@@ -1956,4 +2046,123 @@ fn a_receipt_is_refused_by_a_provider_without_a_receipt_script() {
         path_token: None,
     });
     assert_eq!(receipt, Err(ReceiptScriptError::NotDeclared));
+}
+
+fn aws_settings(authentication: &str) -> HttpProviderSettings {
+    settings("https://sms-voice.us-east-1.amazonaws.com/", authentication)
+}
+
+const AWS_AUTH: &str = "  kind: aws-sigv4\n  region: us-east-1\n  service: sms-voice\n  accessKeyIdRef: secret:file/access-key\n  secretAccessKeyRef: secret:file/secret-key\n  sessionTokenRef: secret:file/session-token\n";
+
+#[test]
+fn aws_credentials_are_explicit_secret_references_and_debug_is_redacted() {
+    let settings = aws_settings(AWS_AUTH);
+    assert_eq!(
+        settings.secret_references(),
+        vec![
+            ("authentication.accessKeyIdRef", "secret:file/access-key"),
+            (
+                "authentication.secretAccessKeyRef",
+                "secret:file/secret-key"
+            ),
+            (
+                "authentication.sessionTokenRef",
+                "secret:file/session-token"
+            ),
+        ]
+    );
+    let secrets = secrets(&[
+        ("access-key", b"AKIATESTKEYONLY123456"),
+        ("secret-key", b"synthetic-secret-canary"),
+        ("session-token", b"synthetic-session-canary"),
+    ]);
+    let mut package = plain_package(false);
+    package.request.headers = vec!["x-amz-target".to_owned()];
+    let resolved = settings
+        .resolve_authentication(&package, false, &secrets.resolver)
+        .expect("AWS credentials resolve");
+    assert!(matches!(
+        resolved,
+        super::settings::ResolvedAuthentication::AwsSigv4(_)
+    ));
+    let debug = format!("{settings:?}");
+    for value in [
+        "AKIATESTKEYONLY123456",
+        "synthetic-secret-canary",
+        "synthetic-session-canary",
+        "secret:file/access-key",
+    ] {
+        assert!(!debug.contains(value));
+    }
+}
+
+#[test]
+fn aws_inline_credentials_and_invalid_signing_scopes_are_refused() {
+    let secrets = no_secrets();
+    let package = plain_package(false);
+    for (from, to, field) in [
+        (
+            "region: us-east-1",
+            "region: us-east-1/other",
+            "authentication.region",
+        ),
+        (
+            "service: sms-voice",
+            "service: SMS",
+            "authentication.service",
+        ),
+        (
+            "accessKeyIdRef: secret:file/access-key",
+            "accessKeyIdRef: INLINE_CANARY",
+            "authentication.accessKeyIdRef",
+        ),
+    ] {
+        let settings = aws_settings(&AWS_AUTH.replace(from, to));
+        let error = settings
+            .resolve_authentication(&package, false, &secrets.resolver)
+            .err()
+            .expect("invalid settings refused");
+        assert!(error.to_string().contains(field), "{error}");
+        assert!(!error.to_string().contains("INLINE_CANARY"));
+    }
+}
+
+#[test]
+fn aws_authentication_refuses_get_and_non_root_or_extra_header_shapes() {
+    let secrets = secrets(&[
+        ("access-key", b"AKIATESTKEYONLY123456"),
+        ("secret-key", b"synthetic-secret-canary"),
+        ("session-token", b"synthetic-session-canary"),
+    ]);
+    let settings = aws_settings(AWS_AUTH);
+    let mut package = plain_package(false);
+    package.request.headers = vec!["x-amz-target".to_owned()];
+    package.request.method = HttpSendMethod::Get;
+    assert!(settings
+        .resolve_authentication(&package, false, &secrets.resolver)
+        .is_err());
+    package.request.method = HttpSendMethod::Post;
+    let mut nested = settings.clone();
+    nested.base_url.push_str("nested/");
+    let error = nested
+        .activate(
+            "aws",
+            &package,
+            scripts(JSON_PREPARE, None),
+            None,
+            &secrets.resolver,
+        )
+        .expect_err("nested root refused");
+    assert!(error.to_string().starts_with("baseUrl:"), "{error}");
+    package.request.headers.push("x-request-id".to_owned());
+    let error = settings
+        .activate(
+            "aws",
+            &package,
+            scripts(JSON_PREPARE, None),
+            None,
+            &secrets.resolver,
+        )
+        .expect_err("extra headers refused");
+    assert!(error.to_string().starts_with("request.headers:"), "{error}");
 }

@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::config::tests::{package_value, runtime_value, write_project};
+use crate::dispatch::send_within_budget;
 use crate::smtp::stub::{Act, Script, Stub};
 
 const MESSAGE_ID: &str = "0192f1d6-7c1a-7b4e-9a51-3f0c2e8d4b10";
@@ -536,4 +537,136 @@ async fn an_activated_provider_cut_off_after_the_message_left_is_maybe_sent() {
     let gateway = transports.get("sms-gateway").expect("http transport");
     assert_eq!(gateway.send(&sms()).await, SendOutcome::MaybeSent);
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
+}
+
+/// A listener that reads what each client first writes and then holds the
+/// connection open without answering. The count is of requests read.
+async fn holding_listener() -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("address").port();
+    let read = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&read);
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let counter = Arc::clone(&counter);
+            tokio::spawn(async move {
+                let mut buffer = [0_u8; 4096];
+                if matches!(stream.read(&mut buffer).await, Ok(read) if read > 0) {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+                std::future::pending::<()>().await;
+                drop(stream);
+            });
+        }
+    });
+    (port, read)
+}
+
+/// An attempt as the worker makes it: its budget is what the lease has left
+/// of the transport's timeout after reading the payload.
+fn dispatched(message: OutboundMessage, transport: &Arc<dyn MessageTransport>) -> OutboundMessage {
+    OutboundMessage {
+        budget: transport.attempt_timeout() - Duration::from_millis(100),
+        ..message
+    }
+}
+
+#[tokio::test]
+async fn a_dispatched_http_attempt_classifies_its_own_timeout_before_the_worker_stops_waiting() {
+    let (port, read) = holding_listener().await;
+    let mut gateway = http_connection_to(
+        &format!("http://127.0.0.1:{port}/v1/"),
+        json!({"kind": "none"}),
+    );
+    gateway["timeoutMilliseconds"] = json!(1000);
+    gateway["concurrencyLimit"] = json!(1);
+    let project = project(
+        json!({"sms-gateway": gateway}),
+        |_| {},
+        &[("callback-token", CALLBACK_TOKEN)],
+    );
+    let mut transports = Transports::new();
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("providers activate");
+    let gateway = Arc::clone(transports.get("sms-gateway").expect("http transport"));
+    // The worker holds the deployment's bound, not the package's, before a
+    // paced attempt takes its turn.
+    assert_eq!(gateway.concurrency_limit(), NonZeroUsize::new(1));
+
+    // The first attempt writes its request and hears nothing back.
+    let written = {
+        let gateway = Arc::clone(&gateway);
+        let message = dispatched(sms(), &gateway);
+        tokio::spawn(async move { send_within_budget(gateway.as_ref(), &message).await })
+    };
+    while read.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    // The second waits for the only send slot until its budget is spent:
+    // nothing left, so a later attempt may send it. Its budget ends well
+    // before the first attempt's, so the slot never opens in time.
+    let short = dispatched(sms(), &gateway);
+    let short = OutboundMessage {
+        budget: short.budget - Duration::from_millis(300),
+        ..short
+    };
+    let queued = send_within_budget(gateway.as_ref(), &short).await;
+    assert_eq!(queued, SendOutcome::Transient { retry_after: None });
+    assert_eq!(
+        written.await.expect("first attempt"),
+        SendOutcome::MaybeSent
+    );
+    assert_eq!(
+        read.load(Ordering::SeqCst),
+        1,
+        "only the first request left"
+    );
+}
+
+#[tokio::test]
+async fn a_dispatched_smtp_attempt_classifies_its_own_timeout_before_the_worker_stops_waiting() {
+    for (script, expected) in [
+        (
+            Script {
+                greeting: Act::Stall,
+                ..Script::default()
+            },
+            SendOutcome::Transient { retry_after: None },
+        ),
+        (
+            Script {
+                end_of_data: Act::Stall,
+                ..Script::default()
+            },
+            SendOutcome::MaybeSent,
+        ),
+    ] {
+        let stub = Stub::start(script).await;
+        let mut relay = smtp_connection(&stub);
+        relay["attemptTimeoutSeconds"] = json!(1);
+        let project = project(
+            json!({"mail-relay": relay}),
+            |_| {},
+            &[("callback-token", CALLBACK_TOKEN)],
+        );
+        let mut transports = Transports::new();
+        activate_providers(
+            &project.config,
+            &project.loaded,
+            &project.secrets,
+            &mut transports,
+        )
+        .expect("providers activate");
+        let relay = transports.get("mail-relay").expect("smtp transport");
+
+        let outcome = send_within_budget(relay.as_ref(), &dispatched(email(), relay)).await;
+        assert_eq!(outcome, expected);
+    }
 }

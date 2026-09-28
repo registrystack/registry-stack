@@ -1,0 +1,1 @@
+{"__type":"ValidationException","Fields":[{"Message":"body-canary-destination-is-invalid","Name":"DestinationPhoneNumber"}],"Message":"body-canary-request-did-not-pass-validation","Reason":"INVALID_PARAMETER"}

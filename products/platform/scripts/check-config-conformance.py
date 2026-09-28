@@ -418,6 +418,57 @@ ROWS: tuple[Row, ...] = (
         ),
     ),
     Row(
+        product="messaging",
+        loader_sources=("crates/registry-messaging/src",),
+        runtime_schema="products/messaging/generated/runtime/runtime.schema.json",
+        shared_blocks=(
+            "DatabaseConfig",
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerConfig",
+            "ListenerNetworkExposure",
+            "PackageConfig",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
+        reference_refusal=TestRef(
+            "crates/registry-messaging/src/config.rs",
+            "shared_runtime_loader_refuses_environment_expressions_in_secret_references",
+        ),
+        authored_refusal=TestRef(
+            "crates/registry-messaging/src/package.rs",
+            "authored_project_environment_expressions_are_refused_in_structured_yaml",
+        ),
+        digest_mismatch=TestRef(
+            "crates/registry-messaging/src/config.rs",
+            "runtime_package_digest_pin_reports_expected_and_found",
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-messaging/src/config.rs",
+                "OidcConfig",
+                "provider",
+                "OidcIssuerConfig",
+            ),
+            RustBlock(
+                "crates/registry-messaging/src/config.rs",
+                "OidcConfig",
+                "clients",
+                "OidcClientsConfig",
+            ),
+            RustBlock(
+                "crates/registry-messaging/src/config.rs",
+                "AuditConfig",
+                "key",
+                "AuditKeyConfig",
+            ),
+        ),
+    ),
+    Row(
         product="breg-mcp",
         loader_sources=("crates/registry-breg-mcp/src",),
         runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
@@ -482,7 +533,7 @@ ROWS: tuple[Row, ...] = (
 
 EXPECTED_PRODUCTS = frozenset(
     {"relay", "render", "discovery", "evidence", "breg", "casework", "scheduling",
-     "breg-mcp", "breg-review"}
+     "messaging", "breg-mcp", "breg-review"}
 )
 
 

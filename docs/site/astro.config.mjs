@@ -15,6 +15,7 @@ import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayV2RetirementRedirects } from './src/lib/relay-v2-retirement-redirects.mjs';
+import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
 // routes that migrated there redirect to these pages.
@@ -70,6 +71,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasMessaging = Boolean(selectedDocset.products?.['registry-messaging']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
+  const currentHasMessaging = Boolean(currentDocset.products?.['registry-messaging']);
   /** @param {string} path */
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */
@@ -89,6 +91,8 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasScheduling,
     hasRender,
     hasMessaging,
+    currentHasMessaging,
+    selectedDocset,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -104,6 +108,8 @@ const {
   hasScheduling,
   hasRender,
   hasMessaging,
+  currentHasMessaging,
+  selectedDocset,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -169,22 +175,26 @@ const messagingOpenApiSchema = {
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
-const messagingRoutes = [
-  '/start/messaging/',
-  '/tutorials/first-messaging/',
-  '/configure/messaging/',
-  '/operate/messaging/',
-  '/reference/apis/registry-messaging/',
-];
+// The Messaging pages are gated out of the docs collection of a docset that
+// does not publish Messaging (src/lib/docset-products.mjs), so their routes
+// redirect instead. While the current docset does not publish Messaging
+// either, there is no Messaging page to send a reader to, so every route lands
+// on the current docset's home page rather than on itself.
+const messagingRoutes = productRoutes('registry-messaging');
 /**
  * @param {boolean} hasMessaging
+ * @param {boolean} currentHasMessaging
  * @param {(path: string) => string} currentDocsetRedirect
  */
-export function messagingRedirects(hasMessaging, currentDocsetRedirect) {
+export function messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect) {
   if (hasMessaging) return {};
-  return Object.fromEntries(messagingRoutes.flatMap((route) => [
-    [route, currentDocsetRedirect(route)],
-  ]));
+  return Object.fromEntries(messagingRoutes.flatMap((route) => {
+    const target = currentDocsetRedirect(currentHasMessaging ? route : '/');
+    return [
+      [route, target],
+      [`${route.slice(0, -1)}.md`, target],
+    ];
+  }));
 }
 const caseworkRoutes = [
   '/start/casework/',
@@ -214,7 +224,9 @@ export default defineConfig({
   base,
   trailingSlash: 'always',
   markdown: {
-    remarkPlugins: [remarkGfm],
+    // remarkDocsetProducts keeps or removes the <DocsetProduct> regions of
+    // shared MDX pages for the products this docset publishes.
+    remarkPlugins: [remarkGfm, remarkDocsetProducts(selectedDocset)],
   },
   // Redirects for content that moved in the docs/marketing split (Wave 4).
   // External redirects (to marketing) absorb the migrated persuasion pages;
@@ -225,7 +237,7 @@ export default defineConfig({
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
-    ...messagingRedirects(hasMessaging, currentDocsetRedirect),
+    ...messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -719,7 +731,7 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'API overview', slug: 'reference/apis' },
             { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
-            ...cliReferenceSidebar(),
+            ...cliReferenceSidebar(undefined, { omit: omittedCliBinaries(selectedDocset) }),
             {
               label: 'Compatibility',
               collapsed: true,

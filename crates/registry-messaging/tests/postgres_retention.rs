@@ -22,12 +22,15 @@ use std::time::{Duration, SystemTime};
 use axum::http::StatusCode;
 use registry_messaging::messages::MESSAGE_ACCEPTED_EVENT;
 use registry_messaging::retention::{
-    erase_expired, RetentionActor, RetentionError, RetentionSweep, RETENTION_ERASED_EVENT,
+    erase_expired, erase_expired_in_batches, RetentionActor, RetentionError, RetentionSweep,
+    RETENTION_ERASED_EVENT,
 };
+use registry_messaging::runtime::{erase_expired_as_operator, RuntimeError};
+use registry_platform_audit::AuditWriter;
 use serde_json::Value;
 use support::{
-    assert_absent, assert_logs_clean, email_submission, sender_token, Harness, ISSUER,
-    SENDER_PRINCIPAL,
+    assert_absent, assert_logs_clean, email_submission, sender_token, test_audit, Harness,
+    RefusingAuditSink, ISSUER, SENDER_PRINCIPAL,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -130,7 +133,7 @@ async fn attempted_and_receipted(harness: &Harness, message_id: Uuid) {
 
 async fn retention_records(harness: &Harness) -> Vec<Value> {
     harness
-        .outbox()
+        .audit_responses()
         .await
         .into_iter()
         .filter(|record| record["event"] == RETENTION_ERASED_EVENT)
@@ -168,6 +171,7 @@ async fn a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while
 
     let report = erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -190,6 +194,7 @@ async fn a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while
     // A second run finds nothing left to erase.
     let again = erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -220,9 +225,18 @@ async fn a_requeue_committed_while_retention_waits_keeps_the_payload() {
         .await
         .unwrap();
     let store = harness.store.clone();
+    let audit = Arc::clone(&harness.audit);
     let retention = harness.config.retention;
     let run = tokio::spawn(async move {
-        erase_expired(&store, retention, None, true, RetentionActor::Runtime).await
+        erase_expired(
+            &store,
+            Some(&audit),
+            retention,
+            None,
+            true,
+            RetentionActor::Runtime,
+        )
+        .await
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!run.is_finished(), "retention waits for the requeue's lock");
@@ -259,6 +273,7 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
 
     let report = erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -319,7 +334,7 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
 
 async fn accepted_records(harness: &Harness) -> usize {
     harness
-        .outbox()
+        .audit_responses()
         .await
         .iter()
         .filter(|record| record["event"] == MESSAGE_ACCEPTED_EVENT)
@@ -349,6 +364,7 @@ async fn a_submission_receipt_expires_after_its_period_and_its_key_stays_spent()
 
     let report = erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -389,6 +405,7 @@ async fn a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused() {
 
     let preview = erase_expired(
         &harness.store,
+        None,
         harness.config.retention,
         None,
         false,
@@ -403,6 +420,7 @@ async fn a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused() {
 
     let refused = erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         Some(SystemTime::now() + Duration::from_secs(3600)),
         true,
@@ -416,6 +434,7 @@ async fn a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused() {
     // An earlier cutoff reaches only what had expired by then.
     let earlier = erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         Some(SystemTime::now() - 20 * DAY),
         true,
@@ -428,11 +447,106 @@ async fn a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused() {
 }
 
 #[tokio::test]
+async fn retention_preview_ignores_a_refused_audit_destination_and_apply_refuses_before_effect() {
+    let harness = Harness::start().await;
+    let id = harness.accepted(&email_submission()).await;
+    settle_as(&harness, id, "delivered", 100).await;
+    let audit_path = harness
+        .config
+        .audit
+        .path
+        .as_ref()
+        .expect("a file audit destination");
+    let blocked_parent = audit_path
+        .parent()
+        .unwrap()
+        .join("retention-audit-parent-is-a-file");
+    std::fs::write(&blocked_parent, b"not a directory").unwrap();
+    let mut config = harness.config.clone();
+    config.audit.path = Some(blocked_parent.join("audit.jsonl"));
+
+    let before = SystemTime::now() - Duration::from_secs(60);
+    let preview = erase_expired_as_operator(&config, before, false)
+        .await
+        .expect("a retention preview does not open the audit destination");
+    assert!(!preview.applied);
+    assert_eq!((preview.payloads, preview.records), (1, 1));
+    assert!(!payload_erased(&harness, id).await);
+
+    let refused = erase_expired_as_operator(&config, before, true)
+        .await
+        .expect_err("an applied retention run requires the audit destination");
+    assert!(
+        matches!(refused, RuntimeError::AuditJournal(_)),
+        "{refused}"
+    );
+    assert!(!payload_erased(&harness, id).await);
+}
+
+#[tokio::test]
+async fn an_audit_request_refusal_erases_nothing() {
+    let harness = Harness::start().await;
+    let id = harness.accepted(&email_submission()).await;
+    settle_as(&harness, id, "delivered", 8).await;
+    let sink = RefusingAuditSink::after(0);
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(sink.clone())));
+
+    let refused = erase_expired(
+        &harness.store,
+        Some(&audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::OperatorTool,
+    )
+    .await
+    .expect_err("retention requires its request entry before erasure");
+    assert!(matches!(refused, RetentionError::Audit), "{refused}");
+    assert!(!payload_erased(&harness, id).await);
+    assert_eq!(rows_of(&harness, id).await, [1, 1, 1, 0, 0, 1]);
+    assert!(sink.entries().is_empty());
+}
+
+#[tokio::test]
+async fn a_post_commit_retention_audit_refusal_leaves_erasure_committed() {
+    let harness = Harness::start().await;
+    let id = harness.accepted(&email_submission()).await;
+    settle_as(&harness, id, "delivered", 8).await;
+    let sink = RefusingAuditSink::after(1);
+    let audit = test_audit(AuditWriter::from_line_sink(Box::new(sink.clone())));
+
+    let refused = erase_expired(
+        &harness.store,
+        Some(&audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::OperatorTool,
+    )
+    .await
+    .expect_err("the response append is after the committed erasure");
+    assert!(
+        matches!(refused, RetentionError::AuditUnconfirmed),
+        "{refused}"
+    );
+    assert!(payload_erased(&harness, id).await);
+    assert_eq!(rows_of(&harness, id).await, [1, 1, 1, 0, 0, 1]);
+    let entries = sink.entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(
+        entries[0]["record"]["event"],
+        "messaging.retention.requested"
+    );
+}
+
+#[tokio::test]
 async fn a_retention_run_is_journaled_with_its_counts_only() {
     let harness = Harness::start().await;
     // A runtime pass that erases nothing writes no record.
     erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -444,6 +558,7 @@ async fn a_retention_run_is_journaled_with_its_counts_only() {
     // An operator run is always journaled, even when it erases nothing.
     erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -456,6 +571,7 @@ async fn a_retention_run_is_journaled_with_its_counts_only() {
     settle_as(&harness, id, "delivered", 8).await;
     erase_expired(
         &harness.store,
+        Some(&harness.audit),
         harness.config.retention,
         None,
         true,
@@ -483,7 +599,6 @@ async fn a_retention_run_is_journaled_with_its_counts_only() {
             "actor",
             "before",
             "event",
-            "eventId",
             "payloads",
             "records",
             "retention",
@@ -503,6 +618,7 @@ async fn the_runtime_sweep_erases_on_its_interval() {
     settle_as(&harness, id, "cancelled", 8).await;
     let sweep = RetentionSweep::new(
         harness.store.clone(),
+        Arc::clone(&harness.audit),
         harness.config.retention,
         Arc::clone(&harness.metrics),
     );
@@ -534,4 +650,137 @@ async fn the_runtime_sweep_erases_on_its_interval() {
             .await,
         Some(0)
     );
+}
+
+#[tokio::test]
+async fn an_applied_run_erases_in_bounded_batches_each_journaled() {
+    let harness = Harness::start().await;
+    let mut due = Vec::new();
+    for _ in 0..5 {
+        let id = harness.accepted(&email_submission()).await;
+        settle_as(&harness, id, "delivered", 8).await;
+        due.push(id);
+    }
+    let preview = erase_expired_in_batches(
+        &harness.store,
+        None,
+        harness.config.retention,
+        None,
+        false,
+        RetentionActor::OperatorTool,
+        2,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview.payloads, 5, "a preview counts everything due");
+
+    let report = erase_expired_in_batches(
+        &harness.store,
+        Some(&harness.audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::Runtime,
+        2,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(report.applied);
+    assert_eq!(report.payloads, 5, "the report sums the batches");
+    for id in &due {
+        assert!(payload_erased(&harness, *id).await);
+    }
+    // Batches of two, two, and one: the short batch ends the run, and each
+    // batch has its own request and outcome.
+    let records = retention_records(&harness).await;
+    let payloads: Vec<i64> = records
+        .iter()
+        .map(|record| record["payloads"].as_i64().unwrap())
+        .collect();
+    assert_eq!(payloads, [2, 2, 1]);
+    assert!(records
+        .iter()
+        .all(|record| record["before"] == report.before));
+    let requests = harness
+        .journal()
+        .into_iter()
+        .filter(|entry| {
+            entry["phase"] == "request"
+                && entry["record"]["event"] == "messaging.retention.requested"
+        })
+        .count();
+    assert_eq!(requests, 3);
+}
+
+#[tokio::test]
+async fn an_exact_multiple_of_the_batch_ends_with_an_unjournaled_empty_runtime_batch() {
+    let harness = Harness::start().await;
+    for _ in 0..2 {
+        let id = harness.accepted(&email_submission()).await;
+        settle_as(&harness, id, "cancelled", 8).await;
+    }
+    let report = erase_expired_in_batches(
+        &harness.store,
+        Some(&harness.audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::Runtime,
+        2,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.payloads, 2);
+    assert_eq!(retention_records(&harness).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_stop_request_ends_the_run_after_the_batch_in_progress_and_the_next_run_resumes() {
+    let harness = Harness::start().await;
+    let mut due = Vec::new();
+    for _ in 0..5 {
+        let id = harness.accepted(&email_submission()).await;
+        settle_as(&harness, id, "delivered", 8).await;
+        due.push(id);
+    }
+    let (_stop, stopped) = watch::channel(true);
+    let report = erase_expired_in_batches(
+        &harness.store,
+        Some(&harness.audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::Runtime,
+        2,
+        Some(&stopped),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.payloads, 2, "the batch in progress commits");
+    let mut erased = 0;
+    for id in &due {
+        erased += usize::from(payload_erased(&harness, *id).await);
+    }
+    assert_eq!(erased, 2, "no batch starts after the stop request");
+    assert_eq!(retention_records(&harness).await.len(), 1);
+
+    let report = erase_expired_in_batches(
+        &harness.store,
+        Some(&harness.audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::Runtime,
+        2,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.payloads, 3, "the next run erases the rest");
+    for id in &due {
+        assert!(payload_erased(&harness, *id).await);
+    }
 }

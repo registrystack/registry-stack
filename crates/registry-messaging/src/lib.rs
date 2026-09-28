@@ -14,7 +14,6 @@ pub mod http_provider;
 pub mod limits;
 pub mod messages;
 pub mod metrics;
-pub mod outbox;
 pub mod package;
 pub mod providers;
 pub mod receipts;

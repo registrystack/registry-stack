@@ -9,8 +9,12 @@ fn interpret(response) {
         }
         return #{ outcome: "maybe-sent" };
     }
-    if response.status == 429 || response.status >= 500 {
+    if response.status == 429 || response.status == 503 {
         return #{ outcome: "transient" };
+    }
+    // The request was written, so the gateway may have acted on it.
+    if response.status == 408 || response.status >= 500 {
+        return #{ outcome: "maybe-sent" };
     }
     if is_map && type_of(body.code) == "i64" {
         return #{ outcome: "permanent", code: "gateway." + body.code };

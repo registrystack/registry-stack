@@ -28,6 +28,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             shutil.copytree(ROOT / directory, root / directory)
         for relative in (
             "release/scripts/release_candidate.py",
+            "release/scripts/release_roster.py",
             "release/scripts/build-release-binaries.sh",
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
@@ -286,7 +287,10 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn('"dist/image-bin/${operator_tool}" --version', merge)
         self.assertIn("--messaging binary-shards/messaging", merge)
         self.assertIn(
-            "if (( release_major > 0 || release_minor >= 35 )); then", merge
+            'messaging_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  messaging-in-release "${REHEARSAL_VERSION}")"\n'
+            'if [[ "${messaging_in_release}" == true ]]; then\n',
+            merge,
         )
         self.assertIn("messaging-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("messagingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)

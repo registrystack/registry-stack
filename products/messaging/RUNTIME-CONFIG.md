@@ -28,36 +28,28 @@ commented document.
 
 ## Environment expressions
 
-The document may carry `${VAR}`, `${VAR:-default}`, or `${VAR:?message}`.
-Expansion is the shared loader every Registry Stack runtime uses
-(`registry-platform-config`): it runs over the document text before the YAML
-is parsed, so an expression in a comment is expanded too and must resolve.
-`${VAR}` needs `VAR` set to a non-empty value, `${VAR:-default}` uses the
-default when `VAR` is unset or empty, and `${VAR:?message}` refuses the
-document with the message. A value that fills a whole member is written as
-one quoted string, so it can never add a key, a list entry, or a document. A
-value embedded in longer text is refused when it holds a line break, a quote,
-a flow or block indicator, `: `, ` #`, or a leading YAML indicator, because
-it could change the document's shape.
+The shared `RuntimeConfigLoader` parses YAML before substituting `${VAR}`,
+`${VAR:-default}`, or `${VAR:?message}` inside string values. Comments are
+not expanded. Substitution cannot create keys, lists, or YAML documents, and
+an expanded string remains a string. Missing required variables fail with a
+field-addressed diagnostic that does not reveal their values.
 
-An expression is refused in every member whose name ends in `Ref`, and in
-everything below one, before anything is expanded: those members name a
-secret, and a secret is named by a `secret:` reference the resolver reads,
-never by text an environment variable spliced in. That refusal names the
-member. A refusal from expansion itself is reported at the document root `/`
-and names the variable, or carries the `:?` message; neither ever repeats a
-variable's value or a default's text.
+Keys remain literal. Expressions are refused in or below members ending in
+`Ref` or `Refs`, and in
+secret-provider declarations. Credentials remain literal `secret:` references
+to the explicitly declared provider. The loader never substitutes a secret
+value into runtime configuration.
 
 ## Keys
 
-`package.root` is the directory holding the authored package:
-`messaging.yaml` and its `templates/` tree. `package.expectedDigest`, when
+`package.root` is an installed package produced by `messagingctl package`,
+including `SHA256SUMS`, `messaging.yaml`, `providers/`, and `templates/`. `package.expectedDigest`, when
 set, pins the package to a `sha256:` digest: the runtime, `messagingctl
 check`, and `messagingctl apply` refuse a package whose digest differs, before
 any database is reached. `messagingctl check` reports the digest to pin.
 
 `listener` is required. `listener.bind` is one numeric socket address and
-defaults to `127.0.0.1:8107`. `listener.tlsTermination` is required: use
+must be explicit, for example `127.0.0.1:8107`. `listener.tlsTermination` is required: use
 `operator-controlled-upstream` behind an operator-managed TLS edge, or
 `development-loopback` for direct local development, which is refused on any
 non-loopback bind. `listener.networkExposure` defaults to `private-address`;
@@ -65,8 +57,8 @@ non-loopback bind. `listener.networkExposure` defaults to `private-address`;
 private container network. A public unicast address is refused under every
 combination.
 
-`metricsListener.bind` is optional. When present, `/metrics` is served on that
-socket and nowhere else; when absent, no metrics are served. The address must
+`metricsListener` is optional. When present, its `bind` is required and
+`/metrics` is served on that socket only; when absent, no metrics are served. The address must
 be a concrete loopback or private address on a non-zero port, and must not be
 the public listener's socket or one a wildcard public listener already covers.
 
@@ -107,17 +99,28 @@ carrying the `postgres-test` feature.
 profile names must be listed; a profile no admitted client could reach is
 refused at load. `scopeClaim` defaults to `registry_scopes`. `jwksSource`
 defaults to issuer discovery and can instead select
-`{kind: static, documentRef: secret:...}`; `jwksUri` overrides the discovery
-document's JWKS address. `assertionIssuers` maps an allowed client to at most
+`{kind: static, documentRef: secret:...}` or `{kind: uri, uri: HTTPS_URL}`.
+The former `jwksUri` member is refused. `assertionIssuers` maps an allowed client to at most
 16 assertion authorities it may exchange a subject token from; a deployment
 that performs no token exchange leaves it empty, and an exchanged token is
 then refused. Tokens must be `at+jwt` access tokens.
 
-`audit.path` is the journal file and `audit.hashKeyRef` the secret keying its
-hash chain. The journal records the runtime start with the runtime version and
-the retention periods in force. The same key derives the caller pseudonyms the
-journal and the idempotency keys are stored under, so rotating it frees every
-idempotency key spent under the previous one.
+`audit.destination` selects `file` (the default) or `stdout`. File mode uses
+`audit.path`, `audit.rotateBytes`, and `audit.retainDays` for a per-process
+JSON Lines stream. File acceptance includes fsync; stdout is best-effort and
+requires the deployment's log pipeline for durable retention. Each process
+uses its own destination: applied operator commands write a sibling
+`messagingctl` file, or stderr when the runtime uses stdout, keeping command
+stdout machine-readable.
+
+`audit.hashKeyRef` supplies the key for minimized identifier references. It
+does not sign or chain the journal. Preserve this key across the transition:
+the same derivation produces caller pseudonyms used by idempotency tombstones,
+so rotation frees keys spent under the previous pseudonym. External tamper
+evidence and complete off-host retention are deployment responsibilities.
+`retainDays` removes local sealed segments; ship required records before
+that retention expires. A failed writer remains unhealthy until restart and
+makes `/ready` fail.
 
 `retention` bounds how long data is kept:
 
@@ -148,12 +151,15 @@ and an operator retry committed while a sweep waits for the message keeps
 its payload.
 
 The runtime sweeps once at start and then hourly, under the runtime
-credential, and journals `messaging.retention.erased` with the counts
-whenever it erased something. `messagingctl retention erase-expired --before
-<RFC 3339 instant>` runs the same sweep on demand under the migration
-credential: it previews by default, erases with `--apply`, journals every
-applied run through the outbox, and refuses a cutoff later than the
-database's clock. One advisory lock serializes the runtime's sweep and the
+credential. A sweep erases in batches of at most 1,000 of each kind, each
+batch its own transaction, and journals `messaging.retention.erased` with the
+counts for every batch that erased something. `messagingctl retention
+erase-expired --before <RFC 3339 instant>` runs the same sweep on demand under
+the migration credential: it previews by default, erases with `--apply`,
+journals every applied batch through its process audit writer (the first one
+even when it erased nothing), and refuses a cutoff later than the database's
+clock. Batches committed before a failure stay erased and journaled. One
+advisory lock, taken by each batch, serializes the runtime's sweep and the
 command.
 
 ### Providers
@@ -191,19 +197,48 @@ An `http` connection:
 | `redirects` | yes | `deny`, the only policy |
 | `authentication` | yes | One of the kinds below |
 | `callbackVerifier` | when the package declares `receipts: callback`, and only then | See Provider callbacks |
-| `tlsTrustProfile` | no | A `tlsTrustProfiles` name whose bundle replaces the public web roots |
+| `tlsTrustProfile` | no | A `tlsTrustProfiles` name whose bundle is trusted in addition to the system roots |
 | `allowedPrivateCidrs` | no | Exact private networks an `https` provider may resolve into |
 | `acknowledgeQueryStringContent` | when, and only when, the package sends with `get` | Acknowledges that content travels in the query string |
 
 `authentication.kind` is `none` (only for a loopback `http` `baseUrl`),
 `basic` (`usernameRef`, `passwordRef`), `static-authorization` (`tokenRef`,
 and `scheme`, which may only be `Bearer`), `static-api-key` (`headerName`,
-`valueRef`), `static-api-key-query` (`parameterName`, `valueRef`), or
+`valueRef`), `static-api-key-query` (`parameterName`, `valueRef`),
+`aws-sigv4` (`region`, `service`, `accessKeyIdRef`, `secretAccessKeyRef`, and
+optional `sessionTokenRef`), or
 `oauth2-client-credentials` (`tokenEndpoint` on the `baseUrl`'s scheme,
 `clientIdRef`, `clientSecretRef`, `maximumCacheSeconds` from 10 to 86400, and
 optionally `scope`, `audience`, `resource`, `assumedLifetimeSeconds`, and
 `credentialPlacement: form-body`). A resolved credential value is at most
-4096 bytes.
+4096 bytes. AWS access key identifiers and secret access keys have a tighter
+128-byte limit; AWS session tokens retain the 4096-byte credential limit.
+
+For `aws-sigv4`, `baseUrl` must name the JSON API root, ending in `/` with
+no other path. The provider must declare POST and exactly the `x-amz-target`
+request header. Its prepare script uses an empty relative target, `bodyFormat:
+json`, and the AWS action in `x-amz-target`. Rust supplies JSON 1.0 content type
+and signs the actual destination host, action, timestamp, session token when
+present, and exact serialized body. Signing credentials never enter scripts.
+The current signing profile supports root JSON RPC requests, not AWS Query
+APIs such as Amazon SNS Publish, S3, or arbitrary AWS REST paths.
+
+The included `examples/providers/aws-sms` package uses AWS End User Messaging
+SMS `SendTextMessage`, with `service: sms-voice` and an explicit region. Configure
+the matching regional endpoint and restrict its AWS principal to the required
+send action/resources. Access keys and optional temporary session credentials
+are explicit `secret:` references resolved at activation. There is no ambient
+AWS credential chain, metadata lookup, role assumption, or token refresh;
+replace the secret values and restart before temporary credentials expire.
+No real AWS account or carrier delivery is exercised by the local fixture tests.
+
+This adapter records AWS acceptance as `submitted`. It does not ingest SNS or
+EventBridge delivery events and declares no receipt capability. AWS does not
+provide a submission idempotency token on this operation: retain `onUncertain:
+hold`; a possibly accepted send cannot be automatically retried safely. Sender
+registration, account sandbox/production access, spend limits, and destination
+country requirements remain AWS account prerequisites. The provider example
+contains the installation steps and links to AWS's maintained documentation.
 
 `tlsTrustProfiles` names at most 64 PEM trust bundles, each
 `{bundleRef: secret:...}`, that an `http` connection's `tlsTrustProfile`
@@ -229,6 +264,10 @@ as given, `http` or `https`, without a query or fragment, at most 2048 bytes;
 it is what a reverse proxy in front of the runtime must not change for the
 provider. `header` is an HTTP header name of at most 128 bytes. There is no
 unauthenticated kind.
+
+The receipt script reads only what the verifier signed: under
+`hmac-sha256-body` its `query` is empty, under `hmac-sha1-url-form` its
+`json` is `()`, and under `path-token` it reads the whole request.
 
 A verified callback answers 204 whether its receipt moved the report,
 changed nothing, reported a state the runtime does not record, or named no
@@ -352,9 +391,14 @@ capabilities:
 `ratePerSecond` paces the worker: an attempt waits for the provider's next
 send slot after it is leased and before anything reaches the provider, so at
 most one send starts every `1 / ratePerSecond` seconds per runtime process.
-The wait has its own ten-second allowance on top of the send's time budget;
-an attempt whose slot does not open in it is retried under its dispatch
-policy without a send.
+A paced attempt first waits for one of the connection's `concurrencyLimit`
+sends in flight and holds it through the send, so the rate spaces requests as
+they leave, including ones queued behind a slow send. Both waits share their
+own ten-second allowance on top of the send's time budget, and stop at the
+message's `expiresAt`; an attempt whose slot does not open in time is retried
+under its dispatch policy without a send, and one past its expiry is not sent
+again: it expires, or stays `unknown` when an earlier attempt may have reached
+the provider and its policy retries.
 
 `provider.yaml` is closed and at most 64 KiB; each script is at most 64 KiB
 and must compile with exactly its entry point when the package loads. A
@@ -390,14 +434,21 @@ characters, and a subject strips newlines. A locale the version does not
 declare is refused `422 template.locale-unavailable`, never answered in
 another language.
 
-Symbolic links are refused anywhere in the package, and files at the package
-root other than `messaging.yaml`, `templates/`, and `providers/` are ignored
-and not part of the digest.
+Symbolic links and unknown product files are refused in installed packages.
+`messagingctl package PROJECT --output DIRECTORY` selects `messaging.yaml`,
+`templates/`, and `providers/` from the editable project and excludes runtime
+configuration, secrets, and development state. The output is write-once; an
+optional `--revision TEXT` records provenance. `--dry-run` reports the plan
+without writing. Use `check --project PROJECT` and `preview --project PROJECT`
+while authoring, and `--package DIRECTORY` for installed output.
 
 ### The package ledger
 
-The package digest is the SHA-256 of a canonical JSON listing of every
-package file with its own SHA-256 and size. `messagingctl apply
+The package identity is the shared SHA-256 digest of `SHA256SUMS`. The runtime
+verifies the envelope and optional pin, then rechecks each bounded file buffer
+against its verified digest before parsing or compiling it. Rendering and
+scripts use those owned buffers; later filesystem changes cannot replace
+the bytes accepted at startup. `messagingctl apply
 --runtime-config FILE` reports whether the package on disk differs from the
 one the database's package ledger names active; with `--apply` it records the
 package. `messaging serve` refuses to start unless the package on disk has the

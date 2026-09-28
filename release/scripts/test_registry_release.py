@@ -2413,21 +2413,20 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence discovery breg casework scheduling messaging)",
+            'canary_image_names="$(python3 release/scripts/release_candidate.py \\\n'
+            '            image-names --version "${version}")"\n'
+            '          read -r -a image_names <<<"${canary_image_names}"\n',
             "images: $images[0]",
             "scans: $scans[0]",
-            '"discovery-image"',
-            '"evidence-image"',
-            '"breg-image"',
-            '"casework-image"',
-            '"scheduling-image"',
-            '"messaging-image"',
-            '"relay-image"',
+            'subjects:($ARGS.positional | map(. + "-image"))',
+            "}' --args \"${image_names[@]}\" > \"${evidence_root}/advisory-verdict.json\"",
         ):
             self.assertIn(current, workflow)
         # The canary derives its image roster from release_candidate.py, so it
-        # names no product image of its own, breg-mcp and breg-review included.
+        # names no product image of its own, Messaging, breg-mcp, and
+        # breg-review included.
         self.assertNotIn("image_names=(", workflow)
+        self.assertNotIn('"messaging-image"', workflow)
         self.assertNotIn('"breg-mcp-image"', workflow)
         self.assertNotIn('"breg-review-image"', workflow)
         for retired in (
@@ -2943,6 +2942,118 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
+    def test_messaging_release_surface_begins_at_its_first_release(self) -> None:
+        module = load_registry_release()
+        previous = {
+            name: "0.34.0"
+            for name in (
+                module.RELAY_V2_ARTIFACT_INVENTORY
+                | {
+                    "relay-installer",
+                    "registry-docs",
+                    "discovery",
+                    "breg",
+                    "bregctl",
+                    "breg-installer",
+                    "casework",
+                    "caseworkctl",
+                    "casework-installer",
+                    "scheduling",
+                    "registry-client-node",
+                    "registry-client-python",
+                }
+            )
+            if name != "mint"
+            and name
+            not in {
+                "evidence-client-node",
+                "evidence-client-python",
+            }
+        }
+        # No version ships Messaging while the roster names no first release.
+        with mock.patch.object(
+            module.release_roster, "MESSAGING_FIRST_RELEASE", None
+        ):
+            for version in ("0.34.0", "0.35.0", "0.36.0", "1.0.0"):
+                with self.subTest(version=version, roster=None):
+                    current = {name: version for name in previous}
+                    self.assertEqual(
+                        [], module.artifact_inventory_errors(version, current)
+                    )
+                    self.assertNotEqual(
+                        [],
+                        module.artifact_inventory_errors(
+                            version,
+                            current
+                            | {"messaging": version, "messagingctl": version},
+                        ),
+                    )
+
+        # A hypothetical first release keeps the inclusion path covered.
+        with mock.patch.object(
+            module.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
+        ):
+            earlier = {name: "0.35.0" for name in previous}
+            self.assertEqual([], module.artifact_inventory_errors("0.35.0", earlier))
+            self.assertNotEqual(
+                [],
+                module.artifact_inventory_errors(
+                    "0.35.0",
+                    earlier | {"messaging": "0.35.0", "messagingctl": "0.35.0"},
+                ),
+            )
+            future = {name: "0.36.0" for name in previous}
+            future.update({"messaging": "0.36.0", "messagingctl": "0.36.0"})
+            self.assertEqual([], module.artifact_inventory_errors("0.36.0", future))
+            for missing in ("messaging", "messagingctl"):
+                with self.subTest(missing=missing):
+                    incomplete = dict(future)
+                    del incomplete[missing]
+                    self.assertNotEqual(
+                        [], module.artifact_inventory_errors("0.36.0", incomplete)
+                    )
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RELEASE_INCLUDE_MESSAGING", recipe)
+        self.assertIn("-p registry-messaging --bin messaging", recipe)
+        self.assertIn("-p registry-messagingctl --bin messagingctl", recipe)
+        self.assertIn('"messaging-${tag}-linux-amd64"', recipe)
+        self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(messaging)", recipe)
+
+    def test_release_candidate_smokes_messaging_assets_from_its_first_release(
+        self,
+    ) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        gate = (
+            '          messaging_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '            messaging-in-release "${version}")"\n'
+            '          if [[ "${messaging_in_release}" == true ]]; then\n'
+        )
+        self.assertIn(gate, assemble)
+        smoke = assemble.split(gate, 1)[1].split("\n          fi\n", 1)[0]
+        self.assertIn("for messaging_binary in messaging messagingctl; do", smoke)
+        self.assertIn(
+            '"candidate/bundle-root/${messaging_binary}-'
+            '${{ needs.validate.outputs.tag }}-linux-amd64" --version',
+            smoke,
+        )
+        self.assertIn(
+            '"${messaging_binary} ${{ needs.validate.outputs.version }}"', smoke
+        )
+        self.assertIn('init "${messaging_project}"', smoke)
+        self.assertIn('check --project "${messaging_project}"', smoke)
+        self.assertIn(
+            'package "${messaging_project}" --output "${messaging_project}-installed"',
+            smoke,
+        )
+        self.assertIn('check --package "${messaging_project}-installed"', smoke)
+
     def test_breg_services_release_surface_begins_at_their_first_release(
         self,
     ) -> None:
@@ -2963,8 +3074,6 @@ class RegistryReleaseTest(TestCase):
                     "casework-installer",
                     "scheduling",
                     "schedulingctl",
-                    "messaging",
-                    "messagingctl",
                     "registry-client-node",
                     "registry-client-python",
                 }
@@ -3055,83 +3164,6 @@ class RegistryReleaseTest(TestCase):
                 )
                 self.assertNotIn("USER ", dockerfile)
                 self.assertNotIn("bregctl", dockerfile)
-
-    def test_messaging_release_surface_begins_after_v0_34(self) -> None:
-        module = load_registry_release()
-        previous = {
-            name: "0.34.0"
-            for name in (
-                module.RELAY_V2_ARTIFACT_INVENTORY
-                | {
-                    "relay-installer",
-                    "registry-docs",
-                    "discovery",
-                    "breg",
-                    "bregctl",
-                    "breg-installer",
-                    "casework",
-                    "caseworkctl",
-                    "casework-installer",
-                    "scheduling",
-                    "registry-client-node",
-                    "registry-client-python",
-                }
-            )
-            if name != "mint"
-            and name
-            not in {
-                "evidence-client-node",
-                "evidence-client-python",
-            }
-        }
-        self.assertEqual([], module.artifact_inventory_errors("0.34.0", previous))
-        self.assertNotEqual(
-            [],
-            module.artifact_inventory_errors(
-                "0.34.0",
-                previous | {"messaging": "0.34.0", "messagingctl": "0.34.0"},
-            ),
-        )
-        future = {name: "0.35.0" for name in previous}
-        future.update({"messaging": "0.35.0", "messagingctl": "0.35.0"})
-        self.assertEqual([], module.artifact_inventory_errors("0.35.0", future))
-        for missing in ("messaging", "messagingctl"):
-            with self.subTest(missing=missing):
-                incomplete = dict(future)
-                del incomplete[missing]
-                self.assertNotEqual(
-                    [], module.artifact_inventory_errors("0.35.0", incomplete)
-                )
-
-        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("RELEASE_INCLUDE_MESSAGING", recipe)
-        self.assertIn("-p registry-messaging --bin messaging", recipe)
-        self.assertIn("-p registry-messagingctl --bin messagingctl", recipe)
-        self.assertIn('"messaging-${tag}-linux-amd64"', recipe)
-        self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
-        self.assertIn("image_bin_binaries+=(messaging)", recipe)
-
-    def test_release_candidate_smokes_messaging_assets_from_v0_35(self) -> None:
-        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
-            encoding="utf-8"
-        )
-        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
-        smoke = assemble.split(
-            "if (( relay_major > 0 || relay_minor >= 35 )); then", 1
-        )[1].split("\n          fi\n", 1)[0]
-        self.assertIn("for messaging_binary in messaging messagingctl; do", smoke)
-        self.assertIn(
-            '"candidate/bundle-root/${messaging_binary}-'
-            '${{ needs.validate.outputs.tag }}-linux-amd64" --version',
-            smoke,
-        )
-        self.assertIn(
-            '"${messaging_binary} ${{ needs.validate.outputs.version }}"', smoke
-        )
-        self.assertIn('init "${messaging_project}"', smoke)
-        self.assertIn('check --package "${messaging_project}"', smoke)
 
     def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
         module = load_registry_release()
@@ -4674,7 +4706,7 @@ def write_manifest(
     if load_release_roster().breg_services_in_release(version_tuple):
         artifacts["breg-mcp"] = version
         artifacts["breg-review"] = version
-    if version_tuple >= (0, 35, 0):
+    if load_release_roster().messaging_in_release(version_tuple):
         artifacts["messaging"] = version
         artifacts["messagingctl"] = version
     manifest = {

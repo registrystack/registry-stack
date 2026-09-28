@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 
 import { cliReferenceSidebar } from '../src/lib/cli-reference-sidebar.mjs';
+import { omittedCliBinaries, productRoutes } from '../src/lib/docset-products.mjs';
 import { RETIRED_RELAY_ROUTE_TARGETS } from '../src/lib/relay-v2-retirement-redirects.mjs';
 import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
 
@@ -31,12 +32,13 @@ const schedulingRedirects = new Function(
   `${schedulingRoutesSource}; ${schedulingRedirectsSource.replace(/^export /, '')}; return schedulingRedirects;`,
 )();
 const messagingRedirectsSource = configSource.match(/export function messagingRedirects[\s\S]*?^}\n/m)?.[0];
-const messagingRoutesSource = configSource.match(/const messagingRoutes = \[[\s\S]*?\];/)?.[0];
+const messagingRoutesSource = configSource.match(/const messagingRoutes = productRoutes\('registry-messaging'\);/)?.[0];
 assert.ok(messagingRedirectsSource && messagingRoutesSource,
   'could not isolate Messaging docset routing');
 const messagingRedirects = new Function(
+  'productRoutes',
   `${messagingRoutesSource}; ${messagingRedirectsSource.replace(/^export /, '')}; return messagingRedirects;`,
-)();
+)(productRoutes);
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
@@ -104,10 +106,12 @@ const sidebarFactory = new Function(
   'optionalGeneratedProduct',
   'openAPISidebarGroups',
   'flattenSidebarGroups',
+  'omittedCliBinaries',
   'hasCasework',
   'hasScheduling',
   'hasRender',
   'hasMessaging',
+  'selectedDocset',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -119,8 +123,26 @@ const sidebarArguments = [
   (label) => generatedProducts.get(label) ?? null,
   generatedAPI,
   flattenSidebarGroups,
+  omittedCliBinaries,
 ];
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true);
+// The whole-site sidebar publishes every product, so every page is seated.
+const everyProductDocset = {
+  products: {
+    'registry-casework': {},
+    'registry-scheduling': {},
+    'registry-render': {},
+    'registry-messaging': {},
+  },
+};
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, everyProductDocset);
+
+const messagingPageRoutes = [
+  '/start/messaging/',
+  '/tutorials/first-messaging/',
+  '/configure/messaging/',
+  '/operate/messaging/',
+  '/reference/apis/registry-messaging/',
+];
 
 function section(label) {
   const group = sidebar.find((item) => item.label === label);
@@ -247,7 +269,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     current: 'latest',
     released: 'v0.29.0',
     docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' }, 'registry-messaging': { ref: 'HEAD' } } },
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } } },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
       // A docset that carries Messaging without Scheduling, so the Messaging
@@ -256,7 +278,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     ],
   };
   for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging] of [
-    ['latest', {}, true, true, true, true],
+    ['latest', {}, true, true, true, false],
     ['v0.29.0', {}, false, false, false, false],
     ['v0.30.0', {}, true, false, false, false],
     ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false],
@@ -273,6 +295,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasScheduling,
       context.hasRender,
       context.hasMessaging,
+      context.selectedDocset,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
@@ -296,10 +319,12 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       sidebarArguments[2],
       docsetAPI,
       flattenSidebarGroups,
+      omittedCliBinaries,
       context.hasCasework,
       context.hasScheduling,
       context.hasRender,
       context.hasMessaging,
+      context.selectedDocset,
     ).find((item) => item.label === 'Registry Messaging');
     if (hasMessaging) {
       assert.deepEqual(
@@ -313,16 +338,52 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(redirects['/tutorials/first-casework.md'] !== undefined, !hasCasework, id);
     const schedulingRedirectsResult = schedulingRedirects(context.hasScheduling, context.currentDocsetRedirect);
     assert.equal(schedulingRedirectsResult['/reference/apis/registry-scheduling/'] !== undefined, !hasScheduling, id);
-    const messagingRedirectsResult = messagingRedirects(context.hasMessaging, context.currentDocsetRedirect);
-    for (const route of [
-      '/start/messaging/',
-      '/tutorials/first-messaging/',
-      '/configure/messaging/',
-      '/operate/messaging/',
-      '/reference/apis/registry-messaging/',
-    ]) {
-      assert.equal(messagingRedirectsResult[route] !== undefined, !hasMessaging, `${id} ${route}`);
+    const messagingRedirectsResult = messagingRedirects(
+      context.hasMessaging,
+      context.currentHasMessaging,
+      context.currentDocsetRedirect,
+    );
+    // The current docset does not publish Messaging, so a docset without it
+    // sends every Messaging route, and its Markdown twin, to the current
+    // docset's home page instead of redirecting a route to itself.
+    const home = context.currentDocsetRedirect('/');
+    for (const route of messagingPageRoutes) {
+      const twin = `${route.slice(0, -1)}.md`;
+      assert.equal(messagingRedirectsResult[route], hasMessaging ? undefined : home, `${id} ${route}`);
+      assert.equal(messagingRedirectsResult[twin], hasMessaging ? undefined : home, `${id} ${twin}`);
     }
+  }
+  // When the current docset publishes Messaging, a docset without it sends each
+  // Messaging route to the same route of the current docset.
+  const activated = {
+    ...docsets,
+    docsets: docsets.docsets.map((docset) => docset.id === 'latest'
+      ? { ...docset, products: { ...docset.products, 'registry-messaging': { ref: 'HEAD' } } }
+      : docset),
+  };
+  for (const [id, env, expected] of [
+    ['latest', {}, {}],
+    ['v0.29.0', {}, Object.fromEntries(messagingPageRoutes.flatMap((route) => {
+      const target = `https://docs.registrystack.org/dev${route}`;
+      return [[route, target], [`${route.slice(0, -1)}.md`, target]];
+    }))],
+  ]) {
+    const context = resolveDocsetBuildContext(activated, { DOCS_DOCSET: id, ...env });
+    assert.equal(context.currentHasMessaging, true, id);
+    assert.deepEqual(
+      messagingRedirects(context.hasMessaging, context.currentHasMessaging, context.currentDocsetRedirect),
+      expected,
+      id,
+    );
+  }
+  // A non-archived build without Messaging never redirects a route to itself.
+  const unpublished = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: 'latest', DOCS_BASE: '/dev/' });
+  for (const [route, target] of Object.entries(messagingRedirects(
+    unpublished.hasMessaging,
+    unpublished.currentHasMessaging,
+    unpublished.currentDocsetRedirect,
+  ))) {
+    assert.equal(target, '/dev/', route);
   }
   assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling' \|\| repoId === 'registry-messaging'\) && !docset\.products\[repoId\]/);
   for (const route of [
@@ -338,7 +399,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   assert.match(configSource, /\.\.\.caseworkRedirects\(hasCasework, currentDocsetRedirect\)/);
   assert.match(configSource, /'\/reference\/apis\/registry-scheduling\/'/);
   assert.match(configSource, /\.\.\.schedulingRedirects\(hasScheduling, currentDocsetRedirect\)/);
-  assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentDocsetRedirect\)/);
+  assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentHasMessaging, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {

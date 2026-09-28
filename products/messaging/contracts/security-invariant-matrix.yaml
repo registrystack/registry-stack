@@ -62,6 +62,9 @@ invariants:
       resolved address before connecting to the one it pinned: an http
       provider through the platform fixed-destination substrate, an smtp
       provider through the same address classification in its own resolver.
+      AWS JSON signing retains that same fixed destination and signs only the
+      final request bytes; keys remain outside provider scripts. Runtime-owned
+      authorization and signing headers cannot be supplied by a script.
       A private, shared, or unique-local address needs an exact
       allowedPrivateCidrs entry; loopback is reachable only in a development
       mode, and metadata never.
@@ -108,9 +111,10 @@ invariants:
     enforcementPoint: >-
       Each activated provider kind's delivery certainty: an smtp failure
       after the end-of-data marker, and an http failure after the request was
-      written, is maybe-sent. The dispatcher holds a maybe-sent attempt, and
-      every attempt its transport's timeout cuts off, as unknown unless the
-      sender profile opts into retry, which the package allows only over a
+      written, is maybe-sent, and so is an attempt its transport's timeout
+      cuts off after the request was written or that overruns the budget the
+      dispatcher gives it. The dispatcher holds a maybe-sent attempt as
+      unknown unless the sender profile opts into retry, which the package allows only over a
       provider that declares idempotentSubmit or a profile that sets
       acceptDuplicates. The provider idempotency capability is stored at
       acceptance and controls the key sent on every later attempt, even
@@ -161,12 +165,13 @@ invariants:
       Audit records carry operation, caller pseudonym, sender profile,
       template reference, correlation, outcome class, and a keyed recipient
       reference; log fields never carry payload values; metric labels are
-      closed sets fixed in code. Startup publishes every pending outbox batch
-      before its runtime-start record; recovery failure refuses startup.
+      closed sets fixed in code. The audit writer opens before serving and its
+      sticky health participates in readiness. Request records precede effects;
+      response records describe only established outcomes.
     refusal: >-
       Nothing to refuse at the caller: the absence is the control, proven over
-      the journal, the outbox, the logs, and the metrics of a full journey
-      whose journal chain still verifies.
+      the journal, the logs, and the metrics of a full journey. Audit records
+      are minimized JSON envelopes, not a keyed hash chain.
     negativeTest:
       path: crates/registry-messaging/tests/postgres_callbacks.rs
       name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics
@@ -194,8 +199,8 @@ invariants:
       message still sending or in an unknown outcome.
     enforcementPoint: >-
       The retention run, hourly in the runtime and on demand through
-      messagingctl retention erase-expired, in one transaction under one
-      advisory lock: a payload is nulled retention.payloadDays after its
+      messagingctl retention erase-expired, in bounded batches, each one
+      transaction under one advisory lock: a payload is nulled retention.payloadDays after its
       dispatch job reached a terminal state, a record is deleted
       retention.recordDays after it, and a submission receipt is dropped
       when its retention.submissionReceiptDays end. Each terminal job is

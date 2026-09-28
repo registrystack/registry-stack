@@ -8,6 +8,7 @@ import json
 import subprocess
 import tarfile
 import tempfile
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -413,20 +414,47 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
-    def test_v0_35_roster_includes_messaging(self) -> None:
-        result = subprocess.run(
-            [
-                "python3",
-                str(ROOT / "release/scripts/release_candidate.py"),
-                "image-names",
-                "--version",
-                "0.35.0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+    def test_no_version_roster_includes_messaging_until_it_joins_a_release(
+        self,
+    ) -> None:
+        for version in ("0.35.0", "0.36.0", "1.0.0"):
+            with self.subTest(version=version):
+                result = subprocess.run(
+                    [
+                        "python3",
+                        str(ROOT / "release/scripts/release_candidate.py"),
+                        "image-names",
+                        "--version",
+                        version,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    MODULE.parse_roster(result.stdout),
+                    ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
+                )
+
+    def test_first_messaging_release_roster_includes_messaging(self) -> None:
+        # Messaging has not joined a release, so this patches a hypothetical
+        # first release into release_roster in process instead of adding a
+        # production knob.
+        spec = importlib.util.spec_from_file_location(
+            "release_candidate", ROOT / "release/scripts/release_candidate.py"
         )
-        roster = MODULE.parse_roster(result.stdout)
+        assert spec is not None and spec.loader is not None
+        release_candidate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(release_candidate)
+        stdout = io.StringIO()
+        with mock.patch.object(
+            release_candidate.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
+        ), redirect_stdout(stdout):
+            self.assertEqual(
+                0,
+                release_candidate.main(["image-names", "--version", "0.36.0"]),
+            )
+        roster = MODULE.parse_roster(stdout.getvalue())
         self.assertEqual(
             roster,
             (

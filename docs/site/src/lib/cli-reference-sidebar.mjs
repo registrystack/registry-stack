@@ -69,9 +69,13 @@ function commandSeats(directory, name, command, slug) {
  * is the whole of this site's navigation and the subcommand pages carry the
  * exact syntax the guides send readers to.
  *
+ * A binary named in `omit` takes no seat: its product is not in the docset
+ * (src/lib/docset-products.mjs), and the docs collection drops its pages.
+ *
  * @param {string | URL} indexPath
+ * @param {{ omit?: readonly string[] }} options
  */
-export function cliReferenceSidebar(indexPath = generatedIndex) {
+export function cliReferenceSidebar(indexPath = generatedIndex, { omit = [] } = {}) {
   if (!existsSync(indexPath)) return [];
   const index = indexPath instanceof URL ? fileURLToPath(indexPath) : String(indexPath);
   if (isDraft(index)) return [];
@@ -82,7 +86,9 @@ export function cliReferenceSidebar(indexPath = generatedIndex) {
       collapsed: true,
       items: [
         { label: 'Overview', slug: 'reference/cli' },
-        ...binaries.flatMap((binary) => commandSeats(root, binary, binary, `reference/cli/${binary}`)),
+        ...binaries
+          .filter((binary) => !omit.includes(binary))
+          .flatMap((binary) => commandSeats(root, binary, binary, `reference/cli/${binary}`)),
       ],
     },
   ];

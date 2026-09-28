@@ -16,13 +16,18 @@
 //!
 //! A provider's rate paces the worker: an attempt waits for the provider's
 //! next send slot after it is leased and before anything reaches the
-//! provider. Waiting attempts queue in turn, and the wait is bounded by the
-//! pacing allowance added to the attempt's timeout, so pacing never eats
-//! into the time the send itself is given. An attempt that cannot start in
-//! that allowance is a transient failure: nothing was sent, and it is
-//! retried under its policy.
+//! provider. When the provider also bounds its sends in flight, the attempt
+//! first waits for one of those, and holds it through the send, so the rate
+//! spaces the requests as they leave and never lets attempts queued behind
+//! a slow send leave back to back. Waiting attempts queue in turn, and the
+//! wait is bounded by the pacing allowance added to the attempt's timeout,
+//! so pacing never eats into the time the send itself is given. An attempt
+//! that cannot start in that allowance is a transient failure: nothing was
+//! sent, and it is retried under its policy.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::Duration;
 
 use registry_messaging_core::AccessProfiles;
@@ -30,6 +35,7 @@ use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
 };
 use thiserror::Error;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 /// The longest an attempt waits for its provider's next send slot.
@@ -172,20 +178,37 @@ impl CallbackLimits {
 
 /// One provider's send rate: at most one send starts every
 /// `1 / ratePerSecond` seconds, and waiting attempts take their turn in the
-/// order they arrived.
+/// order they arrived. With a concurrency limit, an attempt takes its turn
+/// only once it holds one of the provider's in-flight slots.
 #[derive(Debug)]
 pub struct ProviderPacer {
     provider: String,
     limiter: TokenBucketLimiter,
     turn: tokio::sync::Mutex<()>,
+    in_flight: Option<Arc<Semaphore>>,
+}
+
+/// A paced attempt's place: it holds the provider's in-flight slot, when
+/// the provider bounds them, until it is dropped after the send.
+#[derive(Debug)]
+#[must_use = "the in-flight slot is released when this is dropped"]
+pub struct PacedSlot {
+    _in_flight: Option<OwnedSemaphorePermit>,
 }
 
 impl ProviderPacer {
+    /// Pace `provider` at `rate_per_second`, with at most
+    /// `concurrency_limit` paced sends in flight when it names one.
+    ///
     /// # Errors
     ///
     /// [`LimitConfigurationError`] when `rate_per_second` is zero or too
     /// large for the limiter.
-    pub fn new(provider: &str, rate_per_second: u32) -> Result<Self, LimitConfigurationError> {
+    pub fn new(
+        provider: &str,
+        rate_per_second: u32,
+        concurrency_limit: Option<NonZeroUsize>,
+    ) -> Result<Self, LimitConfigurationError> {
         let refused = || LimitConfigurationError {
             kind: "provider",
             id: provider.to_owned(),
@@ -200,26 +223,42 @@ impl ProviderPacer {
             provider: provider.to_owned(),
             limiter,
             turn: tokio::sync::Mutex::new(()),
+            in_flight: concurrency_limit.map(|limit| Arc::new(Semaphore::new(limit.get()))),
         })
     }
 
-    /// Wait for the provider's next send slot, until `deadline`.
+    /// Wait for an in-flight slot, when the provider bounds them, and then
+    /// for the provider's next send slot, until `deadline`.
     ///
     /// # Errors
     ///
     /// [`LimitRefusal::Exceeded`] with the wait still needed when no slot
     /// opens before `deadline`, and [`LimitRefusal::Unavailable`] when the
     /// limiter cannot decide.
-    pub async fn acquire(&self, deadline: Instant) -> Result<(), LimitRefusal> {
+    pub async fn acquire(&self, deadline: Instant) -> Result<PacedSlot, LimitRefusal> {
         let spent = LimitRefusal::Exceeded {
             retry_after: Duration::from_secs(1),
+        };
+        let in_flight = match &self.in_flight {
+            Some(slots) => {
+                match tokio::time::timeout_at(deadline, Arc::clone(slots).acquire_owned()).await {
+                    Ok(Ok(permit)) => Some(permit),
+                    Ok(Err(_closed)) => return Err(LimitRefusal::Unavailable),
+                    Err(_elapsed) => return Err(spent),
+                }
+            }
+            None => None,
         };
         let Ok(_turn) = tokio::time::timeout_at(deadline, self.turn.lock()).await else {
             return Err(spent);
         };
         loop {
             match self.limiter.check(&self.provider, 1).await {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    return Ok(PacedSlot {
+                        _in_flight: in_flight,
+                    })
+                }
                 Err(TokenBucketError::Exceeded { retry_after }) => {
                     let ready = Instant::now() + retry_after;
                     if ready > deadline {
@@ -326,17 +365,17 @@ mod tests {
 
     #[test]
     fn a_zero_or_overflowing_provider_rate_is_refused() {
-        assert!(ProviderPacer::new("gateway", 0).is_err());
-        assert!(ProviderPacer::new("gateway", u32::MAX).is_err());
-        assert!(ProviderPacer::new("gateway", 1_000).is_ok());
+        assert!(ProviderPacer::new("gateway", 0, None).is_err());
+        assert!(ProviderPacer::new("gateway", u32::MAX, None).is_err());
+        assert!(ProviderPacer::new("gateway", 1_000, None).is_ok());
     }
 
     #[tokio::test]
     async fn a_provider_starts_one_send_per_interval() {
-        let pacer = ProviderPacer::new("gateway", 20).unwrap();
+        let pacer = ProviderPacer::new("gateway", 20, None).unwrap();
         let started = Instant::now();
         for _ in 0..5 {
-            pacer
+            let _slot = pacer
                 .acquire(Instant::now() + Duration::from_secs(1))
                 .await
                 .unwrap();
@@ -346,9 +385,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_attempt_takes_its_turn_only_once_it_holds_an_in_flight_slot() {
+        let pacer = Arc::new(ProviderPacer::new("gateway", 20, NonZeroUsize::new(1)).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let slow = pacer.acquire(deadline).await.unwrap();
+        let queued: Vec<_> = (0..3)
+            .map(|_| {
+                let pacer = Arc::clone(&pacer);
+                tokio::spawn(async move {
+                    let _slot = pacer.acquire(deadline).await.unwrap();
+                    Instant::now()
+                })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(slow);
+        let mut started = Vec::new();
+        for task in queued {
+            started.push(task.await.unwrap());
+        }
+        started.sort();
+        // The rate's slots went unused while the slow send held the only
+        // in-flight slot; the queued attempts still start 50 ms apart.
+        for pair in started.windows(2) {
+            let gap = pair[1].duration_since(pair[0]);
+            assert!(gap >= Duration::from_millis(45), "{gap:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_attempt_with_no_in_flight_slot_by_the_deadline_is_refused() {
+        let pacer = ProviderPacer::new("gateway", 1_000, NonZeroUsize::new(1)).unwrap();
+        let _held = pacer.acquire(Instant::now()).await.unwrap();
+        let refusal = pacer
+            .acquire(Instant::now() + Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(matches!(refusal, LimitRefusal::Exceeded { .. }));
+    }
+
+    #[tokio::test]
     async fn a_slot_that_opens_after_the_deadline_is_refused_without_waiting() {
-        let pacer = ProviderPacer::new("gateway", 1).unwrap();
-        pacer.acquire(Instant::now()).await.unwrap();
+        let pacer = ProviderPacer::new("gateway", 1, None).unwrap();
+        let _slot = pacer.acquire(Instant::now()).await.unwrap();
         let started = Instant::now();
         let refusal = pacer
             .acquire(Instant::now() + Duration::from_millis(100))

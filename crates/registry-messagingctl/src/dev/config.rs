@@ -283,6 +283,7 @@ pub(super) fn runtime_config(
             "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"},
         }},
         "audit": {
+            "destination": "file",
             "path": root.join("audit/messaging.ndjson"),
             "hashKeyRef": "secret:file/messaging-audit-key",
         },

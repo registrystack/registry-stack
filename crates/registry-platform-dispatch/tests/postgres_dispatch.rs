@@ -23,14 +23,15 @@ use registry_platform_dispatch::postgres::{
     enqueue, AttemptAudit, CancelOutcome, Claim, ClaimRefusal, Columns, Decoded, DispatchConfig,
     DispatchConnection, DispatchEvent, DispatchOutcome, DispatchSql, DispatchStore,
     DispatchTransport, DispatchWorker, Dispatcher, ExpirySql, JobKey, JobState, JobTable,
-    LeasedJob, Quarantine, QuarantineDisposition, QuarantineReason, SelectSql, TargetAction,
-    TransitionAudit, TransitionCode, WorkerConfig,
+    LeasedJob, Quarantine, QuarantineAudit, QuarantineDisposition, QuarantineReason, ReplayAudit,
+    ReplayOutcome, SelectSql, TargetAction, TransitionAudit, TransitionCode, TransitionOutcome,
+    WorkerConfig,
 };
 use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, DispatchError, FailureCode, Jitter, JobPolicy,
     ReceiverReference, RetrySchedule, SendOutcome, Sent, UncertainOutcome,
 };
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch, Notify};
 use tokio_postgres::{NoTls, Row, Transaction};
 use uuid::Uuid;
 
@@ -70,6 +71,22 @@ struct Harness {
     table: JobTable,
     admin: tokio_postgres::Client,
     events: Arc<Mutex<Vec<DispatchEvent>>>,
+    controls: Arc<TestControls>,
+}
+
+#[derive(Default)]
+struct TestControls {
+    connections: AtomicUsize,
+    refused_connections: Mutex<BTreeSet<usize>>,
+    interleave: Mutex<BTreeMap<usize, String>>,
+    attempt_hold: Mutex<Option<Arc<AuditHold>>>,
+    terminal_hold: Mutex<Option<Arc<AuditHold>>>,
+}
+
+#[derive(Default)]
+struct AuditHold {
+    reached: Mutex<Option<oneshot::Sender<()>>>,
+    release: Notify,
 }
 
 async fn harness() -> Harness {
@@ -87,7 +104,8 @@ async fn harness() -> Harness {
                  initial_backoff_ms bigint NOT NULL,
                  maximum_backoff_ms bigint NOT NULL,
                  jitter boolean NOT NULL,
-                 on_uncertain text NOT NULL CHECK (on_uncertain IN ('hold', 'retry')),
+                 on_uncertain text NOT NULL
+                     CHECK (on_uncertain IN ('hold', 'retry', 'retry_then_hold')),
                  expires_at timestamptz NOT NULL
              );
              CREATE TABLE {schema}.test_audit (
@@ -98,6 +116,19 @@ async fn harness() -> Harness {
                  attempt smallint NOT NULL,
                  point text NOT NULL,
                  disposition text NOT NULL
+             );
+             CREATE TABLE {schema}.test_intent_audit (
+                 sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                 message_id uuid NOT NULL,
+                 recipient text NOT NULL,
+                 generation bigint NOT NULL,
+                 attempt smallint NOT NULL,
+                 point text NOT NULL
+             );
+             CREATE TABLE {schema}.test_relational_refusal (
+                 message_id uuid NOT NULL,
+                 point text NOT NULL,
+                 PRIMARY KEY (message_id, point)
              );"
         ))
         .await
@@ -125,6 +156,7 @@ async fn harness() -> Harness {
         table,
         admin,
         events: Arc::new(Mutex::new(Vec::new())),
+        controls: Arc::new(TestControls::default()),
     }
 }
 
@@ -134,6 +166,7 @@ struct TestStore {
     schema: String,
     events: Arc<Mutex<Vec<DispatchEvent>>>,
     quarantine: QuarantineMode,
+    controls: Arc<TestControls>,
 }
 
 /// Whether and how the test consumer quarantines a row the core cannot
@@ -148,6 +181,7 @@ enum QuarantineMode {
     Claimable,
 }
 
+#[derive(Clone)]
 struct TestJob {
     body: String,
 }
@@ -177,6 +211,7 @@ fn decode_policy(row: &Row, first: usize) -> Result<JobPolicy, DispatchError> {
         on_uncertain: match on_uncertain.as_str() {
             "hold" => UncertainOutcome::Hold,
             "retry" => UncertainOutcome::Retry,
+            "retry_then_hold" => UncertainOutcome::RetryThenHold,
             _ => return Err(DispatchError::Unavailable),
         },
         expires_at: Some(expires_at),
@@ -188,13 +223,35 @@ impl DispatchStore for TestStore {
     type Job = TestJob;
     type Record = ();
     type Detail = ();
+    type Context = ();
+
+    fn capture_context(&self) -> Self::Context {}
 
     async fn connection(&self) -> Result<DispatchConnection, DispatchError> {
+        let number = self.controls.connections.fetch_add(1, Ordering::SeqCst) + 1;
+        if self
+            .controls
+            .refused_connections
+            .lock()
+            .expect("refused connections lock")
+            .contains(&number)
+        {
+            return Err(DispatchError::Unavailable);
+        }
         let (client, connection) = tokio_postgres::connect(&self.url, NoTls).await?;
         tokio::spawn(async move {
             // A dropped connection surfaces as the next query's error.
             let _closed = connection.await;
         });
+        let interleave = self
+            .controls
+            .interleave
+            .lock()
+            .expect("interleave lock")
+            .remove(&number);
+        if let Some(statement) = interleave {
+            client.batch_execute(&statement).await?;
+        }
         Ok(Box::new(Box::new(client)))
     }
 
@@ -229,6 +286,14 @@ impl DispatchStore for TestStore {
         Ok(())
     }
 
+    fn decode_expired_on_uncertain(
+        &self,
+        row: &Row,
+        first: usize,
+    ) -> Result<UncertainOutcome, DispatchError> {
+        decode_policy(row, first).map(|policy| policy.on_uncertain)
+    }
+
     fn decode_target(
         &self,
         _row: &Row,
@@ -241,39 +306,174 @@ impl DispatchStore for TestStore {
 
     async fn record_attempt_audit(
         &self,
-        transaction: &Transaction<'_>,
         job: &LeasedJob<TestJob>,
         audit: AttemptAudit<'_, ()>,
+        _context: &(),
     ) -> Result<(), DispatchError> {
         let (point, disposition) = match audit {
             AttemptAudit::Started => ("attempt_started", "leased"),
             AttemptAudit::Finished { disposition, .. } => {
                 ("attempt_finished", disposition.as_str())
             }
+            AttemptAudit::Interrupted { disposition } => {
+                ("attempt_interrupted", disposition.as_str())
+            }
         };
-        self.audit(
-            transaction,
-            &job.key,
-            job.generation,
-            job.attempt,
-            point,
-            disposition,
+        self.audit_direct(&job.key, job.generation, job.attempt, point, disposition)
+            .await?;
+        let hold = match audit {
+            AttemptAudit::Started => self
+                .controls
+                .attempt_hold
+                .lock()
+                .expect("attempt hold lock")
+                .clone(),
+            AttemptAudit::Finished { .. } | AttemptAudit::Interrupted { .. } => self
+                .controls
+                .terminal_hold
+                .lock()
+                .expect("terminal hold lock")
+                .clone(),
+        };
+        if let Some(hold) = hold {
+            if let Some(reached) = hold.reached.lock().expect("audit hold lock").take() {
+                let _ = reached.send(());
+            }
+            hold.release.notified().await;
+        }
+        Ok(())
+    }
+
+    async fn write_transition(
+        &self,
+        transaction: &Transaction<'_>,
+        audit: &TransitionAudit<()>,
+    ) -> Result<(), DispatchError> {
+        let refused = transaction
+            .query_opt(
+                &format!(
+                    "SELECT 1 FROM {}.test_relational_refusal WHERE message_id = $1 AND point = $2",
+                    self.schema
+                ),
+                &[&audit.key.id(), &audit.transition.as_str()],
+            )
+            .await?;
+        if refused.is_some() {
+            Err(DispatchError::Unavailable)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn begin_transition_audit(
+        &self,
+        audit: &TransitionAudit<()>,
+        _context: &(),
+    ) -> Result<(), DispatchError> {
+        self.audit_intent(
+            &audit.key,
+            audit.generation,
+            audit.attempt,
+            &format!("{}_requested", audit.transition.as_str()),
         )
         .await
     }
 
     async fn record_transition_audit(
         &self,
-        transaction: &Transaction<'_>,
-        audit: TransitionAudit<'_, ()>,
+        audit: &TransitionAudit<()>,
+        outcome: TransitionOutcome,
+        _context: &(),
     ) -> Result<(), DispatchError> {
-        self.audit(
-            transaction,
-            audit.key,
+        let point = match outcome {
+            TransitionOutcome::Committed => audit.transition.as_str().to_owned(),
+            TransitionOutcome::Refused => format!("{}_refused", audit.transition.as_str()),
+            TransitionOutcome::Unfinished => format!("{}_unfinished", audit.transition.as_str()),
+        };
+        let disposition = match outcome {
+            TransitionOutcome::Committed => audit.transition.disposition().as_str(),
+            TransitionOutcome::Refused => match audit.transition {
+                registry_platform_dispatch::postgres::Transition::LeaseLapsed(_) => "leased",
+                registry_platform_dispatch::postgres::Transition::Expired { from, .. } => {
+                    from.as_str()
+                }
+                registry_platform_dispatch::postgres::Transition::Cancelled => "pending",
+            },
+            TransitionOutcome::Unfinished => "unknown",
+        };
+        self.audit_direct(
+            &audit.key,
             audit.generation,
             audit.attempt,
-            audit.transition.as_str(),
-            audit.transition.disposition().as_str(),
+            &point,
+            disposition,
+        )
+        .await
+    }
+
+    async fn record_replay_audit(
+        &self,
+        audit: &ReplayAudit<()>,
+        _context: &(),
+    ) -> Result<(), DispatchError> {
+        self.audit_direct(
+            &audit.key,
+            audit.generation,
+            0,
+            match audit.outcome {
+                ReplayOutcome::Requested => "replay_requested",
+                ReplayOutcome::Committed => "replay_committed",
+                ReplayOutcome::Refused => "replay_refused",
+                ReplayOutcome::Unfinished => "replay_unfinished",
+            },
+            match audit.outcome {
+                ReplayOutcome::Refused => audit.from.as_str(),
+                ReplayOutcome::Unfinished => "unknown",
+                ReplayOutcome::Requested | ReplayOutcome::Committed => "replay_pending",
+            },
+        )
+        .await
+    }
+
+    async fn begin_quarantine_audit(
+        &self,
+        quarantine: Quarantine<'_>,
+        _context: &(),
+    ) -> Result<(), DispatchError> {
+        self.audit_intent(
+            quarantine.key,
+            quarantine.generation,
+            quarantine.attempt,
+            "quarantined_requested",
+        )
+        .await
+    }
+
+    async fn record_quarantine_audit(
+        &self,
+        audit: &QuarantineAudit,
+        outcome: TransitionOutcome,
+        _context: &(),
+    ) -> Result<(), DispatchError> {
+        let point = match outcome {
+            TransitionOutcome::Committed => "quarantined",
+            TransitionOutcome::Refused => "quarantined_refused",
+            TransitionOutcome::Unfinished => "quarantined_unfinished",
+        };
+        let disposition = match outcome {
+            TransitionOutcome::Committed => audit
+                .disposition
+                .ok_or(DispatchError::Unavailable)?
+                .as_str(),
+            TransitionOutcome::Refused => audit.from.as_str(),
+            TransitionOutcome::Unfinished => "unknown",
+        };
+        self.audit_direct(
+            &audit.key,
+            audit.generation,
+            audit.attempt,
+            point,
+            disposition,
         )
         .await
     }
@@ -308,10 +508,15 @@ impl DispatchStore for TestStore {
         transaction: &Transaction<'_>,
         quarantine: Quarantine<'_>,
     ) -> Result<QuarantineDisposition, DispatchError> {
-        let (state, stamp) = if quarantine.attempt > 0 {
-            (JobState::DeadLettered, "dead_lettered_at")
+        let (state, stamp) = if quarantine.may_have_reached_receiver {
+            (JobState::Unknown, "")
+        } else if quarantine.attempt > 0 {
+            (
+                JobState::DeadLettered,
+                "dead_lettered_at = transaction_timestamp(),",
+            )
         } else {
-            (JobState::Expired, "expired_at")
+            (JobState::Expired, "expired_at = transaction_timestamp(),")
         };
         match self.quarantine {
             QuarantineMode::Unsupported => return Ok(QuarantineDisposition::Unsupported),
@@ -326,7 +531,7 @@ impl DispatchStore for TestStore {
                                     attempt_started_at = NULL,
                                     lease_expires_at = NULL,
                                     lease_token = NULL,
-                                    {stamp} = transaction_timestamp(),
+                                    {stamp}
                                     updated_at = transaction_timestamp()
                               WHERE message_id = $1 AND recipient = $2 AND generation = $3",
                             self.schema
@@ -344,30 +549,43 @@ impl DispatchStore for TestStore {
                 }
             }
         }
-        self.audit(
-            transaction,
-            quarantine.key,
-            quarantine.generation,
-            quarantine.attempt,
-            "quarantined",
-            state.as_str(),
-        )
-        .await?;
         Ok(QuarantineDisposition::Quarantined(state))
     }
 }
 
 impl TestStore {
-    async fn audit(
+    async fn audit_intent(
         &self,
-        transaction: &Transaction<'_>,
+        key: &JobKey,
+        generation: i64,
+        attempt: i16,
+        point: &str,
+    ) -> Result<(), DispatchError> {
+        let client = connect(&self.url).await;
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {}.test_intent_audit
+                         (message_id, recipient, generation, attempt, point)
+                     VALUES ($1, $2, $3, $4, $5)",
+                    self.schema
+                ),
+                &[&key.id(), &key.part(), &generation, &attempt, &point],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn audit_direct(
+        &self,
         key: &JobKey,
         generation: i64,
         attempt: i16,
         point: &str,
         disposition: &str,
     ) -> Result<(), DispatchError> {
-        transaction
+        let client = connect(&self.url).await;
+        client
             .execute(
                 &format!(
                     "INSERT INTO {}.test_audit
@@ -404,7 +622,7 @@ fn dispatch_sql() -> DispatchSql {
         expiry: Some(ExpirySql {
             states: &[JobState::Pending],
             select: SelectSql {
-                columns: "",
+                columns: POLICY_COLUMNS,
                 joins: MESSAGE_JOIN,
                 predicate: "message.expires_at <= transaction_timestamp()",
             },
@@ -430,6 +648,7 @@ fn quarantining_dispatcher(harness: &Harness, quarantine: QuarantineMode) -> Dis
             schema: harness.schema.clone(),
             events: Arc::clone(&harness.events),
             quarantine,
+            controls: Arc::clone(&harness.controls),
         },
         DispatchConfig {
             table: harness.table.clone(),
@@ -569,6 +788,62 @@ async fn audit_trail(harness: &Harness, key: &JobKey) -> Vec<String> {
             )
         })
         .collect()
+}
+
+async fn intent_trail(harness: &Harness, key: &JobKey) -> Vec<String> {
+    harness
+        .admin
+        .query(
+            &format!(
+                "SELECT point FROM {}.test_intent_audit
+                  WHERE message_id = $1 AND recipient = $2 ORDER BY sequence",
+                harness.schema
+            ),
+            &[&key.id(), &key.part()],
+        )
+        .await
+        .expect("the intent trail reads")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+async fn refuse_intent(harness: &Harness, key: &JobKey, point: &str) {
+    harness
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.test_intent_audit
+                 ADD CONSTRAINT refuse_{point}
+                 CHECK (message_id <> '{}' OR point <> '{point}')",
+            harness.schema,
+            key.id()
+        ))
+        .await
+        .expect("the intent refusal installs");
+}
+
+async fn refuse_direct_audit(harness: &Harness, key: &JobKey, point: &str) {
+    harness
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.test_audit
+                 ADD CONSTRAINT refuse_{point}
+                 CHECK (message_id <> '{}' OR point <> '{point}')",
+            harness.schema,
+            key.id()
+        ))
+        .await
+        .expect("the direct audit refusal installs");
+}
+
+fn refuse_connections(harness: &Harness, numbers: &[usize]) {
+    harness.controls.connections.store(0, Ordering::SeqCst);
+    harness
+        .controls
+        .refused_connections
+        .lock()
+        .expect("refused connections lock")
+        .extend(numbers.iter().copied());
 }
 
 /// The retry delay the last transition scheduled, in milliseconds.
@@ -1055,6 +1330,172 @@ async fn a_maybe_sent_outcome_follows_the_job_policy() {
 }
 
 #[tokio::test]
+async fn a_maybe_sent_answer_with_no_attempt_left_follows_the_job_policy() {
+    let harness = harness().await;
+    let retried = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry",
+            maximum_attempts: 1,
+            ..Message::default()
+        },
+    )
+    .await;
+    let held = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            maximum_attempts: 1,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| SendOutcome::MaybeSent);
+    let mut outcomes = BTreeSet::new();
+    for _ in 0..2 {
+        outcomes.insert(format!(
+            "{:?}",
+            dispatcher
+                .dispatch_once(&transport)
+                .await
+                .expect("dispatch")
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        BTreeSet::from(["DeadLettered".to_owned(), "Unknown".to_owned()])
+    );
+    assert_eq!(state_row(&harness, &retried).await.state, "dead_lettered");
+    let row = state_row(&harness, &held).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
+    assert_eq!(
+        audit_trail(&harness, &held).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:unknown:g1:a1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_retry_then_hold_job_retries_a_maybe_sent_answer_while_attempts_remain() {
+    let harness = harness().await;
+    let key = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            maximum_attempts: 2,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| SendOutcome::MaybeSent);
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await.expect("first"),
+        DispatchOutcome::RetryScheduled
+    );
+    make_due(&harness, &key).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await.expect("second"),
+        DispatchOutcome::Unknown
+    );
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 2));
+}
+
+#[tokio::test]
+async fn a_maybe_sent_retry_that_would_land_after_expiry_holds_the_job_unknown() {
+    let harness = harness().await;
+    let key = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            expires_in_ms: 500,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| SendOutcome::MaybeSent);
+    assert_eq!(
+        dispatcher
+            .dispatch_once(&transport)
+            .await
+            .expect("dispatch"),
+        DispatchOutcome::Unknown
+    );
+    assert_eq!(state_row(&harness, &key).await.state, "unknown");
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:unknown:g1:a1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_lease_on_a_retry_then_hold_job_with_no_attempt_left_is_unknown() {
+    let harness = harness().await;
+    let key = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            maximum_attempts: 1,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    lapse_lease(&harness, &key).await;
+    assert!(matches!(
+        dispatcher.claim().await.expect("claim"),
+        Claim::Idle
+    ));
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec!["attempt_started:leased:g1:a1", "lease_lapsed:unknown:g1:a1"]
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_lease_on_a_retry_then_hold_job_past_its_expiry_is_unknown() {
+    let harness = harness().await;
+    let key = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            expires_in_ms: 500,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    lapse_lease(&harness, &key).await;
+    assert!(matches!(
+        dispatcher.claim().await.expect("claim"),
+        Claim::Idle
+    ));
+    assert_eq!(state_row(&harness, &key).await.state, "unknown");
+}
+
+#[tokio::test]
 async fn an_exhausted_transient_failure_dead_letters() {
     let harness = harness().await;
     let key = enqueue_message(
@@ -1079,6 +1520,198 @@ async fn an_exhausted_transient_failure_dead_letters() {
     let row = state_row(&harness, &key).await;
     assert_eq!(row.state, "dead_lettered");
     assert_eq!(row.attempt, 2);
+}
+
+/// A `retry_then_hold` job whose first attempt answered maybe-sent is held
+/// `unknown` where a later attempt would dead-letter it, whether the later
+/// attempts failed transiently or permanently, since neither proves the
+/// first one did not land.
+#[tokio::test]
+async fn a_retry_then_hold_job_is_held_unknown_when_later_failures_exhaust_it_after_a_maybe_sent_attempt(
+) {
+    let harness = harness().await;
+    let transiently = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            maximum_attempts: 3,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|job| {
+        if job.attempt == 1 {
+            SendOutcome::MaybeSent
+        } else {
+            transient()
+        }
+    });
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    make_due(&harness, &transiently).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    make_due(&harness, &transiently).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Unknown)
+    );
+    let row = state_row(&harness, &transiently).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 3));
+    assert_eq!(
+        audit_trail(&harness, &transiently).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:retry_pending:g1:a1",
+            "attempt_started:leased:g1:a2",
+            "attempt_finished:retry_pending:g1:a2",
+            "attempt_started:leased:g1:a3",
+            "attempt_finished:unknown:g1:a3"
+        ]
+    );
+
+    let permanently = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            maximum_attempts: 3,
+            ..Message::default()
+        },
+    )
+    .await;
+    let transport = ScriptedTransport::new(|job| {
+        if job.attempt == 1 {
+            SendOutcome::MaybeSent
+        } else {
+            SendOutcome::Permanent {
+                code: FailureCode::new("recipient.rejected").expect("bounded code"),
+            }
+        }
+    });
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    make_due(&harness, &permanently).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Unknown)
+    );
+    let row = state_row(&harness, &permanently).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 2));
+}
+
+/// A later transient failure whose retry would land after the expiry of a
+/// `retry_then_hold` job whose first attempt answered maybe-sent holds it
+/// `unknown` instead of expiring it.
+#[tokio::test]
+async fn a_retry_then_hold_job_is_held_unknown_when_a_later_retry_would_land_after_expiry() {
+    let harness = harness().await;
+    let key = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            expires_in_ms: 3_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|job| {
+        if job.attempt == 1 {
+            SendOutcome::MaybeSent
+        } else {
+            SendOutcome::Transient {
+                retry_after: Some(Duration::from_secs(60)),
+            }
+        }
+    });
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    make_due(&harness, &key).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Unknown)
+    );
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 2));
+}
+
+/// Without an earlier attempt that may have reached the receiver, a
+/// `retry_then_hold` job still dead-letters on a spent or permanent
+/// failure, and a `retry` job dead-letters however its earlier attempts
+/// ended.
+#[tokio::test]
+async fn a_failure_without_an_earlier_uncertain_attempt_or_under_plain_retry_still_dead_letters() {
+    let harness = harness().await;
+    let dispatcher = dispatcher(&harness);
+    let spent = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            maximum_attempts: 1,
+            ..Message::default()
+        },
+    )
+    .await;
+    let transport = ScriptedTransport::new(|_| transient());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::DeadLettered)
+    );
+    assert_eq!(state_row(&harness, &spent).await.state, "dead_lettered");
+
+    let refused = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            ..Message::default()
+        },
+    )
+    .await;
+    let transport = ScriptedTransport::new(|_| SendOutcome::Permanent {
+        code: FailureCode::new("recipient.rejected").expect("bounded code"),
+    });
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::DeadLettered)
+    );
+    assert_eq!(state_row(&harness, &refused).await.state, "dead_lettered");
+
+    let retried = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry",
+            maximum_attempts: 2,
+            ..Message::default()
+        },
+    )
+    .await;
+    let transport = ScriptedTransport::new(|job| {
+        if job.attempt == 1 {
+            SendOutcome::MaybeSent
+        } else {
+            transient()
+        }
+    });
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    make_due(&harness, &retried).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::DeadLettered)
+    );
+    let row = state_row(&harness, &retried).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("dead_lettered", 2));
 }
 
 #[tokio::test]
@@ -1128,6 +1761,35 @@ async fn a_claimed_job_can_no_longer_be_cancelled() {
             .await
             .expect("finish"),
         DispatchOutcome::Delivered
+    );
+}
+
+#[tokio::test]
+async fn by_default_a_pending_retry_of_an_attempted_job_is_not_cancelled() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| transient());
+    assert_eq!(
+        dispatcher
+            .dispatch_once(&transport)
+            .await
+            .expect("dispatch"),
+        DispatchOutcome::RetryScheduled
+    );
+    assert_eq!(
+        dispatcher.cancel(&key).await.expect("cancel"),
+        CancelOutcome::MayHaveReachedReceiver
+    );
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("pending", 1));
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:retry_pending:g1:a1"
+        ],
+        "a refused cancel writes nothing"
     );
 }
 
@@ -1474,7 +2136,8 @@ async fn operator_replay_bumps_the_generation_and_refuses_a_stale_replay() {
         vec![
             "attempt_started:leased:g1:a1",
             "attempt_finished:dead_lettered:g1:a1",
-            "replayed:replay_pending:g2:a0",
+            "replay_requested:replay_pending:g2:a0",
+            "replay_committed:replay_pending:g2:a0",
             "attempt_started:leased:g2:a1",
             "attempt_finished:delivered:g2:a1"
         ]
@@ -1493,6 +2156,462 @@ async fn an_unknown_job_is_replayable() {
     );
     assert_eq!(dispatcher.replay(&key, 1).await, Ok(2));
     assert_eq!(state_row(&harness, &key).await.state, "pending");
+}
+
+#[tokio::test]
+async fn a_replay_whose_reset_changes_no_row_is_refused() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let job = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    dispatcher
+        .finish(
+            &job,
+            Sent {
+                outcome: SendOutcome::Permanent {
+                    code: FailureCode::new("terminal").expect("failure code"),
+                },
+                detail: (),
+            },
+        )
+        .await
+        .expect("dead letter");
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.skip_replay() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RETURN NULL; END $$;
+             CREATE TRIGGER skip_replay BEFORE UPDATE ON {}.{JOB_TABLE}
+             FOR EACH ROW WHEN (NEW.generation > OLD.generation)
+             EXECUTE FUNCTION {}.skip_replay();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the replay update is skipped");
+
+    assert_eq!(
+        dispatcher.replay(&key, 1).await,
+        Err(DispatchError::Unavailable)
+    );
+    assert_eq!(state_row(&harness, &key).await.generation, 1);
+    let audit = audit_trail(&harness, &key).await;
+    assert!(audit.ends_with(&[
+        "replay_requested:replay_pending:g2:a0".to_owned(),
+        "replay_refused:dead_lettered:g2:a0".to_owned(),
+    ]));
+}
+
+#[tokio::test]
+async fn a_replay_whose_commit_cannot_be_read_back_is_unfinished() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let job = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    dispatcher
+        .finish(
+            &job,
+            Sent {
+                outcome: SendOutcome::Permanent {
+                    code: FailureCode::new("terminal").expect("failure code"),
+                },
+                detail: (),
+            },
+        )
+        .await
+        .expect("dead letter");
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.refuse_replay_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'replay commit refused'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_replay_commit
+             AFTER UPDATE ON {}.{JOB_TABLE} DEFERRABLE INITIALLY DEFERRED
+             FOR EACH ROW WHEN (NEW.generation > OLD.generation)
+             EXECUTE FUNCTION {}.refuse_replay_commit();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the replay commit is refused");
+    refuse_connections(&harness, &[2, 3, 4]);
+
+    assert_eq!(
+        dispatcher.replay(&key, 1).await,
+        Err(DispatchError::Unavailable)
+    );
+    assert_eq!(state_row(&harness, &key).await.generation, 1);
+    let audit = audit_trail(&harness, &key).await;
+    assert!(audit.ends_with(&[
+        "replay_requested:replay_pending:g2:a0".to_owned(),
+        "replay_unfinished:unknown:g2:a0".to_owned(),
+    ]));
+}
+
+#[tokio::test]
+async fn a_claim_cancelled_after_its_request_still_commits_the_lease() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let (reached, request_reached) = oneshot::channel();
+    let hold = Arc::new(AuditHold {
+        reached: Mutex::new(Some(reached)),
+        ..AuditHold::default()
+    });
+    *harness
+        .controls
+        .attempt_hold
+        .lock()
+        .expect("attempt hold lock") = Some(Arc::clone(&hold));
+
+    let claim = tokio::spawn(async move { dispatcher.claim().await });
+    request_reached
+        .await
+        .expect("the attempt request was accepted");
+    claim.abort();
+    assert!(claim.await.is_err(), "the caller was cancelled");
+    hold.release.notify_one();
+
+    for _ in 0..200 {
+        if state_row(&harness, &key).await.state == "leased" {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the lease did not commit after caller cancellation");
+}
+
+#[tokio::test]
+async fn a_finish_cancelled_after_commit_still_records_its_terminal_answer() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let job = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    let (reached, terminal_reached) = oneshot::channel();
+    let hold = Arc::new(AuditHold {
+        reached: Mutex::new(Some(reached)),
+        ..AuditHold::default()
+    });
+    *harness
+        .controls
+        .terminal_hold
+        .lock()
+        .expect("terminal hold lock") = Some(Arc::clone(&hold));
+    let finishing = dispatcher.clone();
+    let finish = tokio::spawn(async move {
+        finishing
+            .finish(
+                &job,
+                Sent {
+                    outcome: accepted(),
+                    detail: (),
+                },
+            )
+            .await
+    });
+    terminal_reached
+        .await
+        .expect("the terminal answer was reached");
+    assert_eq!(state_row(&harness, &key).await.state, "delivered");
+    finish.abort();
+    assert!(finish.await.is_err(), "the caller was cancelled");
+    hold.release.notify_one();
+
+    for _ in 0..200 {
+        if audit_trail(&harness, &key)
+            .await
+            .iter()
+            .any(|entry| entry == "attempt_finished:delivered:g1:a1")
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the committed terminal answer was not recorded");
+}
+
+#[tokio::test]
+async fn a_claim_with_unreadable_commit_fate_answers_unknown_and_never_sends() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.refuse_lease_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'lease commit refused'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_lease_commit
+             AFTER UPDATE ON {}.{JOB_TABLE} DEFERRABLE INITIALLY DEFERRED
+             FOR EACH ROW WHEN (NEW.state = 'leased')
+             EXECUTE FUNCTION {}.refuse_lease_commit();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the lease commit is refused");
+    refuse_connections(&harness, &[2, 3, 4]);
+    let transport = ScriptedTransport::new(|_| accepted());
+
+    assert_eq!(
+        dispatcher(&harness).dispatch_once(&transport).await,
+        Err(DispatchError::Unavailable)
+    );
+    assert!(transport.sends().is_empty());
+    assert_eq!(state_row(&harness, &key).await.state, "pending");
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_interrupted:unknown:g1:a1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn another_invocations_matching_transition_does_not_resolve_a_failed_claim_commit() {
+    let harness = harness().await;
+    let expiring = enqueue_message(
+        &harness,
+        &Message {
+            expires_in_ms: -1_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let claimable = enqueue_message(&harness, &Message::default()).await;
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.refuse_mixed_claim_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'lease commit refused'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_mixed_claim_commit
+             AFTER UPDATE ON {}.{JOB_TABLE} DEFERRABLE INITIALLY DEFERRED
+             FOR EACH ROW WHEN (NEW.state = 'leased')
+             EXECUTE FUNCTION {}.refuse_mixed_claim_commit();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the mixed claim commit is refused");
+    harness.controls.connections.store(0, Ordering::SeqCst);
+    harness
+        .controls
+        .interleave
+        .lock()
+        .expect("interleave lock")
+        .insert(
+            2,
+            format!(
+                "UPDATE {}.{JOB_TABLE}
+                    SET state = 'expired', next_attempt_at = NULL,
+                        expired_at = transaction_timestamp()
+                  WHERE message_id = '{}'",
+                harness.schema,
+                expiring.id()
+            ),
+        );
+    harness
+        .controls
+        .refused_connections
+        .lock()
+        .expect("refused connections lock")
+        .extend([3, 4, 5]);
+
+    assert!(dispatcher(&harness).claim().await.is_err());
+    assert_eq!(state_row(&harness, &expiring).await.state, "expired");
+    assert_eq!(state_row(&harness, &claimable).await.state, "pending");
+    assert_eq!(
+        audit_trail(&harness, &expiring).await,
+        vec!["expired_unfinished:unknown:g1:a0"]
+    );
+    assert_eq!(
+        audit_trail(&harness, &claimable).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_interrupted:unknown:g1:a1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn another_invocations_cancel_does_not_resolve_a_failed_cancel_commit() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.refuse_cancel_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+                 IF current_setting('dispatch_test.allow_cancel', true) = 'on' THEN
+                     RETURN NEW;
+                 END IF;
+                 RAISE EXCEPTION 'cancel commit refused';
+             END $$;
+             CREATE CONSTRAINT TRIGGER refuse_cancel_commit
+             AFTER UPDATE ON {}.{JOB_TABLE} DEFERRABLE INITIALLY DEFERRED
+             FOR EACH ROW WHEN (NEW.state = 'cancelled')
+             EXECUTE FUNCTION {}.refuse_cancel_commit();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the cancel commit is refused");
+    harness.controls.connections.store(0, Ordering::SeqCst);
+    harness
+        .controls
+        .interleave
+        .lock()
+        .expect("interleave lock")
+        .insert(
+            2,
+            format!(
+                "SET dispatch_test.allow_cancel = 'on';
+                 UPDATE {}.{JOB_TABLE}
+                    SET state = 'cancelled', next_attempt_at = NULL
+                  WHERE message_id = '{}'",
+                harness.schema,
+                key.id()
+            ),
+        );
+
+    assert_eq!(
+        dispatcher(&harness).cancel(&key).await,
+        Err(DispatchError::Unavailable)
+    );
+    assert_eq!(state_row(&harness, &key).await.state, "cancelled");
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec!["cancelled_unfinished:unknown:g1:a0"]
+    );
+}
+
+#[tokio::test]
+async fn another_invocations_generation_does_not_resolve_a_failed_replay_commit() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let job = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    dispatcher
+        .finish(
+            &job,
+            Sent {
+                outcome: SendOutcome::Permanent {
+                    code: FailureCode::new("terminal").expect("failure code"),
+                },
+                detail: (),
+            },
+        )
+        .await
+        .expect("dead letter");
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.refuse_racing_replay_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+                 IF current_setting('dispatch_test.allow_replay', true) = 'on' THEN
+                     RETURN NEW;
+                 END IF;
+                 RAISE EXCEPTION 'replay commit refused';
+             END $$;
+             CREATE CONSTRAINT TRIGGER refuse_racing_replay_commit
+             AFTER UPDATE ON {}.{JOB_TABLE} DEFERRABLE INITIALLY DEFERRED
+             FOR EACH ROW WHEN (NEW.generation > OLD.generation)
+             EXECUTE FUNCTION {}.refuse_racing_replay_commit();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the replay commit is refused");
+    harness.controls.connections.store(0, Ordering::SeqCst);
+    harness
+        .controls
+        .interleave
+        .lock()
+        .expect("interleave lock")
+        .insert(
+            2,
+            format!(
+                "SET dispatch_test.allow_replay = 'on';
+                 UPDATE {}.{JOB_TABLE}
+                    SET generation = 2, state = 'pending', attempt = 0,
+                        next_attempt_at = transaction_timestamp(), dead_lettered_at = NULL
+                  WHERE message_id = '{}'",
+                harness.schema,
+                key.id()
+            ),
+        );
+
+    assert_eq!(
+        dispatcher.replay(&key, 1).await,
+        Err(DispatchError::Unavailable)
+    );
+    assert_eq!(state_row(&harness, &key).await.generation, 2);
+    let audit = audit_trail(&harness, &key).await;
+    assert!(audit.ends_with(&[
+        "replay_requested:replay_pending:g2:a0".to_owned(),
+        "replay_unfinished:unknown:g2:a0".to_owned(),
+    ]));
+}
+
+#[tokio::test]
+async fn a_finish_with_unreadable_commit_fate_answers_unknown() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let job = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    harness
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION {}.refuse_finish_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'finish commit refused'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_finish_commit
+             AFTER UPDATE ON {}.{JOB_TABLE} DEFERRABLE INITIALLY DEFERRED
+             FOR EACH ROW WHEN (NEW.state = 'delivered')
+             EXECUTE FUNCTION {}.refuse_finish_commit();",
+            harness.schema, harness.schema, harness.schema
+        ))
+        .await
+        .expect("the finish commit is refused");
+    refuse_connections(&harness, &[2, 3, 4]);
+
+    assert_eq!(
+        dispatcher
+            .finish(
+                &job,
+                Sent {
+                    outcome: accepted(),
+                    detail: (),
+                }
+            )
+            .await,
+        Err(DispatchError::Unavailable)
+    );
+    assert_eq!(state_row(&harness, &key).await.state, "leased");
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_interrupted:unknown:g1:a1"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1530,6 +2649,7 @@ fn unguarded_dispatcher(harness: &Harness) -> Dispatcher<TestStore> {
             schema: harness.schema.clone(),
             events: Arc::clone(&harness.events),
             quarantine: QuarantineMode::Unsupported,
+            controls: Arc::clone(&harness.controls),
         },
         DispatchConfig {
             table: harness.table.clone(),
@@ -1594,6 +2714,144 @@ async fn a_job_past_its_policy_expiry_is_expired_at_claim_and_never_sent() {
         Ok(DispatchOutcome::Idle)
     );
     assert!(transport.sends().is_empty());
+}
+
+/// Move the captured expiry of `key`'s message into the past, the way a
+/// worker that fell behind finds it.
+async fn lapse_expiry(harness: &Harness, key: &JobKey) {
+    harness
+        .admin
+        .execute(
+            &format!(
+                "UPDATE {}.test_messages
+                    SET expires_at = transaction_timestamp() - interval '1 second'
+                  WHERE message_id = $1",
+                harness.schema
+            ),
+            &[&key.id()],
+        )
+        .await
+        .expect("the message expires");
+}
+
+/// Enqueue a `retry_then_hold` message and let its first attempt answer
+/// maybe-sent, leaving it pending with a retry scheduled.
+async fn maybe_sent_retry(harness: &Harness, dispatcher: &Dispatcher<TestStore>) -> JobKey {
+    let key = enqueue_message(
+        harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            ..Message::default()
+        },
+    )
+    .await;
+    let transport = ScriptedTransport::new(|_| SendOutcome::MaybeSent);
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    key
+}
+
+#[tokio::test]
+async fn a_swept_retry_after_a_maybe_sent_attempt_is_held_unknown_not_expired() {
+    let harness = harness().await;
+    let dispatcher = dispatcher(&harness);
+    let key = maybe_sent_retry(&harness, &dispatcher).await;
+    lapse_expiry(&harness, &key).await;
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Idle)
+    );
+    assert!(transport.sends().is_empty());
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:retry_pending:g1:a1",
+            "expired:unknown:g1:a1"
+        ]
+    );
+    assert_eq!(expiry_events(&harness), 0);
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Idle)
+    );
+    assert!(transport.sends().is_empty());
+}
+
+#[tokio::test]
+async fn a_retry_after_a_maybe_sent_attempt_past_its_policy_expiry_is_held_unknown_at_claim() {
+    let harness = harness().await;
+    let dispatcher = unguarded_dispatcher(&harness);
+    let key = maybe_sent_retry(&harness, &dispatcher).await;
+    lapse_expiry(&harness, &key).await;
+    make_due(&harness, &key).await;
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Expired)
+    );
+    assert!(transport.sends().is_empty());
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:retry_pending:g1:a1",
+            "expired:unknown:g1:a1"
+        ]
+    );
+    assert_eq!(expiry_events(&harness), 0);
+}
+
+/// Only a `retry_then_hold` job an earlier attempt of which may have
+/// reached its receiver is held: one never attempted, and one whose policy
+/// retries uncertain attempts plainly, still expire.
+#[tokio::test]
+async fn a_never_attempted_or_plainly_retried_job_still_expires() {
+    let harness = harness().await;
+    let dispatcher = dispatcher(&harness);
+    let never_attempted = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry_then_hold",
+            not_before: Some(Duration::from_secs(60)),
+            ..Message::default()
+        },
+    )
+    .await;
+    let retried = enqueue_message(
+        &harness,
+        &Message {
+            on_uncertain: "retry",
+            ..Message::default()
+        },
+    )
+    .await;
+    let transport = ScriptedTransport::new(|_| SendOutcome::MaybeSent);
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    lapse_expiry(&harness, &never_attempted).await;
+    lapse_expiry(&harness, &retried).await;
+    for _ in 0..2 {
+        assert_eq!(
+            dispatcher.dispatch_once(&transport).await,
+            Ok(DispatchOutcome::Idle)
+        );
+    }
+    assert_eq!(transport.sends().len(), 1);
+    let row = state_row(&harness, &never_attempted).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("expired", 0));
+    let row = state_row(&harness, &retried).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("expired", 1));
+    assert_eq!(expiry_events(&harness), 2);
 }
 
 #[tokio::test]
@@ -1798,14 +3056,12 @@ async fn a_quarantining_store_sets_an_unrecoverable_lapsed_lease_aside_and_deliv
     let row = state_row(&harness, &poisoned).await;
     assert_eq!(
         (row.state.as_str(), row.attempt, row.lease_token),
-        ("dead_lettered", 1, None)
+        ("unknown", 1, None),
+        "a lease that lapsed mid-attempt may have reached its receiver"
     );
     assert_eq!(
         audit_trail(&harness, &poisoned).await,
-        vec![
-            "attempt_started:leased:g1:a1",
-            "quarantined:dead_lettered:g1:a1"
-        ]
+        vec!["attempt_started:leased:g1:a1", "quarantined:unknown:g1:a1"]
     );
     assert_eq!(state_row(&harness, &healthy).await.state, "delivered");
     assert_eq!(
@@ -1822,20 +3078,19 @@ async fn a_quarantining_store_sets_an_unrecoverable_lapsed_lease_aside_and_deliv
     );
 }
 
-/// Have the database refuse one audit point for one job, so the step that
-/// writes it fails inside PostgreSQL and aborts its statement.
-async fn refuse_audit(harness: &Harness, key: &JobKey, point: &str) {
+/// Have the consumer's relational transition callback refuse one point.
+async fn refuse_transition(harness: &Harness, key: &JobKey, point: &str) {
     harness
         .admin
-        .batch_execute(&format!(
-            "ALTER TABLE {}.test_audit
-                 ADD CONSTRAINT refuse_{point}
-                 CHECK (message_id <> '{}' OR point <> '{point}')",
-            harness.schema,
-            key.id()
-        ))
+        .execute(
+            &format!(
+                "INSERT INTO {}.test_relational_refusal (message_id, point) VALUES ($1, $2)",
+                harness.schema
+            ),
+            &[&key.id(), &point],
+        )
         .await
-        .expect("the audit refusal installs");
+        .expect("the relational refusal installs");
 }
 
 #[tokio::test]
@@ -1850,7 +3105,7 @@ async fn a_lapsed_lease_the_database_refuses_is_rolled_back_to_its_savepoint_and
         .leased()
         .expect("due");
     lapse_lease(&harness, &poisoned).await;
-    refuse_audit(&harness, &poisoned, "lease_lapsed").await;
+    refuse_transition(&harness, &poisoned, "lease_lapsed").await;
     let healthy = enqueue_message(&harness, &Message::default()).await;
     let transport = ScriptedTransport::new(|_| accepted());
     assert_eq!(
@@ -1859,12 +3114,13 @@ async fn a_lapsed_lease_the_database_refuses_is_rolled_back_to_its_savepoint_and
     );
     assert_eq!(transport.sends(), vec![(healthy.clone(), 1, 1)]);
     let row = state_row(&harness, &poisoned).await;
-    assert_eq!((row.state.as_str(), row.attempt), ("dead_lettered", 1));
+    assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
     assert_eq!(
         audit_trail(&harness, &poisoned).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "quarantined:dead_lettered:g1:a1"
+            "lease_lapsed_refused:leased:g1:a1",
+            "quarantined:unknown:g1:a1"
         ]
     );
     assert_eq!(
@@ -1884,7 +3140,7 @@ async fn an_expiry_the_database_refuses_is_rolled_back_to_its_savepoint_and_quar
         },
     )
     .await;
-    refuse_audit(&harness, &poisoned, "expired").await;
+    refuse_transition(&harness, &poisoned, "expired").await;
     let healthy = enqueue_message(&harness, &Message::default()).await;
     let dispatcher = quarantining_dispatcher(&harness, QuarantineMode::Terminal);
     let transport = ScriptedTransport::new(|_| accepted());
@@ -1897,7 +3153,7 @@ async fn an_expiry_the_database_refuses_is_rolled_back_to_its_savepoint_and_quar
     assert_eq!((row.state.as_str(), row.attempt), ("expired", 0));
     assert_eq!(
         audit_trail(&harness, &poisoned).await,
-        vec!["quarantined:expired:g1:a0"]
+        vec!["expired_refused:pending:g1:a0", "quarantined:expired:g1:a0"]
     );
     assert_eq!(
         quarantine_events(&harness),
@@ -1955,8 +3211,100 @@ async fn a_quarantine_that_leaves_the_row_claimable_is_refused() {
     assert!(quarantine_events(&harness).is_empty());
     let row = state_row(&harness, &poisoned).await;
     assert_eq!((row.state.as_str(), row.attempt), ("pending", 0));
-    assert!(
-        audit_trail(&harness, &poisoned).await.is_empty(),
-        "the refused quarantine's audit rolls back with it"
+    assert_eq!(
+        audit_trail(&harness, &poisoned).await,
+        vec!["quarantined_refused:pending:g1:a0"],
+        "the direct response preserves the row's prior disposition"
     );
+}
+
+#[tokio::test]
+async fn refused_direct_intents_prevent_every_protected_operator_and_claim_path_write() {
+    let recovery = harness().await;
+    let recovery_key = enqueue_message(&recovery, &Message::default()).await;
+    let recovery_dispatcher = dispatcher(&recovery);
+    recovery_dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    lapse_lease(&recovery, &recovery_key).await;
+    refuse_intent(&recovery, &recovery_key, "lease_lapsed_requested").await;
+    assert!(recovery_dispatcher.claim().await.is_err());
+    assert_eq!(state_row(&recovery, &recovery_key).await.state, "leased");
+
+    let expiry = harness().await;
+    let expiry_key = enqueue_message(
+        &expiry,
+        &Message {
+            expires_in_ms: -1_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    refuse_intent(&expiry, &expiry_key, "expired_requested").await;
+    assert!(dispatcher(&expiry).claim().await.is_err());
+    assert_eq!(state_row(&expiry, &expiry_key).await.state, "pending");
+
+    let quarantine = harness().await;
+    let quarantine_key = enqueue_message(
+        &quarantine,
+        &Message {
+            attempt_timeout_ms: 61_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    refuse_intent(&quarantine, &quarantine_key, "quarantined_requested").await;
+    assert!(
+        quarantining_dispatcher(&quarantine, QuarantineMode::Terminal)
+            .claim()
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        state_row(&quarantine, &quarantine_key).await.state,
+        "pending"
+    );
+
+    let cancel = harness().await;
+    let cancel_key = enqueue_message(&cancel, &Message::default()).await;
+    refuse_intent(&cancel, &cancel_key, "cancelled_requested").await;
+    assert!(dispatcher(&cancel).cancel(&cancel_key).await.is_err());
+    assert_eq!(state_row(&cancel, &cancel_key).await.state, "pending");
+
+    let replay = harness().await;
+    let replay_key = enqueue_message(&replay, &Message::default()).await;
+    let replay_dispatcher = dispatcher(&replay);
+    let replay_job = replay_dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    replay_dispatcher
+        .finish(
+            &replay_job,
+            Sent {
+                outcome: SendOutcome::Permanent {
+                    code: FailureCode::new("terminal").expect("failure code"),
+                },
+                detail: (),
+            },
+        )
+        .await
+        .expect("dead letter");
+    refuse_direct_audit(&replay, &replay_key, "replay_requested").await;
+    assert!(replay_dispatcher.replay(&replay_key, 1).await.is_err());
+    let replay_row = state_row(&replay, &replay_key).await;
+    assert_eq!(
+        (replay_row.state.as_str(), replay_row.generation),
+        ("dead_lettered", 1)
+    );
+
+    assert!(intent_trail(&recovery, &recovery_key).await.is_empty());
+    assert!(intent_trail(&expiry, &expiry_key).await.is_empty());
+    assert!(intent_trail(&quarantine, &quarantine_key).await.is_empty());
+    assert!(intent_trail(&cancel, &cancel_key).await.is_empty());
 }

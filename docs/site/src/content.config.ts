@@ -1,9 +1,30 @@
 import { defineCollection } from 'astro:content';
 import { docsLoader } from '@astrojs/starlight/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
+import type { Loader } from 'astro/loaders';
 import { z } from 'astro/zod';
 
+import docsetsManifest from './data/generated/docsets.json';
 import { DOC_PERSONAS } from './lib/doc-personas.mjs';
+import { isEntryGatedOut, selectedDocset } from './lib/docset-products.mjs';
+
+// Starlight's docs loader, minus the pages of every product the selected
+// docset does not publish (src/lib/docset-products.mjs). Removing the entries
+// here keeps them out of every surface built from the collection: HTML pages,
+// per-page Markdown, llms corpora, search, and the sitemap.
+function docsetDocsLoader(): Loader {
+  const docset = selectedDocset(docsetsManifest, process.env);
+  const loader = docsLoader();
+  return {
+    name: 'registry-docset-docs-loader',
+    load: async (context) => {
+      await loader.load(context);
+      for (const id of [...context.store.keys()]) {
+        if (isEntryGatedOut(id, docset)) context.store.delete(id);
+      }
+    },
+  };
+}
 
 const registryLegendFrontmatter = z.object({
   // These seven keys are required for every hand-authored page, but they are
@@ -78,7 +99,7 @@ const registryLegendFrontmatter = z.object({
 
 export const collections = {
   docs: defineCollection({
-    loader: docsLoader(),
+    loader: docsetDocsLoader(),
     schema: docsSchema({ extend: registryLegendFrontmatter }),
   }),
 };

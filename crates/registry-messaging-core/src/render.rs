@@ -152,7 +152,14 @@ pub fn render_part(
 #[must_use]
 pub fn finish_part(kind: PartKind, text: &str) -> String {
     match kind {
-        PartKind::Html => text.to_owned(),
+        // Markup keeps its tab and line breaks. NUL and the other C0
+        // controls have no meaning in HTML, and PostgreSQL text refuses NUL.
+        PartKind::Html => text
+            .chars()
+            .filter(|character| {
+                matches!(character, '\t' | '\n' | '\r') || !matches!(character, '\0'..='\u{1f}')
+            })
+            .collect(),
         PartKind::Text => text
             .chars()
             .filter(|character| *character == '\n' || !character.is_control())
@@ -514,6 +521,23 @@ mod tests {
                 json!({"name": "x\r\nBcc: victim@example.org"})
             ),
             Ok("Hello xBcc: victim@example.org".to_owned())
+        );
+    }
+
+    #[test]
+    fn html_parts_drop_nul_and_c0_controls_but_keep_tab_and_line_breaks() {
+        assert_eq!(
+            render(PartKind::Html, "<p>{{ v }}</p>", json!({"v": "a\u{0}b"})),
+            Ok("<p>ab</p>".to_owned())
+        );
+        let data = json!({"value": "a\u{0}b\u{7}c\td\re\u{1b}f\ng\u{7f}h\u{85}i"});
+        assert_eq!(
+            render(PartKind::Html, "<p>{{ value }}</p>\u{1}\nend", data),
+            Ok("<p>abc\td\ref\ng\u{7f}h\u{85}i</p>\nend".to_owned())
+        );
+        assert_eq!(
+            finish_part(PartKind::Html, "<b>x\u{0}\u{1f}</b>\r\n\t"),
+            "<b>x</b>\r\n\t"
         );
     }
 

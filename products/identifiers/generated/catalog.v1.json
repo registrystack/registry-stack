@@ -3362,11 +3362,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "e7ed8eb90597151a5ef095dca7abe6e9926f5a6a91c035f0f1a1034b8ce2874b"
+        "sha256": "c46f7ab05ff765053e37e6fafb2699f78061dfc8a8adc07406819b1a538ef6f4"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "02ca90c87ad0e842c55ae0dcbac0f7fccbde763bc8d176ae0484c1491941c4fb",
+        "sha256": "d814589772d9b5956b67c54aaa0e1f43f2e7869fbd75c02fb8fe5dee37b5710f",
         "mediaType": "application/schema+json"
       }
     },

@@ -69,7 +69,6 @@ WHEEL_PLATFORMS = (
 )
 STACK_PYTHON_NAMESPACES = ("breg", "discovery", "evidence", "relay")
 CASEWORK_CLIENT_MINIMUM_VERSION = (0, 30, 0)
-MESSAGING_CLIENT_MINIMUM_VERSION = (0, 35, 0)
 MAXIMUM_ARCHIVE_MEMBERS = 128
 MAXIMUM_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 MAXIMUM_REGISTRY_METADATA_BYTES = 4 * 1024 * 1024
@@ -119,71 +118,29 @@ def includes_casework(version: str, *, include_casework: bool = False) -> bool:
     return include_casework or release_version(version) >= CASEWORK_CLIENT_MINIMUM_VERSION
 
 
-def includes_messaging(version: str, *, include_messaging: bool = False) -> bool:
-    """Select Messaging automatically only after it joins the public roster.
-
-    The explicit override is for local candidate integration. It must never be
-    inferred from the current checkout when validating already-published bytes.
-    """
-    return (
-        include_messaging
-        or release_version(version) >= MESSAGING_CLIENT_MINIMUM_VERSION
-    )
-
-
-def joining_products(
-    version: str, *, include_casework: bool = False, include_messaging: bool = False
-) -> dict[str, bool]:
-    """Report, for each product that joined the unified clients late, whether
-    this version carries it."""
-    return {
-        "casework": includes_casework(version, include_casework=include_casework),
-        "messaging": includes_messaging(
-            version, include_messaging=include_messaging
-        ),
-    }
-
-
 def native_binary_stems(
-    client: str,
-    version: str,
-    *,
-    include_casework: bool = False,
-    include_messaging: bool = False,
+    client: str, version: str, *, include_casework: bool = False
 ) -> tuple[str, ...]:
     definition = client_definition(client)
     stems = definition.native_binary_stems
-    if client == "stack":
-        for product, included in joining_products(
-            version,
-            include_casework=include_casework,
-            include_messaging=include_messaging,
-        ).items():
-            if included:
-                stems += (f"{product}-client",)
+    if client == "stack" and includes_casework(
+        version, include_casework=include_casework
+    ):
+        stems += ("casework-client",)
     return stems
 
 
 def stack_python_namespaces(
-    version: str, *, include_casework: bool = False, include_messaging: bool = False
+    version: str, *, include_casework: bool = False
 ) -> tuple[str, ...]:
     namespaces = STACK_PYTHON_NAMESPACES
-    for product, included in joining_products(
-        version,
-        include_casework=include_casework,
-        include_messaging=include_messaging,
-    ).items():
-        if included:
-            namespaces += (product,)
+    if includes_casework(version, include_casework=include_casework):
+        namespaces += ("casework",)
     return tuple(sorted(namespaces))
 
 
 def npm_platforms(
-    client: str,
-    version: str,
-    *,
-    include_casework: bool = False,
-    include_messaging: bool = False,
+    client: str, version: str, *, include_casework: bool = False
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(
         (
@@ -191,10 +148,7 @@ def npm_platforms(
             tuple(
                 f"{stem}.{platform}.node"
                 for stem in native_binary_stems(
-                    client,
-                    version,
-                    include_casework=include_casework,
-                    include_messaging=include_messaging,
+                    client, version, include_casework=include_casework
                 )
             ),
         )
@@ -322,7 +276,6 @@ def validate_npm_packages(
     client: str,
     *,
     include_casework: bool = False,
-    include_messaging: bool = False,
 ) -> list[Path]:
     definition = client_definition(client)
     expected_optional = expected_optional_dependencies(client, version)
@@ -332,10 +285,7 @@ def validate_npm_packages(
         expected_name = definition.npm_root_package
         expected_binaries = None
         for platform, binaries in npm_platforms(
-            client,
-            version,
-            include_casework=include_casework,
-            include_messaging=include_messaging,
+            client, version, include_casework=include_casework
         ):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
                 expected_name = f"{definition.npm_root_package}-{platform}"
@@ -354,30 +304,28 @@ def validate_npm_packages(
                     "root npm package must not contain a native binary"
                 )
             if client == "stack":
-                for product, expected in joining_products(
-                    version,
-                    include_casework=include_casework,
-                    include_messaging=include_messaging,
-                ).items():
-                    members = {
-                        f"package/{product}/client.js",
-                        f"package/{product}/client.d.ts",
-                        f"package/{product}/index.js",
-                        f"package/{product}/index.d.ts",
-                    }
-                    exposed = any(
-                        name.startswith(f"package/{product}/") for name in names
+                casework_members = {
+                    "package/casework/client.js",
+                    "package/casework/client.d.ts",
+                    "package/casework/index.js",
+                    "package/casework/index.d.ts",
+                }
+                exposed_casework = any(
+                    name.startswith("package/casework/") for name in names
+                )
+                casework_expected = includes_casework(
+                    version, include_casework=include_casework
+                )
+                missing_casework = casework_members - names
+                if casework_expected and missing_casework:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} has an incomplete casework facade: "
+                        f"{sorted(missing_casework)!r}"
                     )
-                    missing = members - names
-                    if expected and missing:
-                        raise ClientRegistryError(
-                            f"root npm package {path.name} has an incomplete {product} facade: "
-                            f"{sorted(missing)!r}"
-                        )
-                    if not expected and exposed:
-                        raise ClientRegistryError(
-                            f"root npm package {path.name} unexpectedly exposes the {product} facade"
-                        )
+                if not casework_expected and exposed_casework:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} unexpectedly exposes the casework facade"
+                    )
             if metadata.get("optionalDependencies") != expected_optional:
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"
@@ -397,7 +345,6 @@ def validate_wheels(
     client: str,
     *,
     include_casework: bool = False,
-    include_messaging: bool = False,
 ) -> list[Path]:
     definition = client_definition(client)
     paths = wheel_paths(directory, version, client)
@@ -425,9 +372,7 @@ def validate_wheels(
             raise ClientRegistryError(f"Python wheel {path.name} repeats a member")
         if client == "stack":
             expected_namespaces = stack_python_namespaces(
-                version,
-                include_casework=include_casework,
-                include_messaging=include_messaging,
+                version, include_casework=include_casework
             )
             for namespace in expected_namespaces:
                 prefix = f"registry_client/{namespace}/"
@@ -435,13 +380,12 @@ def validate_wheels(
                     raise ClientRegistryError(
                         f"Python wheel {path.name} has no {namespace} namespace"
                     )
-            for product in joining_products(version):
-                if product not in expected_namespaces and any(
-                    name.startswith(f"registry_client/{product}/") for name in names
-                ):
-                    raise ClientRegistryError(
-                        f"Python wheel {path.name} unexpectedly contains the {product} namespace"
-                    )
+            if "casework" not in expected_namespaces and any(
+                name.startswith("registry_client/casework/") for name in names
+            ):
+                raise ClientRegistryError(
+                    f"Python wheel {path.name} unexpectedly contains the casework namespace"
+                )
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
             raise ClientRegistryError(
@@ -473,22 +417,11 @@ def validate_distribution(
     client: str,
     *,
     include_casework: bool = False,
-    include_messaging: bool = False,
 ) -> None:
     validate_npm_packages(
-        directory,
-        version,
-        client,
-        include_casework=include_casework,
-        include_messaging=include_messaging,
+        directory, version, client, include_casework=include_casework
     )
-    validate_wheels(
-        directory,
-        version,
-        client,
-        include_casework=include_casework,
-        include_messaging=include_messaging,
-    )
+    validate_wheels(directory, version, client, include_casework=include_casework)
 
 
 def npm_registry_state(
@@ -606,7 +539,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--version", required=True)
     validate.add_argument("--client", choices=sorted(CLIENTS), required=True)
     validate.add_argument("--include-casework", action="store_true")
-    validate.add_argument("--include-messaging", action="store_true")
     bind = subparsers.add_parser("bind-optional-deps")
     bind.add_argument("--package-json", type=Path, required=True)
     bind.add_argument("--version", required=True)
@@ -618,7 +550,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pypi.add_argument("--version", required=True)
     pypi.add_argument("--client", choices=sorted(CLIENTS), required=True)
     pypi.add_argument("--include-casework", action="store_true")
-    pypi.add_argument("--include-messaging", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -631,7 +562,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.version,
                 args.client,
                 include_casework=args.include_casework,
-                include_messaging=args.include_messaging,
             )
             print("validated")
         elif args.command == "bind-optional-deps":
@@ -645,7 +575,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.version,
                 args.client,
                 include_casework=args.include_casework,
-                include_messaging=args.include_messaging,
             )
             print(
                 pypi_registry_state(

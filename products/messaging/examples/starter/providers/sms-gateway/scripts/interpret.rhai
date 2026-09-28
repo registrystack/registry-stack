@@ -11,8 +11,12 @@ fn interpret(response) {
         }
         return #{ outcome: "maybe-sent" };
     }
-    if response.status == 408 || response.status == 429 || response.status >= 500 {
+    if response.status == 429 || response.status == 503 {
         return #{ outcome: "transient" };
+    }
+    // The request was written, so the gateway may have acted on it.
+    if response.status == 408 || response.status >= 500 {
+        return #{ outcome: "maybe-sent" };
     }
     #{ outcome: "permanent", code: "http." + response.status }
 }

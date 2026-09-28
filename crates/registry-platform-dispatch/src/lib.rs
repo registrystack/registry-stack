@@ -20,8 +20,9 @@
 //!
 //! The core owns no product vocabulary. The product names its schema and
 //! table, joins its own policy and payload rows into the claim, writes its
-//! own audit inside every transition transaction, and adds its own columns
-//! to terminal writes.
+//! own direct audit lifecycle around every protected commit, keeps its
+//! relational effects inside the transition transaction, and adds its own
+//! columns to terminal writes.
 
 mod idempotency;
 mod identifier;

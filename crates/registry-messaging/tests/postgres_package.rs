@@ -10,18 +10,24 @@
 //! database URL is absent is not database verification, so the variable is
 //! required: without it every test in this file fails on the spot.
 
+use std::cell::Cell;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use registry_messaging::config::{RuntimeConfig, RuntimeConfigError};
-use registry_messaging::package::load_package;
+use registry_messaging::package::{load_package, package_inputs, write_package_inputs};
 use registry_messaging::runtime::{
     apply_package, migrate_from_path, serve_from_path, PackageChange, RuntimeError,
 };
 use registry_messaging_core::{Package, TemplatePreviewRequest};
+use registry_platform_audit::AuditDestination;
 use serde_json::{json, Value};
 use uuid::Uuid;
+
+/// The ledger lock key `apply_package` takes, the ASCII bytes of
+/// "msgledgr".
+const LEDGER_LOCK_KEY: i64 = 0x6d73_676c_6564_6772;
 
 /// One isolated schema and the secret reference that reaches it.
 struct Isolated {
@@ -106,32 +112,49 @@ fn copy_tree(from: &Path, to: &Path) {
 struct Deployment {
     root: tempfile::TempDir,
     reference: String,
+    package_generation: Cell<u32>,
 }
 
 impl Deployment {
     fn new(isolated: &Isolated) -> Self {
-        let root = tempfile::tempdir().expect("a runtime directory");
+        let root = tempfile::tempdir_in("/private/tmp").expect("a runtime directory");
         let starter =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/messaging/examples/starter");
-        let package = root.path().join("package");
-        std::fs::create_dir_all(&package).unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
         std::fs::copy(
             starter.join("messaging.yaml"),
-            package.join("messaging.yaml"),
+            project.join("messaging.yaml"),
         )
         .unwrap();
-        copy_tree(&starter.join("templates"), &package.join("templates"));
-        copy_tree(&starter.join("providers"), &package.join("providers"));
+        copy_tree(&starter.join("templates"), &project.join("templates"));
+        copy_tree(&starter.join("providers"), &project.join("providers"));
         let deployment = Self {
             root,
             reference: isolated.reference.clone(),
+            package_generation: Cell::new(0),
         };
+        deployment.install_project();
         deployment.write_runtime(None);
         deployment
     }
 
+    fn project(&self) -> PathBuf {
+        self.root.path().join("project")
+    }
+
     fn package(&self) -> PathBuf {
-        self.root.path().join("package")
+        self.root
+            .path()
+            .join(format!("package-{}", self.package_generation.get()))
+    }
+
+    fn install_project(&self) {
+        let inputs = package_inputs(&self.project()).expect("the package inputs");
+        let generation = self.package_generation.get() + 1;
+        let output = self.root.path().join(format!("package-{generation}"));
+        write_package_inputs(&output, &inputs, None).expect("the installed package");
+        self.package_generation.set(generation);
     }
 
     fn runtime_path(&self) -> PathBuf {
@@ -190,8 +213,8 @@ impl Deployment {
     /// Ship version 2 of the email template beside version 1, the way an
     /// adopter upgrades a template without touching the version in use.
     fn add_reminder_version_two(&self) {
-        let package = self.package();
-        let manifest = std::fs::read_to_string(package.join("messaging.yaml")).unwrap();
+        let project = self.project();
+        let manifest = std::fs::read_to_string(project.join("messaging.yaml")).unwrap();
         let upgraded = manifest.replace(
             "  - id: appointment-reminder\n    version: \"1\"\n",
             "  - id: appointment-reminder\n    version: \"1\"\n  - id: appointment-reminder\n    version: \"2\"\n",
@@ -200,15 +223,17 @@ impl Deployment {
             manifest, upgraded,
             "the starter lists appointment-reminder 1"
         );
-        std::fs::write(package.join("messaging.yaml"), upgraded).unwrap();
-        let one = package.join("templates/appointment-reminder/1");
-        let two = package.join("templates/appointment-reminder/2");
+        std::fs::write(project.join("messaging.yaml"), upgraded).unwrap();
+        let one = project.join("templates/appointment-reminder/1");
+        let two = project.join("templates/appointment-reminder/2");
         copy_tree(&one, &two);
         for locale in ["en", "fr"] {
             let text = two.join(locale).join("text.j2");
             let source = std::fs::read_to_string(&text).unwrap();
             std::fs::write(&text, format!("[v2] {source}")).unwrap();
         }
+        self.install_project();
+        self.write_runtime(None);
     }
 
     async fn serve_error(&self) -> RuntimeError {
@@ -254,55 +279,32 @@ async fn migrated(isolated: &Isolated) -> Deployment {
 }
 
 #[tokio::test]
-async fn startup_publishes_every_pending_outbox_batch_before_its_start_record() {
+async fn startup_opens_the_audit_writer_before_serving() {
     let isolated = isolated_schema().await;
     let deployment = migrated(&isolated).await;
     let config = deployment.config();
     apply_package(&config, true).await.expect("apply");
-
-    // More than one publication batch must precede the restart marker.
-    for sequence in 0..125 {
-        let event_id = Uuid::new_v4();
-        let record = json!({
-            "event": "messaging.test.committed-before-restart",
-            "eventId": event_id.to_string(),
-            "sequence": sequence
-        });
-        isolated.admin.execute(
-            &format!("INSERT INTO {}.messaging_audit_outbox (event_id, audit_record) VALUES ($1, $2)", isolated.schema),
-            &[&event_id, &record],
-        ).await.expect("a committed pre-restart audit event");
-    }
 
     let app = registry_messaging::runtime::assemble(
         &config,
         registry_messaging::dispatch::Transports::new(),
     )
     .await
-    .expect("assemble after recovering the pending outbox");
-    let records: Vec<Value> = std::fs::read_to_string(&config.audit.path)
-        .expect("the startup journal")
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(records.len(), 126);
-    for (sequence, record) in records.iter().take(125).enumerate() {
-        assert_eq!(record["record"]["sequence"], sequence);
-    }
-    assert_eq!(records[125]["record"]["event"], "messaging.runtime.started");
-    let pending: i64 = isolated
-        .admin
-        .query_one(
-            &format!(
-                "SELECT count(*) FROM {}.messaging_audit_outbox WHERE published_at IS NULL",
-                isolated.schema
-            ),
-            &[],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(pending, 0);
+    .expect("assemble after opening the audit writer");
+    let records: Vec<Value> = std::fs::read_to_string(
+        config
+            .audit
+            .path
+            .as_ref()
+            .expect("an audit file destination"),
+    )
+    .expect("the startup journal")
+    .lines()
+    .map(|line| serde_json::from_str(line).unwrap())
+    .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["phase"], "response");
+    assert_eq!(records[0]["record"]["event"], "messaging.runtime.started");
     drop(app);
 }
 
@@ -320,6 +322,21 @@ async fn apply_previews_by_default_records_once_and_is_idempotent() {
     assert_eq!(preview.change, PackageChange::Activate);
     assert!(!preview.applied);
     assert!(isolated.ledger().await.is_empty());
+    let operator_audit = match deployment
+        .config()
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    assert!(
+        !operator_audit.exists(),
+        "a preview does not open or write the operator audit destination"
+    );
 
     let applied = apply_package(&deployment.config(), true)
         .await
@@ -327,6 +344,24 @@ async fn apply_previews_by_default_records_once_and_is_idempotent() {
     assert_eq!(applied.change, PackageChange::Activate);
     assert!(applied.applied);
     assert_eq!(isolated.ledger().await, std::slice::from_ref(&digest));
+    let entries: Vec<Value> = std::fs::read_to_string(&operator_audit)
+        .expect("the operator audit destination")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(
+        entries[0]["record"]["event"],
+        "messaging.package.activation.requested"
+    );
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(
+        entries[1]["record"]["event"],
+        "messaging.package.activation.finished"
+    );
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[1]["record"]["applied"], true);
 
     let again = apply_package(&deployment.config(), true)
         .await
@@ -335,6 +370,41 @@ async fn apply_previews_by_default_records_once_and_is_idempotent() {
     assert_eq!(again.change, PackageChange::None);
     assert!(!again.applied);
     assert_eq!(isolated.ledger().await, [digest]);
+    assert_eq!(
+        std::fs::read_to_string(operator_audit)
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "an idempotent no-op writes no activation pair"
+    );
+}
+
+#[tokio::test]
+async fn package_apply_preview_ignores_a_refused_audit_destination_and_apply_refuses_before_effect()
+{
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    let blocked_parent = deployment.root.path().join("audit-parent-is-a-file");
+    std::fs::write(&blocked_parent, b"not a directory").unwrap();
+    let mut config = deployment.config();
+    config.audit.path = Some(blocked_parent.join("audit.jsonl"));
+
+    let preview = apply_package(&config, false)
+        .await
+        .expect("a preview does not open the audit destination");
+    assert_eq!(preview.change, PackageChange::Activate);
+    assert!(!preview.applied);
+    assert!(isolated.ledger().await.is_empty());
+
+    let refused = apply_package(&config, true)
+        .await
+        .expect_err("an applied activation requires the audit destination");
+    assert!(
+        matches!(refused, RuntimeError::AuditJournal(_)),
+        "{refused}"
+    );
+    assert!(isolated.ledger().await.is_empty());
 }
 
 #[tokio::test]
@@ -343,12 +413,85 @@ async fn concurrent_applies_record_the_package_once() {
     let deployment = migrated(&isolated).await;
     let config = deployment.config();
     let (first, second) = tokio::join!(apply_package(&config, true), apply_package(&config, true));
-    let recorded = [first.expect("apply"), second.expect("apply")]
+    let results = [first, second];
+    let recorded = results
         .iter()
+        .filter_map(|result| result.as_ref().ok())
         .filter(|apply| apply.applied)
         .count();
     assert_eq!(recorded, 1);
+    for error in results.iter().filter_map(|result| result.as_ref().err()) {
+        assert!(matches!(error, RuntimeError::AuditJournal(_)), "{error}");
+    }
     assert_eq!(isolated.ledger().await.len(), 1);
+}
+
+#[tokio::test]
+async fn apply_reports_the_active_digest_it_read_under_the_ledger_lock() {
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    let config = deployment.config();
+    let concurrent = format!("sha256:{}", "c".repeat(64));
+    // Another activation holds the ledger lock and records a package the
+    // apply has not seen when it first reads the ledger.
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "BEGIN; SELECT pg_advisory_xact_lock({LEDGER_LOCK_KEY}); \
+             INSERT INTO {}.messaging_package_ledger (package_digest, runtime_version, activated_at) \
+             VALUES ('{concurrent}', 'test', now())",
+            isolated.schema
+        ))
+        .await
+        .unwrap();
+    let apply = tokio::spawn({
+        let config = config.clone();
+        async move { apply_package(&config, true).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let waiting: i64 = isolated
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM pg_locks \
+                      WHERE locktype = 'advisory' AND NOT granted \
+                        AND pg_backend_pid() = ANY (pg_blocking_pids(pid))",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the apply waits for the ledger lock this connection holds");
+    isolated.admin.batch_execute("COMMIT").await.unwrap();
+
+    let applied = apply.await.unwrap().expect("apply");
+    assert!(applied.applied);
+    assert_eq!(applied.active_digest.as_deref(), Some(concurrent.as_str()));
+    let operator_audit = match config
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    let finished: Vec<Value> = std::fs::read_to_string(operator_audit)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|entry| entry["phase"] == "response")
+        .collect();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0]["record"]["activeDigest"], concurrent.as_str());
 }
 
 #[tokio::test]
@@ -378,8 +521,14 @@ async fn the_runtime_refuses_a_package_the_ledger_does_not_name_active() {
         other => panic!("expected a ledger mismatch, got {other}"),
     }
     assert!(
-        !deployment.root.path().join("audit").exists(),
-        "a refused start writes no audit record"
+        !deployment
+            .config()
+            .audit
+            .path
+            .as_ref()
+            .expect("an audit file destination")
+            .exists(),
+        "a refused start writes no runtime audit record"
     );
 }
 
@@ -391,16 +540,21 @@ async fn a_pinned_digest_must_match_the_package_before_any_ledger_write() {
 
     deployment.write_runtime(Some(&format!("sha256:{}", "0".repeat(64))));
     match RuntimeConfig::load(deployment.runtime_path()) {
-        Err(RuntimeConfigError::PackageDigestMismatch { expected, actual }) => {
-            assert_eq!(expected, format!("sha256:{}", "0".repeat(64)));
-            assert_eq!(actual, digest);
+        Err(error @ RuntimeConfigError::Package(_)) => {
+            assert_eq!(error.path(), "package.expectedDigest");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(&format!("sha256:{}", "0".repeat(64))),
+                "{rendered}"
+            );
+            assert!(rendered.contains(&digest), "{rendered}");
         }
         other => panic!("expected a digest mismatch, got {other:?}"),
     }
     assert!(isolated.ledger().await.is_empty());
     assert!(matches!(
         deployment.serve_error().await,
-        RuntimeError::Config(RuntimeConfigError::PackageDigestMismatch { .. })
+        RuntimeError::Config(RuntimeConfigError::Package(_))
     ));
 
     deployment.write_runtime(Some(&digest));

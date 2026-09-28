@@ -3,7 +3,7 @@
 //! `messagingctl`, the Registry Messaging adopter and local operator
 //! tooling.
 //!
-//! - `init` writes the starter package and runtime example.
+//! - `init` writes a starter authoring project and runtime example.
 //! - `check` loads a package, or a runtime configuration and the package it
 //!   names, exactly as `messaging serve` would, offline: no secret is
 //!   resolved, no database is reached, and no signing key is fetched. It
@@ -16,8 +16,9 @@
 //! - `messages list` and `messages show` read accepted messages with the
 //!   recipient masked; `messages retry`, `settle`, and `cancel` report what
 //!   the action would do to one message, and with `--apply` do it. Each
-//!   applied action writes its audit record into the outbox the running
-//!   runtime publishes.
+//!   applied action writes its audit request and outcome directly to the
+//!   `messagingctl` companion stream beside the runtime's audit
+//!   destination.
 //! - `retention erase-expired` reports what the configured retention
 //!   periods say had expired by `--before`, and with `--apply` erases it,
 //!   with the migration credential. A cutoff in the future is refused.
@@ -28,8 +29,17 @@
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the configuration,
 //! package, preview, message action, or retention cutoff is refused, 2 for a usage error, and
-//! 3 when a file, secret, or database could not be reached or the report
-//! could not be written.
+//! 3 when a file, secret, database, or audit destination could not be
+//! reached, a change's commit or audit outcome could not be confirmed, or
+//! the report could not be written.
+//!
+//! With `--format json` every report opens with `ok`, `command`, and
+//! `status`, in that order. `status` is `complete` for a success unless the
+//! report names its own, such as `ready` for a development session, and
+//! `domain-refusal`, `usage-error`, or `operational-failure` by exit class
+//! for a failure, whose `diagnostics` each name a `suggestedAction`. A
+//! successful `preview` is the one exception: it prints the exact bytes the
+//! runtime's preview route answers.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read as _};
@@ -40,21 +50,30 @@ use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_messaging::config::{RuntimeConfig, RuntimeConfigError};
 use registry_messaging::http::preview_json;
 use registry_messaging::messages::{
-    MessageStore, MessageStoreError, OperatorAction, OperatorActionReport, SettleOutcome,
+    MessageReader, MessageStoreError, OperatorAction, OperatorActionReport, SettleOutcome,
 };
-use registry_messaging::package::{load_package, LoadedPackage};
+use registry_messaging::package::{
+    load_package, load_project, package_inputs, plan_package_inputs, write_package_inputs,
+    LoadedPackage,
+};
 use registry_messaging::retention::RetentionError;
 use registry_messaging::runtime::{
-    apply_package, erase_expired_as_operator, message_store, PackageChange, RuntimeError,
+    apply_package, erase_expired_as_operator, message_reader, message_store, PackageChange,
+    RuntimeError,
 };
 use registry_messaging_core::{
-    ContentRefusal, MessageDispatch, MessageStatus, TemplatePreviewRequest,
+    ContentRefusal, MessageDispatch, MessageStatus, ProblemCode, TemplatePreviewRequest,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+#[cfg(test)]
+mod cli_contract_tests;
 mod dev;
+mod report;
 mod starter;
+
+use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -73,9 +92,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Write the starter package and runtime example into a new directory.
+    /// Write a starter authoring project and runtime example.
     Init(InitArgs),
-    /// Check a package, or a runtime configuration and its package, offline.
+    /// Build an immutable runtime package from an editable project.
+    Package(PackageArgs),
+    /// Check an authoring project, installed package, or runtime configuration.
     Check(CheckArgs),
     /// Render one template version with the given data, offline.
     Preview(PreviewArgs),
@@ -88,7 +109,7 @@ enum Command {
     /// Erase what the retention periods say has expired.
     #[command(subcommand)]
     Retention(RetentionCommand),
-    /// Run the package locally with PostgreSQL, Mailpit, and a mock HTTP
+    /// Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP
     /// gateway in Docker, until Ctrl-C.
     Dev(dev::DevArgs),
 }
@@ -153,8 +174,13 @@ struct MessageArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// The message id the runtime returned on acceptance.
-    #[arg(value_name = "MESSAGE_ID")]
+    #[arg(value_name = "MESSAGE_ID", value_parser = parse_message_id)]
     message: Uuid,
+}
+
+/// Parse a message id without repeating the refused value in the reason.
+fn parse_message_id(value: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(value).map_err(|_| "expected a UUID".to_owned())
 }
 
 #[derive(Debug, Args)]
@@ -217,6 +243,22 @@ struct InitArgs {
     directory: PathBuf,
 }
 
+#[derive(Debug, Args)]
+struct PackageArgs {
+    /// Editable Messaging project to package.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    /// New directory to create for the installed package.
+    #[arg(long, value_name = "DIRECTORY")]
+    output: PathBuf,
+    /// Optional source revision recorded in the package envelope.
+    #[arg(long, value_name = "REVISION")]
+    revision: Option<String>,
+    /// Validate and report the digest without writing the package.
+    #[arg(long)]
+    dry_run: bool,
+}
+
 /// Where a command reads the package from: a package directory, or the
 /// runtime configuration that names one and may pin its digest.
 #[derive(Debug, Args)]
@@ -228,6 +270,9 @@ struct PackageSource {
     /// The package directory holding messaging.yaml.
     #[arg(long, value_name = "DIRECTORY", group = "source")]
     package: Option<PathBuf>,
+    /// Editable authoring project holding messaging.yaml.
+    #[arg(long, value_name = "DIRECTORY", group = "source")]
+    project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -271,10 +316,6 @@ enum OutputFormat {
     Json,
 }
 
-const REFUSAL_EXIT: u8 = 1;
-const USAGE_EXIT: u8 = 2;
-const OPERATIONAL_FAILURE_EXIT: u8 = 3;
-
 /// The largest template data file `preview` reads.
 const MAXIMUM_DATA_BYTES: u64 = 1024 * 1024;
 
@@ -307,6 +348,7 @@ struct Outcome {
 #[derive(Clone, Copy)]
 enum View {
     Init,
+    Package,
     Check,
     Preview,
     Apply,
@@ -329,16 +371,162 @@ impl Outcome {
     }
 
     fn refused(exit: u8, code: &str, path: &str, message: String) -> Self {
+        let (artifact, action) = guidance(code, exit);
         Self {
             report: json!({
                 "ok": false,
-                "diagnostics": [{"code": code, "path": path, "message": message}]
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": code,
+                    "artifact": artifact,
+                    "path": path,
+                    "message": message,
+                    "suggestedAction": action,
+                }]
             }),
             exit,
             view: View::Check,
             raw_json: None,
         }
     }
+
+    /// Name the artifact a refusal is about when its code alone does not.
+    fn about(mut self, artifact: &str) -> Self {
+        for diagnostic in self.report["diagnostics"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
+            diagnostic["artifact"] = json!(artifact);
+        }
+        self
+    }
+}
+
+/// The next step for a command line clap refused.
+const USAGE_ACTION: &str =
+    "Run messagingctl --help, or the command with --help, and retry with the documented arguments.";
+
+/// The artifact a refusal is about and the next step it suggests, by its
+/// problem code, and by its exit class for a code without its own.
+fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
+    match code {
+        "usage.invalid" => ("command_arguments", USAGE_ACTION),
+        "init.exists" => (
+            "filesystem",
+            "Name a directory that does not exist yet, then rerun messagingctl init.",
+        ),
+        "init.write-failed" => (
+            "filesystem",
+            "Make the parent directory writable, then rerun messagingctl init.",
+        ),
+        "package.project-refused" => (
+            "messaging_project",
+            "Correct the project file the path names, then rerun messagingctl package.",
+        ),
+        "package.refused" => (
+            "package_output",
+            "Correct the --output directory as the message names, then rerun messagingctl package.",
+        ),
+        "config.refused" if exit == OPERATIONAL_FAILURE_EXIT => (
+            "runtime_configuration",
+            "Restore the file or secret the message names, then retry.",
+        ),
+        "config.refused" => (
+            "runtime_configuration",
+            "Correct the member the path names, then rerun messagingctl check.",
+        ),
+        "data.unreadable" => (
+            "template_data",
+            "Make the --data file readable, then rerun messagingctl preview.",
+        ),
+        "data.invalid" => (
+            "template_data",
+            "Correct the --data file as the message names, then rerun messagingctl preview.",
+        ),
+        "runtime.unavailable" | "output.failed" => (
+            "runtime_dependency",
+            "Retry the command; if it fails again, report the message.",
+        ),
+        "package.outcome-unknown" => (
+            "database",
+            "Run messagingctl apply without --apply to see which package the ledger names \
+             active before applying again.",
+        ),
+        "audit.unconfirmed" => (
+            "audit",
+            "Do not apply the change again; restore the audit destination.",
+        ),
+        "audit.unavailable" => (
+            "audit",
+            "Restore the audit destination, then retry; nothing was changed.",
+        ),
+        "database.unavailable" => (
+            "database",
+            "Restore the database or the credential the message names, then retry.",
+        ),
+        "retention.future-cutoff" => (
+            "command_arguments",
+            "Pass a --before instant that is not in the future.",
+        ),
+        "retention.outcome-unknown" => (
+            "database",
+            "Run the same command without --apply to preview what is still due.",
+        ),
+        "message.not-found" => (
+            "message",
+            "Find the message id with messagingctl messages list.",
+        ),
+        "message.not-eligible" | "message.dispatch-started" => (
+            "message",
+            "Run messagingctl messages show MESSAGE_ID and take the action its dispatch state \
+             allows.",
+        ),
+        "message.changed" | "message.outcome-unknown" => (
+            "message",
+            "Run messagingctl messages show MESSAGE_ID before acting again.",
+        ),
+        "dev.refused" => (
+            "dev_session",
+            "Correct the project or request the message names, then retry.",
+        ),
+        "dev.failed" | "dev.interrupted" => (
+            "dev_session",
+            "Restore Docker or the file the message names, then rerun messagingctl dev.",
+        ),
+        _ if exit == OPERATIONAL_FAILURE_EXIT => (
+            "runtime_dependency",
+            "Restore the file, secret, database, or service the message names, then retry.",
+        ),
+        _ => (
+            "messaging_package",
+            "Correct the template, locale, or data the message names, then retry.",
+        ),
+    }
+}
+
+/// Complete a command's own report into the shared envelope: `ok` agrees
+/// with the exit code, `command` names the subcommand path, and `status`
+/// keeps a report's own status or names what happened by exit class.
+fn completed(report: &Value, command: &str, exit: u8) -> Value {
+    assert!(
+        exit == 0
+            || report["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| !diagnostics.is_empty()),
+        "a failed {command} report carries diagnostics"
+    );
+    let mut report = report.clone();
+    report["ok"] = json!(exit == 0);
+    report["command"] = json!(command);
+    if report.get("status").is_none() {
+        report["status"] = json!(if exit == 0 {
+            "complete"
+        } else {
+            report::failure_status(exit)
+        });
+    }
+    report
 }
 
 fn main_entry_from<I, T>(
@@ -369,34 +557,98 @@ where
             };
         }
         Err(error) => {
-            let report = json!({
-                "ok": false,
-                "diagnostics": [{"code": "usage.invalid", "path": "/", "message": error.to_string()}]
-            });
-            let format = if machine_mode {
-                OutputFormat::Json
-            } else {
-                OutputFormat::Human
-            };
-            let outcome = Outcome {
-                report,
-                exit: USAGE_EXIT,
-                view: View::Check,
-                raw_json: None,
-            };
-            return finish(&outcome, format, stdout, stderr);
+            let message = report::usage_message(&error);
+            if machine_mode {
+                let outcome = Outcome::refused(USAGE_EXIT, "usage.invalid", "arguments", message);
+                return finish(&outcome, "usage", OutputFormat::Json, stdout, stderr);
+            }
+            // The exit code carries the refusal even when this line cannot
+            // be written.
+            let _ = writeln!(stderr, "error: {message}\n  next: {USAGE_ACTION}");
+            return ExitCode::from(USAGE_EXIT);
         }
     };
+    let command = command_path(&cli.command);
     let outcome = match cli.command {
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::Init(args) => init(&args.directory),
+        Command::Package(args) => package(&args),
         Command::Check(args) => check(&args.source),
         Command::Preview(args) => preview(&args),
         Command::Apply(args) => apply(&args.runtime_config, args.apply),
         Command::Messages(command) => messages(&command),
         Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args),
     };
-    finish(&outcome, cli.format, stdout, stderr)
+    finish(&outcome, command, cli.format, stdout, stderr)
+}
+
+/// The subcommand path a parsed invocation selected, as its report names it.
+fn command_path(command: &Command) -> &'static str {
+    match command {
+        Command::Init(_) => "init",
+        Command::Package(_) => "package",
+        Command::Check(_) => "check",
+        Command::Preview(_) => "preview",
+        Command::Apply(_) => "apply",
+        Command::Messages(MessagesCommand::List(_)) => "messages list",
+        Command::Messages(MessagesCommand::Show(_)) => "messages show",
+        Command::Messages(MessagesCommand::Retry(_)) => "messages retry",
+        Command::Messages(MessagesCommand::Settle(_)) => "messages settle",
+        Command::Messages(MessagesCommand::Cancel(_)) => "messages cancel",
+        Command::Retention(RetentionCommand::EraseExpired(_)) => "retention erase-expired",
+        Command::Dev(args) => dev::command_path(args),
+    }
+}
+
+fn package(args: &PackageArgs) -> Outcome {
+    let inputs = match package_inputs(&args.project) {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            return Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                "package.project-refused",
+                error.path(),
+                error.to_string(),
+            )
+        }
+    };
+    let digest = if args.dry_run {
+        match plan_package_inputs(&args.project, &inputs, args.revision.as_deref()) {
+            Ok(digest) => digest,
+            Err(error) => {
+                return Outcome::refused(
+                    DOMAIN_REFUSAL_EXIT,
+                    "package.refused",
+                    "--output",
+                    error.to_string(),
+                )
+            }
+        }
+    } else {
+        match write_package_inputs(&args.output, &inputs, args.revision.as_deref()) {
+            Ok(package) => package.digest().to_owned(),
+            Err(error) => {
+                return Outcome::refused(
+                    DOMAIN_REFUSAL_EXIT,
+                    "package.refused",
+                    "--output",
+                    error.to_string(),
+                )
+            }
+        }
+    };
+    Outcome::new(
+        json!({
+            "ok": true,
+            "project": args.project,
+            "output": args.output,
+            "dryRun": args.dry_run,
+            "revision": args.revision,
+            "packageDigest": digest,
+            "packageFiles": inputs.len(),
+        }),
+        View::Package,
+    )
 }
 
 fn init(directory: &Path) -> Outcome {
@@ -407,14 +659,14 @@ fn init(directory: &Path) -> Outcome {
                 "directory": directory,
                 "created": created,
                 "next": [
-                    "Run messagingctl check --package DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.",
-                    "Copy runtime.example.yaml to runtime.yaml, set its absolute paths and secret references, run messaging migrate, then messagingctl apply --apply, then messaging serve.",
+                    "Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.",
+                    "Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messaging migrate, then messagingctl apply --apply, then messaging serve.",
                 ],
             }),
             View::Init,
         ),
         Err(starter::InitError::Exists) => Outcome::refused(
-            REFUSAL_EXIT,
+            DOMAIN_REFUSAL_EXIT,
             "init.exists",
             "/",
             "the directory already exists; init never overwrites".to_owned(),
@@ -432,8 +684,8 @@ fn init(directory: &Path) -> Outcome {
 /// configuration, which also verifies a pinned digest and the admitted
 /// clients, or from a bare package directory.
 fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage), Outcome> {
-    match (&source.runtime_config, &source.package) {
-        (Some(path), _) => {
+    match (&source.runtime_config, &source.package, &source.project) {
+        (Some(path), _, _) => {
             let loaded = RuntimeConfig::load(path).and_then(|config| {
                 let package = config.load_package()?;
                 Ok((config, package))
@@ -442,30 +694,51 @@ fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage)
                 .map(|(config, package)| (Some(config), package))
                 .map_err(|error| config_refusal(&error))
         }
-        (None, Some(root)) => load_package(root)
-            .map(|package| (None, package))
-            .map_err(|error| {
-                let exit = if error.is_read_failure() {
-                    OPERATIONAL_FAILURE_EXIT
-                } else {
-                    REFUSAL_EXIT
-                };
-                Outcome::refused(exit, "config.refused", error.path(), error.to_string())
-            }),
-        (None, None) => Err(Outcome::refused(
+        (None, Some(root), _) => {
+            load_package(root)
+                .map(|package| (None, package))
+                .map_err(|error| {
+                    let exit = if error.is_read_failure() {
+                        OPERATIONAL_FAILURE_EXIT
+                    } else {
+                        DOMAIN_REFUSAL_EXIT
+                    };
+                    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
+                        .about("messaging_package")
+                })
+        }
+        (None, None, Some(root)) => {
+            load_project(root)
+                .map(|package| (None, package))
+                .map_err(|error| {
+                    let exit = if error.is_read_failure() {
+                        OPERATIONAL_FAILURE_EXIT
+                    } else {
+                        DOMAIN_REFUSAL_EXIT
+                    };
+                    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
+                        .about("messaging_package")
+                })
+        }
+        (None, None, None) => Err(Outcome::refused(
             USAGE_EXIT,
             "usage.invalid",
             "/",
-            "name --runtime-config or --package".to_owned(),
+            "name --runtime-config, --package, or --project".to_owned(),
         )),
     }
 }
 
 fn config_refusal(error: &RuntimeConfigError) -> Outcome {
     let exit = match error {
-        RuntimeConfigError::Read(_) => OPERATIONAL_FAILURE_EXIT,
+        RuntimeConfigError::Shared(error)
+            if error.kind()
+                == registry_messaging::config::SharedRuntimeConfigErrorKind::Unavailable =>
+        {
+            OPERATIONAL_FAILURE_EXIT
+        }
         RuntimeConfigError::Package(error) if error.is_read_failure() => OPERATIONAL_FAILURE_EXIT,
-        _ => REFUSAL_EXIT,
+        _ => DOMAIN_REFUSAL_EXIT,
     };
     Outcome::refused(exit, "config.refused", error.path(), error.to_string())
 }
@@ -520,14 +793,14 @@ fn check(source: &PackageSource) -> Outcome {
     });
     if let Some(config) = config {
         report["runtimeConfig"] = json!(source.runtime_config);
-        report["listener"] = json!(config.listener.bind.to_string());
+        report["listener"] = json!(config.listener.bind.socket_addr().to_string());
         report["metricsListener"] = json!(config
             .metrics_listener
             .as_ref()
-            .map(|metrics| metrics.bind.to_string()));
+            .map(|metrics| metrics.bind.socket_addr().to_string()));
         report["retention"] = json!(config.retention);
     } else {
-        report["package"] = json!(source.package);
+        report["package"] = json!(source.package.as_ref().or(source.project.as_ref()));
     }
     Outcome::new(report, View::Check)
 }
@@ -599,7 +872,7 @@ fn read_data(path: &Path) -> Result<Value, Outcome> {
         .map_err(unreadable)?;
     if bytes.len() as u64 > MAXIMUM_DATA_BYTES {
         return Err(Outcome::refused(
-            REFUSAL_EXIT,
+            DOMAIN_REFUSAL_EXIT,
             "data.invalid",
             "--data",
             format!("the data file exceeds {MAXIMUM_DATA_BYTES} bytes"),
@@ -607,7 +880,7 @@ fn read_data(path: &Path) -> Result<Value, Outcome> {
     }
     serde_json::from_slice(&bytes).map_err(|error| {
         Outcome::refused(
-            REFUSAL_EXIT,
+            DOMAIN_REFUSAL_EXIT,
             "data.invalid",
             "--data",
             format!("the data file is not JSON: {error}"),
@@ -619,7 +892,7 @@ fn read_data(path: &Path) -> Result<Value, Outcome> {
 /// pointer and keyword of each refused member, never a value.
 fn preview_refusal(refusal: &ContentRefusal) -> Outcome {
     let mut outcome = Outcome::refused(
-        REFUSAL_EXIT,
+        DOMAIN_REFUSAL_EXIT,
         refusal.problem().code(),
         "/",
         refusal.to_string(),
@@ -672,9 +945,36 @@ fn apply(path: &Path, record: bool) -> Outcome {
             }),
             View::Apply,
         ),
-        Err(RuntimeError::Config(error)) => config_refusal(&error),
-        Err(error) => database_unavailable(&error),
+        Err(error) => apply_failure(error),
     }
+}
+
+/// The report of an `apply` that did not finish.
+fn apply_failure(error: RuntimeError) -> Outcome {
+    match error {
+        RuntimeError::Config(error) => config_refusal(&error),
+        RuntimeError::AuditUnconfirmed { .. } => audit_unconfirmed(&error),
+        RuntimeError::OutcomeUnknown { .. } => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "package.outcome-unknown",
+            "database",
+            format!(
+                "{error}; run messagingctl apply without --apply to see which package the \
+                 ledger names active before applying again"
+            ),
+        ),
+        error => database_unavailable(&error),
+    }
+}
+
+/// A change was committed, and its audit outcome record was not written.
+fn audit_unconfirmed(error: &RuntimeError) -> Outcome {
+    Outcome::refused(
+        OPERATIONAL_FAILURE_EXIT,
+        "audit.unconfirmed",
+        "audit",
+        format!("{error}; do not apply it again, and restore the audit destination"),
+    )
 }
 
 fn messages(command: &MessagesCommand) -> Outcome {
@@ -693,19 +993,20 @@ fn messages(command: &MessagesCommand) -> Outcome {
         Err(refused) => return refused,
     };
     runtime.block_on(async {
-        let store = match message_store(&config).await {
-            Ok(store) => store,
-            Err(RuntimeError::Config(error)) => return config_refusal(&error),
-            Err(error) => return database_unavailable(&error),
-        };
         match command {
-            MessagesCommand::List(args) => list(&store, args).await,
-            MessagesCommand::Show(args) => show(&config, &store, args.message).await,
+            MessagesCommand::List(args) => match open_message_reader(&config).await {
+                Ok(reader) => list(&reader, args).await,
+                Err(outcome) => outcome,
+            },
+            MessagesCommand::Show(args) => match open_message_reader(&config).await {
+                Ok(reader) => show(&config, &reader, args.message).await,
+                Err(outcome) => outcome,
+            },
             MessagesCommand::Retry(args) => {
-                act(&store, &args.target, OperatorAction::Retry, args.apply).await
+                act(&config, &args.target, OperatorAction::Retry, args.apply).await
             }
             MessagesCommand::Cancel(args) => {
-                act(&store, &args.target, OperatorAction::Cancel, args.apply).await
+                act(&config, &args.target, OperatorAction::Cancel, args.apply).await
             }
             MessagesCommand::Settle(args) => {
                 let outcome = match args.outcome {
@@ -713,7 +1014,7 @@ fn messages(command: &MessagesCommand) -> Outcome {
                     SettleArg::NotSent => SettleOutcome::NotSent,
                 };
                 act(
-                    &store,
+                    &config,
                     &args.action.target,
                     OperatorAction::Settle(outcome),
                     args.action.apply,
@@ -724,9 +1025,17 @@ fn messages(command: &MessagesCommand) -> Outcome {
     })
 }
 
+async fn open_message_reader(config: &RuntimeConfig) -> Result<MessageReader, Outcome> {
+    match message_reader(config).await {
+        Ok(reader) => Ok(reader),
+        Err(RuntimeError::Config(error)) => Err(config_refusal(&error)),
+        Err(error) => Err(database_unavailable(&error)),
+    }
+}
+
 fn future_cutoff() -> Outcome {
     Outcome::refused(
-        REFUSAL_EXIT,
+        DOMAIN_REFUSAL_EXIT,
         "retention.future-cutoff",
         "--before",
         "the cutoff is in the future; retention erases only what has already expired".to_owned(),
@@ -766,9 +1075,34 @@ fn erase_expired(args: &EraseExpiredArgs) -> Outcome {
             }),
             View::Retention,
         ),
-        Err(RuntimeError::Config(error)) => config_refusal(&error),
-        Err(RuntimeError::Retention(RetentionError::FutureCutoff)) => future_cutoff(),
-        Err(error) => database_unavailable(&error),
+        Err(error) => retention_failure(error, args.apply),
+    }
+}
+
+/// The report of a retention run that did not finish. An applied run
+/// erases in batches, and the batches committed before a failure stay
+/// erased and journaled.
+fn retention_failure(error: RuntimeError, applied: bool) -> Outcome {
+    match error {
+        RuntimeError::Config(error) => config_refusal(&error),
+        RuntimeError::Retention(RetentionError::FutureCutoff) => future_cutoff(),
+        RuntimeError::AuditUnconfirmed { .. } => audit_unconfirmed(&error),
+        RuntimeError::OutcomeUnknown { .. } => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "retention.outcome-unknown",
+            "database",
+            format!("{error}; run the same command without --apply to preview what is still due"),
+        ),
+        error if applied => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "database.unavailable",
+            "database",
+            format!(
+                "{error}; batches committed before the failure stay erased and journaled, and \
+                 the next run continues from there"
+            ),
+        ),
+        error => database_unavailable(&error),
     }
 }
 
@@ -783,15 +1117,15 @@ fn database_unavailable(error: &dyn std::fmt::Display) -> Outcome {
 
 fn message_not_found(message: Uuid) -> Outcome {
     Outcome::refused(
-        REFUSAL_EXIT,
+        DOMAIN_REFUSAL_EXIT,
         "message.not-found",
         "MESSAGE_ID",
         format!("no message {message} exists"),
     )
 }
 
-async fn list(store: &MessageStore, args: &ListArgs) -> Outcome {
-    match store.list(args.status.map(Into::into), args.limit).await {
+async fn list(reader: &MessageReader, args: &ListArgs) -> Outcome {
+    match reader.list(args.status.map(Into::into), args.limit).await {
         Ok(messages) => Outcome::new(json!({"ok": true, "messages": messages}), View::MessageList),
         Err(error) => database_unavailable(&error),
     }
@@ -800,12 +1134,12 @@ async fn list(store: &MessageStore, args: &ListArgs) -> Outcome {
 /// Show one message as the runtime serves it: the configured package decides
 /// whether a message still without a report is one whose provider records
 /// none.
-async fn show(config: &RuntimeConfig, store: &MessageStore, message: Uuid) -> Outcome {
+async fn show(config: &RuntimeConfig, reader: &MessageReader, message: Uuid) -> Outcome {
     let receipt_providers = match config.load_package() {
         Ok(loaded) => loaded.receipt_providers(),
         Err(error) => return config_refusal(&error),
     };
-    match store.read(message).await {
+    match reader.read(message).await {
         Ok(Some(mut stored)) => {
             stored.settle_report_capability(&receipt_providers);
             Outcome::new(
@@ -828,31 +1162,39 @@ async fn show(config: &RuntimeConfig, store: &MessageStore, message: Uuid) -> Ou
 /// is not in the state for is refused, applied or not, so a preview that
 /// exits 0 is one `--apply` would carry out.
 async fn act(
-    store: &MessageStore,
+    config: &RuntimeConfig,
     target: &MessageArgs,
     action: OperatorAction,
     apply: bool,
 ) -> Outcome {
-    let report = match store.operate(target.message, action, apply).await {
+    let result = if apply {
+        let store = match message_store(config).await {
+            Ok(store) => store,
+            Err(RuntimeError::Config(error)) => return config_refusal(&error),
+            Err(error) => return database_unavailable(&error),
+        };
+        store.operate(target.message, action, true).await
+    } else {
+        let reader = match open_message_reader(config).await {
+            Ok(reader) => reader,
+            Err(outcome) => return outcome,
+        };
+        reader.operate(target.message, action).await
+    };
+    let report = match result {
         Ok(Some(report)) => report,
         Ok(None) => return message_not_found(target.message),
-        Err(MessageStoreError::Refused) => {
-            return Outcome::refused(
-                REFUSAL_EXIT,
-                "message.changed",
-                "MESSAGE_ID",
-                format!(
-                    "message {} changed before the {} could be applied; show it and try again",
-                    target.message,
-                    action.as_str()
-                ),
-            )
-        }
-        Err(error) => return database_unavailable(&error),
+        Err(error) => return action_failure(target.message, action, error),
     };
+    if !report.eligible
+        && action == OperatorAction::Cancel
+        && report.dispatch == MessageDispatch::Queued
+    {
+        return dispatch_started(target.message);
+    }
     if !report.eligible {
         return Outcome::refused(
-            REFUSAL_EXIT,
+            DOMAIN_REFUSAL_EXIT,
             "message.not-eligible",
             "MESSAGE_ID",
             format!(
@@ -866,6 +1208,67 @@ async fn act(
         );
     }
     action_outcome(&report)
+}
+
+/// The refusal of a cancellation of a message that is being sent or whose
+/// current generation has an attempt that may have reached its provider,
+/// under the code the HTTP API answers it with.
+fn dispatch_started(message: Uuid) -> Outcome {
+    Outcome::refused(
+        DOMAIN_REFUSAL_EXIT,
+        ProblemCode::MessageDispatchStarted.code(),
+        "MESSAGE_ID",
+        format!(
+            "message {message} is being sent or may have been handed to its provider, so it \
+             can no longer be cancelled"
+        ),
+    )
+}
+
+/// The report of an operator action the store could not answer, naming
+/// whether the message changed.
+fn action_failure(message: Uuid, action: OperatorAction, error: MessageStoreError) -> Outcome {
+    let action = action.as_str();
+    match error {
+        MessageStoreError::DispatchStarted => dispatch_started(message),
+        MessageStoreError::Refused => Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "message.changed",
+            "MESSAGE_ID",
+            format!(
+                "message {message} changed before the {action} could be applied; show it and \
+                 try again"
+            ),
+        ),
+        MessageStoreError::OutcomeUnknown => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "message.outcome-unknown",
+            "MESSAGE_ID",
+            format!(
+                "the {action} of message {message} may have been applied; run messages show \
+                 before acting again"
+            ),
+        ),
+        MessageStoreError::AuditUnconfirmed => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "audit.unconfirmed",
+            "audit",
+            format!(
+                "the {action} of message {message} was applied, and its audit outcome could \
+                 not be recorded; do not apply it again, and restore the audit destination"
+            ),
+        ),
+        MessageStoreError::AuditUnavailable => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "audit.unavailable",
+            "audit",
+            format!(
+                "the audit destination refused the {action} request for message {message}; \
+                 nothing was changed"
+            ),
+        ),
+        MessageStoreError::Store(error) => database_unavailable(&error),
+    }
 }
 
 /// The one dispatch state an action applies to, as `messages show` reports
@@ -883,6 +1286,14 @@ fn action_outcome(report: &OperatorActionReport) -> Outcome {
     match serde_json::to_value(report) {
         Ok(mut value) => {
             value["ok"] = json!(true);
+            // The envelope's `status` names what the command did; the
+            // message's own status is `messageStatus`.
+            if let Some(status) = value
+                .as_object_mut()
+                .and_then(|report| report.remove("status"))
+            {
+                value["messageStatus"] = status;
+            }
             Outcome::new(value, View::MessageAction)
         }
         Err(error) => Outcome::refused(
@@ -898,15 +1309,16 @@ fn action_outcome(report: &OperatorActionReport) -> Outcome {
 /// code when the report itself could not be written.
 fn finish(
     outcome: &Outcome,
+    command: &str,
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> ExitCode {
     let written = match (format, &outcome.raw_json) {
         (OutputFormat::Json, Some(bytes)) => stdout.write_all(bytes),
-        (OutputFormat::Json, None) => serde_json::to_writer_pretty(&mut *stdout, &outcome.report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout)),
+        (OutputFormat::Json, None) => {
+            report::write(&completed(&outcome.report, command, outcome.exit), stdout)
+        }
         (OutputFormat::Human, _) => render_human(outcome, stdout, stderr),
     };
     match written {
@@ -934,9 +1346,11 @@ fn render_human(
         for diagnostic in report["diagnostics"].as_array().into_iter().flatten() {
             writeln!(
                 stderr,
-                "messagingctl: {} ({})",
+                "{}[{}] {}: {}",
+                diagnostic["severity"].as_str().unwrap_or("error"),
+                text(&diagnostic["code"]),
+                diagnostic["path"].as_str().unwrap_or("/"),
                 text(&diagnostic["message"]),
-                diagnostic["path"].as_str().unwrap_or("/")
             )?;
             for data in diagnostic["data"].as_array().into_iter().flatten() {
                 writeln!(
@@ -950,11 +1364,15 @@ fn render_human(
                     text(&data["keyword"])
                 )?;
             }
+            if let Some(action) = diagnostic["suggestedAction"].as_str() {
+                writeln!(stderr, "  next: {action}")?;
+            }
         }
         return Ok(());
     }
     match outcome.view {
         View::Init => render_init(report, stdout),
+        View::Package => render_package(report, stdout),
         View::Check => render_check(report, stdout),
         View::Preview => render_preview(report, stdout),
         View::Apply => render_apply(report, stdout),
@@ -965,6 +1383,17 @@ fn render_human(
         View::Dev => render_dev(report, stdout),
         View::DevToken => render_dev_token(report, stdout),
     }
+}
+
+fn render_package(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    let verb = if report["dryRun"] == json!(true) {
+        "would create"
+    } else {
+        "created"
+    };
+    writeln!(stdout, "{verb}: {}", text(&report["output"]))?;
+    writeln!(stdout, "package digest: {}", text(&report["packageDigest"]))?;
+    writeln!(stdout, "package files: {}", report["packageFiles"])
 }
 
 fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
@@ -1233,7 +1662,7 @@ fn render_message_action(report: &Value, stdout: &mut dyn io::Write) -> io::Resu
         stdout,
         "{action} {}: {} -> {}",
         text(&report["id"]),
-        text(&report["status"]),
+        text(&report["messageStatus"]),
         text(&report["nextStatus"])
     )?;
     if report["applied"] == json!(true) {
@@ -1252,6 +1681,7 @@ fn render_message_action(report: &Value, stdout: &mut dyn io::Write) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_messaging::store::StoreError;
     use std::path::Path;
 
     const PACKAGE: &str = r"apiVersion: registry.registrystack.org/messaging-package/v1alpha1
@@ -1297,10 +1727,14 @@ audit:
 
     fn project(extra: &str) -> (tempfile::TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("package")).unwrap();
-        std::fs::write(root.path().join("package/messaging.yaml"), PACKAGE).unwrap();
-        let path = root.path().join("runtime.yaml");
-        std::fs::write(&path, runtime(root.path(), extra)).unwrap();
+        let safe_root = std::fs::canonicalize(root.path()).unwrap();
+        let authoring = safe_root.join("project");
+        std::fs::create_dir_all(&authoring).unwrap();
+        std::fs::write(authoring.join("messaging.yaml"), PACKAGE).unwrap();
+        let inputs = package_inputs(&authoring).unwrap();
+        write_package_inputs(&safe_root.join("package"), &inputs, None).unwrap();
+        let path = safe_root.join("runtime.yaml");
+        std::fs::write(&path, runtime(&safe_root, extra)).unwrap();
         (root, path)
     }
 
@@ -1366,7 +1800,7 @@ audit:
     fn an_unknown_key_is_refused_with_its_path() {
         let (_root, path) = project("surprise: true\n");
         let (exit, report) = check_json(&path);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert_eq!(report["ok"], false);
         assert_eq!(report["diagnostics"][0]["code"], "config.refused");
         assert!(report["diagnostics"][0]["message"]
@@ -1378,16 +1812,20 @@ audit:
     #[test]
     fn an_environment_expression_in_a_secret_reference_is_refused() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("package")).unwrap();
-        std::fs::write(root.path().join("package/messaging.yaml"), PACKAGE).unwrap();
-        let document = runtime(root.path(), "").replace(
+        let safe_root = std::fs::canonicalize(root.path()).unwrap();
+        let authoring = safe_root.join("project");
+        std::fs::create_dir_all(&authoring).unwrap();
+        std::fs::write(authoring.join("messaging.yaml"), PACKAGE).unwrap();
+        let inputs = package_inputs(&authoring).unwrap();
+        write_package_inputs(&safe_root.join("package"), &inputs, None).unwrap();
+        let document = runtime(&safe_root, "").replace(
             "secret:env/MESSAGING_AUDIT_KEY",
             "secret:env/${AUDIT_KEY_NAME:-MESSAGING_AUDIT_KEY}",
         );
-        let path = root.path().join("runtime.yaml");
+        let path = safe_root.join("runtime.yaml");
         std::fs::write(&path, document).unwrap();
         let (exit, report) = check_json(&path);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert_eq!(report["diagnostics"][0]["path"], "audit.hashKeyRef");
     }
 
@@ -1399,15 +1837,29 @@ audit:
             OsStr::new("--runtime-config"),
             path.as_os_str(),
         ]);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stdout.is_empty());
         assert!(stderr.contains("retention is out of bounds"), "{stderr}");
+        assert!(stderr.starts_with("error[config.refused] "), "{stderr}");
+        assert!(
+            stderr.contains(
+                "\n  next: Correct the member the path names, then rerun messagingctl check.\n"
+            ),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "carries diagnostics")]
+    fn a_failure_without_diagnostics_is_a_programming_error() {
+        let _ = completed(&json!({"ok": false}), "check", DOMAIN_REFUSAL_EXIT);
     }
 
     #[test]
     fn a_missing_file_is_an_operational_failure() {
         let root = tempfile::tempdir().unwrap();
-        let (exit, report) = check_json(&root.path().join("absent.yaml"));
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let (exit, report) = check_json(&root.join("absent.yaml"));
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
         assert_eq!(report["ok"], false);
     }
@@ -1422,9 +1874,14 @@ audit:
         assert_eq!(exit, ExitCode::from(USAGE_EXIT));
         let report: Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+        assert_eq!(report["command"], "usage");
+        assert_eq!(report["status"], "usage-error");
         let (exit, _, stderr) = run(&[OsStr::new("send")]);
         assert_eq!(exit, ExitCode::from(USAGE_EXIT));
-        assert!(!stderr.is_empty());
+        assert_eq!(
+            stderr,
+            format!("error: unrecognized subcommand\n  next: {USAGE_ACTION}\n")
+        );
     }
 
     #[test]
@@ -1456,14 +1913,18 @@ audit:
     /// terminating TLS as `tls_termination` says.
     fn loopback_relay_project(tls_termination: &str) -> (tempfile::TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("package")).unwrap();
+        let safe_root = std::fs::canonicalize(root.path()).unwrap();
+        let authoring = safe_root.join("project");
+        std::fs::create_dir_all(&authoring).unwrap();
         std::fs::write(
-            root.path().join("package/messaging.yaml"),
+            authoring.join("messaging.yaml"),
             format!("{PACKAGE}providers:\n  - id: mail-relay\n    kind: smtp\n"),
         )
         .unwrap();
+        let inputs = package_inputs(&authoring).unwrap();
+        write_package_inputs(&safe_root.join("package"), &inputs, None).unwrap();
         let document = runtime(
-            root.path(),
+            &safe_root,
             "providers:\n  mail-relay:\n    kind: smtp\n    host: 127.0.0.1\n    \
              port: 1025\n    tls: development-loopback\n",
         )
@@ -1471,7 +1932,7 @@ audit:
             "tlsTermination: development-loopback",
             &format!("tlsTermination: {tls_termination}"),
         );
-        let path = root.path().join("runtime.yaml");
+        let path = safe_root.join("runtime.yaml");
         std::fs::write(&path, document).unwrap();
         (root, path)
     }
@@ -1490,7 +1951,7 @@ audit:
     fn a_plaintext_loopback_relay_is_refused_behind_a_production_listener() {
         let (_root, path) = loopback_relay_project("operator-controlled-upstream");
         let (exit, report) = check_json(&path);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT), "{report}");
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
         let message = report["diagnostics"][0]["message"].as_str().unwrap();
         assert!(
             message.contains("development-loopback listener"),
@@ -1520,7 +1981,7 @@ audit:
     ) -> Vec<&'a OsStr> {
         vec![
             OsStr::new("preview"),
-            OsStr::new("--package"),
+            OsStr::new("--project"),
             package.as_os_str(),
             OsStr::new(template),
             OsStr::new("1"),
@@ -1607,7 +2068,7 @@ audit:
         }
 
         let (exit, report) = json_run(&[OsStr::new("init"), directory.as_os_str()]);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert_eq!(report["diagnostics"][0]["code"], "init.exists");
         let leftovers: Vec<_> = std::fs::read_dir(root.path())
             .unwrap()
@@ -1620,10 +2081,10 @@ audit:
     fn check_reports_the_package_digest_templates_and_sample_segments() {
         let root = tempfile::tempdir().unwrap();
         let directory = starter(root.path());
-        let expected = load_package(&directory).unwrap();
+        let expected = load_project(&directory).unwrap();
         let (exit, report) = json_run(&[
             OsStr::new("check"),
-            OsStr::new("--package"),
+            OsStr::new("--project"),
             directory.as_os_str(),
         ]);
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
@@ -1644,7 +2105,7 @@ audit:
 
         let (exit, stdout, _) = run(&[
             OsStr::new("check"),
-            OsStr::new("--package"),
+            OsStr::new("--project"),
             directory.as_os_str(),
         ]);
         assert_eq!(exit, ExitCode::SUCCESS);
@@ -1656,10 +2117,54 @@ audit:
     }
 
     #[test]
+    fn package_builds_an_installed_directory_that_check_accepts() {
+        let root = tempfile::tempdir().unwrap();
+        let project = starter(root.path());
+        let output = root.path().join("installed");
+        let (exit, report) = json_run(&[
+            OsStr::new("package"),
+            project.as_os_str(),
+            OsStr::new("--output"),
+            output.as_os_str(),
+            OsStr::new("--revision"),
+            OsStr::new("test-revision"),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["revision"], "test-revision");
+        assert!(output.join("SHA256SUMS").is_file());
+        assert_eq!(
+            std::fs::read_to_string(output.join("REVISION")).unwrap(),
+            "test-revision\n"
+        );
+
+        let (exit, checked) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--package"),
+            output.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{checked}");
+        assert_eq!(checked["packageDigest"], report["packageDigest"]);
+
+        let dry_output = root.path().join("dry-output");
+        let (exit, dry) = json_run(&[
+            OsStr::new("package"),
+            project.as_os_str(),
+            OsStr::new("--output"),
+            dry_output.as_os_str(),
+            OsStr::new("--revision"),
+            OsStr::new("test-revision"),
+            OsStr::new("--dry-run"),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{dry}");
+        assert_eq!(dry["packageDigest"], report["packageDigest"]);
+        assert!(!dry_output.exists());
+    }
+
+    #[test]
     fn check_takes_exactly_one_package_source() {
         let (exit, report) = json_run(&[
             OsStr::new("check"),
-            OsStr::new("--package"),
+            OsStr::new("--project"),
             OsStr::new("/a"),
             OsStr::new("--runtime-config"),
             OsStr::new("/b"),
@@ -1679,10 +2184,10 @@ audit:
         .unwrap();
         let (exit, report) = json_run(&[
             OsStr::new("check"),
-            OsStr::new("--package"),
+            OsStr::new("--project"),
             directory.as_os_str(),
         ]);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(report["diagnostics"][0]["message"]
             .as_str()
             .unwrap()
@@ -1704,7 +2209,7 @@ audit:
         ));
         let (exit, stdout, stderr) = run(&args);
         assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
-        let loaded = load_package(&directory).unwrap();
+        let loaded = load_project(&directory).unwrap();
         let preview = loaded
             .package
             .preview(
@@ -1765,7 +2270,7 @@ audit:
             let mut args = vec![OsStr::new("--format"), OsStr::new("json")];
             args.extend(preview_args(&directory, template, locale, &path));
             let (exit, stdout, _) = run(&args);
-            assert_eq!(exit, ExitCode::from(REFUSAL_EXIT), "{code}");
+            assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{code}");
             let report: Value = serde_json::from_str(&stdout).unwrap();
             assert_eq!(report["diagnostics"][0]["code"], code);
             assert!(!stdout.contains("secret-value-7"), "{stdout}");
@@ -1777,7 +2282,7 @@ audit:
             "en",
             &path,
         ));
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.contains("data /day"), "{stderr}");
 
         let path = root.path().join("broken.json");
@@ -1790,7 +2295,7 @@ audit:
             &path,
         ));
         let (exit, stdout, _) = run(&args);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stdout.contains("data.invalid"), "{stdout}");
     }
 
@@ -1811,7 +2316,7 @@ audit:
             OsStr::new("--runtime-config"),
             path.as_os_str(),
         ]);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT));
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert_eq!(report["diagnostics"][0]["path"], "package.expectedDigest");
     }
 
@@ -1851,6 +2356,7 @@ audit:
             let (exit, report) = json_run(&args);
             assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{case:?}");
             assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+            assert_eq!(report["status"], "usage-error");
         }
     }
 
@@ -1876,7 +2382,7 @@ audit:
             OsStr::new("9999-01-01T00:00:00Z"),
             OsStr::new("--apply"),
         ]);
-        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT), "{report}");
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
         assert_eq!(report["diagnostics"][0]["code"], "retention.future-cutoff");
         // A past cutoff reaches the configuration, which is missing here.
         let (exit, report) = json_run(&[
@@ -1908,5 +2414,123 @@ audit:
             assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{report}");
             assert_eq!(report["diagnostics"][0]["code"], "database.unavailable");
         }
+    }
+
+    fn diagnostic(outcome: &Outcome) -> (u8, String, String) {
+        let diagnostic = &outcome.report["diagnostics"][0];
+        (
+            outcome.exit,
+            diagnostic["code"].as_str().unwrap().to_owned(),
+            diagnostic["message"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    #[test]
+    fn each_message_action_failure_names_whether_the_message_changed() {
+        let message = Uuid::nil();
+        let cases = [
+            (
+                MessageStoreError::Refused,
+                DOMAIN_REFUSAL_EXIT,
+                "message.changed",
+                "show it and try again",
+            ),
+            (
+                MessageStoreError::DispatchStarted,
+                DOMAIN_REFUSAL_EXIT,
+                "message.dispatch-started",
+                "can no longer be cancelled",
+            ),
+            (
+                MessageStoreError::OutcomeUnknown,
+                OPERATIONAL_FAILURE_EXIT,
+                "message.outcome-unknown",
+                "may have been applied; run messages show before acting again",
+            ),
+            (
+                MessageStoreError::AuditUnconfirmed,
+                OPERATIONAL_FAILURE_EXIT,
+                "audit.unconfirmed",
+                "was applied",
+            ),
+            (
+                MessageStoreError::AuditUnavailable,
+                OPERATIONAL_FAILURE_EXIT,
+                "audit.unavailable",
+                "nothing was changed",
+            ),
+            (
+                MessageStoreError::Store(StoreError::Configuration),
+                OPERATIONAL_FAILURE_EXIT,
+                "database.unavailable",
+                "database configuration",
+            ),
+        ];
+        for (error, exit, code, says) in cases {
+            let (got_exit, got_code, got_message) =
+                diagnostic(&action_failure(message, OperatorAction::Retry, error));
+            assert_eq!((got_exit, got_code.as_str()), (exit, code), "{got_message}");
+            assert!(got_message.contains(says), "{code}: {got_message}");
+        }
+    }
+
+    #[test]
+    fn a_post_commit_apply_or_retention_failure_is_not_reported_as_database_unavailable() {
+        let unconfirmed = RuntimeError::AuditUnconfirmed {
+            action: "package activation",
+            detail: "refused".to_owned(),
+        };
+        let (exit, code, message) = diagnostic(&apply_failure(unconfirmed));
+        assert_eq!(
+            (exit, code.as_str()),
+            (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed")
+        );
+        assert!(message.contains("was applied"), "{message}");
+
+        let unknown = RuntimeError::OutcomeUnknown {
+            stage: "package ledger write",
+            source: StoreError::Configuration,
+        };
+        let (exit, code, message) = diagnostic(&apply_failure(unknown));
+        assert_eq!(
+            (exit, code.as_str()),
+            (OPERATIONAL_FAILURE_EXIT, "package.outcome-unknown")
+        );
+        assert!(
+            message.contains("run messagingctl apply without --apply"),
+            "{message}"
+        );
+
+        let unconfirmed = RuntimeError::AuditUnconfirmed {
+            action: "retention batch",
+            detail: "refused".to_owned(),
+        };
+        let (exit, code, _) = diagnostic(&retention_failure(unconfirmed, true));
+        assert_eq!(
+            (exit, code.as_str()),
+            (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed")
+        );
+
+        let unknown = RuntimeError::OutcomeUnknown {
+            stage: "retention batch",
+            source: StoreError::Configuration,
+        };
+        let (exit, code, message) = diagnostic(&retention_failure(unknown, true));
+        assert_eq!(
+            (exit, code.as_str()),
+            (OPERATIONAL_FAILURE_EXIT, "retention.outcome-unknown")
+        );
+        assert!(message.contains("preview"), "{message}");
+
+        let database = RuntimeError::Database {
+            stage: "retention run",
+            source: StoreError::Configuration,
+        };
+        let (exit, code, message) = diagnostic(&retention_failure(database, true));
+        assert_eq!(
+            (exit, code.as_str()),
+            (OPERATIONAL_FAILURE_EXIT, "database.unavailable")
+        );
+        assert!(message.contains("batches committed before"), "{message}");
     }
 }

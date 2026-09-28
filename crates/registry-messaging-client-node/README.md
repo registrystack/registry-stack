@@ -1,7 +1,8 @@
 # Registry Messaging Node binding
 
-This internal napi-rs binding supplies the `messaging` module assembled into
-`@registrystack/client`. Applications should use that unified package.
+This internal napi-rs binding is not published. Registry Messaging has not
+joined a release, so `@registrystack/client` leaves it out until Messaging
+does.
 
 Every message operation accepts a bearer token for that call; `health` and
 `ready` take none. `submit` requires a caller-chosen idempotency key of 1 to

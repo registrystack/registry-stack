@@ -66,7 +66,6 @@ SCHEDULING_RELEASE_MINIMUM_VERSION = (0, 33, 0)
 SCHEDULINGCTL_RELEASE_MINIMUM_VERSION = (
     release_candidate.OPERATOR_TOOL_MINIMUM_VERSION
 )
-MESSAGING_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CANDIDATE_VERIFICATION_PLAN_SCHEMA = "registry-release.candidate-verification.v3"
@@ -249,7 +248,7 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("scheduling")
         if parsed_version >= SCHEDULINGCTL_RELEASE_MINIMUM_VERSION:
             expected_inventory.add("schedulingctl")
-        if parsed_version >= MESSAGING_RELEASE_MINIMUM_VERSION:
+        if release_roster.messaging_in_release(parsed_version):
             expected_inventory.update({"messaging", "messagingctl"})
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)

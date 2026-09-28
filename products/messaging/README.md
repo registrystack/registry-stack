@@ -8,11 +8,15 @@ attempt. It is a native Rust runtime over PostgreSQL with no broker.
 
 ## Status
 
+Not yet released. Messaging builds from source in this repository, and no
+Registry Stack release carries a Messaging binary, container image, or client
+yet; it joins a release once it adopts the shared platform activation ledger.
+
 Pre-1.0 and under construction. This version is the product skeleton:
 
 - the `messaging` runtime with `migrate` and `serve`, the converged runtime
   configuration, and the package's access profiles;
-- OIDC bearer authentication, access-profile resolution, and the keyed audit
+- OIDC bearer authentication, access-profile resolution, and the per-process audit
   journal, which records the runtime start and every template preview;
 - the package: providers, sender profiles, and versioned templates rendered
   with bounded, loader-free Jinja, a JSON Schema per version, exact locales,
@@ -25,12 +29,12 @@ Pre-1.0 and under construction. This version is the product skeleton:
   `/metrics` on a separate private listener;
 - message submission under a caller-scoped `Idempotency-Key`, rendered from
   the active package at acceptance and recorded with its dispatch job and
-  acceptance audit in one transaction;
+  dispatch state in one transaction, with direct request/response audit;
 - the dispatch worker on the platform PostgreSQL dispatch substrate: leased
   claims whose outcome writes are fenced by the lease, retries bounded by the
   sender profile's dispatch policy, quarantine of a message whose send may
-  have happened, and audit records written through an outbox the runtime
-  publishes to the journal;
+  have happened, and direct audit outcomes that distinguish attempted work from established
+  commits;
 - SMTP and HTTP provider delivery through the connections the runtime
   configuration gives the package's providers, and verified provider
   delivery callbacks whose receipts move a message's delivery report only
@@ -40,16 +44,31 @@ Pre-1.0 and under construction. This version is the product skeleton:
 - retention: payloads and records erased their configured periods after a
   message reached a terminal state, by the runtime's hourly sweep or on
   demand;
-- `messagingctl init`, `check`, `preview`, `apply`, `messages list`,
+- `messagingctl init`, `package`, `check`, `preview`, `apply`, `messages list`,
   `show`, `retry`, `settle`, and `cancel`, `retention erase-expired`, and
   `dev` with `dev token` for a local session;
-- the Rust client for health, readiness, and reading one message's status;
+- the Rust client for health, readiness, submit, status, cancel, and template
+  preview, with Node.js and Python bindings;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
 
 A provider the runtime configuration gives no connection is not activated, so the worker
 fails its messages with the attempt failure code `provider-unconfigured`,
 without a send, and startup logs a warning.
+
+## Provider support
+
+| Provider | Implemented boundary |
+| --- | --- |
+| SMTP relay | Built-in email transport |
+| Twilio SMS | `examples/providers/form-sms-gateway`, with signed callbacks |
+| AWS End User Messaging SMS | `examples/providers/aws-sms`, with SigV4-authenticated `SendTextMessage`; acceptance only, no delivery-event ingestion |
+| Other HTTP gateways | Reviewed request/response scripts over configured HTTP connections |
+| Mailpit and mock SMS | Local development transports |
+
+The AWS example has offline and local wire-contract tests. A configured AWS
+account, approved origination identity, and real destination are needed to
+verify actual carrier delivery. See the [AWS provider guide](examples/providers/aws-sms/README.md).
 
 ## Product boundary
 
@@ -129,19 +148,19 @@ picks, so `detail.mailpit` is where a script reads the Mailpit address;
 endpoints. The next start in the project reads `owner` to remove the
 containers an interrupted session left.
 
-To run the runtime yourself instead, start from the starter. The starter
-under `examples/starter/` is a runtime configuration and a package with an email and an SMS sender profile, an email template in English and
-French, an SMS template, a sender access profile, and an operator access
-profile. `messagingctl init DIRECTORY` writes a copy, and `DIRECTORY` is
-itself the package root: it holds `messaging.yaml`, `providers/`, and
-`templates/` directly, so `--package ./notices` works and
-`--package ./notices/package` is refused with exit 3. Copy its
-`runtime.example.yaml`, point `package.root` at that directory, set the other
-absolute paths and secret references, then:
+To run the runtime yourself, `messagingctl init DIRECTORY` creates an editable
+project with `messaging.yaml`, `providers/`, and `templates/`. Check that
+project, then use `messagingctl package` to write a separate installed package
+with the shared checksum envelope. Keep the runtime configuration and secrets
+outside the installed package. Copy `runtime.example.yaml`, set `package.root`
+to the installed directory, and configure explicit listener addresses and
+secret references:
 
 ```bash
 messagingctl init ./notices
-messagingctl check --package ./notices
+messagingctl check --project ./notices
+messagingctl package ./notices --output ./notices-installed
+messagingctl check --package ./notices-installed
 messagingctl check --runtime-config /abs/path/runtime.yaml
 messagingctl preview --runtime-config /abs/path/runtime.yaml \
   appointment-reminder 1 --locale fr \
@@ -156,13 +175,17 @@ in like any other relative path; each template version's `sample.json`
 serves. `migrate` uses the migration connection and is safe to run from several
 processes at once. `messagingctl apply` without `--apply` reports whether the
 package differs from the one the ledger names active; with `--apply` it
-records it. `serve` refuses to start against a database whose applied schema
+records it after request audit and confirms the established outcome in its
+process stream. `serve` refuses to start against a database whose applied schema
 it does not recognize, or whose ledger does not name the package on disk, so
 a package change takes effect on restart after `apply --apply`. Every
 `messagingctl` command takes `--format human|json` and exits 0 on success, 1
 on a refusal, 2 on a usage error, and 3 when a file, secret, or database could
-not be reached. `MESSAGING_LOG` accepts `error`, `warn`, or
-`info` and nothing else.
+not be reached. A human failure is one `error[CODE] PATH: MESSAGE` line on
+standard error with a `next:` line after it. A `--format json` report opens with
+`ok`, `command`, and `status`, and a failure lists `diagnostics`; a successful
+`preview` is the exception and prints the HTTP preview's body unwrapped.
+`MESSAGING_LOG` accepts `error`, `warn`, or `info` and nothing else.
 
 `messagingctl messages list` and `show` report messages with the recipient
 masked, each with its derived status and its dispatch state. `retry`
@@ -171,8 +194,10 @@ requeues a message whose dispatch failed as a new generation,
 unknown, and `cancel` cancels a queued one; each is decided on the dispatch
 state, so a submitted message the provider reported undelivered is not
 retried. Each action previews without
-`--apply`, and an applied action writes its audit record into the outbox the
-running runtime publishes. `RUNTIME-CONFIG.md` documents every key.
+`--apply`, and an applied action uses its own request/response audit stream. A failed audit
+response after commit reports unavailable while the database effect stays
+authoritative. After recovery, inspect or retry according to the action
+contract rather than assuming rollback. `RUNTIME-CONFIG.md` documents every key.
 
 ## HTTP contract
 
@@ -182,7 +207,7 @@ never hand-edited.
 | Route | Authentication | Answer |
 |---|---|---|
 | `GET /health` | none | `200` with an empty body while the process serves |
-| `GET /ready` | none | `200` when the database carries every expected migration and its package ledger names the served package active, `503 service.unavailable` otherwise |
+| `GET /ready` | none | `200` when the database carries every expected migration and its package ledger names the served package active, and its audit writer is healthy, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again; `429 rate-limit.exceeded` past the caller's rate and `429 quota.exceeded` past the profile's daily limit, both with `Retry-After` |
 | `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the recipient's channel with the value `redacted`, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |

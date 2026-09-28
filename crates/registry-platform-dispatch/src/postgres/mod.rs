@@ -26,8 +26,9 @@ pub use dispatcher::{
 pub use sql::{Columns, DispatchSql, ExpirySql, SelectSql};
 pub use store::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConnection, DispatchEvent, DispatchStore,
-    DispatchTransport, Disposition, Fence, LapsedJob, LeasedJob, Quarantine, QuarantineDisposition,
-    QuarantineReason, TargetAction, Transition, TransitionAudit, TransitionCode,
+    DispatchTransport, Disposition, Fence, LapsedJob, LeasedJob, Quarantine, QuarantineAudit,
+    QuarantineDisposition, QuarantineReason, ReplayAudit, ReplayOutcome, TargetAction, Transition,
+    TransitionAudit, TransitionCode, TransitionOutcome,
 };
 pub use table::{enqueue, JobKey, JobState, JobTable, MAX_JOB_PART_BYTES, MAX_TABLE_NAME_BYTES};
 pub use worker::{DispatchWorker, WorkerConfig};

@@ -8,6 +8,7 @@
     "Patch",
     "Tombstone",
     "Batch",
+    "Import",
     "Revisions",
     "Snapshot",
     "SubmitRequest",

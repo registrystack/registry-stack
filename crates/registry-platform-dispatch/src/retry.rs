@@ -137,12 +137,26 @@ impl RetrySchedule {
 /// answer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UncertainOutcome {
-    /// Treat the attempt as a transient failure and retry it. Right for a
-    /// receiver that deduplicates on the idempotency key.
+    /// Treat the attempt as a transient failure and retry it, so a job
+    /// whose attempts are spent is dead-lettered and one whose retry would
+    /// land at or after its expiry is expired. Right for a receiver that
+    /// deduplicates on the idempotency key, including across an operator
+    /// replay.
     Retry,
     /// Stop in the `unknown` state and never send the job again unless an
     /// operator replays it. Right for a receiver that would act twice.
     Hold,
+    /// Retry the attempt as [`UncertainOutcome::Retry`] does while the
+    /// policy allows another one, and stop in the `unknown` state where
+    /// `Retry` would dead-letter or expire the job, so an attempt that may
+    /// have reached the receiver never ends as a failure or an expiry. A
+    /// later attempt that fails transiently or permanently holds the job
+    /// `unknown` the same way when the store's
+    /// `DispatchStore::may_have_reached_receiver` reports that an earlier
+    /// attempt of its generation may have reached it.
+    /// Right for a receiver that deduplicates on the idempotency key within
+    /// one generation only, since an operator replay starts a new one.
+    RetryThenHold,
 }
 
 /// The dispatch policy one job was captured with.

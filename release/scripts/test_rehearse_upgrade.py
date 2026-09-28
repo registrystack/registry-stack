@@ -123,35 +123,70 @@ class ReleaseSelectionTest(unittest.TestCase):
 
 
 class ProductSelectionTest(unittest.TestCase):
+    # Messaging has not joined a release (release_roster.MESSAGING_FIRST_RELEASE
+    # is None). The inclusion tests patch a hypothetical first release so the
+    # Messaging leg stays covered without any production knob.
+    HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
+
+    def setUp(self) -> None:
+        roster_patch = unittest.mock.patch.object(
+            MODULE.release_roster,
+            "MESSAGING_FIRST_RELEASE",
+            self.HYPOTHETICAL_MESSAGING_FIRST_RELEASE,
+        )
+        roster_patch.start()
+        self.addCleanup(roster_patch.stop)
+
+    def test_no_starting_release_holds_messaging_until_the_roster_names_one(self) -> None:
+        with unittest.mock.patch.object(
+            MODULE.release_roster, "MESSAGING_FIRST_RELEASE", None
+        ):
+            for tag in ("v0.35.0", "v0.36.0", "v1.0.0"):
+                with self.subTest(tag=tag):
+                    products, omitted = MODULE.select_products(
+                        None, tag, "linux-amd64", True
+                    )
+                    self.assertEqual(products, ["breg", "casework", "evidence"])
+                    self.assertEqual(list(omitted), ["messaging"])
+                    self.assertIn("messaging has not joined a release yet",
+                                  omitted["messaging"])
+                    for downloading in (True, False):
+                        with self.assertRaisesRegex(
+                            Error, "messaging has not joined a release yet"
+                        ):
+                            MODULE.select_products(
+                                ["messaging"], tag, "linux-amd64", downloading
+                            )
+
     def test_a_default_run_omits_a_product_the_starting_release_did_not_ship(self) -> None:
-        products, omitted = MODULE.select_products(None, "v0.34.0", "linux-amd64", True)
+        products, omitted = MODULE.select_products(None, "v0.35.0", "linux-amd64", True)
         self.assertEqual(products, ["breg", "casework", "evidence"])
         self.assertEqual(list(omitted), ["messaging"])
-        self.assertIn("first shipped in v0.35.0", omitted["messaging"])
+        self.assertIn("first shipped in v0.36.0", omitted["messaging"])
 
-    def test_messaging_joins_the_default_run_from_v0_35_0(self) -> None:
-        for tag in ("v0.35.0", "v0.36.2", "v1.0.0"):
+    def test_messaging_joins_the_default_run_from_its_first_release(self) -> None:
+        for tag in ("v0.36.0", "v0.36.2", "v1.0.0"):
             with self.subTest(tag=tag):
                 products, omitted = MODULE.select_products(None, tag, "linux-amd64", True)
                 self.assertEqual(products, list(MODULE.PRODUCTS))
                 self.assertEqual(omitted, {})
 
     def test_a_named_product_the_starting_release_did_not_ship_is_refused(self) -> None:
-        with self.assertRaisesRegex(Error, "messaging was first shipped in v0.35.0"):
-            MODULE.select_products(["messaging"], "v0.34.0", "linux-amd64", True)
+        with self.assertRaisesRegex(Error, "messaging was first shipped in v0.36.0"):
+            MODULE.select_products(["messaging"], "v0.35.0", "linux-amd64", True)
         self.assertEqual(
-            MODULE.select_products(["casework"], "v0.34.0", "linux-amd64", True),
+            MODULE.select_products(["casework"], "v0.35.0", "linux-amd64", True),
             (["casework"], {}),
         )
 
     def test_messaging_downloads_only_the_platforms_it_publishes(self) -> None:
-        products, omitted = MODULE.select_products(None, "v0.35.0", "macos-arm64", True)
+        products, omitted = MODULE.select_products(None, "v0.36.0", "macos-arm64", True)
         self.assertNotIn("messaging", products)
         self.assertIn("no macos-arm64 asset", omitted["messaging"])
         with self.assertRaisesRegex(Error, "no macos-arm64 asset"):
-            MODULE.select_products(["messaging"], "v0.35.0", "macos-arm64", True)
+            MODULE.select_products(["messaging"], "v0.36.0", "macos-arm64", True)
         self.assertEqual(
-            MODULE.select_products(["messaging"], "v0.35.0", "macos-arm64", False),
+            MODULE.select_products(["messaging"], "v0.36.0", "macos-arm64", False),
             (["messaging"], {}),
         )
 
@@ -166,7 +201,7 @@ class ProductSelectionTest(unittest.TestCase):
             ])
             self.assertFalse(work.exists())
         self.assertEqual(status, 1)
-        self.assertIn("messaging was first shipped in v0.35.0, so v0.33.0 holds no",
+        self.assertIn("messaging was first shipped in v0.36.0, so v0.33.0 holds no",
                       stderr.getvalue())
 
 

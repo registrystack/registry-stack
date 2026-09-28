@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::sql::Columns;
 use super::table::{JobKey, JobState};
 use crate::outcome::{DispatchError, Sent};
-use crate::retry::{remaining_attempt_budget, JobPolicy};
+use crate::retry::{remaining_attempt_budget, JobPolicy, UncertainOutcome};
 
 /// One PostgreSQL client the store lends the core for one transaction.
 pub type DispatchConnection = Box<dyn DerefMut<Target = tokio_postgres::Client> + Send>;
@@ -126,15 +126,19 @@ impl Disposition {
 }
 
 /// A transition the core makes without a worker's send: recovery, expiry,
-/// replay, and cancellation.
+/// and cancellation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Transition {
     /// A lease lapsed and the job moved to the disposition its policy owed.
     LeaseLapsed(Disposition),
-    /// An undispatched job expired from `from`.
-    Expired { from: JobState },
-    /// An operator replayed a terminal job from `from`.
-    Replayed { from: JobState },
+    /// An undispatched job reached its expiry in `from` and moved to
+    /// `disposition`: [`Disposition::Expired`], or [`Disposition::Unknown`]
+    /// when its policy holds uncertain attempts and an earlier attempt may
+    /// have reached its receiver.
+    Expired {
+        from: JobState,
+        disposition: Disposition,
+    },
     /// A pending job was withdrawn.
     Cancelled,
 }
@@ -145,7 +149,6 @@ impl Transition {
         match self {
             Self::LeaseLapsed(_) => "lease_lapsed",
             Self::Expired { .. } => "expired",
-            Self::Replayed { .. } => "replayed",
             Self::Cancelled => "cancelled",
         }
     }
@@ -154,28 +157,33 @@ impl Transition {
     pub const fn disposition(self) -> Disposition {
         match self {
             Self::LeaseLapsed(disposition) => disposition,
-            Self::Expired { .. } => Disposition::Expired,
-            Self::Replayed { .. } => Disposition::ReplayPending,
+            Self::Expired { disposition, .. } => disposition,
             Self::Cancelled => Disposition::Cancelled,
         }
     }
 }
 
-/// The audit of one transition that is not an attempt, written inside the
-/// transition's own transaction.
-#[derive(Clone, Copy, Debug)]
-pub struct TransitionAudit<'a, R> {
-    pub key: &'a JobKey,
+/// One non-send transition's audit identity and intended disposition.
+#[derive(Clone, Debug)]
+pub struct TransitionAudit<R> {
+    pub key: JobKey,
     /// The generation the job has after the transition.
     pub generation: i64,
     /// The attempt the job has after the transition.
     pub attempt: i16,
-    pub record: &'a R,
+    pub record: R,
     pub transition: Transition,
 }
 
-/// The audit of one attempt, written inside the claim transaction before
-/// egress and inside the finish transaction after it.
+/// What became of a requested non-send transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransitionOutcome {
+    Committed,
+    Refused,
+    Unfinished,
+}
+
+/// One attempt's direct audit lifecycle.
 #[derive(Clone, Copy, Debug)]
 pub enum AttemptAudit<'a, D> {
     Started,
@@ -183,6 +191,41 @@ pub enum AttemptAudit<'a, D> {
         sent: &'a Sent<D>,
         disposition: Disposition,
     },
+    /// A lease request whose commit rolled back or could not be resolved.
+    Interrupted {
+        disposition: Disposition,
+    },
+}
+
+/// The request/response lifecycle of one operator replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayOutcome {
+    Requested,
+    Committed,
+    Refused,
+    Unfinished,
+}
+
+/// One direct replay audit entry.
+#[derive(Clone, Debug)]
+pub struct ReplayAudit<R> {
+    pub key: JobKey,
+    /// The generation the replay would create.
+    pub generation: i64,
+    pub record: R,
+    pub from: JobState,
+    pub outcome: ReplayOutcome,
+}
+
+/// One consumer quarantine's audit identity and intended disposition.
+#[derive(Clone, Debug)]
+pub struct QuarantineAudit {
+    pub key: JobKey,
+    pub generation: i64,
+    pub attempt: i16,
+    pub from: JobState,
+    pub reason: QuarantineReason,
+    pub disposition: Option<JobState>,
 }
 
 /// Which operator action a target row is read for.
@@ -245,6 +288,10 @@ pub struct Quarantine<'a> {
     /// The state the row was selected in.
     pub from: JobState,
     pub reason: QuarantineReason,
+    /// Whether an attempt of the row's generation may have reached its
+    /// receiver: the row was leased, or
+    /// [`DispatchStore::may_have_reached_receiver`] said so.
+    pub may_have_reached_receiver: bool,
 }
 
 /// What the store did with a row the core asked it to quarantine.
@@ -257,20 +304,26 @@ pub enum QuarantineDisposition {
     Quarantined(JobState),
 }
 
-/// Everything product-owned the core's transactions need.
+/// Everything product-owned the core needs.
 ///
-/// Every audit hook runs inside the transaction whose transition it
-/// records, so an audit that fails rolls the transition back, and an attempt
-/// is audited and committed before any send.
+/// Transaction callbacks keep consumer relational writes atomic with the
+/// transition. Audit callbacks write directly: request entries are accepted
+/// before their protected transition and outcome entries only after commit is
+/// established.
 #[async_trait]
 pub trait DispatchStore: Send + Sync + 'static {
     /// What a claim decodes for the transport.
-    type Job: Send + Sync + 'static;
+    type Job: Clone + Send + Sync + 'static;
     /// What a recovery, expiry, or operator row decodes for the audit.
-    type Record: Send + Sync + 'static;
+    type Record: Clone + Send + Sync + 'static;
     /// The product's own detail of one send, handed back to its audit and
     /// columns.
-    type Detail: Send + Sync + 'static;
+    type Detail: Clone + Send + Sync + 'static;
+    /// Product context captured before work moves into an owned task.
+    type Context: Clone + Send + Sync + 'static;
+
+    /// Capture task-local product context before an owned transition starts.
+    fn capture_context(&self) -> Self::Context;
 
     /// Lend one client for one transaction.
     async fn connection(&self) -> Result<DispatchConnection, DispatchError>;
@@ -296,6 +349,21 @@ pub trait DispatchStore: Send + Sync + 'static {
     /// Decode the expiry columns from index `first`.
     fn decode_expired(&self, row: &Row, first: usize) -> Result<Self::Record, DispatchError>;
 
+    /// Decode the captured uncertain-outcome policy of the job an expiry
+    /// sweep selected, from the same columns [`DispatchStore::decode_expired`]
+    /// reads. A pending job under [`UncertainOutcome::RetryThenHold`] that
+    /// [`DispatchStore::may_have_reached_receiver`] answers `true` for is
+    /// held `unknown` instead of expired. The default answers
+    /// [`UncertainOutcome::Retry`], so every selected job expires, which
+    /// suits a consumer whose expiry selection carries no policy.
+    fn decode_expired_on_uncertain(
+        &self,
+        _row: &Row,
+        _first: usize,
+    ) -> Result<UncertainOutcome, DispatchError> {
+        Ok(UncertainOutcome::Retry)
+    }
+
     /// Decode the operator target columns from index `first`, or refuse the
     /// action with `None`.
     fn decode_target(
@@ -306,20 +374,75 @@ pub trait DispatchStore: Send + Sync + 'static {
         action: TargetAction,
     ) -> Result<Option<Self::Record>, DispatchError>;
 
-    /// Audit an attempt start or finish.
+    /// Apply consumer relational attempt writes in the transition transaction.
+    async fn write_attempt(
+        &self,
+        _transaction: &Transaction<'_>,
+        _job: &LeasedJob<Self::Job>,
+        _audit: AttemptAudit<'_, Self::Detail>,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
+    /// Apply consumer relational transition writes in the transition transaction.
+    async fn write_transition(
+        &self,
+        _transaction: &Transaction<'_>,
+        _audit: &TransitionAudit<Self::Record>,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
+    /// Audit an attempt start or outcome directly.
     async fn record_attempt_audit(
         &self,
-        transaction: &Transaction<'_>,
         job: &LeasedJob<Self::Job>,
         audit: AttemptAudit<'_, Self::Detail>,
+        context: &Self::Context,
     ) -> Result<(), DispatchError>;
 
-    /// Audit a transition that is not an attempt.
+    /// Audit a committed transition that is not an attempt.
     async fn record_transition_audit(
         &self,
-        transaction: &Transaction<'_>,
-        audit: TransitionAudit<'_, Self::Record>,
+        audit: &TransitionAudit<Self::Record>,
+        outcome: TransitionOutcome,
+        context: &Self::Context,
     ) -> Result<(), DispatchError>;
+
+    /// Accept the intent audit before a non-send transition mutates its row.
+    async fn begin_transition_audit(
+        &self,
+        _audit: &TransitionAudit<Self::Record>,
+        _context: &Self::Context,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
+    /// Audit one replay request or response directly.
+    async fn record_replay_audit(
+        &self,
+        audit: &ReplayAudit<Self::Record>,
+        context: &Self::Context,
+    ) -> Result<(), DispatchError>;
+
+    /// Audit one committed quarantine directly.
+    async fn record_quarantine_audit(
+        &self,
+        _audit: &QuarantineAudit,
+        _outcome: TransitionOutcome,
+        _context: &Self::Context,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
+    /// Accept quarantine intent before the consumer mutates the selected row.
+    async fn begin_quarantine_audit(
+        &self,
+        _quarantine: Quarantine<'_>,
+        _context: &Self::Context,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
 
     /// Report one value-free operational event.
     fn operational_event(&self, event: DispatchEvent);
@@ -356,7 +479,9 @@ pub trait DispatchStore: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Product writes after an expiry transition, in the same transaction.
+    /// Product writes after an expiry transition that expired the job, in
+    /// the same transaction. A job held `unknown` at its expiry keeps what
+    /// an operator needs to settle it, so this is not called for it.
     async fn after_expired(
         &self,
         _transaction: &Transaction<'_>,
@@ -364,6 +489,34 @@ pub trait DispatchStore: Send + Sync + 'static {
         _record: &Self::Record,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+
+    /// Whether any attempt of the job's current generation numbered at most
+    /// `attempt` may have reached its receiver, read in the transaction that
+    /// holds the job's row locked or its lease fenced: for example one
+    /// answered [`crate::SendOutcome::MaybeSent`] or cut off by a lapsed
+    /// lease, that the job's policy then retried. The core refuses to cancel
+    /// a pending job this answers `true` for, holds such a job `unknown` at
+    /// its expiry when its policy is [`UncertainOutcome::RetryThenHold`], and
+    /// hands the answer to [`DispatchStore::quarantine`]; each of these asks
+    /// about the job's latest attempt. A finish under
+    /// [`UncertainOutcome::RetryThenHold`] whose transient or permanent
+    /// answer would dead-letter or expire the job asks about the attempts
+    /// before the finishing one, and holds the job `unknown` when this
+    /// answers `true`.
+    ///
+    /// The default answers `true` whenever `attempt` is at least one. A
+    /// consumer that records which attempts were definitely not sent
+    /// overrides it, so a job that only failed transiently stays
+    /// cancellable and still dead-letters or expires.
+    async fn may_have_reached_receiver(
+        &self,
+        _transaction: &Transaction<'_>,
+        _key: &JobKey,
+        _generation: i64,
+        attempt: i16,
+    ) -> Result<bool, DispatchError> {
+        Ok(attempt > 0)
     }
 
     /// Whether this consumer quarantines rows the claim cannot take.
@@ -379,7 +532,7 @@ pub trait DispatchStore: Send + Sync + 'static {
     }
 
     /// Move one row the claim cannot take to a terminal state of this
-    /// consumer's choosing and audit it, inside the claim transaction.
+    /// consumer's choosing, inside the claim transaction.
     ///
     /// The state must be `dead_lettered`, `expired`, `unknown`, or
     /// `cancelled`, and a state the expiry sweep selects must have

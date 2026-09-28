@@ -92,7 +92,7 @@ profile accepts in any 24 hours. A submission past either one is refused with `4
 | Code | Refused when | `Retry-After` |
 | --- | --- | --- |
 | `rate-limit.exceeded` | The caller spent its burst | When the caller's rate admits a submission again |
-| `quota.exceeded` | The profile accepted `dailyLimit` messages in the last 24 hours | When the oldest counted message leaves the 24-hour window |
+| `quota.exceeded` | The profile accepted `dailyLimit` messages in the last 24 hours | When the oldest counted message leaves the 24-hour window, at most 86400 |
 
 The rate is charged after the role check and before the body is read. A replayed submission is
 charged to the rate but not to the daily limit. Each runtime process keeps its own rate, so a
@@ -117,8 +117,8 @@ retry-after: 1
 A submission is one closed JSON object in camelCase. It names a `senderProfile`, a recipient in
 `to`, and either a `template` with its `locale` and `data`, or direct `content` with a `text` and,
 for email, a `subject`. `to` is `{"email": ...}` for an email sender profile or `{"phone": ...}` in
-E.164 form for an SMS one. `notBefore`, `expiresAt`, and a `correlationId` of at most 128 bytes are
-optional. A body that breaks these rules is refused with `request.unprocessable`.
+E.164 form for an SMS one. `notBefore`, `expiresAt`, and a `correlationId` of at most 128 bytes with
+no control characters are optional. A body that breaks these rules is refused with `request.unprocessable`.
 
 {/* Evidence: crates/registry-messaging-core/src/wire.rs, SubmitMessageRequest and Recipient. */}
 

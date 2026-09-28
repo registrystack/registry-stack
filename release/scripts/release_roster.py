@@ -11,6 +11,17 @@ The pull request that admits them to a release sets this constant to the
 first release version, for example ``(0, 37, 0)``, and every release script
 and workflow follows from it. No script or workflow carries its own version
 literal for these services.
+
+``MESSAGING_FIRST_RELEASE`` is the single place that decides which release
+first ships Registry Messaging. It is ``None`` because Messaging is merged to
+main but has not joined a release: no version selects its binaries, image,
+clients, rehearsal leg, or security evidence.
+
+Messaging joins a release in the pull request that adopts the shared platform
+activation crate (issue #1731) in place of ``messaging migrate``. That pull
+request sets this constant to the first release version, for example
+``(0, 37, 0)``, and every release script and workflow follows from it. No
+script or workflow carries its own Messaging version literal.
 """
 
 from __future__ import annotations
@@ -21,6 +32,8 @@ import sys
 
 
 BREG_SERVICES_FIRST_RELEASE: tuple[int, int, int] | None = None
+
+MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 VERSION_PATTERN = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
@@ -41,6 +54,15 @@ def breg_services_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def messaging_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships Registry Messaging.
+
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = MESSAGING_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -49,12 +71,19 @@ def main(argv: list[str] | None = None) -> int:
         help="print true when the release version ships breg-mcp and breg-review, else false",
     )
     breg_services.add_argument("version", help="release version as X.Y.Z")
+    breg_services.set_defaults(in_release=breg_services_in_release)
+    messaging = commands.add_parser(
+        "messaging-in-release",
+        help="print true when the release version ships Registry Messaging, else false",
+    )
+    messaging.add_argument("version", help="release version as X.Y.Z")
+    messaging.set_defaults(in_release=messaging_in_release)
     args = parser.parse_args(argv)
     try:
         version = parse_version(args.version)
     except ValueError as error:
         parser.error(str(error))
-    print("true" if breg_services_in_release(version) else "false")
+    print("true" if args.in_release(version) else "false")
     return 0
 
 

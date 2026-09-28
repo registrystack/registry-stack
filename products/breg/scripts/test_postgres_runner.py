@@ -177,7 +177,15 @@ class PostgresRunnerTests(unittest.TestCase):
     def test_ci_keeps_all_lanes_and_tls_adopter_order(self):
         workflow = yaml.safe_load((SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text())
         job = workflow["jobs"]["breg-contracts"]
-        self.assertEqual(["contracts", "postgres", "immediate-actions"], job["strategy"]["matrix"]["lane"])
+        # The change classifier owns the lane list: review runs only the first
+        # lane, and the merge queue and nightly sweep run all of them.
+        self.assertEqual("${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}", job["strategy"]["matrix"]["lane"])
+        spec = importlib.util.spec_from_file_location("ci_changes", SCRIPT_DIR.parents[2] / ".github/scripts/ci_changes.py")
+        assert spec is not None and spec.loader is not None
+        ci_changes = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = ci_changes
+        spec.loader.exec_module(ci_changes)
+        self.assertEqual(("contracts", "postgres", "immediate-actions"), ci_changes.BREG_CONTRACTS_LANES)
         self.assertFalse(job["strategy"]["fail-fast"])
         self.assertIn("postgres", job["services"])
         runs = {step["run"]: step for step in job["steps"] if "run" in step}

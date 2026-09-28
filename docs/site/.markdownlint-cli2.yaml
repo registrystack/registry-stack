@@ -37,6 +37,7 @@ config:
       - ConfigurationReference
       - EventReferenceTable
       - DiagnosticReference
+      - DocsetProduct
       - Steps
 globs:
   - "**/*.{md,mdx}"
