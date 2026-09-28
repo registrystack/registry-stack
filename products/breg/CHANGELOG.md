@@ -336,6 +336,13 @@
     refused before database authority, and `migration reconcile` refuses the
     active package as its target before database authority.
 
+- A `bregctl` usage error, in human and JSON output, names the refused
+  argument and its error kind but never repeats a rejected token, so a
+  mistyped `--operator-reference` value no longer reaches the terminal or a
+  captured log in clear. A reason one of the value parsers gives is kept
+  while it does not repeat the value. The diagnostic code stays
+  `usage.invalid` and the exit status 2.
+
 ## v0.35.0 - 2026-09-28
 
 - Upgrade a registry whose active package the previous `bregctl` release

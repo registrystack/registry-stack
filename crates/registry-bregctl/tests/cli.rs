@@ -2453,7 +2453,9 @@ fn unavailable_artifact_selections_name_the_selection_and_the_alternatives() {
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("usage message is a string");
-    assert!(message.contains("actoins"), "{message}");
+    // The rejected selection is the operator's own token and is not repeated.
+    assert!(!message.contains("actoins"), "{message}");
+    assert!(message.contains("<ARTIFACT>"), "{message}");
     for selection in [
         "openapi", "schemas", "actions", "manifest", "metadata", "sql",
     ] {
@@ -5769,6 +5771,65 @@ fn json_usage_errors_are_machine_readable_and_value_free() {
         "command_arguments",
         "correct_command_usage",
     );
+}
+
+#[test]
+fn usage_errors_never_repeat_a_rejected_operator_reference() {
+    const REFERENCE_CANARY: &str = "bregctl-operator-reference-canary";
+    let attached = format!("--operator-reference={REFERENCE_CANARY}");
+    let option_shaped = format!("--{REFERENCE_CANARY}");
+
+    for arguments in [
+        // A command that takes no operator reference refuses the attached value.
+        vec!["check", "/project", attached.as_str()],
+        // A value shaped like a long option is refused as an unknown argument.
+        vec![
+            "apply",
+            "--package",
+            "/package",
+            "--operator-reference",
+            option_shaped.as_str(),
+        ],
+        // An unquoted reference of two words leaves the second one unexpected.
+        vec![
+            "apply",
+            "--package",
+            "/package",
+            "--operator-reference",
+            "change",
+            REFERENCE_CANARY,
+        ],
+    ] {
+        for machine in [false, true] {
+            let mut invocation = Vec::new();
+            if machine {
+                invocation.extend(["--format", "json"]);
+            }
+            invocation.extend(arguments.iter().copied());
+            let output = bregctl(&invocation);
+
+            assert_eq!(output.status.code(), Some(2), "{invocation:?}: {output:?}");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stdout.contains(REFERENCE_CANARY) && !stderr.contains(REFERENCE_CANARY),
+                "{invocation:?} repeated the operator reference: {stdout}{stderr}"
+            );
+            let rendered = if machine {
+                assert!(output.stderr.is_empty(), "{stderr}");
+                let report = json_stdout(&output);
+                assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+                report["diagnostics"][0]["message"]
+                    .as_str()
+                    .expect("usage message is a string")
+                    .to_owned()
+            } else {
+                assert!(output.stdout.is_empty(), "{stdout}");
+                stderr.into_owned()
+            };
+            assert!(rendered.contains("unexpected argument"), "{rendered}");
+        }
+    }
 }
 
 #[test]
