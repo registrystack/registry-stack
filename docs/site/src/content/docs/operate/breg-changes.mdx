@@ -112,7 +112,7 @@ package digest and schema, the descriptor and SQL hashes, the measured target sc
 and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
 the command line validates it and does not generate it. The only worked example of the exact
 descriptor and rehearsal receipt fields is the review construction in
-[`test-adopter-workflow.sh`](https://github.com/registrystack/registry-stack/blob/v0.26.1/products/breg/scripts/test-adopter-workflow.sh),
+[`test-adopter-workflow.sh`](https://github.com/registrystack/registry-stack/blob/main/products/breg/scripts/test-adopter-workflow.sh),
 which builds both documents for a metadata-only access change and passes them to `test`. JSON
 artifacts use canonical JSON: sorted keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
 unrelated files are refused. A metadata-only change can declare empty steps and assertions and
