@@ -612,6 +612,49 @@ activations) in the same suite; `the_removed_migrate_command_refuses_as_usage_na
 `records_apply_refuses_a_database_where_this_package_is_not_active`
 (`crates/registry-schedulingctl/tests/records_apply_postgres.rs`).
 
+## A hold's expiry is decided after its locks
+
+The change `fix(scheduling): start a hold's TTL after its capacity locks`
+moved the instant a new hold's expiry is computed from. It changes when a
+capacity claim's lifetime is decided and which instant the grant re-check
+uses, so the record belongs here.
+
+**Threat.** `create_hold` computed `expiresAt` from the request's entry
+instant, then waited on the supply anchor and the per-caller advisory lock.
+Under contention the answered hold carried less than the configured TTL, or
+had already expired when the caller received it, and the caller retried into
+the same contention. Capacity was never at risk: an expired hold consumes
+nothing and cannot be confirmed (SCHEDULING-SEC-11).
+
+**Change.** After both locks, immediately before the hold is written, the
+transaction takes one observation of the store's clock. The task grant is
+re-checked against that instant, and the hold's expiry is that instant plus
+the TTL; the receipt, the stored `hold_expires_at`, and the `held` history
+event's `expiresAt` all carry it. Everything else in the transaction keeps the
+request's single `now`, and the confirm, direct create, reschedule, release,
+and cancel paths are unchanged.
+
+**Why a hold still cannot oversell or outlive its grant's authority.** The
+capacity decision is unchanged: the snapshot, the admission, and the revision
+guards run under the same locks as before, and the later expiry only makes
+the new hold consume longer from the instant it was decided, which is
+conservative against every other transaction's snapshot. The observation is
+taken before the commit, so a hold is visible for at most the authored TTL.
+The grant is re-checked at exactly the instant the hold's lifetime starts,
+after every wait, so a grant that lapsed while the create queued writes
+nothing. A hold's lifetime was never bounded by its grant's expiry, before or
+after this change; turning a hold into an appointment needs a confirmation,
+which re-checks the grant inside its own transaction.
+
+**Tests.** `a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl`
+(SCHEDULING-SEC-11) holds the pool anchor from a second transaction, waits
+until the create is blocked on it, pins the store's clock five minutes later,
+and asserts the receipt, the ledger, and the history carry the pinned instant
+plus the TTL. `a_grant_that_lapses_before_the_commit_never_books` and
+`every_mutation_rechecks_expiry_after_its_writes` (SCHEDULING-SEC-03) still
+pin that a lapsed grant commits nothing on every path, the hold included, all
+in `crates/registry-scheduling/tests/postgres_commitments.rs`.
+
 ## Known deferrals
 
 The matrix records four deferrals with their compensating controls.

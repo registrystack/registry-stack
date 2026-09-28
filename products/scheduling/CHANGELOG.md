@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Start a hold's time to live when its capacity transaction decides, after
+  the supply and per-caller locks, instead of when the request arrived. A
+  hold created under lock contention now carries the whole configured
+  `holdPolicy.ttlMinutes` in its `expiresAt`, its stored expiry, and its
+  `held` history event, and the task grant is re-checked at that same
+  instant.
 - Answer availability for an offering whose `horizonDays` reaches past the
   last representable instant instead of panicking the request: such a horizon
   bounds nothing. A caller-supplied availability or explain `start` at the
