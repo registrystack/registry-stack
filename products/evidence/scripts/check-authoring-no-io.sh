@@ -184,18 +184,31 @@ lint_probe handles
   exit 1
 }
 
-engine_library=$(find "$repository_root/target/debug/deps" \
+# Cargo places that build under CARGO_TARGET_DIR, CARGO_BUILD_TARGET_DIR or the
+# workspace `target` directory, so ask it where rather than assuming the last.
+target_directory=$(
+  cd -- "$repository_root"
+  cargo metadata --format-version 1 --no-deps |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+) || {
+  printf 'cargo metadata did not report the target directory, so the engine probes cannot run.\n' >&2
+  exit 1
+}
+dependency_directory="$target_directory/debug/deps"
+
+engine_library=$(find "$dependency_directory" \
   -maxdepth 1 -name 'librhai-*.rlib' -print0 2>/dev/null |
-  xargs -0 ls -t 2>/dev/null | head -1 || true)
+  xargs -0 -r ls -t 2>/dev/null | head -1 || true)
 
 if [[ -z "$engine_library" ]]; then
-  printf 'No compiled rhai was found under target/debug/deps, so the engine probes cannot run.\n' >&2
+  printf 'No compiled rhai was found under %s, so the engine probes cannot run.\n' \
+    "$dependency_directory" >&2
   exit 1
 fi
 
 lint_engine_probe() {
   lint_probe "$1" \
-    -L "dependency=$repository_root/target/debug/deps" \
+    -L "dependency=$dependency_directory" \
     --extern "rhai=$engine_library"
 }
 
