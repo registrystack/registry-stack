@@ -139,7 +139,7 @@ pub enum MigrationError {
     /// of this package was started with other database roles. Only the role
     /// mode and the runtime role name cross this boundary.
     #[error(
-        "the unfinished activation of this package was started with {role_mode} database roles and runtime role `{runtime_role}`; rerun the apply with the database roles it started with, or assess it with `bregctl migration reconcile`"
+        "the unfinished activation of this package was started with {role_mode} database roles and runtime role `{runtime_role}`; rerun the apply with the database roles it started with, or, for a new package, assess it with `bregctl migration reconcile`"
     )]
     ResumeRolesDiffer {
         role_mode: String,

@@ -59,7 +59,10 @@
     while the upgrade's first apply was unfinished, is refused as
     `apply.resume.roles_differ`, naming the role mode and runtime role the
     activation started with, and nothing changes. Rerun the apply with those
-    roles, or assess the activation with `bregctl migration reconcile`.
+    roles, or, for a new package, assess the activation with
+    `bregctl migration reconcile`. A role change is not assessed by
+    reconciliation: fix the cause of its failure and rerun the same apply,
+    which resumes it.
   - A successor package activates with the database roles the active
     activation serves with. A runtime file whose `database.roles` name other
     roles is refused as `apply.successor.roles_differ` before maintenance,
