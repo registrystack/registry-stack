@@ -5060,21 +5060,29 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
-        ApplyLifecycleError::CurrentPackage(error) | ApplyLifecycleError::TargetPackage(error) => {
-            let action = match error {
-                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
-                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
-                _ => SuggestedAction::VerifyPackageIntegrity,
-            };
-            (
-                "apply.package.refused",
-                "package",
-                package_refusal_message(error, "the activation package was refused"),
-                DiagnosticArtifact::VerifiedPackage,
-                action,
-            )
-        }
+        ApplyLifecycleError::TargetPackage(error) => (
+            "apply.package.refused",
+            "package",
+            package_refusal_message(error, "the activation package was refused"),
+            DiagnosticArtifact::VerifiedPackage,
+            package_refusal_action(error),
+        ),
+        // The configured active package is refused apart from the target, so
+        // the operator reads which of the two directories to fix.
+        ApplyLifecycleError::CurrentPackage(error) => (
+            "apply.package.refused",
+            "package.root",
+            match error {
+                PackageError::LegacyFormat => {
+                    "the active package at package.root uses the retired package/v1 manifest format: rebuild the deployed project with this release's `bregctl package`, point package.root at the rebuilt package, and run the command again"
+                }
+                _ => {
+                    "the active package at package.root was refused"
+                }
+            },
+            DiagnosticArtifact::VerifiedPackage,
+            package_refusal_action(error),
+        ),
         ApplyLifecycleError::Uninitialized => (
             "apply.database.uninitialized",
             "database",
@@ -5749,6 +5757,15 @@ fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
         PackageError::Bounds | PackageError::Read => {
             ("package_refused", SuggestedAction::VerifyPackageIntegrity)
         }
+    }
+}
+
+fn package_refusal_action(error: PackageError) -> SuggestedAction {
+    match error {
+        PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+        PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+        PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+        _ => SuggestedAction::VerifyPackageIntegrity,
     }
 }
 
@@ -13094,6 +13111,47 @@ mod tests {
             reviewed_plan_closed: None,
             durable_step_progress: None,
         }
+    }
+
+    #[test]
+    fn a_refused_active_package_names_package_root_apart_from_the_target() {
+        let diagnostic = |error| {
+            let report = serde_json::to_value(lifecycle_failure("plan", error))
+                .expect("the failure report serializes");
+            report["diagnostics"][0].clone()
+        };
+        let target = diagnostic(ApplyLifecycleError::TargetPackage(
+            PackageError::LegacyFormat,
+        ));
+        assert_eq!(target["code"], "apply.package.refused");
+        assert_eq!(target["path"], "package");
+        assert_eq!(
+            target["message"],
+            registry_breg::package::LEGACY_PACKAGE_FORMAT
+        );
+
+        // A database a release before the activation ledger activated is
+        // adopted by the package package.root names, and that release's
+        // packages all use the retired format.
+        let active = diagnostic(ApplyLifecycleError::CurrentPackage(
+            PackageError::LegacyFormat,
+        ));
+        assert_eq!(active["code"], "apply.package.refused");
+        assert_eq!(active["path"], "package.root");
+        let message = active["message"].as_str().expect("the message renders");
+        assert!(message.contains("package.root"), "{message}");
+        assert!(message.contains("`bregctl package`"), "{message}");
+
+        let active = diagnostic(ApplyLifecycleError::CurrentPackage(
+            PackageError::Permissions,
+        ));
+        assert_eq!(active["path"], "package.root");
+        assert!(
+            active["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("package.root")),
+            "{active}"
+        );
     }
 
     #[test]
