@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.36.0 - 2026-09-29
+
 - BREAKING: package signing is removed. Upgrade to v0.35.0 before this
   release: a deployment on v0.34.0 or earlier must pass through v0.35.0,
   because this release no longer reads a predecessor package that has no
