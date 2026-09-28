@@ -1007,9 +1007,14 @@ async fn open_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
 ///
 /// This also checks the `bregctl` companion destination operator commands
 /// append to beside the runtime (see [`crate::audit::RegistryAudit::open_companion`]):
-/// a torn final entry or an unwritable directory there blocks an operator
-/// command exactly as one in the runtime's own destination would, so doctor
-/// must refuse it too instead of reporting a clean audit dependency.
+/// an unwritable or loosely owned directory, a lock or active file that is not
+/// an owner-only regular file, an active file that does not open with a
+/// current-format entry, a final line longer than any entry, or a torn final
+/// line whose `<path>.torn` side file already holds other bytes blocks an
+/// operator command exactly as it would in the runtime's own destination, so
+/// doctor must refuse it too instead of reporting a clean audit dependency. A
+/// torn final line the writer can move to its side file at open blocks
+/// neither.
 fn check_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
     let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
     let destination = config.audit().destination();
