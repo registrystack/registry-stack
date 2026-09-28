@@ -178,7 +178,8 @@ pub struct ActivationPlan {
     /// The role mode that user holds over the ledger now, or none before
     /// the first apply created it.
     pub effective_role_mode: Option<RoleMode>,
-    /// Whether an apply of the candidate would record an activation.
+    /// Whether an apply of the candidate would record an activation: false
+    /// whenever the plan names a refusal.
     pub changes_pending: bool,
 }
 
@@ -505,7 +506,7 @@ impl PostgresStore {
                 refusals,
                 runtime_role,
                 effective_role_mode,
-                changes_pending,
+                changes_pending: false,
             });
         }
         let deployed = deployed_policy_in(&*transaction).await?;
@@ -554,6 +555,8 @@ impl PostgresStore {
             None
         };
         transaction.rollback().await?;
+        // An apply records an activation only when it would meet no refusal.
+        let changes_pending = changes_pending && refusals.is_empty();
         Ok(ActivationPlan {
             active,
             schema,
