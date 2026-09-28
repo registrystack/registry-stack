@@ -14,7 +14,7 @@ updates:
         update-types:
           - minor
           - patch
-    # wasmtime is pinned to an LTS line (=48.0.2 today). Patch updates
+    # wasmtime is pinned to an LTS line (=48.0.3 today). Patch updates
     # within the line are wanted; a minor or major proposal is an LTS jump
     # the pin exists to prevent. wasmtime is the only direct
     # wasmtime-family dependency; add sibling entries here if that changes.
@@ -42,11 +42,13 @@ updates:
           - minor
           - patch
     # wasmtime and wasmtime-wizer are pinned to the same LTS line as the root
-    # workspace's wasmtime dependency (=48.0.2 today); a minor or major
+    # workspace's wasmtime dependency (=48.0.3 today); a minor or major
     # proposal is the LTS jump the pin exists to prevent. phonenumber is
     # pinned exactly because the module-size ceiling was measured against its
     # bundled metadata at this release (template/Cargo.toml); any bump,
     # patch included, needs a deliberate re-measurement, not an automated PR.
+    # The admission crate path-depends on registry-platform-script, so a
+    # wasmtime patch bump lands in both workspaces in the same change.
     ignore:
       - dependency-name: "wasmtime"
         update-types:
