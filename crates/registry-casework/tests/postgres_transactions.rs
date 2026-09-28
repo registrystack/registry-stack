@@ -3024,6 +3024,43 @@ async fn only_a_pending_attempt_can_be_marked_uncertain() {
 }
 
 #[tokio::test]
+async fn an_uncertainty_marking_needs_the_item_to_await_the_source_outcome() {
+    let fixture = settlement_fixture("mark_item_state", false).await;
+    fixture.lapse_execution_lease().await;
+    // A source observation cannot move the item while its attempt is
+    // pending, so the item is superseded directly, as a store that lost that
+    // pairing would hold it.
+    fixture
+        .client
+        .execute(
+            "UPDATE casework_items SET state='superseded' WHERE item_id=$1",
+            &[&fixture.item_id],
+        )
+        .await
+        .expect("supersede the item");
+    let before = fixture.snapshot().await;
+    assert_eq!(before["attempt"]["state"], "pending");
+    for result in [
+        fixture
+            .store
+            .preview_attempt_uncertain_marking(&fixture.marking())
+            .await,
+        fixture
+            .store
+            .mark_expired_attempt_uncertain(&fixture.marking())
+            .await,
+    ] {
+        assert!(matches!(
+            result,
+            Err(AttemptSettlementError::ItemCannotBecomeUncertain(
+                "superseded"
+            ))
+        ));
+    }
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
 async fn an_uncertainty_marking_preview_names_both_parties_and_writes_nothing() {
     let fixture = settlement_fixture("mark_preview", false).await;
     fixture.lapse_execution_lease().await;
