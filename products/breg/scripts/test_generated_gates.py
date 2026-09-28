@@ -122,6 +122,7 @@ class GeneratedGateTests(unittest.TestCase):
         workflows = [
             SCRIPT_DIR / "test-historical-workflow.sh",
             SCRIPT_DIR / "test-change-request-examples.sh",
+            SCRIPT_DIR / "test-promotion.sh",
             product / "acceptance/person-registration-rhai/tests/live_registration.py",
             product / "acceptance/farmer-landholding-evidence/tests/live_registration.py",
             product / "acceptance/farmer-landholding-evidence/tests/run-live.py",
@@ -142,6 +143,33 @@ class GeneratedGateTests(unittest.TestCase):
             ):
                 with self.subTest(workflow=workflow.name, retired=retired):
                     self.assertNotIn(retired, source)
+
+    def test_promotion_workflow_moves_one_package_through_two_environments(self) -> None:
+        promotion = SCRIPT_DIR / "test-promotion.sh"
+        self.assertTrue(os.access(promotion, os.X_OK))
+        source = promotion.read_text(encoding="utf-8")
+        for marker in (
+            "BREG_TEST_TLS_CA_PEM_PATH",
+            'if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]',
+            "registry_prepare_cargo_runtime",
+            "plan --runtime-config",
+            "--initial",
+            "status --runtime-config",
+            "--baseline-package",
+            "--reviewed-migrations",
+            "--backup",
+            "generate evidence-source",
+            "registryRevision",
+            "apply.backup_evidence.refused",
+            "apply.package.refused",
+            "apply.database.identity_mismatch",
+            "has not activated the package at package.root",
+            "catalog_digest",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+        workflow = (SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("run: products/breg/scripts/test-promotion.sh", workflow)
 
     def test_adopter_workflow_uses_public_binaries_database_and_recovery(self) -> None:
         adopter_gate = (SCRIPT_DIR / "test-adopter-workflow.sh").read_text(encoding="utf-8")
