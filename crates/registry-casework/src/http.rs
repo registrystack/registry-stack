@@ -2,7 +2,7 @@ use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
 };
@@ -29,9 +29,11 @@ use registry_casework_core::{
     VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_canonical_json::StrictJsonError;
 use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
+use serde_json::error::Category;
 use uuid::Uuid;
 
 use crate::problem::ProblemCode;
@@ -249,6 +251,78 @@ fn normalize_framework_rejection(response: Response) -> Response {
     problem.map_or(response, |problem| problem_response(problem, None, None))
 }
 
+/// A JSON request body parsed with the workspace's strict parser, so a
+/// duplicate object member at any depth is refused instead of letting the
+/// last occurrence win. The router's body limit bounds the bytes first.
+///
+/// The rejection classes match axum's `Json`: a missing or non-JSON content
+/// type is 415, a body over the limit is 413, malformed JSON is 400
+/// `request.invalid`, and a document that does not match the closed request
+/// type is 422 `request.unprocessable`. A duplicate member falls in the
+/// latter class, as serde already refused a duplicated typed field.
+struct StrictJson<T>(T);
+
+impl<T, S> FromRequest<S> for StrictJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        if !json_content_type(request.headers()) {
+            return Err(problem_response(
+                ProblemCode::RequestUnsupportedMediaType,
+                None,
+                None,
+            ));
+        }
+        let bytes = Bytes::from_request(request, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let value =
+            registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|error| {
+                let malformed = matches!(
+                    &error,
+                    StrictJsonError::Json(error)
+                        if matches!(error.classify(), Category::Syntax | Category::Eof)
+                );
+                problem_response(
+                    if malformed {
+                        ProblemCode::RequestInvalid
+                    } else {
+                        ProblemCode::RequestUnprocessable
+                    },
+                    None,
+                    None,
+                )
+            })?;
+        serde_json::from_value(value)
+            .map(Self)
+            .map_err(|_| problem_response(ProblemCode::RequestUnprocessable, None, None))
+    }
+}
+
+/// `application/json` or an `application/*+json` media type, as axum's
+/// `Json` extractor accepts.
+fn json_content_type(headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let essence = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence
+        .strip_prefix("application/")
+        .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
+}
+
 async fn route_not_found() -> Response {
     problem_response(ProblemCode::RequestNotFound, None, None)
 }
@@ -307,7 +381,7 @@ async fn description(
 async fn create_review_request(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(request): Json<ReviewCreateRequest>,
+    StrictJson(request): StrictJson<ReviewCreateRequest>,
 ) -> Result<Response, HttpError> {
     reject_source_profile(&headers)?;
     let (actor, _) = authenticate(&state, &headers).await?;
@@ -464,7 +538,7 @@ async fn cancel_review_request(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
-    Json(request): Json<ReviewCancelRequest>,
+    StrictJson(request): StrictJson<ReviewCancelRequest>,
 ) -> Result<Response, HttpError> {
     reject_source_profile(&headers)?;
     let (actor, _) = authenticate(&state, &headers).await?;
@@ -510,7 +584,7 @@ async fn assign_review_task(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
-    Json(request): Json<AssignmentRequest>,
+    StrictJson(request): StrictJson<AssignmentRequest>,
 ) -> Result<Json<ReviewerTask>, HttpError> {
     let source_profile_id = source_profile_optional(&headers)?;
     let (actor, token) = authenticate(&state, &headers).await?;
@@ -534,7 +608,7 @@ async fn delegate_review_task(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
-    Json(request): Json<DelegateRequest>,
+    StrictJson(request): StrictJson<DelegateRequest>,
 ) -> Result<Json<ReviewerTask>, HttpError> {
     let source_profile_id = source_profile_optional(&headers)?;
     let (actor, token) = authenticate(&state, &headers).await?;
@@ -575,7 +649,7 @@ async fn save_review_task_draft(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
-    Json(input): Json<ReviewTaskDraftInput>,
+    StrictJson(input): StrictJson<ReviewTaskDraftInput>,
 ) -> Result<Json<ReviewTaskDraft>, HttpError> {
     let source_profile_id = source_profile_optional(&headers)?;
     let (actor, token) = authenticate(&state, &headers).await?;
@@ -665,7 +739,7 @@ async fn add_review_note(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
-    Json(request): Json<ReviewNoteRequest>,
+    StrictJson(request): StrictJson<ReviewNoteRequest>,
 ) -> Result<Json<ReviewHistoryEntry>, HttpError> {
     let source_profile_id = source_profile_optional(&headers)?;
     let (actor, token) = authenticate(&state, &headers).await?;
@@ -729,7 +803,7 @@ async fn decide_review_task(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
-    Json(request): Json<ReviewTaskDecisionRequest>,
+    StrictJson(request): StrictJson<ReviewTaskDecisionRequest>,
 ) -> Result<StatusCode, HttpError> {
     let source_profile_id = source_profile_optional(&headers)?;
     let (actor, token) = authenticate(&state, &headers).await?;
@@ -891,7 +965,7 @@ async fn save_draft(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Json(request): Json<SaveDraftRequest>,
+    StrictJson(request): StrictJson<SaveDraftRequest>,
 ) -> Result<Json<DraftResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let source_profile = source_profile(&headers)?;
@@ -941,7 +1015,7 @@ async fn decide(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Json(request): Json<DecideRequest>,
+    StrictJson(request): StrictJson<DecideRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let selected_source_profile = source_profile(&headers)?;
@@ -967,7 +1041,7 @@ async fn recover(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(path): Path<AttemptPath>,
-    Json(RecoverAttemptRequest {}): Json<RecoverAttemptRequest>,
+    StrictJson(RecoverAttemptRequest {}): StrictJson<RecoverAttemptRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let selected_source_profile = source_profile(&headers)?;
@@ -988,7 +1062,7 @@ async fn recover_by_key(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Json(RecoverAttemptRequest {}): Json<RecoverAttemptRequest>,
+    StrictJson(RecoverAttemptRequest {}): StrictJson<RecoverAttemptRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let selected_source_profile = source_profile(&headers)?;
@@ -1083,7 +1157,7 @@ async fn update_directory_team(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(team_id): Path<String>,
-    Json(request): Json<DirectoryTeamUpdateRequest>,
+    StrictJson(request): StrictJson<DirectoryTeamUpdateRequest>,
 ) -> Result<Json<DirectoryResponse>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     state
@@ -1103,7 +1177,7 @@ async fn update_directory_team(
 async fn bootstrap(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(request): Json<BootstrapDirectoryRequest>,
+    StrictJson(request): StrictJson<BootstrapDirectoryRequest>,
 ) -> Result<Json<DirectoryResponse>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     state
@@ -1136,7 +1210,7 @@ async fn work_item_clocks(
 async fn create_holiday_revision(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<HolidaySetRevisionInput>,
+    StrictJson(input): StrictJson<HolidaySetRevisionInput>,
 ) -> Result<(StatusCode, Json<HolidaySetDocument>), HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     state
@@ -1163,7 +1237,7 @@ async fn holiday_revision(
 async fn preview_clock_recompute(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<ClockRecomputeRequest>,
+    StrictJson(input): StrictJson<ClockRecomputeRequest>,
 ) -> Result<Json<ClockRecomputePreview>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1177,7 +1251,7 @@ async fn preview_clock_recompute(
 async fn apply_clock_recompute(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<ClockRecomputeApplyRequest>,
+    StrictJson(input): StrictJson<ClockRecomputeApplyRequest>,
 ) -> Result<Json<ClockRecomputeResult>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1215,7 +1289,7 @@ async fn absences(
 async fn create_absence(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<AbsenceInput>,
+    StrictJson(input): StrictJson<AbsenceInput>,
 ) -> Result<(StatusCode, Json<AbsenceRecord>), HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     let absence = state
@@ -1234,7 +1308,7 @@ async fn update_absence(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(absence_id): Path<Uuid>,
-    Json(input): Json<AbsenceInput>,
+    StrictJson(input): StrictJson<AbsenceInput>,
 ) -> Result<Json<AbsenceRecord>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1273,7 +1347,7 @@ async fn assign_item(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Json(request): Json<AssignmentRequest>,
+    StrictJson(request): StrictJson<AssignmentRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let item = state
@@ -1298,7 +1372,7 @@ async fn delegate_item(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Json(request): Json<DelegateRequest>,
+    StrictJson(request): StrictJson<DelegateRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let item = state
@@ -1323,7 +1397,7 @@ async fn preview_caseload_move(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Query(query): Query<CaseloadPreviewQuery>,
-    Json(movement): Json<CaseloadMoveRequest>,
+    StrictJson(movement): StrictJson<CaseloadMoveRequest>,
 ) -> Result<Json<CaseloadPreviewPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1344,7 +1418,7 @@ async fn preview_caseload_move(
 async fn apply_caseload_move(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(request): Json<CaseloadApplyRequest>,
+    StrictJson(request): StrictJson<CaseloadApplyRequest>,
 ) -> Result<Json<Vec<CaseloadItemResult>>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1410,7 +1484,7 @@ async fn approve_task_grant(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item): Path<Uuid>,
-    Json(request): Json<registry_casework_core::TaskApprovalRequest>,
+    StrictJson(request): StrictJson<registry_casework_core::TaskApprovalRequest>,
 ) -> Result<Json<registry_casework_core::TaskGrantView>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1470,7 +1544,7 @@ async fn approve_review_task_grant(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
-    Json(request): Json<registry_casework_core::TaskApprovalRequest>,
+    StrictJson(request): StrictJson<registry_casework_core::TaskApprovalRequest>,
 ) -> Result<Json<registry_casework_core::TaskGrantView>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -2008,7 +2082,7 @@ mod tests {
     use axum::extract::{Path, State};
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
-    use axum::{Json, Router};
+    use axum::Router;
     use serde::Deserialize;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -2023,7 +2097,7 @@ mod tests {
         value: String,
     }
 
-    async fn json_route(Path(_id): Path<Uuid>, Json(input): Json<Input>) -> StatusCode {
+    async fn json_route(Path(_id): Path<Uuid>, StrictJson(input): StrictJson<Input>) -> StatusCode {
         let _ = input.value;
         StatusCode::NO_CONTENT
     }
@@ -2171,6 +2245,33 @@ mod tests {
                     .expect("large request"),
                 ProblemCode::RequestBodyTooLarge,
             ),
+            (
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/json/{id}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":"ok""#))
+                    .expect("syntax request"),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/json/{id}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":"ok","value":"smuggled"}"#))
+                    .expect("duplicate member request"),
+                ProblemCode::RequestUnprocessable,
+            ),
+            (
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/json/{id}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":"ok","nested":[{"a":1,"a":2}]}"#))
+                    .expect("nested duplicate member request"),
+                ProblemCode::RequestUnprocessable,
+            ),
         ];
 
         for (mut request, expected) in cases {
@@ -2221,6 +2322,49 @@ mod tests {
             assert_eq!(
                 problem["traceId"], "0123456789abcdef0123456789abcdef",
                 "{expected}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn strict_json_accepts_one_unambiguous_document_in_a_json_media_type() {
+        let id = Uuid::nil();
+        for content_type in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "Application/JSON",
+            "application/merge-patch+json",
+        ] {
+            let response = edge_fixture()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/json/{id}"))
+                        .header(CONTENT_TYPE, content_type)
+                        .body(Body::from(r#"{"value":"ok"}"#))
+                        .expect("valid request"),
+                )
+                .await
+                .expect("edge response");
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "{content_type}");
+        }
+        for content_type in [None, Some("text/json"), Some("application/jsonx")] {
+            let mut request = Request::builder().method("POST").uri(format!("/json/{id}"));
+            if let Some(content_type) = content_type {
+                request = request.header(CONTENT_TYPE, content_type);
+            }
+            let response = edge_fixture()
+                .oneshot(
+                    request
+                        .body(Body::from(r#"{"value":"ok"}"#))
+                        .expect("media request"),
+                )
+                .await
+                .expect("edge response");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{content_type:?}"
             );
         }
     }
