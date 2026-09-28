@@ -583,6 +583,12 @@ async fn a_database_id_mismatch_is_refused_before_any_change() {
     assert!(message.contains(
         "the package deployment binding differs from the runtime configuration at identity.databaseId"
     ));
+    // Apply connects with the migration credential, so the recovery names
+    // both credentials a wrong database can come from.
+    assert!(
+        message.contains("database.runtimeUrlRef and database.migrationUrlRef"),
+        "{message}"
+    );
     assert!(!message.contains("another-database") && !message.contains(DATABASE_ID));
     assert_eq!(fixture.ledger().await.len(), 1);
     assert!(

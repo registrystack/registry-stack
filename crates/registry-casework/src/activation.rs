@@ -357,7 +357,7 @@ impl ActivationRefusal {
 #[must_use]
 pub fn database_id_mismatch_message() -> String {
     "the package deployment binding differs from the runtime configuration at \
-     identity.databaseId; point database.runtimeUrlRef at the \
+     identity.databaseId; point database.runtimeUrlRef and database.migrationUrlRef at the \
      database this configuration belongs to, or correct identity.databaseId"
         .to_owned()
 }
