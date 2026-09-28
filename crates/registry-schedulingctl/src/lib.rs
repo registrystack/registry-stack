@@ -207,15 +207,16 @@ where
             return ExitCode::SUCCESS;
         }
         Err(error) => {
+            let message = report::usage_message(&error);
             if machine_mode {
                 write_failure(
-                    &usage_failure(error.to_string()),
+                    &usage_failure(message, USAGE_ACTION),
                     OutputFormat::Json,
                     stdout,
                     stderr,
                 );
             } else {
-                let _ = write!(stderr, "{error}");
+                let _ = writeln!(stderr, "error: {message}\n  next: {USAGE_ACTION}");
             }
             return ExitCode::from(USAGE_EXIT);
         }
@@ -227,7 +228,12 @@ where
                 activation::MAX_BACKUP_REFERENCES
             );
             if machine_mode {
-                write_failure(&usage_failure(message), OutputFormat::Json, stdout, stderr);
+                write_failure(
+                    &usage_failure(message, "Correct the command arguments and retry."),
+                    OutputFormat::Json,
+                    stdout,
+                    stderr,
+                );
             } else {
                 let _ = writeln!(stderr, "error: {message}");
             }
@@ -402,7 +408,11 @@ fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
     report
 }
 
-fn usage_failure(message: String) -> Value {
+/// The next step for a command line clap refused.
+const USAGE_ACTION: &str =
+    "Run schedulingctl --help, or the command with --help, and retry with the documented arguments.";
+
+fn usage_failure(message: String, action: &str) -> Value {
     report::failure(
         "usage",
         USAGE_EXIT,
@@ -412,7 +422,7 @@ fn usage_failure(message: String) -> Value {
             "artifact": "command_arguments",
             "path": "arguments",
             "message": message,
-            "suggestedAction": "Correct the command arguments and retry.",
+            "suggestedAction": action,
         })],
     )
 }
@@ -782,6 +792,42 @@ mod tests {
         assert_eq!(report["ok"], true);
         assert_eq!(report["status"], "complete");
         assert!(report.get("diagnostics").is_none());
+    }
+
+    #[test]
+    fn a_usage_error_never_repeats_a_rejected_argument_value() {
+        let sentinel = "sentinel-7f3a9c";
+        let rejected = format!("{sentinel}\n");
+        let unknown = format!("--operator-reference={sentinel}");
+        let refusals: [&[&str]; 2] = [
+            &[
+                "apply",
+                "--runtime-config",
+                "runtime.yaml",
+                "--operator-reference",
+                &rejected,
+            ],
+            &["check", "project", &unknown],
+        ];
+        for arguments in refusals {
+            for format in ["human", "json"] {
+                let mut all = vec![OsString::from("schedulingctl"), OsString::from("--format")];
+                all.push(OsString::from(format));
+                all.extend(arguments.iter().map(OsString::from));
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let exit = main_entry_from(all, &mut stdout, &mut stderr);
+                let output = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr)
+                );
+                assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{output}");
+                assert!(!output.contains(sentinel), "{output}");
+                assert!(output.contains("--operator-reference"), "{output}");
+                assert!(output.contains("--help"), "{output}");
+            }
+        }
     }
 
     #[test]
