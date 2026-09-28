@@ -137,7 +137,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
         "--target", target, "--json", environment=environment,
     ))
     assert len(fixtures["fixtures"]) == 2, "both questions need their own executed fixture"
-    assert all(fixture["passed"] and fixture["evaluated_cases"] == 11
+    assert all(fixture["passed"] and fixture["evaluatedCases"] == 11
                for fixture in fixtures["fixtures"]), fixtures
     run(binaries["evidencectl"], "package", project, "--target", target,
         "--output", candidate, environment=environment)
@@ -231,7 +231,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
         assert (project / source["factSchema"]).read_bytes() == installed_facts
     return {
         "exportArtifacts": len(manifest["artifacts"]),
-        "fixtureCases": sum(item["evaluated_cases"] for item in fixtures["fixtures"]),
+        "fixtureCases": sum(item["evaluatedCases"] for item in fixtures["fixtures"]),
         "behaviorRevision": source["behaviorRevision"],
         "packageDigest": report["packageDigest"],
         "questions": len(report["requirements"]),
@@ -284,7 +284,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
         "--project", project, "--target", target, "--json", environment=environment))
     assert len(fixtures["fixtures"]) == 1
     assert fixtures["fixtures"][0]["passed"]
-    assert fixtures["fixtures"][0]["evaluated_cases"] == 11
+    assert fixtures["fixtures"][0]["evaluatedCases"] == 11
     run(binaries["evidencectl"], "package", project, "--target", target,
         "--output", candidate, environment=environment)
     return {"questions": 1, "fixtureCases": 11, "defaultSourceClient": "dedicated"}
@@ -309,7 +309,7 @@ def verify_offline_starter(workspace: Path, binaries: dict[str, Path]) -> dict[s
     assert fixtures["passed"], fixtures
     assert len(fixtures["fixtures"]) == 1, "the offline starter ships one fixture set"
     assert fixtures["fixtures"][0]["passed"]
-    assert fixtures["fixtures"][0]["evaluated_cases"] == 13, fixtures
+    assert fixtures["fixtures"][0]["evaluatedCases"] == 13, fixtures
     return {"questions": 1, "fixtureCases": 13, "registryRequired": False}
 
 
@@ -590,7 +590,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             fixtures = json.loads(command("evidencectl", "fixtures", "run", "--local", "--project", project,
                                           "--target", target, "--json"))
             assert len(fixtures["fixtures"]) == 1 and fixtures["fixtures"][0]["passed"]
-            assert fixtures["fixtures"][0]["evaluated_cases"] == 11
+            assert fixtures["fixtures"][0]["evaluatedCases"] == 11
         else:
             source = next(item for item in session["clients"] if item["id"] == "source")
             pair = [Path(source[key]).read_bytes() for key in ["clientIdFile", "assertionKeyFile"]]
