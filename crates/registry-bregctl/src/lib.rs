@@ -159,6 +159,10 @@ enum Command {
     /// Compare an authoring candidate with a rederived closed package.
     Diff(DiffArgs),
     /// Build a deterministic production-profile package from a tested candidate.
+    ///
+    /// The package is the promotable unit `bregctl apply` activates: it is built from a project
+    /// `bregctl test` passed, so it needs that run's --test-receipt. `caseworkctl package` is a
+    /// different verb that writes a Casework project's checked policy to its own package.
     Package(PackageArgs),
     /// Execute the production schema-test journey suite for one package candidate.
     Test(TestArgs),
@@ -303,10 +307,20 @@ struct InitArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("checked")
+        .required(true)
+        .multiple(false)
+        .args(["project", "package"])
+))]
 struct CheckArgs {
     /// Base Registry Engine project directory.
     #[arg(value_name = "PROJECT")]
-    project: PathBuf,
+    project: Option<PathBuf>,
+
+    /// Closed package to verify against its sums, reporting the registry revision it rederives.
+    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["production", "deny_findings"])]
+    package: Option<PathBuf>,
 
     /// Enforce production-only package closure requirements.
     #[arg(long)]
@@ -1242,6 +1256,14 @@ struct SuccessReport {
     /// names its revision here.
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
+    /// Named only by `check`: the registry revision it compiled from a
+    /// project or rederived from a verified package, the value a Casework
+    /// BReg source description pins as its `sourceRevision`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_revision: Option<String>,
+    /// Named only by `check --package`: the digest of the package it verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    package_digest: Option<String>,
     #[serde(serialize_with = "serialize_findings")]
     findings: Vec<ToolDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -2009,7 +2031,12 @@ where
             }
             (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },
-        Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
+        Command::Check(args) => match (&args.project, &args.package) {
+            (Some(project), None) => check(project, profile(args.production)),
+            (None, Some(package)) => check_package(package),
+            _ => unreachable!("clap enforces exactly one of a project and a package"),
+        }
+        .and_then(|report| {
             if args.deny_findings && !report.findings.is_empty() {
                 Err(FailureReport {
                     ok: false,
@@ -5780,6 +5807,8 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
         command: "init",
         profile: ProfileArg::Authoring,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: files
             .iter()
@@ -5836,7 +5865,43 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
         command: "check",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: Some(compiled.revision().to_owned()),
+        package_digest: None,
         findings,
+        artifacts: Vec::new(),
+        explanation: None,
+        next_steps: Vec::new(),
+    })
+}
+
+/// Verify a closed package against its sums and rederive its registry
+/// revision, with no database, runtime configuration, or test receipt.
+fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
+    let inspected = inspect_package_integrity(package_root).map_err(|error| {
+        let (suffix, action) = package_refusal(error);
+        FailureReport {
+            ok: false,
+            command: "check",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    &format!("check.package.{suffix}"),
+                    "package",
+                    package_refusal_message(error, "the package was refused"),
+                ),
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )],
+        }
+    })?;
+    let revision = inspected.registry().revision().to_owned();
+    Ok(SuccessReport {
+        ok: true,
+        command: "check",
+        profile: ProfileArg::Production,
+        revision: Some(revision.clone()),
+        registry_revision: Some(revision),
+        package_digest: Some(inspected.package_digest().to_owned()),
+        findings: Vec::new(),
         artifacts: Vec::new(),
         explanation: None,
         next_steps: Vec::new(),
@@ -6130,6 +6195,8 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
         command: "project lock",
         profile: ProfileArg::Authoring,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: Some(json!({
@@ -6205,6 +6272,8 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         command: "generate",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: export
             .artifacts
@@ -6253,6 +6322,8 @@ fn generate(
         command: "generate",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: None,
@@ -6618,6 +6689,8 @@ fn explain_lifecycle(
         command: "explain",
         profile,
         revision: None,
+        registry_revision: None,
+        package_digest: None,
         findings: Vec::new(),
         artifacts: Vec::new(),
         explanation: Some(explain_envelope(
@@ -6692,6 +6765,8 @@ fn explain(
         command: "explain",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: Vec::new(),
         explanation: Some(explanation),
@@ -10446,6 +10521,7 @@ fn success_lead(report: &SuccessReport) -> String {
             "Initialized a registry project. {} written.",
             report::counted(artifacts, "artifact")
         ),
+        "check" if report.package_digest.is_some() => "Package verified.".to_owned(),
         "check" => match report.profile {
             ProfileArg::Authoring => "Authoring check passed.".to_owned(),
             ProfileArg::Production => "Production check passed.".to_owned(),
@@ -10477,6 +10553,9 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
     lines.lead(&success_lead(report));
     if let Some(revision) = &report.revision {
         lines.pairs(&[("revision", revision.clone())]);
+    }
+    if let Some(digest) = &report.package_digest {
+        lines.pairs(&[("package digest", digest.clone())]);
     }
 
     if !report.artifacts.is_empty() {
