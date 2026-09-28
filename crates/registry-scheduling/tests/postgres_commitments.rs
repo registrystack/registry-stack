@@ -34,7 +34,8 @@ use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
-    CommitError, CommitOutcome, Commitment, PostgresStore, StoreError, SupplyContext,
+    ActivationRequest, CommitError, CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError,
+    SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
@@ -3197,6 +3198,67 @@ async fn a_records_swap_whose_acknowledgment_was_lost_is_read_back() {
         standing.pool("two-counter").map(|pool| pool.members.len()),
         Some(1),
         "the unacknowledged swap took effect"
+    );
+}
+
+#[tokio::test]
+async fn an_activation_whose_acknowledgment_was_lost_is_read_back() {
+    let fx = fixture().await;
+    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let runtime_role: String = fx
+        .admin
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .expect("the test role")
+        .get(0);
+    let request = |digest: &'static str| ActivationRequest {
+        activation_id: Uuid::new_v4(),
+        package_digest: digest,
+        database_id: "activation-read-back",
+        policy: &policy,
+        operator_reference_hash: None,
+        backup_references: &[],
+        role_mode: RoleMode::Single,
+        runtime_role: &runtime_role,
+    };
+    let first = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    let second = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+
+    // An activation that took effect is answered as committed once read back.
+    fx.store.lose_next_commit_acknowledgment();
+    fx.store
+        .activate(&request(first), |_| async { Ok(()) })
+        .await
+        .expect("an activation read back as committed commits");
+    let active = fx
+        .store
+        .active_activation()
+        .await
+        .expect("the ledger is readable");
+    assert_eq!(active.map(|row| row.package_digest).as_deref(), Some(first));
+
+    // An activation whose outcome cannot be read back is reported as such,
+    // never as a failure, since it may have taken effect.
+    fx.store.lose_next_commit_acknowledgment();
+    fx.store.fail_next_read_back();
+    let error = fx
+        .store
+        .activate(&request(second), |_| async { Ok(()) })
+        .await
+        .expect_err("an activation of unknown outcome fails");
+    assert!(
+        matches!(error, StoreError::Unacknowledged),
+        "the unknown outcome is reported as unacknowledged: {error}"
+    );
+    let active = fx
+        .store
+        .active_activation()
+        .await
+        .expect("the ledger is readable");
+    assert_eq!(
+        active.map(|row| row.package_digest).as_deref(),
+        Some(second),
+        "the unacknowledged activation took effect"
     );
 }
 

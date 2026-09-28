@@ -408,7 +408,9 @@ impl PostgresStore {
             )
             .await?;
         let activation = activation_from_row(&row)?;
-        transaction.commit().await?;
+        // The activation takes every supply anchor, so its commit is read
+        // back like a records swap when its acknowledgment is lost.
+        self.commit_publication(transaction).await?;
         Ok(ActivationOutcome {
             activation,
             schema_versions_applied,

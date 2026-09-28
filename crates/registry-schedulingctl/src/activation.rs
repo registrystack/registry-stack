@@ -167,6 +167,19 @@ pub(crate) fn refusal_or_failure(error: StoreError) -> anyhow::Error {
     }
 }
 
+/// The audit outcome and reason of an apply that did not answer. An
+/// activation whose commit was not acknowledged and could not be read back
+/// may have taken effect, so it is `unfinished`, never `failed`.
+fn unanswered_activation(error: &StoreError) -> (&'static str, &'static str) {
+    if error.is_activation_refusal() {
+        ("refused", refusal_code(error))
+    } else if matches!(error, StoreError::Unacknowledged) {
+        ("unfinished", "schedulingctl.activation.unacknowledged")
+    } else {
+        ("failed", "schedulingctl.activation.failed")
+    }
+}
+
 /// The closed code of a refusal apply would raise.
 pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
     match error {
@@ -424,12 +437,13 @@ fn apply_audited(
     })) {
         Ok(outcome) => outcome,
         Err(store_error) => {
-            let (outcome, reason) = if store_error.is_activation_refusal() {
-                ("refused", refusal_code(&store_error))
+            let (outcome, reason) = unanswered_activation(&store_error);
+            let context = if outcome == "unfinished" {
+                "applying the Scheduling package; run `schedulingctl status --runtime-config FILE` to learn whether it is active"
             } else {
-                ("failed", "schedulingctl.activation.failed")
+                "applying the Scheduling package"
             };
-            let error = refusal_or_failure(store_error).context("applying the Scheduling package");
+            let error = refusal_or_failure(store_error).context(context);
             return Err(
                 match record_response(
                     &runtime,
@@ -559,5 +573,21 @@ mod tests {
         assert!(bounded_operator_text("").is_err());
         assert!(bounded_operator_text(&"x".repeat(MAX_OPERATOR_TEXT_BYTES + 1)).is_err());
         assert!(bounded_operator_text("line\nbreak").is_err());
+    }
+
+    #[test]
+    fn an_activation_of_unknown_outcome_is_answered_as_unfinished() {
+        assert_eq!(
+            unanswered_activation(&StoreError::Unacknowledged),
+            ("unfinished", "schedulingctl.activation.unacknowledged")
+        );
+        assert_eq!(
+            unanswered_activation(&StoreError::DatabaseIdMismatch),
+            ("refused", "schedulingctl.activation.database-id-mismatch")
+        );
+        assert_eq!(
+            unanswered_activation(&StoreError::Corrupt),
+            ("failed", "schedulingctl.activation.failed")
+        );
     }
 }

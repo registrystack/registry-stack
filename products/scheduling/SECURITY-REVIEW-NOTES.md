@@ -521,8 +521,12 @@ operator identifiers, not a diagnosis.
 sibling of `audit.path` before it opens the activation transaction, and a
 response entry after it commits or refuses, under the same correlation. The
 response names the outcome (`allowed`, `refused` with its closed
-`schedulingctl.activation.*` reason, or `failed`), the predecessor, and the
-effects. An audit destination that cannot be opened, or a request entry it
+`schedulingctl.activation.*` reason, `failed`, or `unfinished`), the
+predecessor, and the effects. A commit whose acknowledgment is lost is read
+back on another connection like a records swap: one that took effect is
+answered as applied, and one whose outcome cannot be read is `unfinished`
+with `schedulingctl.activation.unacknowledged`, never `failed`, since it may
+have taken effect; the error names `schedulingctl status`. An audit destination that cannot be opened, or a request entry it
 refuses, applies nothing. A response entry refused after the commit leaves
 the activation in place and is reported as
 `schedulingctl.activation.applied-unaudited` (exit 3), naming
