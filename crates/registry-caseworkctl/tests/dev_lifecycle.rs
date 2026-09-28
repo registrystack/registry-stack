@@ -341,11 +341,18 @@ impl Session {
                 .expect("a private header file"),
         )
         .expect("the reported header is readable");
-        let token = header
-            .trim()
-            .strip_prefix("Authorization: Bearer ")
+        let mut lines = header.lines();
+        let token = lines
+            .next()
+            .and_then(|line| line.strip_prefix("Authorization: Bearer "))
             .expect("the local command writes a bearer header")
             .to_owned();
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Registry-Casework-Profile: ")),
+            "the local command writes the client's Casework profile"
+        );
         assert_eq!(
             token.split('.').count(),
             3,

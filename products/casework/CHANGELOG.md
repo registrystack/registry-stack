@@ -143,8 +143,10 @@
   silent empty page. A page that lists anything, such as submitted-context
   tasks, is unchanged (#1443).
 - `caseworkctl dev token` writes the client's `Registry-Casework-Profile`
-  line beneath `Authorization` in `secrets/<client>.header`, so the file is
-  usable as-is with `curl --header @file`. A caller that also passes that
+  line beneath `Authorization` in `secrets/<client>.header` for a client
+  bound to a Casework access profile, so the file is usable as-is with
+  `curl --header @file`; an integration client's file keeps only
+  `Authorization`. A caller that also passes that
   header itself sends it twice (#1443).
 - New closed problem code `request.limit-out-of-range` (400) for a zero or
   over-maximum `limit` on a paged route. Its detail names the parameter and
