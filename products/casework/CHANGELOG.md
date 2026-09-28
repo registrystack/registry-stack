@@ -37,6 +37,36 @@
   generation, a database identity other than its own, or a split-role
   activation whose runtime credential can now write the activation ledger,
   and each refusal names `caseworkctl plan` then `caseworkctl apply`.
+- BREAKING: in split-role mode, `caseworkctl plan`, `caseworkctl apply`, and
+  startup refuse a runtime role that owns a Casework object, holds CREATE on
+  the schema, or holds TRIGGER on a Casework table, and a database where a
+  trigger no Casework migration creates is attached to a Casework table. The
+  refusal names the `REASSIGN OWNED BY`, `REVOKE CREATE ON SCHEMA`, `REVOKE
+  TRIGGER`, or `DROP TRIGGER` statement to run, `FROM PUBLIC` when that is how
+  the runtime role holds the privilege, then the command to run next. Apply
+  never revokes TRIGGER or drops a trigger itself.
+- BREAKING: startup refuses a BReg source whose imported description pins a
+  `sourceRevision` other than the registry revision the source serves, naming
+  `caseworkctl check PROJECT --against-breg-package DIR --source-id ID`, the
+  `caseworkctl source add BREG_PROJECT --project PROJECT --source-id ID
+  --apply` repin, then package, plan, and apply. A source that cannot be read
+  at startup is not refused there; its reads refuse the same drift.
+- `caseworkctl check PROJECT --against-breg-package DIR [--source-id ID]
+  [--bregctl-bin PATH]` verifies a closed BReg package through the `bregctl` of
+  the same release, compares the registry revision it rederives with the
+  source's pinned `sourceRevision`, and adds `bregPackage` to the check report
+  on a match. A mismatch is refused with `casework.source-revision.stale`;
+  a project with several BReg sources needs `--source-id`
+  (`casework.source.ambiguous`), and an unknown or missing source or source
+  description is refused with `casework.source.none`,
+  `casework.source.unknown`, or `casework.source-description.missing`.
+- `caseworkctl plan` refuses a runtime role that cannot read an existing
+  activation ledger with `casework.activation.ledger-unreadable`, naming
+  `caseworkctl apply --runtime-config FILE` with the migration credential to
+  grant it, then `caseworkctl plan --runtime-config FILE`.
+- `caseworkctl package --help` says that its package is the unit `caseworkctl
+  plan` and `apply` activate, and that `bregctl package` is a different verb
+  that builds a BReg registry package.
 - BREAKING: `casework migrate` and `caseworkctl db migrate` are removed. Each
   still parses only to refuse with exit 2 and name `caseworkctl plan
   --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`; the
@@ -47,7 +77,13 @@
   `caseworkctl plan` and `caseworkctl apply` once with the new binaries
   before starting the runtime. The first apply on a database an earlier
   release migrated adopts it: it applies the pending migrations and records
-  the first activation. `caseworkctl dev` applies in-process on every start.
+  the first activation. With split roles, a trigger an operator added to a
+  Casework table blocks apply and startup until it is dropped. A BReg source
+  description imported from an earlier release pins a registry revision this
+  release's BReg no longer serves: after upgrading BReg, run `caseworkctl
+  check --against-breg-package`, repin with `caseworkctl source add --apply`,
+  and package the project again before plan and apply.
+  `caseworkctl dev` applies in-process on every start.
   A session it creates connects the runtime and apply with one database role;
   a session retained from an earlier release keeps its split runtime and
   migration roles.

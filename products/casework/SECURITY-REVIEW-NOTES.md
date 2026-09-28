@@ -30,6 +30,9 @@ credential it was given. The threats:
 3. An apply lands on the wrong database, races another apply or the running
    service, strands pinned work, or leaves a partial activation
    (CASEWORK-SEC-25).
+4. A package keeps serving work against a Base Registry Engine source whose
+   compiled contract changed under the registry revision it pinned
+   (CASEWORK-SEC-26).
 
 ### What authorizes an activation
 
@@ -59,6 +62,23 @@ two-person rule enforce it on who can read the migration credential.
   Each refusal names `caseworkctl plan` then `caseworkctl apply`. The
   database-identity refusal uses the Base Registry Engine's wording and names
   neither value.
+- Startup also refuses a source whose served registry revision differs from
+  the `sourceRevision` the package pins (`runtime::check_source_revisions`).
+  The refusal names `caseworkctl check PROJECT --against-breg-package DIR
+  --source-id ID`, then the repin through `caseworkctl source add ... --apply`,
+  `package`, `plan`, and `apply`. An unpinned source is not compared, and a
+  source that cannot be reached at startup is logged as a warning rather
+  than refused, so an outage does not stop the service.
+- `caseworkctl check PROJECT --against-breg-package DIR` runs the same
+  comparison before deployment. It composes through the `bregctl` binary of
+  the same version, which verifies the package bytes and rederives the
+  registry revision; Casework takes no crate dependency on the Base Registry
+  Engine. A stale pin is `casework.source-revision.stale`, and a project with
+  no, several, or an unknown BReg source is refused rather than guessed
+  (`casework.source.none`, `casework.source.ambiguous`,
+  `casework.source.unknown`).
+- What startup no longer checks: it does not verify or record stranded pinned
+  work, and it takes no migration lock; apply does both.
 - `casework migrate` and `caseworkctl db migrate` still parse, only to refuse
   with exit 2 and name the two commands.
 
@@ -129,9 +149,18 @@ two-person rule enforce it on who can read the migration credential.
   are not current, so moving to split or rotating the runtime role reissues
   the grants. Re-applying with nothing to change is a refusal naming the
   digest.
+- `plan` refuses, with `casework.activation.ledger-unreadable` and exit 1,
+  when its role cannot read the ledger its search path reaches first: no
+  `USAGE` on that schema, which would hide the ledger and read the database as
+  empty, or no `SELECT` on `casework_activations` or
+  `casework_schema_migrations`, as for a rotated runtime role before apply
+  grants it. The refusal names `caseworkctl apply --runtime-config FILE`,
+  then `plan` again. A database with no ledger is not refused.
 - Single-role deployments are allowed. `status` and `doctor` then state that
   the runtime credential can activate packages and rewrite the ledger, so the
-  ledger cannot show that it did not.
+  ledger cannot show that it did not. `caseworkctl dev` creates single-role
+  sessions, as local development needs no role separation; a session
+  retained from an earlier release keeps its split roles.
 
 ### Audit integrity
 
@@ -184,8 +213,13 @@ holds no lock stronger than a row lock while the runtime works.
   `split_role_runtime_cannot_write_the_ledgers_but_still_serves`,
   `startup_refuses_an_unapplied_database_another_package_and_another_database`,
   `moving_to_split_and_rotating_the_runtime_role_reapply_the_active_package`,
-  `plan_against_an_empty_database_writes_nothing`, and the removed-command
-  tests in `runtime.rs` and `registry-caseworkctl`.
+  `plan_against_an_empty_database_writes_nothing`,
+  `plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply`,
+  `a_plan_whose_runtime_role_cannot_read_the_ledger_is_a_refusal_naming_apply`
+  (in `registry-caseworkctl`),
+  `a_session_connects_the_runtime_and_apply_with_one_database_credential` (in
+  `registry-caseworkctl` dev), and the removed-command tests in `runtime.rs`
+  and `registry-caseworkctl`.
 - CASEWORK-SEC-24: `a_refused_audit_request_leaves_the_database_untouched`,
   `a_refused_audit_response_after_commit_reports_the_activation_applied_but_unaudited`,
   `the_same_operator_reference_in_two_activations_is_stored_under_different_hashes`,
@@ -195,6 +229,13 @@ holds no lock stronger than a row lock while the runtime works.
   `an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock`,
   `stranded_work_is_refused_until_the_exact_package_is_acknowledged`, and
   `reapplying_the_active_package_is_refused_and_writes_nothing`.
+- CASEWORK-SEC-26:
+  `startup_refuses_a_pinned_source_revision_the_source_no_longer_serves` and
+  `startup_accepts_a_current_pin_an_unpinned_source_and_an_unreachable_source`
+  (in `runtime.rs`),
+  `source_revision_pin_reports_the_pinned_and_the_served_registry_revision`
+  (in `registry-casework-breg`), and the `check_against_a_breg_package_*`
+  tests in `registry-caseworkctl`.
 
 The PostgreSQL tests are in `crates/registry-casework/tests/activation_postgres.rs`
 and need `CASEWORK_ACTIVATION_TEST_DATABASE_URL`.
@@ -213,13 +254,10 @@ and need `CASEWORK_ACTIVATION_TEST_DATABASE_URL`.
 - A future migration that alters `casework_meta` itself could still meet a
   runtime transaction queued for its `FOR SHARE` lock; PostgreSQL detects the
   deadlock and rolls one side back, and apply can be retried.
-- `plan` run as a rotated runtime role that has no schema `USAGE` yet sees an
-  empty database and reports an initial activation; apply, which connects as
-  the migration role, reads the real state.
-- `plan` run as a runtime role that has schema `USAGE` but no `SELECT` on a
-  ledger, a rotated role in a schema `PUBLIC` can use or one that lost a
-  ledger it owned to `REASSIGN OWNED BY`, fails with a permission-denied
-  database error rather than a report; apply reads the real state.
+- `plan`'s ledger-unreadable check follows the search path, so a ledger in a
+  schema the path does not name is invisible to it, as it is to the runtime.
+- A source unreachable at startup is served with its pin unchecked until
+  the next start; its registry revision is not re-read while the service runs.
 - `plan` sees the runtime role's membership in the migration role only through
   ownership; apply, which runs as the migration role, sees it directly.
 - If reading the ledger back after a refused response entry also fails, apply
