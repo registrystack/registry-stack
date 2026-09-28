@@ -458,13 +458,20 @@ struct Analysis {
 
 impl PostgresStore {
     /// Read what applying `candidate` would do, in a read-only transaction.
-    /// It writes nothing and works against an empty database.
+    /// It writes nothing and works against an empty database. It reads the
+    /// ledger and the effects from one snapshot, so an apply that commits
+    /// while it runs cannot change them between reads.
     pub async fn plan_activation(
         &self,
         candidate: &ActivationCandidate<'_>,
     ) -> Result<ActivationPlan, StoreError> {
         let mut client = self.client().await?;
-        let transaction = client.build_transaction().read_only(true).start().await?;
+        let transaction = client
+            .build_transaction()
+            .read_only(true)
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
+            .await?;
         if let Some(schema) = unreadable_ledger(&transaction).await? {
             return Err(StoreError::LedgerUnreadable { schema });
         }
