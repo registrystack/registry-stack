@@ -196,9 +196,11 @@ target_directory=$(
 }
 dependency_directory="$target_directory/debug/deps"
 
+# `-exec ... +` runs nothing when nothing matches, on GNU and BSD alike, where
+# GNU `xargs` would run a bare `ls` in the current directory.
 engine_library=$(find "$dependency_directory" \
-  -maxdepth 1 -name 'librhai-*.rlib' -print0 2>/dev/null |
-  xargs -0 -r ls -t 2>/dev/null | head -1 || true)
+  -maxdepth 1 -name 'librhai-*.rlib' -exec ls -t {} + 2>/dev/null |
+  head -1 || true)
 
 if [[ -z "$engine_library" ]]; then
   printf 'No compiled rhai was found under %s, so the engine probes cannot run.\n' \
