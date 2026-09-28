@@ -7,7 +7,7 @@ are synthetic. Follow [the export contract](../EVIDENCE.md) and
 
 For a custom-model journey, derive `organization-selection.yaml` with
 `bregctl init --from publicschema --selection`, start and edit a record, then stop
-normally. `evidencectl source add ./registry --project ./evidence --source-id
+normally. `evidencectl source add ./registry ./evidence --source-id
 registry-name --selector-profile by-code` guides the code/name lookup authority
 and reports the connection it would configure; the same command with `--apply`
 configures it. Copy the `named-starter/` question, derivation, and

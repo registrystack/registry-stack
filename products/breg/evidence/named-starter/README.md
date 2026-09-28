@@ -13,7 +13,7 @@ the command previews without writing anything:
 
 ```sh
 bregctl dev stop ./registry
-evidencectl source add ./registry --project ./evidence \
+evidencectl source add ./registry ./evidence \
   --source-id registry-name --selector-profile by-code
 ```
 
@@ -23,7 +23,7 @@ institutional data choose the required row boundary. Repeat the command with
 `--apply` to perform the connection:
 
 ```sh
-evidencectl source add ./registry --project ./evidence \
+evidencectl source add ./registry ./evidence \
   --source-id registry-name --selector-profile by-code --apply
 ```
 
@@ -36,7 +36,7 @@ advances to carry the chosen source authority, so restart the registry to
 activate it.
 
 Copy `questions/`, `derivations/`, and `fixtures/` into the Evidence project,
-then run `evidencectl fixtures run --project . --target ./targets/local --local`
+then run `evidencectl fixtures run . --target ./targets/local --local`
 to rehearse generated local caller authority with the source connection. That
 connection is the prerequisite: these files name the `registry-name` source,
 so before `--apply` above (or the hand `source import` below) `check` reports

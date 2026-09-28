@@ -14,7 +14,7 @@ anything:
 
 ```sh
 bregctl dev stop ./registry
-evidencectl source add ./registry --project ./evidence \
+evidencectl source add ./registry ./evidence \
   --source-id registry-status --selector-profile by-code
 ```
 
@@ -25,7 +25,7 @@ row boundary instead. Repeat the command with `--apply` to perform the
 connection:
 
 ```sh
-evidencectl source add ./registry --project ./evidence \
+evidencectl source add ./registry ./evidence \
   --source-id registry-status --selector-profile by-code --apply
 ```
 
@@ -42,7 +42,7 @@ project. From the Evidence project directory, rehearse the connection with
 generated local caller authority:
 
 ```sh
-evidencectl fixtures run --project . --target ./targets/local --local
+evidencectl fixtures run . --target ./targets/local --local
 ```
 
 Fixtures replay recorded synthetic responses once the reviewed source above is

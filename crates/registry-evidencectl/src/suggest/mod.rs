@@ -42,7 +42,11 @@ pub enum SourceCommand {
     Mock(crate::source_mock::MockCommand),
 }
 
+// The retired `--project` flag has to stay in the group so it alone still
+// satisfies it, and clap prints every group member in the usage line, hidden
+// or not. The usage is therefore stated here, naming the documented spellings.
 #[derive(Debug, Args)]
+#[command(override_usage = "evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|PROJECT>")]
 #[command(group(
     ArgGroup::new("source")
         .required(true)

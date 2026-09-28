@@ -3,7 +3,7 @@
 This beta integration is installed from a Registry Stack source release.
 It is not yet published to the VS Code Marketplace and no release VSIX is provided.
 For the stable beta path, run
-`evidencectl tooling editor --project <directory>` for an Evidence authoring project or
+`evidencectl tooling editor <directory>` for an Evidence authoring project or
 `relayctl tooling editor <directory>` for Relay V2, and use the
 generated YAML schema settings. Install this integration for optional semantic navigation.
 

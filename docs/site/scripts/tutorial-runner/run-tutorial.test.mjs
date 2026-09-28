@@ -721,7 +721,7 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
     assert.equal(code, 1, output);
     const log = (await readFile(calls, 'utf8')).trim().split('\n');
     assert.deepEqual(log.slice(0, 3), ['evidence --version', 'evidencectl dev', 'evidence-oid4vci --version']);
-    assert.match(log[3], /^evidencectl dev stop --project \/\S+\/work\/project$/u);
+    assert.match(log[3], /^evidencectl dev stop \/\S+\/work\/project$/u);
     assert.equal(log.length, 4);
     await assert.rejects(fetch('http://127.0.0.1:8003/healthz'), 'the FHIR mock must stop with the journey');
   });

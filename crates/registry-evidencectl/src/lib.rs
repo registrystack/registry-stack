@@ -1220,6 +1220,24 @@ mod tests {
         assert_eq!(failure.exit(), report::OPERATIONAL_FAILURE_EXIT);
     }
 
+    /// The retired `--project` spelling of `source suggest` stays accepted
+    /// but hidden, so the usage line names only the documented alternatives.
+    #[test]
+    fn source_suggest_usage_omits_the_retired_project_flag() {
+        let mut command = command();
+        let suggest = command
+            .find_subcommand_mut("source")
+            .and_then(|source| source.find_subcommand_mut("suggest"))
+            .expect("source suggest is declared");
+        let usage = suggest.render_usage().to_string();
+        assert!(usage.contains("<--openapi <OPENAPI>|PROJECT>"), "{usage}");
+        assert!(!usage.contains("--project"), "{usage}");
+        assert!(
+            Cli::try_parse_from(["evidencectl", "source", "suggest", "--project", "project"])
+                .is_ok()
+        );
+    }
+
     #[test]
     fn public_reference_excludes_the_dev_supervisor() {
         let command = command();
