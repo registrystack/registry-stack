@@ -43,7 +43,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let registry = canonical_dir(&args.registry, "BReg project")?;
     let project = canonical_dir(&args.project, "Casework project")?;
     let description_path = configured_source_description_path(&project, &args.source_id)?;
-    check_version(&args.bregctl_bin)?;
+    check_version(&args.bregctl_bin, "source add")?;
     let checked = invoke(&args.bregctl_bin, &["--format", "json", "check"], &registry)?;
     require_ok("check", &checked)?;
     let explained = invoke(
@@ -297,7 +297,7 @@ fn canonical_dir(path: &Path, label: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn check_version(binary: &Path) -> Result<()> {
+pub(crate) fn check_version(binary: &Path, operation: &str) -> Result<()> {
     let output = Command::new(binary)
         .arg("--version")
         .stdin(Stdio::null())
@@ -305,12 +305,12 @@ fn check_version(binary: &Path) -> Result<()> {
         .context("starting bregctl; use --bregctl-bin or BREGCTL_BIN to select it")?;
     let expected = format!("bregctl {}", registry_platform_buildinfo::DISPLAY_VERSION);
     if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != expected {
-        bail!("source add requires {expected}");
+        bail!("{operation} requires {expected}");
     }
     Ok(())
 }
 
-fn invoke(binary: &Path, prefix: &[&str], project: &Path) -> Result<Value> {
+pub(crate) fn invoke(binary: &Path, prefix: &[&str], project: &Path) -> Result<Value> {
     let mut arguments = prefix.iter().map(OsString::from).collect::<Vec<_>>();
     arguments.push(project.as_os_str().to_owned());
     let output = Command::new(binary)
@@ -351,7 +351,7 @@ fn provider_refusal(operation: &[&str], report: &Value) -> anyhow::Error {
     )
 }
 
-fn require_ok(operation: &str, report: &Value) -> Result<()> {
+pub(crate) fn require_ok(operation: &str, report: &Value) -> Result<()> {
     if report["ok"] != true {
         bail!("bregctl {operation} did not return a successful public report");
     }
@@ -2568,7 +2568,7 @@ fn description_version(description: &Value) -> &str {
 }
 
 /// Quote a word for a POSIX shell only when it needs it.
-fn shell_word(word: &str) -> String {
+pub(crate) fn shell_word(word: &str) -> String {
     if !word.is_empty()
         && word
             .bytes()

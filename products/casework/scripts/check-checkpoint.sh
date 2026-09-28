@@ -107,4 +107,30 @@ cp "$repo_root/products/casework/fixtures/source-add-public-organizations/casewo
   --bregctl-bin "$bregctl_bin" >/dev/null
 "$bregctl_bin" check "$source_add_registry" >/dev/null
 
+# The pin `source add` just wrote is the public-organizations registry
+# revision. A BReg package built from another registry rederives a different
+# one, so `check --against-breg-package` must refuse the pin as stale and name
+# the repin, through the real bregctl of this release.
+set +e
+"$caseworkctl_bin" --format json check "$source_add_project" \
+  --against-breg-package "$repo_root/crates/registry-breg/tests/fixtures/person-registration-rhai-package" \
+  --bregctl-bin "$bregctl_bin" >"$work/stale-pin.json"
+stale_pin_exit=$?
+set -e
+if [ "$stale_pin_exit" -ne 1 ]; then
+  echo "check --against-breg-package exited $stale_pin_exit for a stale pin, expected 1" >&2
+  exit 1
+fi
+python3 - "$work/stale-pin.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+diagnostic = report["diagnostics"][0]
+if report["ok"] is not False or diagnostic["code"] != "casework.source-revision.stale":
+    sys.exit(f"stale pin was not refused as stale: {report}")
+if "caseworkctl source add BREG_PROJECT" not in diagnostic["suggestedAction"]:
+    sys.exit(f"stale pin refusal names no repin: {diagnostic}")
+PY
+
 echo "Casework product contracts and offline authoring journey passed."

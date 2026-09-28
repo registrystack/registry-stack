@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod breg_package;
 mod dev;
 mod display_schema;
 mod lifecycle;
@@ -140,6 +141,17 @@ struct CheckArgs {
     /// Exit unsuccessfully when the authoring check reports any finding.
     #[arg(long)]
     deny_findings: bool,
+    /// Closed BReg package whose rederived registry revision must equal the
+    /// pinned sourceRevision of a BReg source; verified by bregctl.
+    #[arg(long, value_name = "DIRECTORY")]
+    against_breg_package: Option<PathBuf>,
+    /// BReg source to compare with the package; required when the project
+    /// declares more than one.
+    #[arg(long, value_name = "ID", requires = "against_breg_package")]
+    source_id: Option<String>,
+    /// bregctl binary of the same release that verifies the package.
+    #[arg(long, env = "BREGCTL_BIN", default_value = "bregctl")]
+    bregctl_bin: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1217,7 +1229,17 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Source(args) => match args.command {
             SourceCommand::Add(args) => source_add::run(&args),
         },
-        Command::Check(args) => project::check(&args.project, args.production, args.deny_findings),
+        Command::Check(args) => project::check(&args.project, args.production, args.deny_findings)
+            .and_then(|report| match &args.against_breg_package {
+                Some(package) => breg_package::compare(
+                    &args.project,
+                    package,
+                    args.source_id.as_deref(),
+                    &args.bregctl_bin,
+                    report,
+                ),
+                None => Ok(report),
+            }),
         Command::Explain(args) => project::explain(&args.project),
         Command::Lifecycle => lifecycle::lifecycle(),
         Command::Package(args) => match args.output {

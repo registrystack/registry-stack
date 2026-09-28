@@ -478,3 +478,252 @@ fn package_locally(project: &Path) {
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
 }
+
+/// A stand-in for the public `bregctl` of this release: it answers
+/// `--version`, records the arguments of every other call, and prints the
+/// report it was handed with the exit code it was handed.
+#[cfg(unix)]
+struct FakeBregctl {
+    directory: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl FakeBregctl {
+    fn new(version: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = crate::canonical_tempdir();
+        let binary = directory.path().join("bregctl");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nhere=$(dirname \"$0\")\nif [ \"$1\" = --version ]; then echo 'bregctl {version}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$here/arguments\"\ncat \"$here/report.json\"\nexit \"$(cat \"$here/exit\")\"\n"
+            ),
+        )
+        .expect("fake bregctl writes");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("fake bregctl is executable");
+        let fake = Self { directory };
+        fake.answer(0, &json!({}));
+        fake
+    }
+
+    fn answer(&self, exit: u8, report: &Value) {
+        std::fs::write(self.directory.path().join("exit"), exit.to_string()).unwrap();
+        std::fs::write(
+            self.directory.path().join("report.json"),
+            serde_json::to_vec(report).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn verifies(&self, registry_revision: &str) {
+        self.answer(
+            0,
+            &json!({
+                "ok": true,
+                "command": "check",
+                "profile": "production",
+                "revision": registry_revision,
+                "registryRevision": registry_revision,
+                "packageDigest": "sha256:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                "findings": []
+            }),
+        );
+    }
+
+    fn binary(&self) -> PathBuf {
+        self.directory.path().join("bregctl")
+    }
+
+    fn arguments(&self) -> Vec<String> {
+        std::fs::read_to_string(self.directory.path().join("arguments"))
+            .expect("fake bregctl was called")
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+fn check_against_breg_package(
+    fake: &FakeBregctl,
+    package: &Path,
+    extra: &[&str],
+) -> (ExitCode, Value) {
+    let example = repo_root().join("products/casework/examples/multi-stage-routing-clocks");
+    let mut arguments = vec![
+        OsString::from("check"),
+        example.into_os_string(),
+        OsString::from("--against-breg-package"),
+        package.as_os_str().to_owned(),
+        OsString::from("--bregctl-bin"),
+        fake.binary().into_os_string(),
+    ];
+    arguments.extend(extra.iter().map(OsString::from));
+    invoke(arguments)
+}
+
+#[cfg(unix)]
+#[test]
+fn check_against_a_breg_package_reports_a_pin_the_package_rederives_as_current() {
+    let fake = FakeBregctl::new(registry_platform_buildinfo::DISPLAY_VERSION);
+    fake.verifies("sha256:regional-source-revision");
+    let package = crate::canonical_tempdir();
+
+    let (exit, report) =
+        check_against_breg_package(&fake, package.path(), &["--source-id", "regional-register"]);
+
+    assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
+    assert_eq!(
+        fake.arguments(),
+        vec![
+            "--format".to_owned(),
+            "json".to_owned(),
+            "check".to_owned(),
+            "--package".to_owned(),
+            package.path().display().to_string(),
+        ]
+    );
+    assert_eq!(report["status"], "complete");
+    assert_eq!(
+        report["bregPackage"],
+        json!({
+            "package": package.path(),
+            "packageDigest": "sha256:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+            "registryRevision": "sha256:regional-source-revision",
+            "sourceId": "regional-register",
+            "sourceRevision": "sha256:regional-source-revision",
+            "pin": "current"
+        })
+    );
+    assert_matches_contract("check against a BReg package", "CheckReport", &report);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_against_a_breg_package_refuses_a_stale_pin_naming_the_check_and_the_repin() {
+    let fake = FakeBregctl::new(registry_platform_buildinfo::DISPLAY_VERSION);
+    fake.verifies("sha256:rederived-by-the-package");
+    let package = crate::canonical_tempdir();
+
+    let (exit, report) =
+        check_against_breg_package(&fake, package.path(), &["--source-id", "regional-register"]);
+
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    assert_eq!(report["ok"], false);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "casework.source-revision.stale");
+    assert_eq!(diagnostic["artifact"], "source_description");
+    assert_eq!(diagnostic["path"], "casework.yaml:/sources/0/description");
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(
+        message.contains("sha256:regional-source-revision"),
+        "{message}"
+    );
+    assert!(
+        message.contains("sha256:rederived-by-the-package"),
+        "{message}"
+    );
+    let action = diagnostic["suggestedAction"].as_str().unwrap();
+    assert!(
+        action.contains("caseworkctl source add BREG_PROJECT --project ")
+            && action.contains(" --source-id regional-register --apply"),
+        "{action}"
+    );
+    assert!(
+        action.contains("caseworkctl check ")
+            && action.contains(&format!(
+                " --against-breg-package {}",
+                package.path().display()
+            )),
+        "{action}"
+    );
+    assert_matches_contract("stale pin refusal", "CheckReport", &report);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_against_a_breg_package_selects_one_source_and_never_guesses() {
+    let fake = FakeBregctl::new(registry_platform_buildinfo::DISPLAY_VERSION);
+    fake.verifies("sha256:regional-source-revision");
+    let package = crate::canonical_tempdir();
+
+    let (exit, report) = check_against_breg_package(&fake, package.path(), &[]);
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("--source-id")
+            && message.contains("regional-register")
+            && message.contains("response-register"),
+        "{message}"
+    );
+
+    let (exit, report) =
+        check_against_breg_package(&fake, package.path(), &["--source-id", "undeclared"]);
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("undeclared"), "{message}");
+
+    let example = repo_root().join("products/casework/examples/multi-stage-routing-clocks");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit = main_entry_from(
+        [
+            OsString::from("caseworkctl"),
+            OsString::from("check"),
+            example.into_os_string(),
+            OsString::from("--source-id"),
+            OsString::from("regional-register"),
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(exit, ExitCode::from(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn check_against_a_breg_package_carries_the_bregctl_refusal_and_its_release() {
+    let fake = FakeBregctl::new(registry_platform_buildinfo::DISPLAY_VERSION);
+    fake.answer(
+        1,
+        &json!({
+            "ok": false,
+            "command": "check",
+            "diagnostics": [{
+                "severity": "error",
+                "code": "check.package.integrity_refused",
+                "artifact": "verified_package",
+                "path": "package",
+                "message": "the package was refused",
+                "suggestedAction": "verify_package_integrity"
+            }]
+        }),
+    );
+    let package = crate::canonical_tempdir();
+    let (exit, report) =
+        check_against_breg_package(&fake, package.path(), &["--source-id", "regional-register"]);
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("check.package.integrity_refused"),
+        "{message}"
+    );
+
+    let other_release = FakeBregctl::new("0.0.1");
+    other_release.verifies("sha256:regional-source-revision");
+    let (exit, report) = check_against_breg_package(
+        &other_release,
+        package.path(),
+        &["--source-id", "regional-register"],
+    );
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "bregctl {}",
+            registry_platform_buildinfo::DISPLAY_VERSION
+        )),
+        "{message}"
+    );
+}
