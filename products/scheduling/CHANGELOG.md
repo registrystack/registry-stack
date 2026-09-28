@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Answer availability for an offering whose `horizonDays` reaches past the
+  last representable instant instead of panicking the request: such a horizon
+  bounds nothing. A caller-supplied availability or explain `start` at the
+  edge of the calendar is answered the same way.
 - Write operational logs to standard error instead of standard output, so a
   `stdout` audit destination carries audit entries alone. A collector that read
   `scheduling` logs from standard output reads standard error instead.
