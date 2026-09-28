@@ -1,0 +1,211 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: messaging
+scope: mvp
+evidenceStatus: source-mapped-not-executed
+evidenceNote: >-
+  Test references identify maintained proof obligations. This file does not
+  assert that any test ran or passed in a particular review. Rows whose named
+  test lives in a PostgreSQL suite are proven only when that suite runs against
+  a disposable database under the postgres-test feature.
+reviewRule: >-
+  This matrix is the baseline every later Messaging change is reviewed
+  against. A change that weakens a row rewrites the row in the same commit and
+  says why. A row may not lose its negative test. A pending row names the
+  slice that owes its enforcement and carries no test until that slice lands;
+  it becomes partial or enforced only in the change that adds the negative
+  test that earns it. The matrix lists the ten invariants of the product
+  specification, no fewer.
+invariants:
+  - id: MESSAGING-SEC-01
+    state: enforced
+    threat: >-
+      A caller sends through a sender profile or template its access profile
+      does not list, so one integration spends another program's sender
+      identity or content, or an operator profile submits messages.
+    enforcementPoint: >-
+      The core's authorize_submission decision over the caller's resolved
+      access profile, applied by POST /v1/messages after authentication and
+      before the store is reached: the sender profile and the template must
+      each be listed, direct content needs the profile's explicit opt-in, and
+      only the sender role submits. Authentication, role checks, and per-caller
+      rate admission happen before the router buffers the submission body.
+    refusal: >-
+      Refuse with profile.not-authorized for a sender profile, template, or
+      direct content outside the profile, and with operation.not-authorized
+      for an operator; accept nothing.
+    negativeTest:
+      path: crates/registry-messaging/src/http.rs
+      name: only_the_sender_role_submits_and_only_through_what_its_profile_lists
+  - id: MESSAGING-SEC-02
+    state: enforced
+    threat: >-
+      A request field chooses a provider endpoint, a credential, or a script,
+      so a caller redirects a send or spends an operator credential.
+    enforcementPoint: >-
+      A closed submission schema: the request names a sender profile and a
+      template, and every endpoint, credential, and script is bound by the
+      operator in configuration and the package.
+    refusal: >-
+      Refuse any unknown request member with request.invalid before
+      acceptance.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_messages.rs
+      name: a_submission_naming_an_unknown_member_is_refused_and_records_nothing
+  - id: MESSAGING-SEC-03
+    state: enforced
+    threat: >-
+      A provider origin resolves, or is rebound, to a private, loopback, or
+      metadata address, so the worker reaches an internal service.
+    enforcementPoint: >-
+      Every provider the runtime activates is a dispatch transport that
+      resolves its configured destination once per attempt and checks every
+      resolved address before connecting to the one it pinned: an http
+      provider through the platform fixed-destination substrate, an smtp
+      provider through the same address classification in its own resolver.
+      A private, shared, or unique-local address needs an exact
+      allowedPrivateCidrs entry; loopback is reachable only in a development
+      mode, and metadata never.
+    refusal: >-
+      Refuse the send before any byte leaves and record the attempt as not
+      sent.
+    negativeTest:
+      path: crates/registry-messaging/src/providers/tests.rs
+      name: an_activated_provider_resolving_to_loopback_is_refused_before_connecting
+  - id: MESSAGING-SEC-04
+    state: enforced
+    threat: >-
+      A caller reads or cancels another caller's message, or learns whether a
+      message identifier exists at all.
+    enforcementPoint: >-
+      The core's check_message_visibility decision, applied on the status and
+      cancel routes after authentication against the stored submitter: only
+      the submitter and operator profiles see a message, and a missing message
+      answers exactly like an invisible one.
+    refusal: >-
+      Answer 404 message.not-visible to every other caller, whether or not the
+      message exists.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_messages.rs
+      name: a_message_is_visible_to_its_submitter_and_an_operator_only
+  - id: MESSAGING-SEC-05
+    state: enforced
+    threat: >-
+      A worker whose lease was reaped finishes late and overwrites the outcome
+      a newer worker recorded.
+    enforcementPoint: >-
+      The platform dispatch core's lease token and generation fence on every
+      outcome write.
+    refusal: >-
+      Refuse the stale write and leave the newer outcome in place.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_dispatch.rs
+      name: a_stale_fence_cannot_finish_a_requeued_message
+  - id: MESSAGING-SEC-06
+    state: enforced
+    threat: >-
+      A send that may have reached the provider is retried, so a recipient
+      receives the same message twice.
+    enforcementPoint: >-
+      Each activated provider kind's delivery certainty: an smtp failure
+      after the end-of-data marker, and an http failure after the request was
+      written, is maybe-sent. The dispatcher holds a maybe-sent attempt, and
+      every attempt its transport's timeout cuts off, as unknown unless the
+      sender profile opts into retry, which the package allows only over a
+      provider that declares idempotentSubmit or a profile that sets
+      acceptDuplicates. The provider idempotency capability is stored at
+      acceptance and controls the key sent on every later attempt, even
+      after a package upgrade removes that capability.
+    refusal: >-
+      Record unknown and never send again without an operator settle.
+    negativeTest:
+      path: crates/registry-messaging/src/providers/tests.rs
+      name: an_activated_provider_cut_off_after_the_message_left_is_maybe_sent
+  - id: MESSAGING-SEC-07
+    state: enforced
+    threat: >-
+      A forged, replayed, or reordered provider callback changes a delivery
+      report or regresses it to an earlier state, or a flood of
+      unauthenticated callbacks spends the runtime's verification and store
+      work without bound.
+    enforcementPoint: >-
+      POST /v1/provider-callbacks/{provider_id} charges each callback to a
+      fixed per-provider rate before anything else, then verifies it with
+      the verifier kind the runtime configuration gives that provider
+      (hmac-sha1-url-form, hmac-sha256-body, or path-token; none is not a
+      kind) over the bounded raw body where required, before parsing a receipt
+      or reaching the store. Rate admission precedes body buffering. It
+      applies the receipt its receipt
+      script reads in one transaction. Assignment and lookup share a
+      provider-reference advisory lock; the message row is then locked: the
+      report moves only forward (none, sent, then delivered or undelivered,
+      final once terminal), and a receipt already in the message's bounded
+      history is not stored or audited again. There is no replay window: the
+      verifier kinds carry no timestamp, and a replayed genuine callback
+      repeats a report the message already holds or has passed, so it
+      changes nothing.
+    refusal: >-
+      Refuse a callback past its provider's rate with 429
+      rate-limit.exceeded and Retry-After before it is verified; refuse an
+      unknown provider, a missing or wrong signature or token, and a token on
+      the wrong route alike with 403 callback.unverified and record nothing;
+      answer a duplicate or regressing receipt 204 without moving the report.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_callbacks.rs
+      name: duplicate_and_out_of_order_receipts_never_regress_the_report
+  - id: MESSAGING-SEC-08
+    state: enforced
+    threat: >-
+      Recipient contacts, message bodies, template data, or credentials reach
+      the operational log, the audit journal, or the metrics.
+    enforcementPoint: >-
+      Audit records carry operation, caller pseudonym, sender profile,
+      template reference, correlation, outcome class, and a keyed recipient
+      reference; log fields never carry payload values; metric labels are
+      closed sets fixed in code. Startup publishes every pending outbox batch
+      before its runtime-start record; recovery failure refuses startup.
+    refusal: >-
+      Nothing to refuse at the caller: the absence is the control, proven over
+      the journal, the outbox, the logs, and the metrics of a full journey
+      whose journal chain still verifies.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_callbacks.rs
+      name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics
+  - id: MESSAGING-SEC-09
+    state: enforced
+    threat: >-
+      A template reaches the network or a file, or renders without bound and
+      exhausts the runtime.
+    enforcementPoint: >-
+      The core's template environment: sources come only from the package
+      the runtime loaded and checked at startup, with no loader, include,
+      import, or extends; only the date and number filters; strict undefined;
+      a fuel budget per render; and a byte ceiling per part checked as the
+      output grows.
+    refusal: >-
+      Refuse the render with 422 template.render-refused, naming the part and
+      the failure class but no value, and accept nothing.
+    negativeTest:
+      path: crates/registry-messaging-core/src/render.rs
+      name: a_runaway_template_runs_out_of_fuel
+  - id: MESSAGING-SEC-10
+    state: enforced
+    threat: >-
+      Payloads outlive their retention, or erasure removes the payload of a
+      message still sending or in an unknown outcome.
+    enforcementPoint: >-
+      The retention run, hourly in the runtime and on demand through
+      messagingctl retention erase-expired, in one transaction under one
+      advisory lock: a payload is nulled retention.payloadDays after its
+      dispatch job reached a terminal state, a record is deleted
+      retention.recordDays after it, and a submission receipt is dropped
+      when its retention.submissionReceiptDays end. Each terminal job is
+      locked before its payload is erased, so an operator requeue that
+      commits first keeps the payload.
+    refusal: >-
+      Skip every pending, leased, or unknown message whatever its age, and
+      erase every expired terminal payload; refuse a cutoff later than the
+      database's clock and erase nothing.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_retention.rs
+      name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown
+deferred: []

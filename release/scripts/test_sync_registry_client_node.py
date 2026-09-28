@@ -86,6 +86,10 @@ class SyncRegistryClientNodeDeclarationTest(unittest.TestCase):
 
 
 CASEWORK_PYTHON_LICENCE = "crates/registry-casework-client-py/LICENSE"
+MESSAGING_LICENCES = (
+    "crates/registry-messaging-client-node/LICENSE",
+    "crates/registry-messaging-client-py/LICENSE",
+)
 
 
 class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
@@ -119,6 +123,13 @@ class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
             len(shipped), len(self.licence), CASEWORK_PYTHON_LICENCE
         )
         self.assertTrue(shipped == self.licence, CASEWORK_PYTHON_LICENCE)
+
+    def test_the_messaging_binding_licences_are_gated(self) -> None:
+        # Both Messaging bindings are assembled into the unified packages, so
+        # their licences are held by the same gate as the other bindings.
+        for licence in MESSAGING_LICENCES:
+            with self.subTest(licence=licence):
+                self.assertIn(licence, self.gated)
 
 
 if __name__ == "__main__":

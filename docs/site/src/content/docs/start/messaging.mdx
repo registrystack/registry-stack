@@ -1,0 +1,108 @@
+---
+title: Registry Messaging overview
+description: What Registry Messaging sends and records on a caller's behalf, and which parts of a notification, why, when, and to whom, stay with the caller's source of record.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Registry Messaging sends one message to one destination over one channel for an authorized
+caller. It renders the message from a reviewed template through an operator-configured provider,
+and it reports what is known about delivery. Why to send, when to send, who the recipient is, and
+whether that recipient consented to be contacted stay with the caller's source of record: Messaging
+never decides any of them.
+
+{/* Evidence: products/messaging/README.md;
+    crates/registry-messaging-core/src/access.rs, AccessProfile. */}
+
+Messaging owns rendering, its dispatch queue, provider calls, receipts, attempt history, payload
+retention, and its own audit journal. Being allowed to act on a source record does not carry into
+being allowed to send: a caller reaches Messaging over its public HTTP contract like any other
+authorized caller, and the access profile Messaging resolves for that caller decides whether the
+send is permitted, never an authorization the caller already holds elsewhere.
+
+{/* Evidence: crates/registry-messaging-core/src/access.rs, AccessProfile and AccessRole. */}
+
+## Channels and provider kinds
+
+A sender profile fixes one channel, email or SMS, to one provider kind for every message it
+accepts. An SMTP provider only ever carries email; an HTTP provider carries either channel,
+depending on how the operator configured it. A message submitted against a sender profile is
+rendered and queued for that channel and that provider, with no channel selection left to the
+request.
+
+{/* Evidence: crates/registry-messaging-core/src/package.rs, Channel, ProviderKind, and
+    ProviderKind::carries. */}
+
+## What a message's status says
+
+A message answers two facts separately. Its dispatch state is what Messaging did with it: queued,
+sending, submitted to the provider, failed, unknown, cancelled, or expired. Submitted means the
+provider accepted the message, not that the recipient received it. Its delivery report is what the
+provider said afterwards: none yet, sent, delivered, or undelivered, only ever moving forward, with
+delivered and undelivered final. A provider that sends no receipts leaves the report unavailable,
+so submitted is the most a caller learns.
+
+The status a caller reads combines the two: it is the dispatch state, except that a submitted
+message becomes delivered, or failed, once the provider reports it so. Unknown means a send may
+have reached the provider and nobody can tell whether it did; an operator settles it rather than
+Messaging guessing.
+
+{/* Evidence: crates/registry-messaging-core/src/wire.rs, MessageDispatch, MessageReport, and
+    derive_status(); crates/registry-messaging-core/src/receipt.rs, DeliveryReport::rank and
+    DeliveryReport::is_terminal. */}
+
+## What it is not
+
+Messaging is not a contact directory, a consent registry, or a place to decide whether a message
+should be sent at all. It holds no recipient identity beyond what a request carries, and it never
+writes to another product's database. No Messaging crate reaches a Base Registry Engine, Casework,
+Scheduling, Evidence, or Relay crate, and none of those products reach the Messaging runtime or its
+tooling directly: every product composes with Messaging over its public HTTP contract, the same
+surface any other authorized caller uses.
+
+{/* Evidence: products/messaging/README.md;
+    products/messaging/scripts/check_dependency_direction.py. */}
+
+## Limits and retention
+
+Each access profile bounds its callers. A request rate with a burst applies to each caller of the
+profile, and an optional daily limit caps the messages the whole profile accepts in 24 hours. A
+submission past either is refused with `429` and a time to retry, so a caller stuck in a loop
+cannot send without bound. An operator may also pace how often the runtime starts a send to
+each provider.
+
+Messaging keeps what it holds only as long as the operator's retention says. The rendered content
+and the recipient contact go first, then the message record with its attempts and receipts. Both
+periods count from the moment a message reached a final state, so a message still waiting to send
+keeps its content. The runtime erases what has expired once at start and then every hour, and an
+operator can run the same erasure on demand.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys and The package;
+    crates/registry-messaging/src/limits.rs; crates/registry-messaging/src/retention.rs,
+    SWEEP_INTERVAL and erase_expired(). */}
+
+## Try it locally
+
+`messagingctl dev` runs the starter package on your machine, with a local mail catcher for email
+and a mock SMS gateway that reports delivery.
+[Send your first message](../../tutorials/first-messaging/) takes it from there: send one SMS until
+it is delivered and one email into the mail catcher, and read both back.
+
+{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, StartArgs;
+    products/messaging/README.md, Running locally. */}
+
+## Next
+
+- [Send your first message](../../tutorials/first-messaging/) to run the starter package locally.
+
+- [Author a Messaging package](../../configure/messaging/) to declare providers, sender profiles,
+  templates, and who may call.
+- [Deploy Registry Messaging](../../operate/messaging/) to run the runtime against PostgreSQL and
+  your providers.
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for the contract a caller uses.

@@ -1,0 +1,453 @@
+---
+title: Author a Messaging package
+description: Write the Registry Messaging package that declares providers, sender profiles, templates, and access profiles, add an HTTP provider's scripts, and check and preview it offline before an operator records it.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - json-schema
+---
+
+You decided what your service sends and to whom, and now you want to author what Registry Messaging
+may send on its behalf. This page covers the package: the providers messages travel through, the
+sender profiles callers select, the templates Messaging renders, and the access profiles that decide
+who may do what. At the end, `messagingctl check` accepts the package and reports the digest an
+operator records before a runtime serves it.
+
+The package holds no endpoint, credential, or database address. Those belong to the operator's
+runtime file, which [Deploy Registry Messaging](../../operate/messaging/) covers.
+
+To watch the starter package send before you change it, run
+[Send your first message](../../tutorials/first-messaging/) first: it delivers one SMS and one email
+on your machine with `messagingctl dev`.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package;
+    crates/registry-messaging/src/package.rs. */}
+
+## Get `messagingctl`
+
+Registry Messaging is unreleased, so `messagingctl` is built from a Registry Stack checkout:
+
+```sh
+cargo build --release --locked -p registry-messagingctl
+```
+
+On macOS, Cargo builds the FIPS crypto library as a dynamic library the shell cannot find on its
+own. Build through the repository's helper instead, in the terminal you run the binary from:
+
+```sh
+. scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --release --locked -p registry-messagingctl
+```
+
+The binary is `target/release/messagingctl`. It reads files and prints reports; `check` and
+`preview` open no connection. Every command takes `--format human|json` and exits 0 on success, 1
+on a refusal, 2 on a usage error, and 3 when a file, secret, or database could not be reached. Run
+`messagingctl <command> --help` for each command's arguments.
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
+    products/messaging/README.md, Running locally;
+    scripts/cargo-runtime-library-path.sh, registry_cargo_build; CONTRIBUTING.md. */}
+
+{/* messaging-release: once v0.35.0 publishes, name the released messagingctl linux-amd64 release binary before the source build. */}
+
+## Start from the starter
+
+`messagingctl init` writes a complete package into a directory that must not exist yet:
+
+```sh
+messagingctl init ./notices
+```
+
+```text
+created: ./notices
+  messaging.yaml
+  providers/sms-gateway/provider.yaml
+  providers/sms-gateway/scripts/interpret.rhai
+  providers/sms-gateway/scripts/prepare.rhai
+  providers/sms-gateway/scripts/receipt.rhai
+  runtime.example.yaml
+  templates/appointment-reminder-sms/1/en/text.j2
+  templates/appointment-reminder-sms/1/sample.json
+  templates/appointment-reminder-sms/1/schema.json
+  templates/appointment-reminder-sms/1/template.yaml
+  templates/appointment-reminder/1/en/html.j2
+  templates/appointment-reminder/1/en/subject.j2
+  templates/appointment-reminder/1/en/text.j2
+  templates/appointment-reminder/1/fr/html.j2
+  templates/appointment-reminder/1/fr/subject.j2
+  templates/appointment-reminder/1/fr/text.j2
+  templates/appointment-reminder/1/sample.json
+  templates/appointment-reminder/1/schema.json
+  templates/appointment-reminder/1/template.yaml
+next: Run messagingctl check --package DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
+next: Copy runtime.example.yaml to runtime.yaml, set its absolute paths and secret references, run messaging migrate, then messagingctl apply --apply, then messaging serve.
+```
+
+The directory is the package. `messaging.yaml`, `templates/`, and `providers/` are its content, and
+the package digest covers every file under them. Any other file at the root, such as
+`runtime.example.yaml`, is ignored and not part of the digest, and a symbolic link anywhere in the
+package is refused.
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, init(); crates/registry-messagingctl/src/starter.rs;
+    products/messaging/examples/starter/;
+    products/messaging/RUNTIME-CONFIG.md, Templates and The package ledger. */}
+
+## Declare providers and sender profiles
+
+`messaging.yaml` opens with its type and declares the providers messages travel through:
+
+```yaml
+apiVersion: registry.registrystack.org/messaging-package/v1alpha1
+kind: MessagingPackage
+providers:
+  - id: mail-relay
+    kind: smtp
+  - id: sms-gateway
+    kind: http
+    idempotentSubmit: true
+```
+
+A provider's `kind` is `smtp`, which carries email, or `http`, which carries whatever its scripts
+send. `idempotentSubmit: true` declares that the provider drops a repeat submission carrying the
+same idempotency key. Only an `http` provider may set it, and only then does its prepare script see
+the key. Every key in the manifest is closed: an unknown field is a refusal, not a line that is
+ignored.
+
+A sender profile is what a caller names when it submits. It fixes the channel, the provider
+carrying it, and the sender identity:
+
+```yaml
+senderProfiles:
+  - id: transactional
+    channel: email
+    provider: mail-relay
+    sender: notices@example.org
+  - id: reminders-sms
+    channel: sms
+    provider: sms-gateway
+    sender: Registry
+    maximumSegments: 2
+```
+
+An SMS sender profile sets `maximumSegments`, from 1 to 10, and a rendered SMS needing more is
+refused with `422 content.too-many-segments`.
+
+{/* Evidence: crates/registry-messaging-core/src/package.rs, ProviderDeclaration and
+    SenderProfile; products/messaging/RUNTIME-CONFIG.md, The package. */}
+
+### Choose how a sender profile retries
+
+A sender profile also sets how the worker sends its messages. Each message keeps the policy its
+profile had when it was accepted, so a later package change does not alter a queued message.
+
+| Key | Default | Bounds |
+| --- | --- | --- |
+| `retry.maximumAttempts` | 5 | 1 to 20 |
+| `retry.initialDelaySeconds` | 30 | at least 1 |
+| `retry.maximumDelaySeconds` | 3600 | `initialDelaySeconds` to 86400 |
+| `onUncertain` | `hold` | `hold` or `retry` |
+| `acceptDuplicates` | `false` | |
+| `defaultExpirySeconds` | 86400 | 60 to 2592000 |
+
+A send that definitely failed is retried with exponential backoff, doubling from the initial delay
+up to the maximum, with jitter. A send that may have reached the provider, including one cut off by
+its time budget, is uncertain. Under `hold`, the message stops as `unknown` until an operator
+settles it. Under `retry`, it is sent again under the same provider idempotency key, and the
+package is refused unless the profile's provider declares `idempotentSubmit: true` or the profile
+sets `acceptDuplicates: true`. Set `acceptDuplicates` only when a duplicate message is better for
+the recipient than a missed one.
+
+A message whose request names no `expiresAt` expires `defaultExpirySeconds` after acceptance, or at
+the end of the operator's payload retention if that comes first, and is never sent after it
+expires.
+
+{/* Evidence: crates/registry-messaging-core/src/package.rs, RetryPolicy and UncertainPolicy;
+    products/messaging/RUNTIME-CONFIG.md, The package. */}
+
+## Declare who may call
+
+Each access profile names the callers it admits and what they may do. A token resolves to a profile
+by the client it was issued to, the scopes it carries, and the actor kind when the profile names
+one:
+
+```yaml
+accessProfiles:
+  - id: case-notices
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [case-system]
+    actorKind: service
+    role: sender
+    senderProfiles: [transactional, reminders-sms]
+    templates: [appointment-reminder, appointment-reminder-sms]
+    requestsPerMinute: 60
+    burst: 10
+  - id: operations
+    principalClaim: sub
+    requiredScopes: [messaging:operate]
+    requesterClients: [operations-console]
+    role: operator
+    requestsPerMinute: 60
+    burst: 10
+```
+
+| Key | Meaning |
+| --- | --- |
+| `principalClaim` | The token claim naming the caller. With the issuer, it scopes the messages a sender may read and cancel |
+| `requiredScopes` | Scopes the token must carry |
+| `requesterClients` | The OAuth clients this profile admits. A client belongs to exactly one profile, and the operator's runtime file must admit it |
+| `actorKind` | `human`, `agent`, or `service`. Omitted means any |
+| `role` | `sender` submits and previews. `operator` reads and cancels every message and may not submit |
+| `senderProfiles`, `templates` | What a sender may use: at least one of each. An operator lists none |
+| `allowDirectContent` | Lets a sender submit text instead of naming a template. An operator may not set it |
+| `requestsPerMinute`, `burst`, `dailyLimit` | Positive limits on the profile's callers |
+
+Messaging inherits no authorization from a calling product. A service allowed to act on a case is
+not thereby allowed to send; this profile decides. Keep `allowDirectContent` off unless a caller
+has a reason to send text no reviewer saw: a template is the reviewed wording.
+
+{/* Evidence: crates/registry-messaging-core/src/access.rs, AccessProfile, AccessRole, and
+    authorize_submission(); products/messaging/RUNTIME-CONFIG.md, The package. */}
+
+`requestsPerMinute` and `burst` bound how fast each caller of the profile submits. Every
+`POST /v1/messages` that passes the role check is charged to a bucket kept per caller, by token
+issuer and subject, and a submission past the burst is refused `429 rate-limit.exceeded` with a
+`Retry-After` header. The bucket lives in the runtime process, so each replica enforces its own and
+a restart refills it.
+
+`dailyLimit` bounds the messages the whole profile accepted in the last 24 hours. It is counted from
+the accepted messages when a submission is accepted, so it holds across replicas and restarts. A
+submission past it is refused `429 quota.exceeded`, with `Retry-After` set to when the oldest
+counted message leaves the window. A replayed submission is charged to the rate but not to the
+daily limit.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package; crates/registry-messaging/src/limits.rs,
+    CallerLimits and LimitRefusal; crates/registry-messaging/src/http.rs. */}
+
+## Write a template version
+
+`templates` in `messaging.yaml` lists every version the package ships, and each lives under
+`templates/<id>/<version>/`. A version is a label, so quote a numeric one:
+
+```yaml
+templates:
+  - id: appointment-reminder
+    version: "1"
+  - id: appointment-reminder-sms
+    version: "1"
+```
+
+A version directory holds:
+
+- `template.yaml`, which declares the `channel`, up to 32 `locales` such as `en` or `pt-BR`, and the
+  `parts`. An email version renders `subject`, `text`, and optionally `html`. An SMS version
+  renders exactly `text`.
+- `schema.json`, a JSON Schema (draft 2020-12) the caller's data must satisfy before anything
+  renders. It may not reference anything outside itself.
+- `sample.json`, optional data every locale must render at load, which is how `messagingctl check`
+  reports each SMS locale's segment count.
+- `<locale>/<part>.j2` for every declared locale and part, at most 64 KiB each.
+
+The starter's email version declares:
+
+```yaml
+channel: email
+locales: [en, fr]
+parts: [subject, text, html]
+```
+
+and its English text part reads:
+
+```jinja
+Hello {{ name }},
+
+Your appointment at {{ office }} is on {{ day|date }}.
+
+Please bring this notice with you.
+```
+
+Templates are Jinja without a loader: no `include`, `import`, `extends`, or macros, no built-in
+filters or globals, and no file, network, or clock access. A missing or null value refuses the
+render instead of printing nothing. Two filters format for the requested locale: `date` for an ISO
+calendar date and `number(decimals)` for a number. HTML parts escape every value and cannot opt out,
+text and SMS parts strip control characters, and a subject strips newlines. A locale the version
+does not declare is refused with `422 template.locale-unavailable`, never answered in another
+language.
+
+To change wording a deployment already sends, add a new version directory and list it, and leave
+the old version in place until no caller names it.
+
+{/* Evidence: crates/registry-messaging-core/src/template.rs; crates/registry-messaging-core/src/render.rs;
+    products/messaging/RUNTIME-CONFIG.md, Templates. */}
+
+## Add an HTTP provider
+
+Every `http` provider has a directory `providers/<id>/` holding `provider.yaml` and the Rhai scripts
+it names. The starter's `sms-gateway` is a generic JSON gateway that deduplicates on an idempotency
+key and reports delivery through a signed callback:
+
+```yaml
+prepareScript: scripts/prepare.rhai
+interpretScript: scripts/interpret.rhai
+receiptScript: scripts/receipt.rhai
+request:
+  method: post
+  headers: [idempotency-key, x-request-id]
+responseHeaders: [x-request-id]
+capabilities:
+  receipts: callback
+  concurrencyLimit: 8
+```
+
+| Key | Meaning |
+| --- | --- |
+| `prepareScript` | Required. Shapes one message into a request |
+| `interpretScript` | Optional. Classifies the provider's response; without it, the status code decides |
+| `receiptScript` | Required exactly when `capabilities.receipts` is `callback` |
+| `request.method` | `post`, or `get`, which the operator's runtime file must acknowledge |
+| `request.headers`, `responseHeaders` | The only header names the prepare script may set and the interpret script may read |
+| `capabilities.receipts` | `none`, `callback`, or `reconcile`. Only `callback` gives messages a delivery report |
+| `capabilities.concurrencyLimit` | 1 to 64. The operator's connection may lower it, never raise it |
+| `capabilities.ratePerSecond` | Optional, 1 to 1000. Paces how often this runtime process starts a send |
+
+With `ratePerSecond` set, at most one send to the provider starts every `1 / ratePerSecond` seconds
+in each runtime process. An attempt waits for its slot for up to ten seconds on top of the send's
+own time budget; an attempt whose slot does not open in time sends nothing and is retried under its
+dispatch policy.
+
+`provider.yaml` is closed and at most 64 KiB, and each script is at most 64 KiB and must compile
+with exactly its entry point when the package loads. A file the provider does not name, a hidden
+entry, or a directory for an `smtp` provider is refused.
+
+The scripts see plain data only, never a credential, a URL, or a header value the runtime owns:
+
+| Script | Receives | Returns |
+| --- | --- | --- |
+| `prepare(message, profile)` | `message`: `messageId`, `generation`, `attempt`, `channel`, `recipient`, `parts`, and `idempotencyKey` when the provider declares `idempotentSubmit`. `profile`: `id`, `channel`, `sender`, `maximumSegments` | `target` relative to the operator's `baseUrl`, declared `headers`, `bodyFormat` `json` or `form`, and `body`. Messaging serializes the body |
+| `interpret(response)` | `status`, the declared response `headers`, and the decoded `body` | `outcome`: `accepted` with a `providerReference`, `transient` with an optional `retryAfter`, `permanent` with an optional `code`, or `maybe-sent` |
+| `receipt(request)` | A verified callback's `method`, `form`, `query`, and `json` | `providerReference` and `report` (`sent`, `delivered`, or `undelivered`) with an optional `code`, or `()` to ignore the callback. A throw answers `422 callback.unreadable` |
+
+Without an interpret script, a `2xx` is accepted, `408`, `429`, and `5xx` are transient, and any
+other status is permanent with the code `http.<status>`. An interpret script that fails falls back
+to the status, except that an unreadable `2xx` is `maybe-sent`, because a provider may answer `200`
+with an error body. Report `maybe-sent` whenever the provider may have taken the message: that is
+what keeps a message from being sent twice under `onUncertain: hold`.
+
+The Registry Stack repository carries two more example provider directories under
+`products/messaging/examples/providers/`: `mock`, a loopback mock for local runs, and
+`form-sms-gateway`, a form-encoded SMS provider with a form callback signed by
+`hmac-sha1-url-form`.
+
+{/* Evidence: crates/registry-messaging/src/http_provider/mod.rs, module documentation and
+    message_view(); crates/registry-messaging/src/http_provider/script.rs, PreparedRequest,
+    Interpretation, and ScriptReceipt; products/messaging/RUNTIME-CONFIG.md, HTTP providers;
+    crates/registry-messaging/src/limits.rs, ProviderPacer and PACING_ALLOWANCE;
+    products/messaging/examples/providers/. */}
+
+## Check and preview the package
+
+`messagingctl check --package` loads the package the way the runtime does, renders every sample,
+and reports the digest:
+
+```sh
+messagingctl check --package ./notices
+```
+
+```text
+ok: ./notices
+package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+template: appointment-reminder 1 (email)
+  sample en: renders
+  sample fr: renders
+template: appointment-reminder-sms 1 (sms)
+  sample en: 1 segment(s), gsm7 85 units
+access profile: case-notices (sender)
+access profile: operations (operator)
+```
+
+`messagingctl preview` renders one template version with the data you give it, so you can read
+each locale before a caller sends it:
+
+```sh
+messagingctl preview --package ./notices appointment-reminder 1 \
+  --locale fr --data ./notices/templates/appointment-reminder/1/sample.json
+```
+
+```text
+template: appointment-reminder 1 (email, fr)
+package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+--- subject
+Votre rendez-vous du 01/10/2026
+--- text
+Bonjour Ada Lovelace,
+
+Votre rendez-vous à Central Registry Office est fixé au 01/10/2026.
+
+Merci d'apporter cet avis.
+--- html
+<p>Bonjour Ada Lovelace,</p>
+<p>Votre rendez-vous à Central Registry Office est fixé au 01&#x2f;10&#x2f;2026.</p>
+<p>Merci d'apporter cet avis.</p>
+```
+
+An SMS preview adds the encoding and segment count the runtime charges against
+`maximumSegments`:
+
+```sh
+messagingctl preview --package ./notices appointment-reminder-sms 1 \
+  --locale en --data ./notices/templates/appointment-reminder-sms/1/sample.json
+```
+
+```text
+template: appointment-reminder-sms 1 (sms, en)
+package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+--- text
+Reminder: Ada Lovelace, your appointment at Central Registry Office is on 01/10/2026.
+--- sms: 1 segment(s), gsm7 85 units
+```
+
+A refusal exits 1 and names what failed. Data missing two of the schema's required members:
+
+```text
+messagingctl: the data does not satisfy the template schema: `/` fails `required`; `/` fails `required`; (/)
+  data /: required
+  data /: required
+```
+
+A locale the version does not declare:
+
+```text
+messagingctl: the template does not ship this locale (/)
+```
+
+The same preview is available to a sender over HTTP, and it answers the same bytes
+`messagingctl --format json preview` prints for the same package, template, locale, and data.
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, check() and preview();
+    products/messaging/README.md, HTTP contract; outputs observed with messagingctl 0.33.0-dev on
+    2026-09-25. */}
+
+## Hand over the package
+
+Give the operator the package directory and the digest `messagingctl check` reported. The operator
+records that digest in the runtime's package ledger with `messagingctl apply --apply`, and the
+runtime serves only the package whose digest the ledger names active, so an edited file never
+changes what a running deployment sends. The operator may also set `package.expectedDigest` to the
+same value, which refuses any other package before the runtime starts.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package ledger;
+    crates/registry-messaging/src/config.rs, expected_digest. */}
+
+## Next
+
+- [Deploy Registry Messaging](../../operate/messaging/) to give each provider its connection, record
+  the package, and serve it.
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for the submission, status, and
+  callback contract your callers use.
+- [Registry Messaging overview](../../start/messaging/) for what stays with the caller's source of
+  record.

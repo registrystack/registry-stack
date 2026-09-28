@@ -68,7 +68,8 @@ jobs:
           cargo build --locked --profile ci \
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl -p registry-casework -p registry-caseworkctl \
-            -p registry-evidence -p registry-evidencectl --bins
+            -p registry-evidence -p registry-evidencectl \
+            -p registry-messaging -p registry-messagingctl --bins
 
       - name: Rehearse the upgrade from verified release assets
         shell: bash

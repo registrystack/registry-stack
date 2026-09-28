@@ -31,6 +31,7 @@ SHARDS = {
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
+        "registry-platform-dispatch",
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
@@ -79,6 +80,14 @@ SHARDS = {
         "registry-schedulingctl",
         "registry-scheduling-client",
     ),
+    "messaging": (
+        "registry-messaging-core",
+        "registry-messaging",
+        "registry-messagingctl",
+        "registry-messaging-client",
+        "registry-messaging-client-node",
+        "registry-messaging-client-py",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -108,6 +117,7 @@ RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
+MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # The runtime configuration conformance gate reads the sources of the runtimes
@@ -288,6 +298,20 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/first-casework.mdx",
 )
 
+# Every input the Registry Messaging tutorial gate replays or is built from.
+# The gate starts the local session the page tells a reader to run; that
+# session and the starter project the page initializes are both written by
+# registry-messagingctl, so package routing already carries them.
+MESSAGING_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/check-messaging-tutorial.sh",
+    "docs/site/scripts/check-messaging-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+)
+
 # This guide explains the authoring form across three intentionally separate
 # enforcement layers: the shared form model, the evidencectl compiler, and the
 # frozen bundle validator. Keep the routing list at module ownership rather
@@ -348,6 +372,11 @@ CLI_REFERENCE_INPUTS = (
         "crates/registry-casework/src/runtime.rs",
     ),
     ("crates/registry-caseworkctl/src/**", "crates/registry-caseworkctl/src/lib.rs"),
+    (
+        "crates/registry-messaging/src/runtime.rs",
+        "crates/registry-messaging/src/runtime.rs",
+    ),
+    ("crates/registry-messagingctl/src/**", "crates/registry-messagingctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -369,17 +398,108 @@ BREG_BINDING_PACKAGES = frozenset(
 CASEWORK_BINDING_PACKAGES = frozenset(
     {"registry-casework-client-node", "registry-casework-client-py"}
 )
+MESSAGING_BINDING_PACKAGES = frozenset(
+    {"registry-messaging-client-node", "registry-messaging-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
     | RELAY_BINDING_PACKAGES
     | BREG_BINDING_PACKAGES
     | CASEWORK_BINDING_PACKAGES
+    | MESSAGING_BINDING_PACKAGES
+)
+LINUX_NODE_BINDING_PACKAGES = frozenset(
+    {
+        "registry-discovery-client-node",
+        "registry-evidence-client-node",
+        "registry-relay-client-node",
+        "registry-breg-client-node",
+        "registry-casework-client-node",
+        "registry-messaging-client-node",
+    }
+)
+# The shared Linux release job also builds the Evidence Python wheel. Keep its
+# production recipe selected by the binding it actually proves, including
+# build.rs-only changes that the Node package closure does not reach.
+LINUX_RELEASE_BINDING_PACKAGES = LINUX_NODE_BINDING_PACKAGES | frozenset(
+    {"registry-evidence-client-py"}
 )
 
-# The breg-contracts matrix lanes. Review runs the first; the merge queue, the
-# nightly sweep and a `ci:full` pull request run every lane.
-BREG_CONTRACTS_LANES = ("contracts", "postgres", "immediate-actions")
+# Inputs that can change the production Linux native-client compiler path
+# without changing a binding crate. This proof is deliberately selected from
+# the actual changed paths rather than `complete`: an unrelated change must not
+# rebuild release clients merely because its Rust matrix is complete. Explicit
+# periodic/manual full sweeps additionally select this proof.
+LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
+    {
+        ".github/scripts/ci_changes.py",
+        ".github/scripts/ci_event_routing.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-candidate.yml",
+        ".github/workflows/release-rehearsal.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "release/glibc-floor.env",
+        "release/requirements/maturin-1.9.6.txt",
+        "release/scripts/build-linux-python-client",
+        "release/scripts/build-linux-node-client",
+        "release/scripts/smoke-discovery-client-package.js",
+        "release/scripts/smoke-evidence-client-package.js",
+        "release/scripts/smoke-relay-client-package.js",
+        "release/scripts/smoke-registry-client-package.js",
+        "release/scripts/smoke-registry-client-package.mjs",
+        "release/scripts/assemble-registry-client-wheel.py",
+        "release/scripts/sync-registry-client-node.py",
+        "release/scripts/test_build_linux_node_client.py",
+        "release/scripts/test_build_linux_python_client.py",
+        "release/scripts/test_zig_glibc_compiler.py",
+        "release/scripts/zig-glibc-compiler",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+    }
+)
+
+# On a pull request, the production Linux client recipe runs only when an input
+# it reads that the native binding job does not already prove changes: the
+# cross-compiler, the toolchain whose standard library sets part of the glibc
+# floor, the glibc floor, the pinned wheel builder, the smoke scripts, and each
+# package's native build and platform-loader files. Binding sources, CI
+# routing, release workflows and helper tests are proven by their own jobs on
+# the pull request, and by this recipe on the merge queue, main and the
+# nightly sweep.
+LINUX_NATIVE_RELEASE_PULL_REQUEST_INPUTS = (
+    ".cargo/*",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "release/glibc-floor.env",
+    "release/requirements/maturin-1.9.6.txt",
+    "release/scripts/build-linux-node-client",
+    "release/scripts/build-linux-python-client",
+    "release/scripts/smoke-*-client-package.js",
+    "release/scripts/smoke-registry-client-package.mjs",
+    "release/scripts/zig-glibc-compiler",
+    *(
+        f"crates/{package}/{pattern}"
+        for package in sorted(LINUX_NODE_BINDING_PACKAGES)
+        for pattern in (
+            "Cargo.toml",
+            "build.rs",
+            "index.js",
+            "npm/*",
+            "package-lock.json",
+            "package.json",
+            "scripts/*",
+        )
+    ),
+    "crates/registry-evidence-client-py/Cargo.toml",
+    "crates/registry-evidence-client-py/build.rs",
+    "crates/registry-evidence-client-py/pyproject.toml",
+    "crates/registry-stack-client-node/native.js",
+    "crates/registry-stack-client-node/npm/*",
+    "crates/registry-stack-client-node/package-lock.json",
+    "crates/registry-stack-client-node/package.json",
+)
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
 # The Python binding is what `request-evidence-from-an-application` imports, so
@@ -419,6 +539,12 @@ BREG_TUTORIAL_PACKAGES = frozenset(
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
     {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
 )
+
+# The gate builds and runs exactly messagingctl, which links the Messaging
+# runtime in process for its local session and issues every token the reader's
+# calls carry. The client crates in the Messaging shard are not on the
+# replayed path.
+MESSAGING_TUTORIAL_PACKAGES = frozenset({"registry-messaging", "registry-messagingctl"})
 
 # The offline proof of the native BReg to Evidence composition drives bregctl,
 # evidencectl and the Evidence runtime over the reviewed teaching inputs. It
@@ -924,18 +1050,13 @@ def classify(
     run_all: bool = False,
     full_sweep: bool = False,
     pull_request: bool = False,
-    ci_full: bool = False,
-    main_push: bool = False,
     lock_change: LockChange | None = None,
 ) -> dict[str, Any]:
     """Select CI gates for changed paths.
 
-    ``pull_request`` defers broad assurance and the heavy integration tier to
-    the merge queue and the nightly sweep; ``ci_full`` opts a pull request back
-    into the heavy tier. ``main_push`` marks a push to main, where platform
-    line coverage runs.
-    ``lock_change`` routes a Cargo.lock difference through the packages it
-    reaches; without one, Cargo.lock selects the complete matrix.
+    ``pull_request`` defers broad assurance to the merge queue, main and the
+    nightly sweep. ``lock_change`` routes a Cargo.lock difference through the
+    packages it reaches; without one, Cargo.lock selects the complete matrix.
     """
 
     changed = tuple(
@@ -996,6 +1117,8 @@ def classify(
                 seeds.update(CASEWORK_PACKAGES)
             elif path.startswith("products/scheduling/"):
                 seeds.update(SCHEDULING_PACKAGES)
+            elif path.startswith("products/messaging/"):
+                seeds.update(MESSAGING_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -1045,11 +1168,9 @@ def classify(
         or path in ROOT_RUST_INPUTS
         for path in paths
     ) or (lock_members is not None and bool(affected & PLATFORM_PACKAGES))
-    # Fuzz smoke is broad assurance for the merge queue and the nightly sweep,
-    # while review keeps platform-quality. Line coverage runs on main and in
-    # the nightly sweep only, outside the merge verdict.
+    # Coverage and fuzz smoke are broad assurance: the merge queue, main and
+    # the nightly sweeps run them, while review keeps platform-quality.
     platform_assurance = platform and (full_sweep or not pull_request)
-    platform_coverage = platform and (full_sweep or main_push)
     platform_hygiene = complete or any(
         matches(
             path,
@@ -1160,10 +1281,9 @@ def classify(
     # Rebuild immutable history only when archive inputs or assembly semantics
     # change. Publication workflows, this workflow and this classifier do not
     # alter archived bytes; their focused tests cover those contracts, and the
-    # nightly full sweep replays the archive job's own recipe. Review defers
-    # the rebuild to the merge queue.
-    docs_archives = full_sweep or (
-        not pull_request and any(path in DOCS_ARCHIVE_INPUTS for path in changed)
+    # nightly full sweep replays the archive job's own recipe.
+    docs_archives = full_sweep or any(
+        path in DOCS_ARCHIVE_INPUTS for path in changed
     )
     editors = (
         complete
@@ -1184,7 +1304,7 @@ def classify(
         or unified_client_changed
     )
 
-    evidence_tutorial = integration and (
+    evidence_tutorial = (
         complete
         or any(matches(path, *EVIDENCE_TUTORIAL_INPUTS) for path in paths)
         or bool(
@@ -1192,19 +1312,25 @@ def classify(
         )
     )
 
-    breg_tutorial = integration and (
+    breg_tutorial = (
         complete
         or any(matches(path, *BREG_TUTORIAL_INPUTS) for path in paths)
         or bool(affected & BREG_TUTORIAL_PACKAGES)
     )
 
-    casework_tutorial = integration and (
+    casework_tutorial = (
         complete
         or any(matches(path, *CASEWORK_TUTORIAL_INPUTS) for path in paths)
         or bool(affected & CASEWORK_TUTORIAL_PACKAGES)
     )
 
-    breg_evidence_composition = integration and (
+    messaging_tutorial = (
+        complete
+        or any(matches(path, *MESSAGING_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & MESSAGING_TUTORIAL_PACKAGES)
+    )
+
+    breg_evidence_composition = (
         complete
         or any(matches(path, *BREG_EVIDENCE_COMPOSITION_INPUTS) for path in paths)
         or bool(affected & BREG_EVIDENCE_COMPOSITION_PACKAGES)
@@ -1239,14 +1365,12 @@ def classify(
         )
     )
 
-    outputs = {
-        "full_sweep": full_sweep,
+    return {
         "rust": bool(affected),
         "rust_matrix": {"include": matrix},
         "rust_packages": sorted(affected),
         "platform": platform,
         "platform_assurance": platform_assurance,
-        "platform_coverage": platform_coverage,
         "platform_hygiene": platform_hygiene,
         "config_conformance": config_conformance,
         "discovery_contracts": complete
@@ -1263,17 +1387,16 @@ def classify(
         # The Casework task approval journey drives the stock issuer through
         # Evidence, BReg, and the Scheduling authorization probe, so it runs on
         # every input of the BReg product gate and of the Scheduling runtime.
-        "breg_integration": integration and breg_contracts,
-        "breg_contracts_lanes": list(
-            BREG_CONTRACTS_LANES if integration else BREG_CONTRACTS_LANES[:1]
+        "casework_postgres": bool(affected & CASEWORK_PACKAGES)
+        or breg_contracts
+        or "registry-scheduling" in affected,
+        # The Scheduling PostgreSQL job also runs the dispatch core's suite
+        # against its service database.
+        "scheduling_postgres": bool(
+            affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})
         ),
-        "casework_postgres": integration
-        and (
-            bool(affected & CASEWORK_PACKAGES)
-            or breg_contracts
-            or "registry-scheduling" in affected
-        ),
-        "scheduling_postgres": integration and bool(affected & SCHEDULING_PACKAGES),
+        "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
+        "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,
@@ -1284,10 +1407,10 @@ def classify(
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,
         "casework_tutorial": casework_tutorial,
+        "messaging_tutorial": messaging_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
         "identifiers": identifiers,
     }
-    return outputs
 
 
 def write_github_outputs(path: Path, outputs: dict[str, Any]) -> None:

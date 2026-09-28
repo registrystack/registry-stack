@@ -1,0 +1,1972 @@
+{
+  "components": {
+    "schemas": {
+      "AttemptSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "generation": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "in-progress",
+              "accepted",
+              "transient",
+              "permanent",
+              "maybe-sent",
+              "interrupted"
+            ],
+            "type": "string"
+          },
+          "providerReference": {
+            "description": "Whether the provider returned a reference. The reference itself is not returned.",
+            "type": "boolean"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "generation",
+          "attempt",
+          "outcome",
+          "startedAt",
+          "providerReference"
+        ],
+        "type": "object"
+      },
+      "MaskedRecipient": {
+        "description": "The recipient's kind, with its contact masked.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "const": "redacted"
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "phone": {
+                "const": "redacted"
+              }
+            },
+            "required": [
+              "phone"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MessageDispatch": {
+        "description": "What the dispatch worker did. submitted means the provider accepted the message, never that it was delivered.",
+        "enum": [
+          "queued",
+          "sending",
+          "submitted",
+          "failed",
+          "unknown",
+          "cancelled",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "MessageLinks": {
+        "additionalProperties": false,
+        "properties": {
+          "cancel": {
+            "type": "string"
+          },
+          "self": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "self",
+          "cancel"
+        ],
+        "type": "object"
+      },
+      "MessageReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "links": {
+            "$ref": "#/components/schemas/MessageLinks"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MessageStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "links"
+        ],
+        "type": "object"
+      },
+      "MessageReport": {
+        "description": "What the provider's delivery receipts reported. It only moves forward, none then sent then delivered or undelivered, and a final report is never replaced. unavailable: the message's provider reports no delivery receipts, so submitted is the last status.",
+        "enum": [
+          "none",
+          "sent",
+          "delivered",
+          "undelivered",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "MessageStatus": {
+        "description": "Derived from dispatch and report: the dispatch state, except that a submitted message whose report is delivered is delivered, and one whose report is undelivered is failed.",
+        "enum": [
+          "queued",
+          "sending",
+          "submitted",
+          "delivered",
+          "failed",
+          "expired",
+          "cancelled",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "MessageView": {
+        "additionalProperties": false,
+        "description": "A message's status and metadata. The recipient is masked, and no part or template data is returned.",
+        "properties": {
+          "acceptedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptSummary"
+            },
+            "type": "array"
+          },
+          "channel": {
+            "enum": [
+              "email",
+              "sms"
+            ],
+            "type": "string"
+          },
+          "correlationId": {
+            "type": "string"
+          },
+          "dispatch": {
+            "$ref": "#/components/schemas/MessageDispatch"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "links": {
+            "$ref": "#/components/schemas/MessageLinks"
+          },
+          "notBefore": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/MessageReport"
+          },
+          "reportedAt": {
+            "description": "When the report last moved. Absent while it is none or unavailable.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "senderProfile": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MessageStatus"
+          },
+          "template": {
+            "$ref": "#/components/schemas/TemplateReference"
+          },
+          "to": {
+            "$ref": "#/components/schemas/MaskedRecipient"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "dispatch",
+          "report",
+          "channel",
+          "senderProfile",
+          "to",
+          "acceptedAt",
+          "expiresAt",
+          "updatedAt",
+          "attempts",
+          "links"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "authentication.refused",
+              "callback.unreadable",
+              "callback.unverified",
+              "content.invalid",
+              "content.too-large",
+              "content.too-many-segments",
+              "idempotency.expired",
+              "idempotency.key-reused",
+              "message.dispatch-started",
+              "message.not-visible",
+              "message.terminal",
+              "operation.not-authorized",
+              "profile.not-authorized",
+              "quota.exceeded",
+              "rate-limit.exceeded",
+              "request.body-too-large",
+              "request.invalid",
+              "request.method-not-allowed",
+              "request.not-found",
+              "request.unprocessable",
+              "request.unsupported-media-type",
+              "service.unavailable",
+              "template.data-invalid",
+              "template.locale-unavailable",
+              "template.not-found",
+              "template.render-refused"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "https://id.registrystack.org/problems/registry-messaging/authentication/refused",
+              "https://id.registrystack.org/problems/registry-messaging/callback/unreadable",
+              "https://id.registrystack.org/problems/registry-messaging/callback/unverified",
+              "https://id.registrystack.org/problems/registry-messaging/content/invalid",
+              "https://id.registrystack.org/problems/registry-messaging/content/too-large",
+              "https://id.registrystack.org/problems/registry-messaging/content/too-many-segments",
+              "https://id.registrystack.org/problems/registry-messaging/idempotency/expired",
+              "https://id.registrystack.org/problems/registry-messaging/idempotency/key-reused",
+              "https://id.registrystack.org/problems/registry-messaging/message/dispatch-started",
+              "https://id.registrystack.org/problems/registry-messaging/message/not-visible",
+              "https://id.registrystack.org/problems/registry-messaging/message/terminal",
+              "https://id.registrystack.org/problems/registry-messaging/operation/not-authorized",
+              "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized",
+              "https://id.registrystack.org/problems/registry-messaging/quota/exceeded",
+              "https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded",
+              "https://id.registrystack.org/problems/registry-messaging/request/body-too-large",
+              "https://id.registrystack.org/problems/registry-messaging/request/invalid",
+              "https://id.registrystack.org/problems/registry-messaging/request/method-not-allowed",
+              "https://id.registrystack.org/problems/registry-messaging/request/not-found",
+              "https://id.registrystack.org/problems/registry-messaging/request/unprocessable",
+              "https://id.registrystack.org/problems/registry-messaging/request/unsupported-media-type",
+              "https://id.registrystack.org/problems/registry-messaging/service/unavailable",
+              "https://id.registrystack.org/problems/registry-messaging/template/data-invalid",
+              "https://id.registrystack.org/problems/registry-messaging/template/locale-unavailable",
+              "https://id.registrystack.org/problems/registry-messaging/template/not-found",
+              "https://id.registrystack.org/problems/registry-messaging/template/render-refused"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "traceId"
+        ],
+        "type": "object"
+      },
+      "Recipient": {
+        "description": "Exactly one contact, typed by the channel that carries it: an email address, or an E.164 phone number.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "maxLength": 254,
+                "minLength": 3,
+                "type": "string"
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "phone": {
+                "pattern": "^\\+[1-9][0-9]{1,14}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "phone"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SubmitMessageRequest": {
+        "additionalProperties": false,
+        "description": "One message: a template version with its locale and data, or direct content where the access profile allows it, never both. Every endpoint, credential, and script is bound by the operator; no member chooses one.",
+        "properties": {
+          "content": {
+            "additionalProperties": false,
+            "description": "Direct content, instead of `template`.",
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          },
+          "correlationId": {
+            "description": "An opaque caller reference, stored, returned, and audited, never interpreted.",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "data": {
+            "description": "The template data, validated against the template version's schema; required with `template`. It is rendered at acceptance and never stored."
+          },
+          "expiresAt": {
+            "description": "The instant an unsent message expires. It must lie within `retention.payloadDays` of acceptance, and defaults to the sender profile's expiry.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "locale": {
+            "description": "A locale the template version declares; required with `template`.",
+            "type": "string"
+          },
+          "notBefore": {
+            "description": "The earliest instant the message may be sent.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "senderProfile": {
+            "description": "A sender profile the caller's access profile lists.",
+            "type": "string"
+          },
+          "template": {
+            "$ref": "#/components/schemas/TemplateReference"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Recipient"
+          }
+        },
+        "required": [
+          "senderProfile",
+          "to"
+        ],
+        "type": "object"
+      },
+      "TemplatePreview": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "enum": [
+              "email",
+              "sms"
+            ],
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "packageDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "parts": {
+            "additionalProperties": false,
+            "properties": {
+              "html": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          },
+          "sms": {
+            "additionalProperties": false,
+            "description": "The segment count, for an SMS template only.",
+            "properties": {
+              "encoding": {
+                "enum": [
+                  "gsm7",
+                  "ucs2"
+                ],
+                "type": "string"
+              },
+              "segments": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "units": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "encoding",
+              "units",
+              "segments"
+            ],
+            "type": "object"
+          },
+          "template": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "template",
+          "locale",
+          "channel",
+          "packageDigest",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "TemplatePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "The template data, validated against the template version's schema before rendering."
+          },
+          "locale": {
+            "description": "A locale the template version declares.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "locale",
+          "data"
+        ],
+        "type": "object"
+      },
+      "TemplateReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Registry Messaging HTTP contract. Every refusal is one application/problem+json document from the closed vocabulary.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "Registry Messaging API",
+    "version": "v1alpha1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          }
+        },
+        "security": [],
+        "summary": "Report that the process is serving."
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "getReady",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Report that the store answers with the expected schema."
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "operationId": "submitMessage",
+        "parameters": [
+          {
+            "description": "Scopes a retry to the caller: the same key and request answer the stored receipt again.",
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageReceipt"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "operation.not-authorized",
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: operation.not-authorized, profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "template.not-found"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: template.not-found."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "idempotency.key-reused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: idempotency.key-reused."
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "idempotency.expired"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: idempotency.expired."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unsupported-media-type"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unsupported-media-type."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unprocessable",
+                            "content.invalid",
+                            "content.too-large",
+                            "content.too-many-segments",
+                            "template.data-invalid",
+                            "template.locale-unavailable",
+                            "template.render-refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unprocessable, content.invalid, content.too-large, content.too-many-segments, template.data-invalid, template.locale-unavailable, template.render-refused."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded",
+                            "quota.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded, quota.exceeded."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Submit one message through a sender profile the caller's access profile lists, rendered from a template version at acceptance or, where the profile allows it, from direct content. The `Idempotency-Key` header is required: the same key and request answer the stored receipt again."
+      }
+    },
+    "/v1/messages/{message_id}": {
+      "get": {
+        "operationId": "getMessage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageView"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "message.not-visible"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: message.not-visible."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the status of a message the caller submitted, or any message for an operator. A message the caller may not see answers exactly like one that does not exist. The recipient is masked, and no part or template data is returned."
+      }
+    },
+    "/v1/messages/{message_id}/cancel": {
+      "post": {
+        "operationId": "cancelMessage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageView"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "message.not-visible"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: message.not-visible."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "message.dispatch-started",
+                            "message.terminal"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: message.dispatch-started, message.terminal."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel a queued message, including one waiting for a retry, the caller submitted, or any queued message for an operator. A message whose dispatch started or that reached a final state is refused."
+      }
+    },
+    "/v1/provider-callbacks/{provider_id}": {
+      "post": {
+        "operationId": "receiveProviderCallback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "The body the provider sends, JSON or form-encoded, read only by the provider package's receipt script after the callback verified.",
+          "required": false
+        },
+        "responses": {
+          "204": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unverified"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unverified."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unreadable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unreadable."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Take one delivery callback from a provider whose runtime configuration names an `hmac-sha1-url-form` or `hmac-sha256-body` callback verifier. The verifier, not a bearer token, authenticates the request; the provider package's receipt script reads it. A verified callback answers 204 whether or not its reference names a message, and a receipt never moves a message's report backwards."
+      }
+    },
+    "/v1/provider-callbacks/{provider_id}/{token}": {
+      "post": {
+        "operationId": "receiveProviderCallbackWithToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "The body the provider sends, JSON or form-encoded, read only by the provider package's receipt script after the callback verified.",
+          "required": false
+        },
+        "responses": {
+          "204": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unverified"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unverified."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unreadable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unreadable."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Take one delivery callback from a provider whose runtime configuration names a `path-token` callback verifier, with the secret token as the last path segment. Otherwise as `receiveProviderCallback`."
+      }
+    },
+    "/v1/templates/{template_id}/versions/{version}/preview": {
+      "post": {
+        "operationId": "previewTemplate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplatePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreview"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "operation.not-authorized",
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: operation.not-authorized, profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "template.not-found"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: template.not-found."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unsupported-media-type"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unsupported-media-type."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unprocessable",
+                            "template.data-invalid",
+                            "template.locale-unavailable",
+                            "template.render-refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unprocessable, template.data-invalid, template.locale-unavailable, template.render-refused."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Render a template version of the active package with the given locale and data, for a sender whose profile lists the template. Nothing is persisted; the body is byte-identical to `messagingctl preview --format json`."
+      }
+    }
+  }
+}

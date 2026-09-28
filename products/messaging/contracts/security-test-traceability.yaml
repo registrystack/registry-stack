@@ -1,0 +1,125 @@
+contract: registry.messaging.security-test-traceability/v1
+scope: mvp
+executionStatus: not-recorded
+note: >-
+  Every entry names the tests that carry its invariant. A pending invariant
+  has no entry until the slice that enforces it adds its tests. Tests under
+  crates/registry-messaging/tests run only with the postgres-test feature and
+  a disposable database. This file records the obligation, not a passing run.
+entries:
+  - id: MESSAGING-SEC-01
+    tests:
+      - {path: crates/registry-messaging/src/http.rs, name: a_submission_authentication_refusal_does_not_poll_the_body}
+      - {path: crates/registry-messaging/src/http.rs, name: a_caller_past_its_profile_rate_is_refused_with_the_wait_needed}
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused}
+      - {path: crates/registry-messaging-core/src/access.rs, name: direct_content_is_accepted_only_where_the_profile_allows_it}
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_client_listed_in_no_profile_is_refused}
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_client_in_two_profiles_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: an_admitted_client_without_a_profile_is_not_authorized}
+      - {path: crates/registry-messaging/src/http.rs, name: a_client_without_a_profile_or_scope_is_not_authorized}
+      - {path: crates/registry-messaging/src/http.rs, name: only_the_sender_role_submits_and_only_through_what_its_profile_lists}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_outside_the_callers_role_or_profile_is_refused_before_the_store}
+  - id: MESSAGING-SEC-02
+    tests:
+      - {path: crates/registry-messaging-core/src/wire.rs, name: a_submission_is_closed_and_selects_exactly_one_content_source}
+      - {path: crates/registry-messaging/src/http.rs, name: a_submission_body_is_closed_and_needs_an_idempotency_key}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_naming_an_unknown_member_is_refused_and_records_nothing}
+  - id: MESSAGING-SEC-03
+    tests:
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_resolving_to_loopback_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: metadata_private_and_loopback_provider_addresses_are_refused_without_an_allowlist}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_private_network_allowance_must_be_an_exact_cidr_for_an_https_provider}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_provider_url_with_credentials_a_query_or_plain_http_to_a_remote_host_is_refused}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_script_target_outside_the_base_path_or_origin_is_refused}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_refused_connection_is_not_sent_and_transient}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_private_answer_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_private_literal_host_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: loopback_is_refused_in_a_tls_mode_with_real_resolution}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: development_plaintext_refuses_an_answer_that_is_not_loopback}
+  - id: MESSAGING-SEC-04
+    tests:
+      - {path: crates/registry-messaging-core/src/visibility.rs, name: another_caller_is_told_the_message_is_not_visible}
+      - {path: crates/registry-messaging-core/src/visibility.rs, name: a_missing_message_answers_exactly_like_an_invisible_one}
+      - {path: crates/registry-messaging/src/http.rs, name: an_authenticated_caller_is_told_an_unknown_message_is_not_visible}
+      - {path: crates/registry-messaging/src/http.rs, name: a_missing_or_malformed_credential_is_challenged}
+      - {path: crates/registry-messaging/src/http.rs, name: a_forged_credential_is_challenged}
+      - {path: crates/registry-messaging/src/http.rs, name: a_credential_for_another_audience_is_challenged}
+      - {path: crates/registry-messaging/src/auth.rs, name: an_expired_token_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: a_token_that_is_not_an_access_token_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: a_client_the_deployment_does_not_admit_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: an_exchanged_token_is_refused_when_no_authority_was_declared}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener}
+      - {path: crates/registry-messaging/src/http.rs, name: a_message_route_reaches_the_store_only_for_an_identifier_a_message_can_carry}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_is_visible_to_its_submitter_and_an_operator_only}
+  - id: MESSAGING-SEC-05
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_stale_fence_cannot_finish_a_requeued_message}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: two_workers_never_send_one_message_twice}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
+  - id: MESSAGING-SEC-06
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: accepted_idempotency_capability_is_loaded_after_worker_reconstruction}
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: the_idempotency_key_follows_the_capability_persisted_at_acceptance}
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_cut_off_after_the_message_left_is_maybe_sent}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_drop_after_the_end_of_data_marker_is_maybe_sent}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_timeout_after_the_end_of_data_marker_is_maybe_sent}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_connection_dropped_after_the_request_is_maybe_sent}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_response_slower_than_the_timeout_is_maybe_sent}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_hanging_send_is_cut_off_and_held_as_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_killed_worker_leaves_its_message_unknown_and_unsent_again}
+      - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}
+      - {path: crates/registry-messaging-core/src/package.rs, name: retrying_an_uncertain_send_needs_provider_deduplication_or_an_explicit_choice}
+  - id: MESSAGING-SEC-07
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: receipt_resolution_waits_for_a_concurrent_reference_assignment}
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: a_path_token_must_be_bounded_utf8_before_callback_activation}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: an_hmac_sha256_body_callback_is_applied_and_a_forged_one_is_unverified}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: an_hmac_sha1_url_form_callback_is_applied_and_a_forged_one_is_unverified}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_path_token_callback_is_applied_and_a_wrong_token_is_unverified}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: duplicate_and_out_of_order_receipts_never_regress_the_report}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_final_undelivered_report_is_not_replaced_by_a_late_delivered_one}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_message_keeps_a_bounded_history_of_distinct_receipts}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_verified_receipt_naming_no_message_is_received_and_counted}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_reference_scoped_to_another_provider_names_nothing}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_reference_two_messages_carry_is_received_and_applied_to_neither}
+      - {path: crates/registry-messaging/src/http.rs, name: a_callback_for_a_provider_that_receives_none_is_unverified}
+      - {path: crates/registry-messaging/src/http.rs, name: a_path_token_callback_verifies_only_on_the_token_route_with_its_token}
+      - {path: crates/registry-messaging/src/http.rs, name: a_body_signed_callback_refuses_a_token_route_and_a_forged_signature}
+      - {path: crates/registry-messaging/src/http.rs, name: a_callback_body_over_the_edge_limit_is_refused}
+      - {path: crates/registry-messaging/src/http.rs, name: callbacks_past_the_rate_are_refused_before_they_are_verified}
+      - {path: crates/registry-messaging/src/limits.rs, name: each_callback_provider_and_the_unrouted_paths_have_separate_budgets}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha1_url_form_refuses_every_forgery}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha256_body_refuses_every_forgery}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: path_token_accepts_only_the_exact_token}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: a_verifier_configuration_document_refuses_none_and_unknown_keys}
+      - {path: crates/registry-messaging-core/src/receipt.rs, name: a_report_never_regresses}
+      - {path: crates/registry-messaging-core/src/receipt.rs, name: a_duplicate_report_is_a_no_op}
+      - {path: crates/registry-messaging-core/src/receipt.rs, name: a_terminal_state_is_never_displaced_by_the_other_terminal_state}
+  - id: MESSAGING-SEC-08
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: startup_publishes_every_pending_outbox_batch_before_its_start_record}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: no_contact_content_data_principal_or_credential_reaches_the_journal_or_the_log}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_retention_run_is_journaled_with_its_counts_only}
+      - {path: crates/registry-messaging/src/http.rs, name: a_preview_answers_the_bytes_the_cli_prints_and_journals_metadata_only}
+  - id: MESSAGING-SEC-09
+    tests:
+      - {path: crates/registry-messaging-core/src/render.rs, name: a_runaway_template_runs_out_of_fuel}
+      - {path: crates/registry-messaging-core/src/render.rs, name: a_part_that_outgrows_its_ceiling_is_refused}
+      - {path: crates/registry-messaging-core/src/render.rs, name: the_environment_offers_no_loader_function_or_builtin_filter}
+      - {path: crates/registry-messaging-core/src/render.rs, name: an_undefined_value_is_refused_not_rendered_empty}
+      - {path: crates/registry-messaging-core/src/template.rs, name: a_schema_may_not_reach_outside_the_package}
+      - {path: crates/registry-messaging/src/package.rs, name: a_symbolic_link_anywhere_in_the_package_is_refused}
+      - {path: crates/registry-messaging/src/http.rs, name: a_preview_refuses_each_malformed_request_with_its_problem}
+  - id: MESSAGING-SEC-10
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_requeue_committed_while_retention_waits_keeps_the_payload}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_runtime_sweep_erases_on_its_interval}
+      - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
+      - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}

@@ -1,0 +1,59 @@
+[package]
+name = "registry-messagingctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Messaging adopter and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "messagingctl"
+path = "src/main.rs"
+
+[[test]]
+name = "postgres_messages_cli"
+path = "tests/postgres_messages_cli.rs"
+required-features = ["postgres-test"]
+
+[features]
+default = []
+postgres-test = ["registry-messaging/postgres-test"]
+
+[lints]
+workspace = true
+
+[dependencies]
+aws-lc-rs.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+hex.workspace = true
+jsonwebtoken.workspace = true
+rcgen.workspace = true
+registry-messaging.workspace = true
+registry-messaging-core.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-crypto.workspace = true
+reqwest.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+signal-hook.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+registry-platform-audit.workspace = true
+registry-platform-dispatch = { workspace = true, features = ["postgres"] }
+registry-platform-oidc.workspace = true
+registry-platform-testing.workspace = true
+tokio-postgres.workspace = true
+tower.workspace = true

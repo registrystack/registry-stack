@@ -34,6 +34,7 @@ IMAGE_NAMES = frozenset(
         "casework",
         "discovery",
         "evidence",
+        "messaging",
         "relay",
         "scheduling",
     }

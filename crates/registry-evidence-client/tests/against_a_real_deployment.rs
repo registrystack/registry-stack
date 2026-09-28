@@ -1593,7 +1593,6 @@ async fn start_trusting_with_request_burst_jwks_and_task_authority(
     .expect("write the runtime configuration");
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
         .expect("the runtime configuration is immutable");
-    refresh_package_envelope(&bundle_root);
     seal(&bundle_root);
 
     let runtime = Arc::new(
@@ -3228,27 +3227,6 @@ fn copy_tree(source: &Path, target: &Path) {
 }
 
 /// Make the staged bundle immutable, as the runtime requires.
-/// Republish the staged package after its intended authored changes.
-fn refresh_package_envelope(root: &Path) {
-    let sum_file = root.join(registry_platform_config::SUM_FILE);
-    if sum_file.exists() {
-        fs::remove_file(&sum_file).expect("remove the stale package sum file");
-    }
-    registry_platform_config::write_sum_file(
-        root,
-        None,
-        &registry_platform_config::PackageLimits {
-            max_files: registry_evidence::bundle::MAX_BUNDLE_FILES,
-            max_file_bytes: registry_evidence::bundle::MAX_ARTIFACT_BYTES,
-            max_total_bytes: registry_evidence::bundle::MAX_BUNDLE_BYTES,
-            max_depth: 3,
-            max_path_bytes: 128,
-        },
-        "evidencectl package",
-    )
-    .expect("publish the staged test package");
-}
-
 fn seal(root: &Path) {
     for entry in fs::read_dir(root).expect("the staged bundle is readable") {
         let entry = entry.expect("the staged entry is readable");

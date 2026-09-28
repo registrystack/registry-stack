@@ -184,6 +184,8 @@ jobs:
               "casework": "casework",
               "caseworkctl": "caseworkctl",
               "schedulingctl": "schedulingctl",
+              "messaging": "messaging",
+              "messagingctl": "messagingctl",
               "relay": "relay",
               "relayctl": "relayctl",
           }

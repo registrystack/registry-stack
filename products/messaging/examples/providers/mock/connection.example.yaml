@@ -1,0 +1,15 @@
+# Runtime settings for a loopback development gateway. Production uses an
+# https baseUrl; the token is a secret reference resolved at startup.
+baseUrl: http://127.0.0.1:8025/v1/
+timeoutMilliseconds: 5000
+maximumResponseBytes: 16384
+concurrencyLimit: 2
+redirects: deny
+authentication:
+  kind: static-authorization
+  tokenRef: secret:file/gateway-token
+callbackVerifier:
+  kind: hmac-sha256-body
+  header: X-Gateway-Signature
+  encoding: hex
+  secretRef: secret:file/gateway-callback-secret

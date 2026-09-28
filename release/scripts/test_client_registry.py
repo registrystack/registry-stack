@@ -84,20 +84,26 @@ class ClientRegistryTest(unittest.TestCase):
         self._write_distribution(self.client)
 
     def _write_distribution(
-        self, client: str, *, include_casework: bool = False
+        self,
+        client: str,
+        *,
+        include_casework: bool = False,
+        include_messaging: bool = False,
     ) -> None:
         definition = self.module.client_definition(client)
+        selection = {
+            "include_casework": include_casework,
+            "include_messaging": include_messaging,
+        }
         optional = {
             f"{definition.npm_root_package}-{platform}": self.version
             for platform, _binary in self.module.npm_platforms(
-                client, self.version, include_casework=include_casework
+                client, self.version, **selection
             )
         }
         for path, (platform, binary) in zip(
             self.module.npm_tarballs(self.directory, self.version, client)[:-1],
-            self.module.npm_platforms(
-                client, self.version, include_casework=include_casework
-            ),
+            self.module.npm_platforms(client, self.version, **selection),
             strict=True,
         ):
             write_npm_package(
@@ -111,20 +117,29 @@ class ClientRegistryTest(unittest.TestCase):
             name=definition.npm_root_package,
             version=self.version,
             optional_dependencies=optional,
-            facade_namespaces=("casework",)
-            if self.module.includes_casework(
-                self.version, include_casework=include_casework
-            )
-            else (),
+            facade_namespaces=(
+                *(
+                    ("casework",)
+                    if self.module.includes_casework(
+                        self.version, include_casework=include_casework
+                    )
+                    else ()
+                ),
+                *(
+                    ("messaging",)
+                    if self.module.includes_messaging(
+                        self.version, include_messaging=include_messaging
+                    )
+                    else ()
+                ),
+            ),
         )
         for path in self.module.wheel_paths(self.directory, self.version, client):
             write_wheel(
                 path,
                 project=definition.pypi_project,
                 namespaces=(
-                    self.module.stack_python_namespaces(
-                        self.version, include_casework=include_casework
-                    )
+                    self.module.stack_python_namespaces(self.version, **selection)
                     if client == "stack"
                     else ()
                 ),
@@ -158,6 +173,7 @@ class ClientRegistryTest(unittest.TestCase):
                 "package/casework-client.darwin-arm64.node",
                 "package/discovery-client.darwin-arm64.node",
                 "package/evidence-client.darwin-arm64.node",
+                "package/messaging-client.darwin-arm64.node",
                 "package/relay-client.darwin-arm64.node",
             ],
         )
@@ -284,6 +300,152 @@ class ClientRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(
             self.module.ClientRegistryError,
             "has no casework namespace",
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
+
+    def test_published_0_34_validation_keeps_the_roster_without_messaging(
+        self,
+    ) -> None:
+        self.version = "0.34.0"
+        self._write_distribution("stack")
+        self.module.validate_distribution(self.directory, self.version, "stack")
+        platform = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[0]
+        _metadata, names = self.module.npm_package_metadata(platform)
+        native = sorted(name for name in names if name.endswith(".node"))
+        self.assertIn("package/casework-client.darwin-arm64.node", native)
+        self.assertNotIn("package/messaging-client.darwin-arm64.node", native)
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        with zipfile.ZipFile(wheel) as archive:
+            self.assertFalse(
+                any(
+                    name.startswith("registry_client/messaging/")
+                    for name in archive.namelist()
+                )
+            )
+
+    def test_explicit_0_34_candidate_validation_includes_messaging(self) -> None:
+        self.version = "0.34.0"
+        self._write_distribution("stack", include_messaging=True)
+        self.module.validate_distribution(
+            self.directory,
+            self.version,
+            "stack",
+            include_messaging=True,
+        )
+        platform = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[0]
+        _metadata, names = self.module.npm_package_metadata(platform)
+        self.assertIn("package/messaging-client.darwin-arm64.node", names)
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "wrong native payload",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly contains the messaging namespace",
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
+        for command in ("validate-dist", "pypi-state"):
+            with self.subTest(command=command):
+                arguments = self.module.parse_args(
+                    [
+                        command,
+                        "--directory",
+                        str(self.directory),
+                        "--version",
+                        self.version,
+                        "--client",
+                        "stack",
+                        "--include-messaging",
+                    ]
+                )
+                self.assertTrue(arguments.include_messaging)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = self.module.main(
+                [
+                    "validate-dist",
+                    "--directory",
+                    str(self.directory),
+                    "--version",
+                    self.version,
+                    "--client",
+                    "stack",
+                    "--include-messaging",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "validated\n")
+
+    def test_0_34_rejects_a_root_package_that_exposes_messaging(self) -> None:
+        self.version = "0.34.0"
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+            facade_namespaces=("casework", "messaging"),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly exposes the messaging facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+
+    def test_selected_messaging_requires_its_root_facade(self) -> None:
+        self.version = "0.35.0"
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+            facade_namespaces=("casework",),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "incomplete messaging facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+
+    def test_rejects_a_unified_wheel_without_messaging(self) -> None:
+        self._write_distribution("stack")
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        write_wheel(
+            wheel,
+            project="registry-stack-client",
+            namespaces=tuple(
+                value
+                for value in self.module.stack_python_namespaces(self.version)
+                if value != "messaging"
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "has no messaging namespace",
         ):
             self.module.validate_wheels(self.directory, self.version, "stack")
 
@@ -566,6 +728,7 @@ class CheckedInClientManifestTest(unittest.TestCase):
             "evidence": repo / "crates/registry-evidence-client-node",
             "relay": repo / "crates/registry-relay-client-node",
             "casework": repo / "crates/registry-casework-client-node",
+            "messaging": repo / "crates/registry-messaging-client-node",
             "stack": repo / "crates/registry-stack-client-node",
         }
         for client, root in roots.items():
@@ -590,9 +753,9 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for pattern in ("*-client-node", "*-client-py")
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
-        # Five products have Rust, Node and Python coverage, and both unified
+        # Six products have Rust, Node and Python coverage, and both unified
         # facades remain present.
-        self.assertEqual(12, len(found), found)
+        self.assertEqual(14, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:
@@ -615,11 +778,13 @@ class ClientReadmeInstallTest(unittest.TestCase):
             "registry-breg-client-node": "@registrystack/client",
             "registry-discovery-client-node": "@registrystack/client",
             "registry-evidence-client-node": "@registrystack/client",
+            "registry-messaging-client-node": "@registrystack/client",
             "registry-relay-client-node": "@registrystack/client",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",
             "registry-evidence-client-py": "registry-stack-client",
+            "registry-messaging-client-py": "registry-stack-client",
             "registry-relay-client-py": "registry-stack-client",
         }
         for readme in self.readmes():

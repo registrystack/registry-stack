@@ -57,6 +57,7 @@ DISCOVERY_RUNTIME_IMAGE_NAMES = OFFICIAL_RUNTIME_IMAGE_NAMES | {"discovery"}
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
 SCHEDULING_RELEASE_MINIMUM_VERSION = (0, 33, 0)
+MESSAGING_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION = (0, 27, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
@@ -76,6 +77,7 @@ IMAGE_OPERATOR_TOOLS = {
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
 }
+MESSAGING_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {"messaging"}
 # The citizen MCP gateway and its review page join the release set from the
 # release that release_roster.BREG_SERVICES_FIRST_RELEASE names.
 BREG_SERVICES_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {
@@ -121,7 +123,7 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/{image}.{suffix}.json"
-    for image in BREG_SERVICES_RUNTIME_IMAGE_NAMES
+    for image in MESSAGING_RUNTIME_IMAGE_NAMES | BREG_SERVICES_RUNTIME_IMAGE_NAMES
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -153,9 +155,12 @@ def _candidate_image_names(version: str) -> set[str]:
         return CASEWORK_RUNTIME_IMAGE_NAMES | {"mint"}
     if parsed < SCHEDULING_RELEASE_MINIMUM_VERSION:
         return CASEWORK_RUNTIME_IMAGE_NAMES
+    image_names = SCHEDULING_RUNTIME_IMAGE_NAMES
     if release_roster.breg_services_in_release(parsed):
-        return BREG_SERVICES_RUNTIME_IMAGE_NAMES
-    return SCHEDULING_RUNTIME_IMAGE_NAMES
+        image_names = image_names | BREG_SERVICES_RUNTIME_IMAGE_NAMES
+    if parsed >= MESSAGING_RELEASE_MINIMUM_VERSION:
+        image_names = image_names | MESSAGING_RUNTIME_IMAGE_NAMES
+    return image_names
 
 
 def image_operator_tools(version: str) -> dict[str, str]:
@@ -454,6 +459,9 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         # The Scheduling runtime ships only inside its image.
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"schedulingctl-{tag}-{platform}"] = "binary"
+    if version_tuple >= MESSAGING_RELEASE_MINIMUM_VERSION:
+        inventory[f"messaging-{tag}-linux-amd64"] = "binary"
+        inventory[f"messagingctl-{tag}-linux-amd64"] = "binary"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:

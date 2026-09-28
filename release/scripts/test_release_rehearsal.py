@@ -28,7 +28,6 @@ class ReleaseRehearsalTest(unittest.TestCase):
             shutil.copytree(ROOT / directory, root / directory)
         for relative in (
             "release/scripts/release_candidate.py",
-            "release/scripts/release_roster.py",
             "release/scripts/build-release-binaries.sh",
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
@@ -223,7 +222,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         binary_job = document["jobs"]["canonical-linux-binaries"]
         self.assertFalse(binary_job["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework", "scheduling"],
+            ["core", "breg", "casework", "scheduling", "messaging"],
             binary_job["strategy"]["matrix"]["group"],
         )
         self.assertEqual(
@@ -285,6 +284,12 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("schedulingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("for operator_tool in bregctl caseworkctl schedulingctl", merge)
         self.assertIn('"dist/image-bin/${operator_tool}" --version', merge)
+        self.assertIn("--messaging binary-shards/messaging", merge)
+        self.assertIn(
+            "if (( release_major > 0 || release_minor >= 35 )); then", merge
+        )
+        self.assertIn("messaging-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("messagingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         breg_services = merge.split(
             'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
             '  breg-services-in-release "${REHEARSAL_VERSION}")"\n'

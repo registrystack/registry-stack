@@ -12,7 +12,9 @@ Two independent primitives live here:
   `check(key, cost)` charges a caller-declared number of tokens, atomically: a
   refused check consumes no partial tokens. A refusal carries a `retry_after`
   duration computed from the bucket's own state, so a caller can set an HTTP
-  `Retry-After` header without guessing.
+  `Retry-After` header without guessing. A cost above `burst` is refused as
+  `CostExceedsBurst` before any bucket is touched: refill stops at the
+  burst, so no wait could admit it.
 - `FixedWindowCounter` is a per-key ceiling over a rolling window, for budgets
   that should reset in one step rather than refill smoothly (a failed-attempt
   counter, for example). `check(key)` answers the current budget without

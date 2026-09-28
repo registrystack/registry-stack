@@ -413,6 +413,35 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
+    def test_v0_35_roster_includes_messaging(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "release/scripts/release_candidate.py"),
+                "image-names",
+                "--version",
+                "0.35.0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        roster = MODULE.parse_roster(result.stdout)
+        self.assertEqual(
+            roster,
+            (
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "messaging",
+                "relay",
+                "scheduling",
+            ),
+        )
+        # The collector also supports the held-out breg citizen services.
+        self.assertEqual(MODULE.IMAGE_NAMES - set(roster), {"breg-mcp", "breg-review"})
+
     def test_the_roster_holds_out_the_breg_citizen_services(self) -> None:
         # release_roster.BREG_SERVICES_FIRST_RELEASE is unset, so neither the
         # current nor the next minor collects evidence for breg-mcp or

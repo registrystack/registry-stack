@@ -61,6 +61,8 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
         self.assertIn('"casework": "casework"', self.workflow)
         self.assertIn('"caseworkctl": "caseworkctl"', self.workflow)
         self.assertIn('"schedulingctl": "schedulingctl"', self.workflow)
+        self.assertIn('"messaging": "messaging"', self.workflow)
+        self.assertIn('"messagingctl": "messagingctl"', self.workflow)
         self.assertIn('"relay": "relay"', self.workflow)
         self.assertIn('"relayctl": "relayctl"', self.workflow)
         self.assertIn(
