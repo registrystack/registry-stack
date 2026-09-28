@@ -280,6 +280,40 @@ class CaseworkPackageTest(unittest.TestCase):
                              str(casework.package))
 
 
+@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class EvidencePackageTest(unittest.TestCase):
+    def test_a_sealed_installed_package_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+            evidence.project = root / "project"
+            evidence.target = root / "target"
+            evidence.installed = root / "installed"
+            evidence.runtime = root / "runtime.yaml"
+            evidence.target.mkdir()
+            dump_json(evidence.target / "runtime.yaml", {"package": {"root": "x"}})
+            # evidencectl seals every published package directory at 0o500.
+            sealed = evidence.installed / "sources"
+            sealed.mkdir(parents=True)
+            (sealed / "record-status.sql").write_text("select 1;\n")
+            (sealed / "record-status.sql").chmod(0o400)
+            sealed.chmod(0o500)
+            evidence.installed.chmod(0o500)
+            candidate = root / "candidate"
+
+            def publish(*_args: str) -> None:
+                candidate.mkdir()
+                (candidate / "SHA256SUMS").write_text("")
+
+            side = unittest.mock.Mock()
+            side.run.side_effect = publish
+            evidence.package(side, candidate)
+            self.assertEqual(sorted(p.name for p in evidence.installed.iterdir()),
+                             ["SHA256SUMS"])
+            self.assertFalse(candidate.exists())
+
+
 class EvidenceGrammarTest(unittest.TestCase):
     OLD_GOVERNANCE = {
         "version": 1,
