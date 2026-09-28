@@ -1292,6 +1292,10 @@ fn start(args: StartArgs) -> Result<Value> {
             state.clients_file = clients_file;
             state.save()?;
         }
+        // A session an earlier release created keeps its database, but its
+        // operator configuration is rewritten so the runtime and apply read
+        // every key this release requires.
+        config::refresh_operator(&root, &state, &clients)?;
         state
     } else {
         let previous = previous.as_ref();

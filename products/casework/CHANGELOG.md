@@ -83,7 +83,9 @@
   release's BReg no longer serves: after upgrading BReg, run `caseworkctl
   check --against-breg-package`, repin with `caseworkctl source add --apply`,
   and package the project again before plan and apply.
-  `caseworkctl dev` applies in-process on every start.
+  `caseworkctl dev` applies in-process on every start, after it rewrites the
+  session's operator configuration, so a session retained from an earlier
+  release starts with its database in place.
   A session it creates connects the runtime and apply with one database role;
   a session retained from an earlier release keeps its split runtime and
   migration roles.

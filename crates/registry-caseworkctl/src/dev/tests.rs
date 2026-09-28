@@ -677,6 +677,31 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
 }
 
 #[test]
+fn a_retained_session_config_is_rewritten_with_every_key_the_runtime_reads() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let state = session(&project);
+    let session_root = state.root();
+    fs::create_dir_all(&session_root).unwrap();
+    fs::set_permissions(project.join(".casework"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&session_root, fs::Permissions::from_mode(0o700)).unwrap();
+    package_session(&session_root, &project).unwrap();
+    // A session an earlier release created wrote no identity block.
+    let path = session_root.join("operator.yaml");
+    let mut retained = config::operator(&state);
+    retained.as_object_mut().unwrap().remove("identity");
+    config::write_yaml(&path, &retained).unwrap();
+    assert!(RuntimeConfig::load(&path).is_err());
+
+    let clients: Clients = serde_norway::from_str(STANDALONE_DEV_CLIENTS).unwrap();
+    config::refresh_operator(&session_root, &state, &clients).unwrap();
+
+    let config = RuntimeConfig::load(&path).expect("the rewritten config loads");
+    assert_eq!(config.database_id(), "casework-local-session");
+    assert_eq!(config.package.root, session_root.join(SESSION_PACKAGE));
+}
+
+#[test]
 fn a_project_declaring_sources_is_refused_before_anything_starts() {
     let root = crate::canonical_tempdir();
     let project = root.path().join("project");

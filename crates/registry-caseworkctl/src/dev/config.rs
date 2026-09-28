@@ -565,15 +565,37 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    // Explicit source bindings need a generated runtime for validation even
-    // when the issuer is borrowed. The legacy source bridge writes its config
-    // later, after exporting source credentials.
-    if !borrowed || clients.integrations.is_some() {
-        let mut operator = operator(state);
-        if let Some(integrations) = &clients.integrations {
-            integrations.operator(state, clients, &mut operator)?;
-        }
+    if let Some(operator) = session_operator(state, clients)? {
         write_yaml(&root.join("operator.yaml"), &operator)?;
+    }
+    Ok(())
+}
+
+/// The operator configuration a session writes for its clients, or `None`
+/// when the legacy source bridge writes it after exporting source credentials.
+fn session_operator(state: &State, clients: &Clients) -> Result<Option<Value>> {
+    // Explicit source bindings need a generated runtime for validation even
+    // when the issuer is borrowed.
+    let borrowed = !state.sources.is_empty() || state.issuer_project.is_some();
+    if borrowed && clients.integrations.is_none() {
+        return Ok(None);
+    }
+    let mut operator = operator(state);
+    if let Some(integrations) = &clients.integrations {
+        integrations.operator(state, clients, &mut operator)?;
+    }
+    Ok(Some(operator))
+}
+
+/// Rewrite a retained session's operator configuration from its state, so a
+/// session an earlier release created carries every key this runtime reads.
+/// The session owns this file; its database and records are left in place.
+pub(super) fn refresh_operator(root: &Path, state: &State, clients: &Clients) -> Result<()> {
+    if let Some(operator) = session_operator(state, clients)? {
+        private::replace(
+            &root.join("operator.yaml"),
+            serde_norway::to_string(&operator)?.as_bytes(),
+        )?;
     }
     Ok(())
 }
