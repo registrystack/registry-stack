@@ -46,11 +46,26 @@
     installed, without `--initial`, adopts it into the activation ledger;
     `bregctl plan` reports that activation as `adopted`. The ledger history
     that release kept is dropped, and the adoption becomes ledger row 1.
-    Adoption also records the adoption's activation id on every import
-    authority the database holds, closed ones included, so an authority
-    closed before the upgrade no longer names the activation it was opened
-    under.
-  - <!-- ledger: lead fills: Casework repins -->
+    Every ingestion run the earlier release opened against the running
+    package is rebound to the adopted package and stays writable; a run
+    bound to any other package stays retired. Adoption records its own
+    activation id on every import authority a pre-ledger release had already
+    closed, because the revision each was opened under has no activation in
+    the ledger, so those authorities' activation id names the adoption rather
+    than the activation they were opened under.
+  - An apply that resumes an unfinished activation must use the database
+    roles that activation started with. A runtime file whose
+    `database.roles` now name other roles, such as one edited for one role
+    while the upgrade's first apply was unfinished, is refused as
+    `apply.resume.roles_differ`, naming the role mode and runtime role the
+    activation started with, and nothing changes. Rerun the apply with those
+    roles, or assess the activation with `bregctl migration reconcile`.
+  - A Casework deployment repins each BReg source whose project declares a
+    `package` block: that project's `registryRevision` changes (see below),
+    so Casework treats the source's records as moved until the source
+    description pins the upgraded value. Repeat `caseworkctl source add
+    --apply` against the upgraded registry and follow the recovery its
+    refusal prints.
   - An Evidence deployment re-imports each BReg source once: the export names
     `provenance.registryRevision` instead of `provenance.packageRevision`, so
     `evidencectl` reports changed provenance on the first import after the

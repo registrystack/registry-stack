@@ -71,8 +71,14 @@ sequence on a restored copy first, as
    and `--package` must both name the rebuilt package, which must describe the schema the
    database runs, `plan` reports `activation` `adopted`, the ledger history the earlier release
    kept is dropped, and the instance claim is carried over, or recorded when the database had
-   none. A `package.root` that still names the earlier release's package is refused with path
-   `package.root`. Casework reports each BReg source as unavailable from here until step 5
+   none. Every ingestion run the earlier release opened against the running package is rebound
+   to the adopted package and stays writable. Adoption records its own activation id on every
+   import authority a pre-ledger release had already closed, because the revision each was
+   opened under has no activation in the ledger, so those authorities' activation id names the
+   adoption rather than the activation they were opened under. A `package.root` that still names
+   the earlier release's package is refused with path `package.root`. When an `apply` stops
+   before it finishes, rerun it with the same `database.roles`: a retry under other roles is
+   refused as `apply.resume.roles_differ`, naming the roles the activation started with. Casework reports each BReg source as unavailable from here until step 5
    finishes.
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
    `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see
@@ -89,7 +95,9 @@ sequence on a restored copy first, as
     adapter, restart Evidence, start the adapter);
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
     update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
-    crates/registry-breg/src/postgres/interlock.rs, adopt_pre_ledger_database();
+    crates/registry-breg/src/postgres/interlock.rs, adopt_pre_ledger_database() (ingestion run
+    rebinding, import authority activation ids); crates/registry-breg/src/migration.rs,
+    MigrationError::ResumeRolesDiffer;
     crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
     crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
     lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
