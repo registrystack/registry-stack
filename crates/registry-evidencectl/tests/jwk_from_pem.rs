@@ -222,6 +222,35 @@ fn writes_the_jwk_under_its_thumbprint_into_an_output_directory() {
     assert!(forced.status.success(), "{}", stderr_of(&forced));
 }
 
+/// A hardened operator shell's umask must not narrow the published public
+/// JWK below the 0644 the service identity needs to read it.
+#[test]
+fn a_restrictive_umask_still_publishes_a_world_readable_jwk() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).expect("P-256 key");
+    let input = write(dir.path(), "signing.pem", &ec_public_pem(&key, PRIME256V1));
+    let output_path = dir.path().join("signing.jwk.json");
+
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("umask 077 && exec \"$0\" \"$@\"")
+        .arg(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["jwk", "from-pem", "--output"])
+        .arg(&output_path)
+        .arg(&input)
+        .output()
+        .expect("run evidencectl under umask 077");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        fs::metadata(&output_path)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+}
+
 #[test]
 fn reads_the_pem_from_standard_input() {
     let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).expect("P-256 key");
