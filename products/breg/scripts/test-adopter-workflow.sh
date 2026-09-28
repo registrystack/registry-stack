@@ -15,24 +15,8 @@ adopter_migration_role=""
 adopter_runtime_role=""
 adopter_author_role=""
 adopter_databases=()
-# --from-release packages and applies the first package with the previous
-# release's verified bregctl and breg, then tests, packages, and applies its
-# successor with the binaries built from this source.
-from_release=0
-audit_file=1
-case "${1:-}" in
-  "") ;;
-  --from-release)
-    from_release=1
-    shift
-    ;;
-  *)
-    printf '%s\n' 'usage: test-adopter-workflow.sh [--from-release]' >&2
-    exit 2
-    ;;
-esac
 if [[ "$#" -ne 0 ]]; then
-  printf '%s\n' 'usage: test-adopter-workflow.sh [--from-release]' >&2
+  printf '%s\n' 'usage: test-adopter-workflow.sh' >&2
   exit 2
 fi
 
@@ -167,50 +151,6 @@ PY
   rm -f -- "$output.der"
 }
 
-write_trust_anchor() {
-  local public_jwk=$1
-  local output=$2
-  python3 - "$public_jwk" "$output" <<'PY'
-import json
-import sys
-jwk = json.load(open(sys.argv[1], encoding="utf-8"))
-anchor = {
-    "apiVersion": "registry.registrystack.org/package-trust/v1",
-    "databaseId": "asset-site-placement-adopter-db",
-    "environment": "acceptance",
-    "instanceId": "asset-site-placement-acceptance",
-    "keys": [{"jwk": jwk, "keyId": jwk["kid"]}],
-    "threshold": 1,
-}
-open(sys.argv[2], "w", encoding="utf-8").write(json.dumps(anchor, sort_keys=True, separators=(",", ":")))
-PY
-}
-
-sign_file_hex() {
-  local private_key=$1
-  local input=$2
-  local output=$3
-  openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$input" -out "$output.bin"
-  python3 - "$output.bin" "$output" <<'PY'
-import sys
-from pathlib import Path
-Path(sys.argv[2]).write_text(Path(sys.argv[1]).read_bytes().hex(), encoding="utf-8")
-PY
-  rm -f -- "$output.bin"
-}
-
-write_signature_document() {
-  local key_id=$1
-  local signature_hex=$2
-  local output=$3
-  python3 - "$key_id" "$signature_hex" "$output" <<'PY'
-import json
-import sys
-document = {"signatures": [{"keyId": sys.argv[1], "signatureHex": open(sys.argv[2], encoding="utf-8").read()}]}
-open(sys.argv[3], "w", encoding="utf-8").write(json.dumps(document, sort_keys=True, separators=(",", ":")))
-PY
-}
-
 write_jwks() {
   local public_jwk=$1
   local output=$2
@@ -269,13 +209,10 @@ PY
 render_runtime_config() {
   local output=$1
   local package_root=$2
-  local active_revision=$3
-  local active_sequence=$4
-  local statement_timeout_ms=$5
-  local runtime_ref=$6
-  local migration_ref=$7
-  local listener=$8
-  local compiler_source_revision=$9
+  local statement_timeout_ms=$3
+  local runtime_ref=$4
+  local migration_ref=$5
+  local listener=$6
   cat >"$output" <<EOF
 apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -302,10 +239,6 @@ database:
     runtime: $adopter_runtime_role
 package:
   root: $package_root
-  trustAnchorPath: $temporary_root/package-trust-anchor.json
-  compilerSourceRevision: $compiler_source_revision
-  activeRevision: $active_revision
-  activeSequence: $active_sequence
 authentication:
   oidc:
     issuer: https://issuer.example/adopter
@@ -333,7 +266,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
-$(if [[ "$audit_file" == 1 ]]; then printf '  path: %s\n' "$temporary_root/audit/audit.jsonl"; fi)
+  path: $temporary_root/audit/audit.jsonl
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300
@@ -544,6 +477,44 @@ Path(output).write_bytes(body)
 PY
 }
 
+# Asserts the plan `bregctl plan` reports before an apply changes anything.
+assert_plan() {
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json
+import sys
+plan = json.load(open(sys.argv[1], encoding="utf-8"))
+activation, digest, resumes = sys.argv[2:]
+if plan.get("pending") is not True or plan.get("activation") != activation or plan.get("packageDigest") != digest:
+    raise SystemExit(f"plan did not report a pending {activation} activation of the package")
+if (plan.get("resumesActivationId") is not None) != (resumes == "resumes"):
+    raise SystemExit("plan did not report whether it resumes a failed activation")
+PY
+}
+
+# Asserts the activation ledger `bregctl status` reports, as space-separated
+# planKind:outcome pairs in apply order, and that the active package is the
+# last applied entry, chained from the applied entry before it.
+assert_ledger() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+status = json.load(open(sys.argv[1], encoding="utf-8"))
+active, expected = sys.argv[2], sys.argv[3].split()
+entries = sorted(status["ledger"], key=lambda entry: entry["applyOrder"])
+observed = [f"{entry['planKind']}:{entry['outcome']}" for entry in entries]
+if observed != expected:
+    raise SystemExit(f"the activation ledger recorded {observed}, expected {expected}")
+if status["activePackageDigest"] != active or status["maintenanceStatus"] != "ready":
+    raise SystemExit("status did not report the applied package as active and ready")
+applied = [entry for entry in entries if entry["outcome"] == "applied"]
+if applied[-1]["packageDigest"] != active or applied[-1]["activationId"] != status["activationId"]:
+    raise SystemExit("the active package is not the last applied ledger entry")
+for previous, current in zip(applied, applied[1:]):
+    if current["predecessorPackageDigest"] != previous["packageDigest"]:
+        raise SystemExit("an applied successor does not chain from the package it replaced")
+PY
+}
+
 if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]; then
   registry_cargo_build "$repository_root" \
     --manifest-path "$repository_root/Cargo.toml" --locked \
@@ -557,46 +528,6 @@ for binary in "$bregctl" "$breg"; do
     exit 2
   fi
 done
-current_bregctl=$bregctl
-current_breg=$breg
-breg_config_flag=--runtime-config
-if [[ "$from_release" == 1 ]]; then
-  require_command gh
-  require_command cosign
-  case "$(uname -s) $(uname -m)" in
-    "Linux x86_64") release_platform=linux-amd64 ;;
-    "Darwin arm64") release_platform=macos-arm64 ;;
-    *)
-      printf '%s\n' 'no previous-release asset matches this host for --from-release.' >&2
-      exit 2
-      ;;
-  esac
-  # rehearse-upgrade.py downloads the previous release and verifies its cosign
-  # bundle and SHA256SUMS before installing bregctl and breg.
-  python3 "$repository_root/release/scripts/rehearse-upgrade.py" --fetch-only \
-    --product breg --platform "$release_platform" \
-    --work-dir "$temporary_root/previous-release" \
-    --report "$temporary_root/previous-release.json" >/dev/null
-  from_tag=$(json_field "$temporary_root/previous-release.json" from)
-  previous_bin_dir=$(json_field "$temporary_root/previous-release.json" fromBinDir)
-  bregctl="$previous_bin_dir/bregctl"
-  breg="$previous_bin_dir/breg"
-  # The first package is authored the way the previous release accepted it.
-  if ! git -C "$repository_root" rev-parse --verify --quiet "refs/tags/$from_tag^{commit}" >/dev/null; then
-    git -C "$repository_root" fetch --quiet --no-tags --depth=1 origin "refs/tags/$from_tag:refs/tags/$from_tag"
-  fi
-  mkdir "$temporary_root/previous-fixture"
-  git -C "$repository_root" archive "$from_tag" products/breg/acceptance/asset-site-placement |
-    tar -x -C "$temporary_root/previous-fixture"
-  fixture="$temporary_root/previous-fixture/products/breg/acceptance/asset-site-placement"
-  if "$bregctl" audit --help >/dev/null 2>&1; then
-    audit_file=0
-  fi
-  if ! "$breg" --help | grep -q -- '--runtime-config'; then
-    breg_config_flag=--config
-  fi
-  printf 'first package from %s bregctl and breg; successor from this source\n' "$from_tag"
-fi
 export SSL_CERT_FILE="$adopter_tls_ca_pem_path"
 
 server_hash_before=$(sha256_file "$breg")
@@ -643,12 +574,9 @@ write_database_url_secrets "$adopter_schema_test_v2_database" schema-test-v2-run
 write_database_url_secrets "$adopter_measure_v3_database" measure-v3-runtime-url measure-v3-migration-url
 write_database_url_secrets "$adopter_schema_test_v3_database" schema-test-v3-runtime-url schema-test-v3-migration-url
 
-openssl genpkey -algorithm ED25519 -out "$temporary_root/package-signer.pem" >/dev/null 2>&1
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
-chmod 600 "$temporary_root/package-signer.pem" "$temporary_root/oidc-signer.pem"
-write_public_jwk "$temporary_root/package-signer.pem" "adopter-package-key" "$temporary_root/package-signer.public.jwk"
+chmod 600 "$temporary_root/oidc-signer.pem"
 write_public_jwk "$temporary_root/oidc-signer.pem" "adopter-oidc-key" "$temporary_root/oidc-signer.public.jwk"
-write_trust_anchor "$temporary_root/package-signer.public.jwk" "$temporary_root/package-trust-anchor.json"
 write_jwks "$temporary_root/oidc-signer.public.jwk" "$temporary_root/secrets/oidc-jwks"
 
 write_jwt "$temporary_root/oidc-signer.pem" "adopter-oidc-key" "synthetic-asset-operator" "asset-management" "$temporary_root/secrets/operator-token"
@@ -669,14 +597,8 @@ bindings:
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/planner-no-purpose-token}}
 EOF
 
-render_runtime_config "$temporary_root/runtime-test-v1.yaml" "$temporary_root/empty-package-root" \
-  "sha256:1111111111111111111111111111111111111111111111111111111111111111" 1 60000 \
-  "secret:file/schema-test-v1-runtime-url" "secret:file/schema-test-v1-migration-url" \
-  "127.0.0.1:0" "asset-site-placement-acceptance-0.1.0"
-render_runtime_config "$temporary_root/runtime-author-v1.yaml" "$temporary_root/empty-package-root" \
-  "sha256:1111111111111111111111111111111111111111111111111111111111111111" 1 60000 \
-  "secret:file/production-runtime-url" "secret:file/missing-migration-url" \
-  "127.0.0.1:0" "asset-site-placement-acceptance-0.1.0"
+render_runtime_config "$temporary_root/runtime-test-v1.yaml" "$temporary_root/empty-package-root" 60000 \
+  "secret:file/schema-test-v1-runtime-url" "secret:file/schema-test-v1-migration-url" "127.0.0.1:0"
 
 "$bregctl" check "$fixture"
 run_json "$temporary_root/production-check.json" check "$fixture" --production
@@ -705,61 +627,34 @@ for operation in ("create", "get", "list"):
         raise SystemExit("inspection events must remain operator-only in the fixture")
 PY
 
-if [[ "$from_release" == 0 ]]; then
-  (
-    cd "$temporary_root"
-    mkdir ./generated
-    for selector in openapi schemas manifest metadata sql; do
-      "$bregctl" generate "$selector" "$fixture" --output "./$selector"
-      cp -R "./$selector/." ./generated
-    done
-  )
-  python3 "$script_dir/compare-generated-tree.py" "$baseline" "$temporary_root/generated"
-fi
+(
+  cd "$temporary_root"
+  mkdir ./generated
+  for selector in openapi schemas manifest metadata sql; do
+    "$bregctl" generate "$selector" "$fixture" --output "./$selector"
+    cp -R "./$selector/." ./generated
+  done
+)
+python3 "$script_dir/compare-generated-tree.py" "$baseline" "$temporary_root/generated"
 
 run_json "$temporary_root/schema-test-v1.json" test "$fixture" \
   --runtime-config "$temporary_root/runtime-test-v1.yaml" \
   --credentials "$temporary_root/schema-test-credentials.yaml" \
-  --database-id asset-site-placement-adopter-db \
-  --signature-threshold 1 \
-  --signature-key-id adopter-package-key \
   --output "$temporary_root/schema-test-receipt-v1.json"
 assert_json_ok "$temporary_root/schema-test-v1.json" test
 schema_fingerprint_v1=$(json_field "$temporary_root/schema-test-v1.json" schemaFingerprint)
 
-run_json "$temporary_root/package-v1-awaiting.json" package "$fixture" \
-  --database-id asset-site-placement-adopter-db \
+run_json "$temporary_root/package-v1.json" package "$fixture" \
   --schema-fingerprint "$schema_fingerprint_v1" \
   --test-receipt "$temporary_root/schema-test-receipt-v1.json" \
-  --signature-threshold 1 \
-  --signature-key-id adopter-package-key \
   --output "$temporary_root/build-v1"
-assert_json_ok "$temporary_root/package-v1-awaiting.json" package
-if [[ "$(json_field "$temporary_root/package-v1-awaiting.json" state)" != "awaiting_signatures" ]]; then
-  printf '%s\n' 'initial package did not stop at the external-signature boundary.' >&2
-  exit 1
-fi
-sign_file_hex "$temporary_root/package-signer.pem" "$temporary_root/build-v1/signing-input.json" "$temporary_root/package-v1.sighex"
-write_signature_document "adopter-package-key" "$temporary_root/package-v1.sighex" "$temporary_root/package-v1-signatures.json"
-run_json "$temporary_root/package-v1-published.json" package "$fixture" \
-  --database-id asset-site-placement-adopter-db \
-  --schema-fingerprint "$schema_fingerprint_v1" \
-  --test-receipt "$temporary_root/schema-test-receipt-v1.json" \
-  --signature-threshold 1 \
-  --signature-key-id adopter-package-key \
-  --signatures "$temporary_root/package-v1-signatures.json" \
-  --output "$temporary_root/build-v1"
-assert_json_ok "$temporary_root/package-v1-published.json" package
-package_revision_v1=$(json_field "$temporary_root/package-v1-published.json" packageRevision)
+assert_json_ok "$temporary_root/package-v1.json" package
+package_digest_v1=$(json_field "$temporary_root/package-v1.json" packageDigest)
 
-render_runtime_config "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "asset-site-placement-acceptance-0.1.0"
-render_runtime_config "$temporary_root/runtime-author-v1.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
-  "secret:file/missing-migration-url" "127.0.0.1:0" \
-  "asset-site-placement-acceptance-0.1.0"
+render_runtime_config "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/build-v1/package" 60000 \
+  "secret:file/production-runtime-url" "secret:file/production-migration-url" "127.0.0.1:0"
+render_runtime_config "$temporary_root/runtime-author-v1.yaml" "$temporary_root/build-v1/package" 60000 \
+  "secret:file/production-runtime-url" "secret:file/missing-migration-url" "127.0.0.1:0"
 
 if run_json "$temporary_root/author-apply-v1.json" apply --runtime-config "$temporary_root/runtime-author-v1.yaml" --package "$temporary_root/build-v1/package" --initial; then
   printf '%s\n' 'author runtime unexpectedly applied a production package.' >&2
@@ -771,18 +666,26 @@ if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT to_regclass('registr
   exit 1
 fi
 
+run_json "$temporary_root/plan-v1.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v1/package"
+assert_json_ok "$temporary_root/plan-v1.json" plan
+assert_plan "$temporary_root/plan-v1.json" initial "$package_digest_v1" fresh
+if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT to_regclass('registry_internal.registry_state') IS NULL")" != "t" ]]; then
+  printf '%s\n' 'plan changed the production database state.' >&2
+  exit 1
+fi
 run_json "$temporary_root/apply-v1.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v1/package" --initial
 assert_json_ok "$temporary_root/apply-v1.json" apply
+run_json "$temporary_root/status-v1.json" status --runtime-config "$temporary_root/runtime-operator-v1.yaml"
+assert_json_ok "$temporary_root/status-v1.json" status
+assert_ledger "$temporary_root/status-v1.json" "$package_digest_v1" "initial:applied"
 run_json "$temporary_root/verify-v1.json" verify --runtime-config "$temporary_root/runtime-operator-v1.yaml"
 assert_json_ok "$temporary_root/verify-v1.json" verify
 
 listener=$(select_free_listener)
 server_url="http://$listener/"
-render_runtime_config "$temporary_root/runtime-server-v1.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "$listener" \
-  "asset-site-placement-acceptance-0.1.0"
-BREG_LOG=error "$breg" "$breg_config_flag" "$temporary_root/runtime-server-v1.yaml" >"$temporary_root/server-v1.log" 2>&1 &
+render_runtime_config "$temporary_root/runtime-server-v1.yaml" "$temporary_root/build-v1/package" 60000 \
+  "secret:file/production-runtime-url" "secret:file/production-migration-url" "$listener"
+BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v1.yaml" >"$temporary_root/server-v1.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
 
@@ -818,22 +721,12 @@ if not any(item.get("domainData", {}).get("assetCode") == "ASSET-PUBLIC-001" for
     raise SystemExit("authorized public data read did not include the created record")
 PY
 
-if [[ "$from_release" == 1 ]]; then
-  bregctl=$current_bregctl
-  breg=$current_breg
-  audit_file=1
-  render_runtime_config "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/build-v1/package" \
-    "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
-    "secret:file/production-migration-url" "127.0.0.1:0" \
-    "asset-site-placement-acceptance-0.1.0"
-fi
 cp -R "$fixture" "$temporary_root/project-v2"
 python3 - "$temporary_root/project-v2/registry.yaml" <<'PY'
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-source = source.replace("  sequence: 1\n", "  sequence: 2\n", 1)
 needle = """      - id: asset-class
         type: vocabulary-code
         vocabulary: asset-classification
@@ -850,30 +743,16 @@ if needle not in source:
     raise SystemExit("asset item field insertion point was not found")
 path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
 PY
-render_runtime_config "$temporary_root/runtime-test-v2.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 60000 "secret:file/schema-test-v2-runtime-url" \
-  "secret:file/schema-test-v2-migration-url" "127.0.0.1:0" \
-  "asset-site-placement-acceptance-0.1.0"
+render_runtime_config "$temporary_root/runtime-test-v2.yaml" "$temporary_root/empty-package-root" 60000 \
+  "secret:file/schema-test-v2-runtime-url" "secret:file/schema-test-v2-migration-url" "127.0.0.1:0"
 
 run_json "$temporary_root/diff-v2.json" diff "$temporary_root/project-v2" --runtime-config "$temporary_root/runtime-operator-v1.yaml"
 assert_json_ok "$temporary_root/diff-v2.json" diff
-python3 - "$temporary_root/diff-v2.json" "$from_release" <<'PY'
+python3 - "$temporary_root/diff-v2.json" <<'PY'
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 changes = report.get("changes", [])
-# A predecessor from the previous release lacks the compiler-owned reference
-# indexes, so the successor plan adds them as a lock risk beside the field.
-if sys.argv[2] == "1":
-    changes = [
-        entry
-        for entry in changes
-        if not (
-            entry.get("classification") == "lock_or_rewrite_risk"
-            and entry.get("change", {}).get("code") == "index_added"
-            and entry.get("change", {}).get("target", {}).get("memberId", "").startswith("reference:")
-        )
-    ]
 change = changes[0].get("change", {}) if len(changes) == 1 else {}
 if (
     len(changes) != 1
@@ -886,53 +765,35 @@ PY
 run_json "$temporary_root/schema-test-v2.json" test "$temporary_root/project-v2" \
   --runtime-config "$temporary_root/runtime-test-v2.yaml" \
   --credentials "$temporary_root/schema-test-credentials.yaml" \
-  --database-id asset-site-placement-adopter-db \
-  --baseline-runtime-config "$temporary_root/runtime-operator-v1.yaml" \
-  --signature-threshold 1 \
-  --signature-key-id adopter-package-key \
+  --baseline-package "$temporary_root/build-v1/package" \
   --output "$temporary_root/schema-test-receipt-v2.json"
 assert_json_ok "$temporary_root/schema-test-v2.json" test
 schema_fingerprint_v2=$(json_field "$temporary_root/schema-test-v2.json" schemaFingerprint)
 
-run_json "$temporary_root/package-v2-awaiting.json" package "$temporary_root/project-v2" \
-  --database-id asset-site-placement-adopter-db \
-  --baseline-runtime-config "$temporary_root/runtime-operator-v1.yaml" \
-  --schema-fingerprint "$schema_fingerprint_v2" \
+run_json "$temporary_root/package-v2.json" package "$temporary_root/project-v2" \
+  --baseline-package "$temporary_root/build-v1/package" \
   --test-receipt "$temporary_root/schema-test-receipt-v2.json" \
-  --signature-threshold 1 \
-  --signature-key-id adopter-package-key \
   --output "$temporary_root/build-v2"
-assert_json_ok "$temporary_root/package-v2-awaiting.json" package
-sign_file_hex "$temporary_root/package-signer.pem" "$temporary_root/build-v2/signing-input.json" "$temporary_root/package-v2.sighex"
-write_signature_document "adopter-package-key" "$temporary_root/package-v2.sighex" "$temporary_root/package-v2-signatures.json"
-run_json "$temporary_root/package-v2-published.json" package "$temporary_root/project-v2" \
-  --database-id asset-site-placement-adopter-db \
-  --baseline-runtime-config "$temporary_root/runtime-operator-v1.yaml" \
-  --schema-fingerprint "$schema_fingerprint_v2" \
-  --test-receipt "$temporary_root/schema-test-receipt-v2.json" \
-  --signature-threshold 1 \
-  --signature-key-id adopter-package-key \
-  --signatures "$temporary_root/package-v2-signatures.json" \
-  --output "$temporary_root/build-v2"
-assert_json_ok "$temporary_root/package-v2-published.json" package
-package_revision_v2=$(json_field "$temporary_root/package-v2-published.json" packageRevision)
+assert_json_ok "$temporary_root/package-v2.json" package
+package_digest_v2=$(json_field "$temporary_root/package-v2.json" packageDigest)
+run_json "$temporary_root/plan-v2.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
+assert_json_ok "$temporary_root/plan-v2.json" plan
+assert_plan "$temporary_root/plan-v2.json" successor "$package_digest_v2" fresh
 
-if [[ "$from_release" == 0 ]]; then
-  render_runtime_config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" "$temporary_root/build-v1/package" \
-    "$package_revision_v1" 1 1000 "secret:file/production-runtime-url" \
-    "secret:file/production-migration-url" "127.0.0.1:0" \
-    "asset-site-placement-acceptance-0.1.0"
-  asset_table=$(python3 - "$temporary_root/build-v1/package/inventories/physical-names.json" <<'PY'
+render_runtime_config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" "$temporary_root/build-v1/package" 1000 \
+  "secret:file/production-runtime-url" "secret:file/production-migration-url" "127.0.0.1:0"
+asset_table=$(
+  python3 - "$temporary_root/build-v1/package/inventories/physical-names.json" <<'PY'
 import json
 import sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 print(document["entities"]["asset-item"]["table"])
 PY
-  )
-  psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -q \
-    -c "BEGIN; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS SHARE MODE; SELECT pg_sleep(120);" >/dev/null &
-  lock_pid=$!
-  python3 - "$adopter_admin_url" "$adopter_production_database" "$asset_table" "$temporary_root/lock-backend-pid" <<'PY'
+)
+psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -q \
+  -c "BEGIN; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS SHARE MODE; SELECT pg_sleep(120);" >/dev/null &
+lock_pid=$!
+python3 - "$adopter_admin_url" "$adopter_production_database" "$asset_table" "$temporary_root/lock-backend-pid" <<'PY'
 import subprocess
 import sys
 import time
@@ -959,88 +820,65 @@ while time.time() < deadline:
     time.sleep(0.25)
 raise SystemExit("table lock was not acquired")
 PY
-  # Measure a lock-timeout refusal for the metadata-only review fixture below.
-  # The contender cannot mutate the table: the held AccessShareLock excludes it.
-  lock_probe_started=$SECONDS
-  if psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -q \
-    -c "BEGIN; SET LOCAL lock_timeout = '1000ms'; SET LOCAL statement_timeout = '60s'; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS EXCLUSIVE MODE; ROLLBACK;" \
-    >"$temporary_root/lock-probe.stdout" 2>"$temporary_root/lock-probe.stderr"; then
-    printf '%s\n' 'lock-timeout probe unexpectedly acquired the blocked table.' >&2
-    exit 1
-  fi
-  if [[ "$(<"$temporary_root/lock-probe.stderr")" != *55P03* ]] || (( SECONDS - lock_probe_started > 10 )); then
-    printf '%s\n' 'lock-timeout probe did not produce the expected bounded PostgreSQL refusal.' >&2
-    exit 1
-  fi
-  if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
-    printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
-    exit 1
-  fi
-  assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.failed
-  wait_ready_status "${server_url}ready" 503
-  python3 - "$adopter_admin_url" "$adopter_production_database" "$package_revision_v2" <<'PY'
-import subprocess
+# Measure a lock-timeout refusal for the metadata-only review fixture below.
+# The contender cannot mutate the table: the held AccessShareLock excludes it.
+lock_probe_started=$SECONDS
+if psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -q \
+  -c "BEGIN; SET LOCAL lock_timeout = '1000ms'; SET LOCAL statement_timeout = '60s'; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS EXCLUSIVE MODE; ROLLBACK;" \
+  >"$temporary_root/lock-probe.stdout" 2>"$temporary_root/lock-probe.stderr"; then
+  printf '%s\n' 'lock-timeout probe unexpectedly acquired the blocked table.' >&2
+  exit 1
+fi
+if [[ "$(<"$temporary_root/lock-probe.stderr")" != *55P03* ]] || ((SECONDS - lock_probe_started > 10)); then
+  printf '%s\n' 'lock-timeout probe did not produce the expected bounded PostgreSQL refusal.' >&2
+  exit 1
+fi
+if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
+  printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.failed
+wait_ready_status "${server_url}ready" 503
+# The failed activation stays durable: status names its exact target and the
+# ledger keeps the failed entry, so the operator's retry resumes it.
+run_json "$temporary_root/status-v2-failed.json" status --runtime-config "$temporary_root/runtime-operator-v1.yaml"
+assert_json_ok "$temporary_root/status-v2-failed.json" status
+python3 - "$temporary_root/status-v2-failed.json" "$package_digest_v1" "$package_digest_v2" <<'PY'
+import json
 import sys
-from urllib.parse import quote, urlsplit, urlunsplit
-admin, database, target = sys.argv[1:]
-parsed_admin = urlsplit(admin)
-database_url = urlunsplit(
-    (parsed_admin.scheme, parsed_admin.netloc, f"/{quote(database, safe='')}", parsed_admin.query, "")
-)
-state = subprocess.check_output([
-    "psql", database_url, "-Atqc",
-    "SELECT maintenance_status || ' ' || maintenance_target_revision FROM registry_internal.registry_state"
-], text=True).strip()
-if state != f"failed {target}":
-    raise SystemExit(f"unexpected maintenance state: {state}")
-ledger = subprocess.check_output([
-    "psql", database_url, "-Atqc",
-    f"SELECT outcome FROM registry_internal.registry_migrations WHERE target_package_revision = '{target}'"
-], text=True).strip()
-if ledger != "failed":
-    raise SystemExit(f"unexpected migration ledger outcome: {ledger}")
+status = json.load(open(sys.argv[1], encoding="utf-8"))
+active, target = sys.argv[2:]
+if status["maintenanceStatus"] != "failed" or status["maintenanceTargetPackageDigest"] != target:
+    raise SystemExit("status did not report the failed activation and its exact target")
+if status["activePackageDigest"] != active:
+    raise SystemExit("a failed activation replaced the active package")
+failed = [entry for entry in status["ledger"] if entry["packageDigest"] == target]
+if [entry["outcome"] for entry in failed] != ["failed"]:
+    raise SystemExit(f"the ledger did not keep one failed entry for the target: {failed}")
 PY
-  lock_backend_pid=$(<"$temporary_root/lock-backend-pid")
-  if [[ ! "$lock_backend_pid" =~ ^[0-9]+$ ]] \
-    || [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($lock_backend_pid)")" != "t" ]]; then
-    printf '%s\n' 'external migration blocker could not be released exactly.' >&2
-    exit 1
-  fi
-  wait "$lock_pid" >/dev/null 2>&1 || true
-  lock_pid=""
+lock_backend_pid=$(<"$temporary_root/lock-backend-pid")
+if [[ ! "$lock_backend_pid" =~ ^[0-9]+$ ]] ||
+  [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($lock_backend_pid)")" != "t" ]]; then
+  printf '%s\n' 'external migration blocker could not be released exactly.' >&2
+  exit 1
 fi
+wait "$lock_pid" >/dev/null 2>&1 || true
+lock_pid=""
 
-render_runtime_config "$temporary_root/runtime-operator-v2-activation.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "asset-site-placement-acceptance-0.1.0"
-successor_apply_args=()
-if [[ "$from_release" == 1 ]] && "$previous_bin_dir/bregctl" audit --help >/dev/null 2>&1; then
-  # The previous release kept audit rows in database tables the current catalog
-  # retires; the synthetic workflow has no audit trail worth archiving.
-  successor_apply_args+=(--acknowledge-retired-audit-discard)
-fi
-run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v2-activation.yaml" --package "$temporary_root/build-v2/package" "${successor_apply_args[@]}"
+run_json "$temporary_root/plan-v2-resume.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
+assert_json_ok "$temporary_root/plan-v2-resume.json" plan
+assert_plan "$temporary_root/plan-v2-resume.json" successor "$package_digest_v2" resumes
+run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
 assert_json_ok "$temporary_root/apply-v2.json" apply
 
 kill "$breg_pid" >/dev/null 2>&1 || true
 wait "$breg_pid" >/dev/null 2>&1 || true
 breg_pid=""
-render_runtime_config "$temporary_root/runtime-server-v2.yaml" "$temporary_root/build-v2/package" \
-  "$package_revision_v2" 2 60000 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "$listener" \
-  "asset-site-placement-acceptance-0.1.0"
-if [[ "$from_release" == 1 ]]; then
-  # A registry the previous release activated records no instance claim, and
-  # the runtime refuses to serve it until the operator adopts it once after
-  # its first apply on this release.
-  run_json "$temporary_root/instance-claim-v2.json" instance-claim status --runtime-config "$temporary_root/runtime-server-v2.yaml"
-  if [[ "$(json_field "$temporary_root/instance-claim-v2.json" status.claim)" == None ]]; then
-    run_json "$temporary_root/instance-claim-adopt-v2.json" instance-claim adopt \
-      --runtime-config "$temporary_root/runtime-server-v2.yaml" --acknowledge-original-retired
-    assert_json_ok "$temporary_root/instance-claim-adopt-v2.json" "instance-claim adopt"
-  fi
-fi
+render_runtime_config "$temporary_root/runtime-server-v2.yaml" "$temporary_root/build-v2/package" 60000 \
+  "secret:file/production-runtime-url" "secret:file/production-migration-url" "$listener"
+run_json "$temporary_root/status-v2.json" status --runtime-config "$temporary_root/runtime-server-v2.yaml"
+assert_json_ok "$temporary_root/status-v2.json" status
+assert_ledger "$temporary_root/status-v2.json" "$package_digest_v2" "initial:applied successor:applied"
 BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v2.yaml" >"$temporary_root/server-v2.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
@@ -1058,12 +896,6 @@ if not matching:
 if any("placementReviewNote" in item.get("domainData", {}) for item in matching):
     raise SystemExit("restricted successor field was disclosed")
 PY
-if [[ "$from_release" == 1 ]]; then
-  run_json "$temporary_root/verify-v2.json" verify --runtime-config "$temporary_root/runtime-server-v2.yaml"
-  assert_json_ok "$temporary_root/verify-v2.json" verify
-  printf 'Base Registry Engine adopter workflow from %s passed\n' "$from_tag"
-  exit 0
-fi
 
 # Add an optional field AND disclose it to one profile on the existing database.
 # This is a reviewed successor, not an automatic additive upgrade.
@@ -1072,7 +904,7 @@ python3 - "$temporary_root/project-v3/registry.yaml" <<'PY'
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
-source = path.read_text(encoding="utf-8").replace("  sequence: 2\n", "  sequence: 3\n", 1)
+source = path.read_text(encoding="utf-8")
 needle = """      - id: placement-review-note
         type: string
         required: false
@@ -1099,13 +931,9 @@ source = source.replace(needle, needle + """      - id: maintenance-note
 source = source.replace(grant, grant.replace("          - asset-class\n", "          - asset-class\n          - maintenance-note\n"), 1)
 path.write_text(source, encoding="utf-8")
 PY
-render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v2/package" \
-  "$package_revision_v2" 2 60000 "secret:file/schema-test-v3-runtime-url" \
-  "secret:file/schema-test-v3-migration-url" "127.0.0.1:0" \
-  "asset-site-placement-acceptance-0.1.0"
-reviewed_candidate_args=("$temporary_root/project-v3" --database-id asset-site-placement-adopter-db
-  --baseline-runtime-config "$temporary_root/runtime-server-v2.yaml"
-  --signature-threshold 1 --signature-key-id adopter-package-key)
+render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/empty-package-root" 60000 \
+  "secret:file/schema-test-v3-runtime-url" "secret:file/schema-test-v3-migration-url" "127.0.0.1:0"
+reviewed_candidate_args=("$temporary_root/project-v3" --baseline-package "$temporary_root/build-v2/package")
 if run_json "$temporary_root/missing-review-v3.json" test "${reviewed_candidate_args[@]}" \
   --runtime-config "$temporary_root/runtime-test-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
   --output "$temporary_root/schema-test-receipt-v3.json"; then
@@ -1118,17 +946,12 @@ run_json "$temporary_root/diff-v3.json" diff "$temporary_root/project-v3" --runt
 assert_json_ok "$temporary_root/diff-v3.json" diff
 
 # Measure the exact target catalog through the public schema-test command on a
-# separate disposable database. Only the package sequence differs. This is not
-# upgrade evidence; the in-place apply and record/disclosure checks follow below.
-cp -R "$temporary_root/project-v3" "$temporary_root/project-measure-v3"
-sed -i.bak 's/  sequence: 3/  sequence: 1/' "$temporary_root/project-measure-v3/registry.yaml"
-render_runtime_config "$temporary_root/runtime-measure-v3.yaml" "$temporary_root/empty-package-root" \
-  "sha256:1111111111111111111111111111111111111111111111111111111111111111" 1 60000 \
-  "secret:file/measure-v3-runtime-url" "secret:file/measure-v3-migration-url" \
-  "127.0.0.1:0" "asset-site-placement-acceptance-0.1.0"
-run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-measure-v3" \
+# separate disposable database: the same project without a baseline. This is
+# not upgrade evidence; the in-place apply and record/disclosure checks follow.
+render_runtime_config "$temporary_root/runtime-measure-v3.yaml" "$temporary_root/empty-package-root" 60000 \
+  "secret:file/measure-v3-runtime-url" "secret:file/measure-v3-migration-url" "127.0.0.1:0"
+run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-v3" \
   --runtime-config "$temporary_root/runtime-measure-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
-  --database-id asset-site-placement-adopter-db --signature-threshold 1 --signature-key-id adopter-package-key \
   --output "$temporary_root/measure-receipt-v3.json"
 assert_json_ok "$temporary_root/measure-v3.json" test
 schema_fingerprint_v3=$(json_field "$temporary_root/measure-v3.json" schemaFingerprint)
@@ -1136,7 +959,7 @@ postgres_major=$(psql "$adopter_production_admin_url" -Atqc 'SELECT current_sett
 
 # Test-fixture evidence only, for a metadata-only review with no authored SQL.
 # The target fingerprint and lock-timeout refusal above were measured, not guessed.
-python3 - "$temporary_root" "$package_revision_v2" "$schema_fingerprint_v2" "$schema_fingerprint_v3" "$postgres_major" <<'PY'
+python3 - "$temporary_root" "$package_digest_v2" "$schema_fingerprint_v2" "$schema_fingerprint_v3" "$postgres_major" <<'PY'
 import hashlib
 import json
 import sys
@@ -1160,7 +983,7 @@ def canonical(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
 descriptor_bytes = canonical(descriptor)
 receipt = {
-    "priorRevision": sys.argv[2], "priorSchemaFingerprint": sys.argv[3],
+    "priorPackageDigest": sys.argv[2], "priorSchemaFingerprint": sys.argv[3],
     "planSha256": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
     "sqlSha256": [], "assertionSha256": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
     "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
@@ -1197,15 +1020,13 @@ run_json "$temporary_root/schema-test-v3.json" test "${reviewed_candidate_args[@
   --output "$temporary_root/schema-test-receipt-v3.json"
 assert_json_ok "$temporary_root/schema-test-v3.json" test
 [[ "$(json_field "$temporary_root/schema-test-v3.json" schemaFingerprint)" == "$schema_fingerprint_v3" ]]
-reviewed_package_args=("${reviewed_candidate_args[@]}" --schema-fingerprint "$schema_fingerprint_v3"
-  --test-receipt "$temporary_root/schema-test-receipt-v3.json" --output "$temporary_root/build-v3")
-run_json "$temporary_root/package-v3-awaiting.json" package "${reviewed_package_args[@]}"
-assert_json_ok "$temporary_root/package-v3-awaiting.json" package
-sign_file_hex "$temporary_root/package-signer.pem" "$temporary_root/build-v3/signing-input.json" "$temporary_root/package-v3.sighex"
-write_signature_document "adopter-package-key" "$temporary_root/package-v3.sighex" "$temporary_root/package-v3-signatures.json"
-run_json "$temporary_root/package-v3-published.json" package "${reviewed_package_args[@]}" --signatures "$temporary_root/package-v3-signatures.json"
-assert_json_ok "$temporary_root/package-v3-published.json" package
-package_revision_v3=$(json_field "$temporary_root/package-v3-published.json" packageRevision)
+run_json "$temporary_root/package-v3.json" package "${reviewed_candidate_args[@]}" \
+  --test-receipt "$temporary_root/schema-test-receipt-v3.json" --output "$temporary_root/build-v3"
+assert_json_ok "$temporary_root/package-v3.json" package
+package_digest_v3=$(json_field "$temporary_root/package-v3.json" packageDigest)
+run_json "$temporary_root/plan-v3.json" plan --runtime-config "$temporary_root/runtime-server-v2.yaml" --package "$temporary_root/build-v3/package"
+assert_json_ok "$temporary_root/plan-v3.json" plan
+assert_plan "$temporary_root/plan-v3.json" successor "$package_digest_v3" fresh
 if ! run_json "$temporary_root/apply-v3.json" apply --runtime-config "$temporary_root/runtime-server-v2.yaml" --package "$temporary_root/build-v3/package"; then
   # Compare catalog metadata only. Never print runtime URLs or stored records.
   measure_admin_url=$(derive_admin_database_url "$adopter_measure_v3_database")
@@ -1219,9 +1040,11 @@ assert_json_ok "$temporary_root/apply-v3.json" apply
 kill "$breg_pid" >/dev/null 2>&1 || true
 wait "$breg_pid" >/dev/null 2>&1 || true
 breg_pid=""
-render_runtime_config "$temporary_root/runtime-server-v3.yaml" "$temporary_root/build-v3/package" \
-  "$package_revision_v3" 3 60000 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "$listener" "asset-site-placement-acceptance-0.1.0"
+render_runtime_config "$temporary_root/runtime-server-v3.yaml" "$temporary_root/build-v3/package" 60000 \
+  "secret:file/production-runtime-url" "secret:file/production-migration-url" "$listener"
+run_json "$temporary_root/status-v3.json" status --runtime-config "$temporary_root/runtime-server-v3.yaml"
+assert_json_ok "$temporary_root/status-v3.json" status
+assert_ledger "$temporary_root/status-v3.json" "$package_digest_v3" "initial:applied successor:applied successor:applied"
 BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v3.yaml" >"$temporary_root/server-v3.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200

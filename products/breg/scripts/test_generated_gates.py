@@ -235,11 +235,19 @@ class GeneratedGateTests(unittest.TestCase):
             "LOCK TABLE",
             "pg_terminate_backend",
             "apply.migration.failed",
-            "maintenance_status",
-            "maintenance_target_revision",
+            "plan --runtime-config",
+            "status --runtime-config",
+            "assert_plan",
+            "assert_ledger",
+            "resumes",
+            "maintenanceTargetPackageDigest",
+            "--baseline-package",
+            "--reviewed-migrations",
             "restricted successor field was disclosed",
         ):
             self.assertIn(marker, adopter_gate)
+        self.assertNotIn("--from-release", adopter_gate)
+        self.assertNotIn("--signature", adopter_gate)
         self.assertNotIn('"psql", admin, "-d", database', adopter_gate)
         self.assertNotIn('"scope": "registry:records"', adopter_gate)
 
