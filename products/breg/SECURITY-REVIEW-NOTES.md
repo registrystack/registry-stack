@@ -111,7 +111,9 @@ registry that predates the claim, claim itself on its first apply
   after its first apply on this release (a documented breaking step).
 - `adopt --acknowledge-original-retired` moves the claim under the migration
   role, raises its epoch, and supersedes every open import authority in one
-  transaction, then appends the audit response.
+  transaction, then appends the audit response. On a database the claim
+  already names it does the same, recorded with the event `reclaimed`: that
+  is the post-restore step after a physical restore.
 
 ### Tests
 
@@ -120,6 +122,7 @@ registry that predates the claim, claim itself on its first apply
 `crates/registry-breg/tests/postgres_import_authority.rs`:
 `the_runtime_role_cannot_rewrite_or_remove_the_instance_claim`,
 `adopting_a_restored_copy_supersedes_every_open_authority`,
+`reclaiming_after_a_physical_restore_supersedes_every_reopened_authority`,
 `installing_the_claim_beside_committed_history_leaves_the_database_to_adopt`.
 
 ### Accepted residuals
@@ -128,9 +131,9 @@ registry that predates the claim, claim itself on its first apply
   snapshots, and base backups keep the system identifier and database oid, so
   the copy matches the claim and serves without adoption, and an import
   authority closed after the backup point is open again on it. BREG-SEC-116
-  holds for logical restores only. Fencing the original stays with the
-  operator; after a physical restore, list and close every open import
-  authority before serving.
+  holds for a physical restore only once the operator runs `bregctl
+  instance-claim adopt` on it before it serves, which nothing enforces.
+  Fencing the original stays with the operator.
 
 ## Audit retention and prune
 

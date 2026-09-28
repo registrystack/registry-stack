@@ -787,6 +787,11 @@ enum InstanceClaimCommand {
     /// Report the claimed database beside the one the runtime role reaches.
     Status(InstanceClaimStatusArgs),
     /// Make the connected database, such as a restored copy, the one the claim names.
+    ///
+    /// Run it once after any restore, logical or physical, before the restored
+    /// database serves. On a database the claim already names, as after a
+    /// point-in-time recovery or a snapshot, it claims the database again and
+    /// supersedes every import authority the restore reopened.
     Adopt(InstanceClaimAdoptArgs),
 }
 
@@ -803,7 +808,8 @@ struct InstanceClaimAdoptArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Acknowledge that the database the claim names today no longer serves
+    /// Acknowledge that every other copy of this Registry, including the
+    /// database the claim names today when it is another one, no longer serves
     /// and never will again.
     ///
     /// Two databases serving one Registry become divergent writers of its
@@ -2616,7 +2622,7 @@ fn instance_claim_acknowledgement_required() -> FailureReport {
             diagnostic(
                 "instance_claim.acknowledgement.required",
                 "acknowledgeOriginalRetired",
-                "adopting moves the Registry to this database for good, and two databases serving one Registry become divergent writers of it: stop and retire the database the claim names, then pass --acknowledge-original-retired",
+                "adopting makes this database the only one that serves the Registry, and two databases serving one Registry become divergent writers of it: stop and retire every other copy, including the database the claim names when it is another one, then pass --acknowledge-original-retired",
             ),
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
@@ -2635,15 +2641,6 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             ),
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
-        ),
-        InstanceClaimCliError::Claim(InstanceClaimError::AlreadyCurrent) => (
-            diagnostic(
-                "instance_claim.already_current",
-                "instanceClaim",
-                "the instance claim already names this database; there is nothing to adopt",
-            ),
-            DiagnosticArtifact::InstanceClaim,
-            SuggestedAction::VerifyInstanceClaim,
         ),
         InstanceClaimCliError::Claim(InstanceClaimError::Unavailable) => (
             diagnostic(

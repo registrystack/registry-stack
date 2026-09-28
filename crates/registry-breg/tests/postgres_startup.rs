@@ -750,7 +750,7 @@ async fn a_database_that_withholds_its_system_identifier_still_serves_and_refuse
 
 #[cfg(feature = "tooling")]
 async fn restored_copy_journey(withhold_system_identifier: bool) {
-    use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+    use registry_breg::instance_claim::InstanceClaimService;
     use registry_breg::postgres::RegistryLockKey;
     use registry_platform_audit::AuditProfile;
 
@@ -878,11 +878,6 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
         "the claim records a system identifier exactly when it was readable"
     );
     assert_eq!(original.claim.map(|claim| claim.epoch), Some(1));
-    assert_eq!(
-        claims.adopt().await.err(),
-        Some(InstanceClaimError::AlreadyCurrent),
-        "the database the claim names has nothing to adopt"
-    );
 
     // A logical restore keeps every row, so the copy holds the claim the
     // original recorded while the database it lands in has another oid.

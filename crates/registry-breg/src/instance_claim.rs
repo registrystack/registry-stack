@@ -38,7 +38,9 @@
 //! A physical copy (a base backup, point-in-time recovery, a storage snapshot,
 //! or a promoted replica) keeps the system identifier and the database oid,
 //! so the claim cannot tell it from its original. Fencing the original before
-//! a physical copy serves remains the operator's work.
+//! a physical copy serves remains the operator's work. Adopting a database the
+//! claim already names claims it again, which supersedes every import
+//! authority the restore reopened.
 
 use serde::Serialize;
 use tokio_postgres::GenericClient;
@@ -237,8 +239,6 @@ mod operator {
     /// Value-free refusal of an instance claim operation.
     #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
     pub enum InstanceClaimError {
-        #[error("the instance claim already names this database")]
-        AlreadyCurrent,
         #[error("the instance claim is unavailable")]
         Unavailable,
     }
@@ -412,6 +412,11 @@ mod operator {
         /// replaced and the authorities superseded are appended. An adoption
         /// that ends without a response, as after a commit error, writes the
         /// unfinished outcome.
+        ///
+        /// A claim that already names this database is claimed again the same
+        /// way. That is the step after a physical restore, which keeps the
+        /// system identifier and the oid and so reopens every authority
+        /// closed after the backup point.
         pub async fn adopt(&self) -> Result<InstanceClaimAdoption, InstanceClaimError> {
             if !crate::audit::profile_is_keyed(self.audit.profile()) {
                 return Err(InstanceClaimError::Unavailable);
@@ -445,12 +450,7 @@ mod operator {
             let adopted = match self.adopt_in_transaction(&mut client, &mut pending).await {
                 Ok(adopted) => adopted,
                 Err(error) => {
-                    let outcome = if error == InstanceClaimError::AlreadyCurrent {
-                        "refused"
-                    } else {
-                        "failed"
-                    };
-                    respond_refused(&mut attempt, &request, outcome).await;
+                    respond_refused(&mut attempt, &request, "failed").await;
                     return Err(error);
                 }
             };
@@ -611,9 +611,13 @@ mod operator {
         package_revision: &str,
     ) -> Result<(InstanceClaimAdoption, Value), InstanceClaimError> {
         let status = read_status(transaction, true).await?;
-        if status.matches {
-            return Err(InstanceClaimError::AlreadyCurrent);
-        }
+        // A claim that already names this database is a re-claim after a
+        // physical restore, which keeps the system identifier and the oid.
+        let event = if status.matches {
+            "reclaimed"
+        } else {
+            "adopted"
+        };
         let row = transaction
             .query_one(
                 "INSERT INTO registry_internal.registry_instance_claim
@@ -637,7 +641,7 @@ mod operator {
         let record = json!({
             "phase": "terminal",
             "outcome": "committed",
-            "event": "adopted",
+            "event": event,
             "operationId": AUDIT_OPERATION_ID,
             "packageRevision": package_revision,
             "previous": status.claim.as_ref().map(audit_claim),
