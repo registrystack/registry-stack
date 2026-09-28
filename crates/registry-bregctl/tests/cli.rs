@@ -5790,6 +5790,15 @@ fn usage_errors_never_repeat_a_rejected_operator_reference() {
             "--operator-reference",
             option_shaped.as_str(),
         ],
+        // An unquoted reference whose second word is shaped like a long option.
+        vec![
+            "apply",
+            "--package",
+            "/package",
+            "--operator-reference",
+            "change",
+            option_shaped.as_str(),
+        ],
         // An unquoted reference of two words leaves the second one unexpected.
         vec![
             "apply",
