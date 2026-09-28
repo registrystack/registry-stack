@@ -2813,11 +2813,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "dee8c52d982ca4944035f8639537acfb6b3f5923c8b1abb55e7989e5e70f99ae"
+        "sha256": "d0800b2abf13736c2836ffe54b7e94b4d3c5605d178e6b7e28d4b239937c32e3"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "705cd67f51b7ff738541527afe1a63bed95eef12f7b910b76fb0ee6885c74648",
+        "sha256": "5dcd8e3823c7ee8ecd6c38ba54dce5d8c69f8aa39ce00ba20b8fa18ea2541f13",
         "mediaType": "application/schema+json"
       }
     },
@@ -2921,11 +2921,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "868c84dec7bd0d5cbef44ac42e29a35a0fbc313dd92f5e12ff76e339a04a5dc0"
+        "sha256": "32cfad59de573591d03d3d99931a4d2f817a5083f3967d109891a63134c3063c"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "5f14f7c436ff2ded7862e5da54d5466d25703d57bbaf87d96d7d423c7982d321",
+        "sha256": "cd8d9a96ed1067f14b6f76f50281dea19461142b81eb8c9508b6537447d93a46",
         "mediaType": "application/schema+json"
       }
     },
