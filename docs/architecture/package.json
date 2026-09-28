@@ -11,6 +11,6 @@
     "build": "likec4 build --output ./dist --base ./ --title \"Registry Stack architecture\""
   },
   "devDependencies": {
-    "likec4": "1.59.3"
+    "likec4": "1.59.4"
   }
 }
