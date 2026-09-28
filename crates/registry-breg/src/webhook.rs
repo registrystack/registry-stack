@@ -126,7 +126,7 @@ impl WebhookOperatorService {
             .map_err(|_| WebhookOperatorError::Unavailable)?;
         let handlers = Arc::new(HookHandlerRegistry::new(
             startup.package().registry(),
-            &startup.expected_identity().package_revision,
+            &startup.expected_identity().activation_id,
         ));
         let delivery = WebhookDeliveryService::new(
             pool,
@@ -134,6 +134,7 @@ impl WebhookOperatorService {
             handlers,
             Arc::new(startup.package().registry().clone()),
             startup.expected_identity().clone(),
+            config.identity().instance_id(),
             startup.lock_key(),
             config.operational_timeouts().record_lock,
             audit,
@@ -178,6 +179,7 @@ struct BregDeliverySeams {
     handlers: Arc<HookHandlerRegistry>,
     registry: Arc<CompiledRegistry>,
     expected: ExpectedRegistryIdentity,
+    instance_id: String,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit: RegistryAudit,
@@ -190,6 +192,7 @@ impl BregDeliverySeams {
             self.lock_key,
             self.lock_timeout,
             self.expected.clone(),
+            &self.instance_id,
             self.audit.clone(),
             Some(Arc::clone(&self.destinations)),
         );
@@ -359,9 +362,8 @@ impl DeliverySeams for BregDeliverySeams {
             .map_err(|_| DeliveryError::Unavailable)?;
         let state = transaction
             .query_opt(
-                "SELECT package_id, environment, instance_id, database_id,
-                        active_package_revision, schema_fingerprint, package_sequence,
-                        maintenance_status
+                "SELECT package_id, database_id, active_package_digest,
+                        active_activation_id::text, schema_fingerprint, maintenance_status
                  FROM registry_internal.registry_state
                  WHERE singleton",
                 &[],
@@ -369,20 +371,17 @@ impl DeliverySeams for BregDeliverySeams {
             .await
             .map_err(|_| DeliveryError::Unavailable)?
             .ok_or(DeliveryError::Unavailable)?;
-        let ready = state.try_get::<_, String>(7).ok().as_deref() == Some("ready")
+        let ready = state.try_get::<_, String>(5).ok().as_deref() == Some("ready")
             && state.try_get::<_, String>(0).ok().as_deref()
                 == Some(self.expected.package_id.as_str())
             && state.try_get::<_, String>(1).ok().as_deref()
-                == Some(self.expected.environment.as_str())
-            && state.try_get::<_, String>(2).ok().as_deref()
-                == Some(self.expected.instance_id.as_str())
-            && state.try_get::<_, String>(3).ok().as_deref()
                 == Some(self.expected.database_id.as_str())
+            && state.try_get::<_, String>(2).ok().as_deref()
+                == Some(self.expected.package_digest.as_str())
+            && state.try_get::<_, String>(3).ok().as_deref()
+                == Some(self.expected.activation_id.as_str())
             && state.try_get::<_, String>(4).ok().as_deref()
-                == Some(self.expected.package_revision.as_str())
-            && state.try_get::<_, String>(5).ok().as_deref()
-                == Some(self.expected.schema_fingerprint.as_str())
-            && state.try_get::<_, i64>(6).ok() == Some(self.expected.package_sequence);
+                == Some(self.expected.schema_fingerprint.as_str());
         if !ready {
             return Err(DeliveryError::Unavailable);
         }
@@ -745,6 +744,7 @@ impl WebhookDeliveryService {
         handlers: Arc<HookHandlerRegistry>,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
+        instance_id: &str,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         audit: RegistryAudit,
@@ -755,6 +755,7 @@ impl WebhookDeliveryService {
             handlers,
             registry,
             expected,
+            instance_id,
             lock_key,
             lock_timeout,
             audit,
@@ -772,6 +773,7 @@ impl WebhookDeliveryService {
         handlers: Arc<HookHandlerRegistry>,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
+        instance_id: &str,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         audit: RegistryAudit,
@@ -780,7 +782,7 @@ impl WebhookDeliveryService {
         let config = DeliveryConfig {
             schema: DELIVERY_SCHEMA.to_owned(),
             idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
-            delivery_source: delivery_source(&expected.package_id, &expected.instance_id),
+            delivery_source: delivery_source(&expected.package_id, instance_id),
         };
         let seams = BregDeliverySeams {
             pool,
@@ -788,6 +790,7 @@ impl WebhookDeliveryService {
             handlers,
             registry,
             expected,
+            instance_id: instance_id.to_owned(),
             lock_key,
             lock_timeout,
             audit,

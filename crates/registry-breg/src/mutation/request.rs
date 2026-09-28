@@ -197,7 +197,7 @@ impl MutationCoordinator {
                 method: route.method,
                 route: &route.path,
                 target_record: Some(input.record_id),
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &input.response_fields,
                 canonical_request_digest: Sha256::digest(
                     canonicalize_json(&action_binding_json(input)?)
@@ -237,7 +237,7 @@ impl MutationCoordinator {
             request_id,
             header.get::<_, i64>(0),
             &actor,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
         )
         .map_err(|_| MutationError::PreconditionFailed)?;
         transaction
@@ -426,7 +426,7 @@ impl MutationCoordinator {
                 method: route.method,
                 route: &route.path,
                 target_record: Some(input.record_id),
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &input.response_fields,
                 canonical_request_digest: Sha256::digest(
                     canonicalize_json(&action_binding_json(input)?)
@@ -471,7 +471,7 @@ impl MutationCoordinator {
             request_id,
             header.get::<_, i64>(0),
             &actor,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
         )
         .map_err(|_| MutationError::PreconditionFailed)?;
         transaction
@@ -511,7 +511,7 @@ impl MutationCoordinator {
         let etag = request_action_etag(
             self.audit.profile(),
             claims,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             route,
             input.record_id,
             current.record_revision,
@@ -582,7 +582,7 @@ impl MutationCoordinator {
                     compiled,
                     record_id,
                     Some(guard.expected_revision),
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     &actor,
                 )?,
             )
@@ -852,7 +852,7 @@ impl MutationCoordinator {
                 method: route.method,
                 route: &route.path,
                 target_record: Some(input.record_id),
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &input.response_fields,
                 canonical_request_digest: digest,
                 key_domain: IdempotencyKeyDomain::Caller,
@@ -893,7 +893,7 @@ impl MutationCoordinator {
             request_id,
             header.get::<_, i64>(0),
             &actor_reference,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
         )
         .map_err(|_| MutationError::PreconditionFailed)?;
         transaction
@@ -923,7 +923,7 @@ impl MutationCoordinator {
         let etag = request_action_etag(
             self.audit.profile(),
             claims,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             route,
             input.record_id,
             current.record_revision,
@@ -1021,7 +1021,7 @@ impl MutationCoordinator {
                 method: route.method,
                 route: &route.path,
                 target_record: Some(input.record_id),
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &input.response_fields,
                 canonical_request_digest: digest,
                 key_domain: IdempotencyKeyDomain::Caller,
@@ -1060,7 +1060,7 @@ impl MutationCoordinator {
             request_id,
             header.get::<_, i64>(0),
             &actor_reference,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
         )
         .map_err(|_| MutationError::PreconditionFailed)?;
         transaction
@@ -1092,7 +1092,7 @@ impl MutationCoordinator {
                 let preview_etag = request_action_etag(
                     self.audit.profile(),
                     claims,
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     route,
                     input.record_id,
                     preview.record_revision,
@@ -1229,7 +1229,7 @@ impl MutationCoordinator {
                 let precondition = request_action_etag_for_revisions(
                     self.audit.profile(),
                     claims,
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     route,
                     input.record_id,
                     current
@@ -1299,7 +1299,7 @@ impl MutationCoordinator {
                 let metadata = StoredResultMetadata::Application {
                     record_reference: record_reference(
                         self.audit.profile(),
-                        &self.expected.package_revision,
+                        &self.expected.activation_id,
                         input.record_id,
                     )?,
                     record_revision: current.record_revision,
@@ -1344,7 +1344,7 @@ impl MutationCoordinator {
         let etag = request_action_etag(
             self.audit.profile(),
             claims,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             route,
             input.record_id,
             current.record_revision,
@@ -1495,7 +1495,7 @@ impl MutationCoordinator {
         current = advance_request_revision(transaction.transaction(), entity, &current).await?;
         let request_reference = record_reference(
             self.audit.profile(),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             input.record_id,
         )?;
         fault.fail_at(MutationFaultPoint::BeforeRevision)?;
@@ -1646,7 +1646,8 @@ impl MutationCoordinator {
                 effect_digest: next
                     .current_proposal()
                     .map(|proposal| proposal.effect_digest().as_str()),
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
+                package_digest: &self.expected.package_digest,
                 schema_fingerprint: &self.expected.schema_fingerprint,
                 request_values: &current.data,
                 payload_retention: self
@@ -1679,7 +1680,7 @@ impl MutationCoordinator {
         let committed = allocate_revision_commit(
             transaction.transaction(),
             CommitAllocation {
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
                     request_reference: &binding.binding_reference,
@@ -1815,7 +1816,7 @@ impl MutationCoordinator {
                 effect,
                 *target_record_id,
                 None,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 actor_reference,
             )?;
             let context =
@@ -1857,7 +1858,7 @@ impl MutationCoordinator {
                 guard,
                 record_id,
                 None,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 actor_reference,
             )?;
             let context = ChangeRequestTargetContext::for_preparation(registry, claims, binding)
@@ -1888,7 +1889,7 @@ impl MutationCoordinator {
             &submission.intake,
             current.record_uuid,
             current.record_revision,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             resolved,
             bases,
             guard_bases,
@@ -2154,7 +2155,7 @@ impl MutationCoordinator {
                 effect,
                 uuid,
                 target.expected_revision,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 actor,
             )?;
             let context =
@@ -2254,7 +2255,7 @@ impl MutationCoordinator {
                 compiled,
                 record_id,
                 Some(guard.expected_revision),
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 actor,
             )?;
             ChangeRequestTargetContext::for_application(
@@ -2332,7 +2333,7 @@ impl MutationCoordinator {
                     compiled,
                     record_id,
                     Some(guard.expected_revision),
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     actor,
                 )?;
                 let context = ChangeRequestTargetContext::for_application(
@@ -2554,8 +2555,7 @@ impl MutationCoordinator {
         })?;
         current.predecessor_revision = target.expected_revision;
         current.before_data = target.before.clone();
-        let reference =
-            record_reference(self.audit.profile(), &self.expected.package_revision, &id)?;
+        let reference = record_reference(self.audit.profile(), &self.expected.activation_id, &id)?;
         // The target journal describes the canonical entity operation. The
         // protected request-results relation records its request provenance.
         let target_operation_id =
@@ -2570,7 +2570,7 @@ impl MutationCoordinator {
                 record_revision: current.record_revision,
                 predecessor_revision: target.expected_revision,
                 lifecycle: "active",
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 operation_id: &target_operation_id,
                 mutation_kind: mutation_kind(target.operation),
                 principal_reference: &binding.principal_reference,
@@ -2596,7 +2596,8 @@ impl MutationCoordinator {
                 record_id: &id,
                 record_reference: &reference,
                 record_revision: current.record_revision,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
+                package_digest: &self.expected.package_digest,
                 schema_fingerprint: &self.expected.schema_fingerprint,
                 before: target.before.as_ref(),
                 after: Some(&current.data),
@@ -2635,7 +2636,7 @@ impl MutationCoordinator {
                 record_revision: current.record_revision,
                 predecessor_revision: current.predecessor_revision,
                 lifecycle: "active",
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 operation_id: &route.id,
                 mutation_kind: "patch",
                 principal_reference: &binding.principal_reference,
@@ -2663,7 +2664,7 @@ impl MutationCoordinator {
             operation_id: route.id.clone(),
             entity_id: Some(input.entity_id.to_owned()),
             action_id: None,
-            package_revision: self.expected.package_revision.clone(),
+            package_revision: self.expected.activation_id.clone(),
             selected_access_profile: claims.access_profile().to_owned(),
             purpose_present: claims.purpose().is_some(),
             principal_reference: Some(binding.principal_reference.clone()),

@@ -207,17 +207,15 @@ impl AttachmentVerificationWorker {
         let ready: bool = transaction
             .query_one(
                 "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
-             AND package_id=$1 AND environment=$2 AND instance_id=$3 AND database_id=$4
-             AND active_package_revision=$5 AND schema_fingerprint=$6 AND package_sequence=$7
+             AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
+             AND active_activation_id::text=$4 AND schema_fingerprint=$5
              AND maintenance_status='ready')",
                 &[
                     &expected.package_id,
-                    &expected.environment,
-                    &expected.instance_id,
                     &expected.database_id,
-                    &expected.package_revision,
+                    &expected.package_digest,
+                    &expected.activation_id,
                     &expected.schema_fingerprint,
-                    &expected.package_sequence,
                 ],
             )
             .await
@@ -230,7 +228,7 @@ impl AttachmentVerificationWorker {
             .execute(
                 "SELECT set_config('registry.active_package_revision', $1, true),
                     set_config('registry.principal', 'breg:attachment-verifier', true)",
-                &[&expected.package_revision],
+                &[&expected.activation_id],
             )
             .await
             .map_err(unavailable)?;
@@ -284,13 +282,13 @@ impl AttachmentVerificationWorker {
         let reference = hasher
             .audit_reference_hash(
                 "breg-attachment-verification-v1",
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &format!("{}:{}:{}", job.sha256, job.content_type, job.lease_id),
             )
             .map_err(unavailable)?;
         let record = json!({
             "kind": "attachmentVerification", "phase": phase, "outcome": outcome,
-            "packageRevision": self.expected.package_revision,
+            "packageRevision": self.expected.activation_id,
             "actor": "breg:attachment-verifier", "verificationReference": reference,
         });
         Ok((reference, record))

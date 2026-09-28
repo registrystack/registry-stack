@@ -3454,7 +3454,9 @@ async fn listing_runs_filters_by_the_effective_status_after_a_package_change() {
         &open_plan,
         "operator",
     );
-    open_body["packageRevision"] = json!("package-ingestion-2");
+    open_body["packageRevision"] = json!(registry_breg::postgres::test_package_digest(
+        "package-ingestion-2"
+    ));
     let created = successor
         .post_json("/v1/records/widgets/ingestion-runs", &claims, open_body)
         .await;
@@ -3813,11 +3815,8 @@ impl IngestionHarness {
             &registry,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: "ingestion-instance",
                 database_id: "ingestion-database",
-                package_revision: PACKAGE_REVISION,
-                package_sequence: 1,
+                label: PACKAGE_REVISION,
             },
         )
         .await
@@ -3832,7 +3831,7 @@ impl IngestionHarness {
                     FieldEncryptionService::activate(
                         &FieldEncryptionProvider::LocalFile { dek_ref },
                         registry.registry_id(),
-                        PACKAGE_REVISION,
+                        &identity.activation_id,
                         &secrets,
                         &migration,
                     )
@@ -3932,11 +3931,11 @@ impl IngestionHarness {
     async fn restart_serving(
         &self,
         registry: Arc<registry_breg::CompiledRegistry>,
-        package_revision: &str,
+        label: &str,
     ) -> Surface {
         let successor = registry_breg::postgres::ExpectedRegistryIdentity {
-            package_revision: package_revision.to_owned(),
-            package_sequence: 2,
+            package_digest: registry_breg::postgres::test_package_digest(label),
+            activation_id: registry_breg::postgres::test_activation_id(label),
             ..self.identity.clone()
         };
         let changed = self
@@ -3944,13 +3943,13 @@ impl IngestionHarness {
             .admin
             .execute(
                 "UPDATE registry_internal.registry_state
-                    SET active_package_revision = $1, schema_fingerprint = $2,
-                        package_sequence = $3
+                    SET active_package_digest = $1, schema_fingerprint = $2,
+                        active_activation_id = $3::text::uuid
                   WHERE singleton",
                 &[
-                    &successor.package_revision,
+                    &successor.package_digest,
                     &successor.schema_fingerprint,
-                    &successor.package_sequence,
+                    &successor.activation_id,
                 ],
             )
             .await
@@ -4084,6 +4083,7 @@ fn build_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "ingestion-instance",
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -4100,7 +4100,7 @@ fn build_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             records,
@@ -4564,7 +4564,7 @@ fn run_body_under(
     json!({
         "operation": operation,
         "profileId": profile_id,
-        "packageRevision": PACKAGE_REVISION,
+        "packageRevision": registry_breg::postgres::test_package_digest(PACKAGE_REVISION),
         "schemaFingerprint": schema_fingerprint,
         "inputDigest": plan.input_digest,
         "inputLength": plan.input_length,

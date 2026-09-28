@@ -125,7 +125,7 @@ pub(crate) fn run(
             },
         ))
         .map_err(HistoryErasureLifecycleError::Erasure)?;
-    Ok(outcome_report(expected.package_revision, outcome))
+    Ok(outcome_report(expected.package_digest, outcome))
 }
 
 fn outcome_report(

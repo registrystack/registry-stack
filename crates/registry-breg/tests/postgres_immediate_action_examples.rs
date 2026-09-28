@@ -231,11 +231,8 @@ impl RunningFixture {
             &registry,
             RegistryStateTestIdentity {
                 package_id: &package.package.manifest().package_id,
-                environment: ENVIRONMENT,
-                instance_id: INSTANCE_ID,
                 database_id: &package.database_id,
-                package_revision: package.package.package_digest(),
-                package_sequence: 1,
+                label: package.package.package_digest(),
             },
         )
         .await

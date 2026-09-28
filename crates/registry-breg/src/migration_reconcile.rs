@@ -2,7 +2,7 @@
 
 //! Reconciliation of a Registry left pinned by a failed package activation.
 //!
-//! A failed apply leaves `maintenance_target_revision` pinned, which refuses
+//! A failed apply leaves `maintenance_target_package_digest` pinned, which refuses
 //! every other successor until that exact target completes. Fixing forward is
 //! the ordinary answer, and this path exists for the two cases where it is not
 //! available: an apply whose durable steps all succeeded but whose activation
@@ -33,13 +33,13 @@ use crate::history_maintenance::profile_is_keyed;
 
 use crate::migration::{
     compiler_statement_checksums, package_ledger_entry, target_package_identity,
-    verify_successor_package_binding, ActivationDeployment, MigrationError,
+    verify_successor_package_binding, ApplyRoles, MigrationError,
 };
 use crate::model::CompiledRegistry;
 use crate::package::VerifiedPackage;
 use crate::postgres::{
     ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceSnapshot,
-    MaintenanceTransition, MigrationLedgerEntry, MigrationPlanKind, PostgresKernelError,
+    MaintenanceTransition, MigrationKind, MigrationLedgerEntry, PostgresKernelError,
     RegistryLockKey, ReviewedMigrationProgress, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
@@ -48,7 +48,7 @@ const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "migration-reconcile-maintenance";
 /// The audit schema of the reconciliation entry.
-pub const MIGRATION_RECONCILE_AUDIT_SCHEMA: &str = "breg-migration-reconcile-audit/v2";
+pub const MIGRATION_RECONCILE_AUDIT_SCHEMA: &str = "breg-migration-reconcile-audit/v3";
 
 /// Why a pinned target can be neither completed nor abandoned. Every reason is
 /// a fixed sentence: no database or package value crosses this boundary.
@@ -223,26 +223,20 @@ pub async fn reconcile_failed_migration(
     request: ReconcileRequest<'_>,
 ) -> Result<ReconcileReport, ReconcileError> {
     validate_request(&request)?;
-    // The failed apply targeted the deployment the database records, so the
-    // recovery binds the target to that same deployment.
-    let deployment = ActivationDeployment::new(
-        &request.current.environment,
-        &request.current.instance_id,
-        &request.current.database_id,
-    );
-    verify_successor_package_binding(request.target_package, deployment, request.current)?;
-    let target =
-        target_package_identity(request.target_package, deployment, Some(request.current))?;
+    // The failed apply targeted the database the Registry records, so the
+    // recovery binds the target to that same database.
+    let database_id = request.current.database_id.as_str();
+    verify_successor_package_binding(request.target_package, database_id, request.current)?;
     let checksums =
         compiler_statement_checksums(&request.target_package.manifest().migration_plan.statements);
     let ledger = package_ledger_entry(
         request.target_package,
         Some(request.current),
-        &target,
+        ApplyRoles::new(request.migration_role, request.runtime_role),
         &checksums,
     )?;
 
-    let lock_key = RegistryLockKey::derive(&target.package_id)?;
+    let lock_key = RegistryLockKey::derive(&request.target_package.manifest().package_id)?;
     // A live apply holds this lock for its whole run. Refusing to wait past
     // the configured lock timeout is what distinguishes an apply in progress
     // from a Registry that is genuinely stuck.
@@ -262,11 +256,11 @@ pub async fn reconcile_failed_migration(
                 maintenance_status: None,
                 maintenance_target_revision: None,
                 active_package_revision: None,
-                target_package_revision: target.package_revision,
+                target_package_revision: ledger.package_digest.clone(),
                 target_catalog_finding: None,
                 active_catalog_finding: None,
                 unresolvable_reason: None,
-                plan_kind: ledger.plan_kind.as_str(),
+                plan_kind: ledger.migration_kind.as_str(),
                 migration_step_count: ledger.steps.len(),
                 reviewed_plan_closed: None,
                 durable_step_progress: None,
@@ -276,7 +270,7 @@ pub async fn reconcile_failed_migration(
         Err(error) => return Err(error.into()),
     };
 
-    let result = reconcile_under_lock(&mut connection, &request, &target, &ledger).await;
+    let result = reconcile_under_lock(&mut connection, &request, database_id, ledger).await;
     let released = connection.release().await;
     let report = result?;
     released?;
@@ -286,27 +280,27 @@ pub async fn reconcile_failed_migration(
 async fn reconcile_under_lock(
     connection: &mut VerifiedPackageApplyConnection,
     request: &ReconcileRequest<'_>,
-    target: &ExpectedRegistryIdentity,
-    ledger: &MigrationLedgerEntry,
+    database_id: &str,
+    mut ledger: MigrationLedgerEntry,
 ) -> Result<ReconcileReport, ReconcileError> {
     let snapshot = connection.maintenance_snapshot().await?;
     let mut report = ReconcileReport {
         outcome: ReconcileOutcome::Unresolvable,
         maintenance_status: Some(snapshot.maintenance_status.clone()),
-        maintenance_target_revision: snapshot.maintenance_target_revision.clone(),
-        active_package_revision: Some(snapshot.identity.package_revision.clone()),
-        target_package_revision: target.package_revision.clone(),
+        maintenance_target_revision: snapshot.maintenance_target_package_digest.clone(),
+        active_package_revision: Some(snapshot.identity.package_digest.clone()),
+        target_package_revision: ledger.package_digest.clone(),
         target_catalog_finding: None,
         active_catalog_finding: None,
         unresolvable_reason: None,
-        plan_kind: ledger.plan_kind.as_str(),
+        plan_kind: ledger.migration_kind.as_str(),
         migration_step_count: ledger.steps.len(),
         reviewed_plan_closed: None,
         durable_step_progress: None,
         executed: false,
     };
 
-    if snapshot.maintenance_target_revision.is_none() {
+    if snapshot.maintenance_target_package_digest.is_none() {
         report.outcome = ReconcileOutcome::Ready;
         return Ok(report);
     }
@@ -314,10 +308,23 @@ async fn reconcile_under_lock(
         report.unresolvable_reason = Some(UNRESOLVABLE_IDENTITY_DIFFERS);
         return Ok(report);
     }
-    if snapshot.maintenance_target_revision.as_deref() != Some(target.package_revision.as_str()) {
+    if snapshot.maintenance_target_package_digest.as_deref() != Some(ledger.package_digest.as_str())
+    {
         report.unresolvable_reason = Some(UNRESOLVABLE_TARGET_DIFFERS);
         return Ok(report);
     }
+    // The pinned target is the activation the failed apply recorded; one the
+    // ledger does not hold open is not the target that apply pinned.
+    let Some(activation_id) = connection
+        .in_flight_activation(&ledger.package_digest)
+        .await?
+    else {
+        report.unresolvable_reason = Some(UNRESOLVABLE_TARGET_DIFFERS);
+        return Ok(report);
+    };
+    ledger.activation_id = activation_id;
+    let ledger = &ledger;
+    let target = &target_package_identity(request.target_package, database_id, activation_id);
 
     let target_catalog = ExpectedManagedCatalog::compiled(request.target_package.registry());
     let active_catalog = ExpectedManagedCatalog::compiled(request.current_registry);
@@ -338,7 +345,7 @@ async fn reconcile_under_lock(
         )
         .await?;
 
-    let progress = if ledger.plan_kind == MigrationPlanKind::Reviewed {
+    let progress = if ledger.migration_kind == MigrationKind::Reviewed {
         let progress = connection.reviewed_migration_progress(ledger).await?;
         report.reviewed_plan_closed = Some(progress.closed);
         report.durable_step_progress = Some(progress.durable_step_progress);
@@ -387,7 +394,7 @@ async fn reconcile_under_lock(
             let transition = connection
                 .revert_failed_package(
                     request.current,
-                    &target.package_revision,
+                    &target.package_digest,
                     MaintenanceTransition {
                         ledger,
                         expected_catalog: &active_catalog,
@@ -481,7 +488,7 @@ async fn transition_landed(
     landed: impl FnOnce(&MaintenanceSnapshot) -> bool,
 ) -> Option<bool> {
     let snapshot = connection.maintenance_snapshot().await.ok()?;
-    Some(snapshot.maintenance_target_revision.is_none() && landed(&snapshot))
+    Some(snapshot.maintenance_target_package_digest.is_none() && landed(&snapshot))
 }
 
 /// Answer the request entry of a transition that did not land: `failed`
@@ -525,10 +532,10 @@ fn outcome_record(
         "outcome": outcome,
         "operationId": AUDIT_OPERATION_ID,
         "action": action,
-        "packageRevision": request.current.package_revision,
-        "targetPackageRevision": target.package_revision,
-        "packageSequence": target.package_sequence,
-        "planKind": ledger.plan_kind.as_str(),
+        "packageDigest": request.current.package_digest,
+        "targetPackageDigest": target.package_digest,
+        "activationId": target.activation_id,
+        "planKind": ledger.migration_kind.as_str(),
         "operatorReference": operator_reference(request)?,
     }))
 }
@@ -557,16 +564,16 @@ fn request_entry(
 ) -> Result<AuditEntry, ReconcileError> {
     Ok(AuditEntry::request(
         MIGRATION_RECONCILE_AUDIT_SCHEMA,
-        target.package_revision.clone(),
+        target.activation_id.clone(),
         json!({
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
             "action": action,
-            "packageRevision": request.current.package_revision,
-            "targetPackageRevision": target.package_revision,
-            "packageSequence": target.package_sequence,
-            "planKind": ledger.plan_kind.as_str(),
+            "packageDigest": request.current.package_digest,
+            "targetPackageDigest": target.package_digest,
+            "activationId": target.activation_id,
+            "planKind": ledger.migration_kind.as_str(),
             "operatorReference": operator_reference(request)?,
         }),
     ))
@@ -574,7 +581,7 @@ fn request_entry(
 
 /// Records identities, the plan shape, and counts. The operator's reference is
 /// a keyed hash, and no catalog, package, or record value is written. The
-/// entry is correlated by the target package revision it resolves.
+/// entry is correlated by the target activation it resolves.
 fn audit_entry(
     request: &ReconcileRequest<'_>,
     target: &ExpectedRegistryIdentity,
@@ -585,16 +592,16 @@ fn audit_entry(
     let operator_reference = operator_reference(request)?;
     Ok(AuditEntry::response(
         MIGRATION_RECONCILE_AUDIT_SCHEMA,
-        target.package_revision.clone(),
+        target.activation_id.clone(),
         json!({
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
             "action": action,
-            "packageRevision": request.current.package_revision,
-            "targetPackageRevision": target.package_revision,
-            "packageSequence": target.package_sequence,
-            "planKind": ledger.plan_kind.as_str(),
+            "packageDigest": request.current.package_digest,
+            "targetPackageDigest": target.package_digest,
+            "activationId": target.activation_id,
+            "planKind": ledger.migration_kind.as_str(),
             "operatorReference": operator_reference,
             "migrationStepCount": ledger.steps.len(),
             "reviewedPlanClosed": report.reviewed_plan_closed,
@@ -612,7 +619,7 @@ fn operator_reference(request: &ReconcileRequest<'_>) -> Result<String, Reconcil
         .key_hasher()
         .audit_reference_hash(
             "breg-migration-reconcile-operator-v1",
-            &request.current.package_revision,
+            &request.current.activation_id,
             request.operator_reference,
         )
         .map_err(|_| ReconcileError::InvalidInput)
@@ -638,15 +645,13 @@ mod tests {
         MaintenanceSnapshot {
             identity: ExpectedRegistryIdentity {
                 package_id: "registry".to_owned(),
-                environment: "production".to_owned(),
-                instance_id: "primary".to_owned(),
                 database_id: "primary".to_owned(),
-                package_revision: "rev-1".to_owned(),
+                package_digest: "rev-1".to_owned(),
+                activation_id: "5c8e2f0a-1b3d-4e6f-8a0b-2c4d6e8f0a1b".to_owned(),
                 schema_fingerprint: "fingerprint-1".to_owned(),
-                package_sequence: 1,
             },
             maintenance_status: status.to_owned(),
-            maintenance_target_revision: target.map(str::to_owned),
+            maintenance_target_package_digest: target.map(str::to_owned),
         }
     }
 

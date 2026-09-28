@@ -219,7 +219,7 @@ pub(crate) fn run_erase_history(
         ))
         .map_err(FieldEncryptionEraseHistoryLifecycleError::Erase)?;
     Ok(FieldEncryptionEraseHistoryLifecycleOutcome {
-        package_digest: expected.package_revision,
+        package_digest: expected.package_digest,
         outcome,
     })
 }

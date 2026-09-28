@@ -183,6 +183,9 @@ impl IngestionAttemptOutcome {
 pub(crate) struct IngestionRunRecord {
     pub(crate) run_id: Uuid,
     pub(crate) created_principal_reference: String,
+    /// The digest of the package the run was planned against. A client plans
+    /// from the package it holds, so a run binds that digest rather than the
+    /// activation id the database records for it.
     pub(crate) package_revision: String,
     pub(crate) schema_fingerprint: String,
     pub(crate) entity_id: String,
@@ -749,7 +752,7 @@ pub(crate) async fn active_binding(
 ) -> Result<(String, String), IngestionStoreError> {
     let row = client
         .query_opt(
-            "SELECT active_package_revision, schema_fingerprint
+            "SELECT active_package_digest, schema_fingerprint
                FROM registry_internal.registry_state
               WHERE singleton",
             &[],
@@ -873,7 +876,7 @@ pub(crate) async fn list_runs(
                         active.state_package_revision, active.state_schema_fingerprint
                    FROM registry_internal.registry_ingestion_runs
                   CROSS JOIN (
-                       SELECT active_package_revision AS state_package_revision,
+                       SELECT active_package_digest AS state_package_revision,
                               schema_fingerprint AS state_schema_fingerprint
                          FROM registry_internal.registry_state
                         WHERE singleton

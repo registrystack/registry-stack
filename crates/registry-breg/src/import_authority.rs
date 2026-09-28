@@ -794,7 +794,7 @@ impl ImportAuthorityOperatorService {
         if !names_import_grant(&self.registry, request.entity_id, request.profile_id) {
             return Err(ImportAuthorityError::NotImportable);
         }
-        let package_revision = &self.expected.package_revision;
+        let package_revision = &self.expected.activation_id;
         let references = operator_references(
             self.audit.profile(),
             package_revision,
@@ -869,7 +869,7 @@ impl ImportAuthorityOperatorService {
         request: ImportAuthorityCloseRequest<'_>,
     ) -> Result<ImportAuthority, ImportAuthorityError> {
         validate_close(&request)?;
-        let package_revision = &self.expected.package_revision;
+        let package_revision = &self.expected.activation_id;
         let references = operator_references(
             self.audit.profile(),
             package_revision,
@@ -930,7 +930,7 @@ impl ImportAuthorityOperatorService {
         let (_, transitioned) = settle_open(
             &transaction,
             &mut pending,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             None,
         )
         .await?;
@@ -987,8 +987,7 @@ impl ImportAuthorityOperatorService {
             .iter()
             .map(|row| {
                 let mut authority = parse_row(row)?;
-                if let Some(reached) =
-                    due_transition(&authority, &self.expected.package_revision, now)
+                if let Some(reached) = due_transition(&authority, &self.expected.activation_id, now)
                 {
                     authority.status = reached;
                 }

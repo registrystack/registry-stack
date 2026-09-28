@@ -108,9 +108,8 @@ pub(crate) async fn verify_ready_identity(
     expected.validate()?;
     let row = transaction
         .query_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint, maintenance_status
                FROM registry_internal.registry_state
               WHERE singleton
               FOR UPDATE",
@@ -119,14 +118,12 @@ pub(crate) async fn verify_ready_identity(
         .await
         .map_err(|_| HistoryMaintenanceError::Unavailable)?
         .ok_or(HistoryMaintenanceError::Unavailable)?;
-    let ready = row.get::<_, String>(7) == "ready"
+    let ready = row.get::<_, String>(5) == "ready"
         && row.get::<_, String>(0) == expected.package_id
-        && row.get::<_, String>(1) == expected.environment
-        && row.get::<_, String>(2) == expected.instance_id
-        && row.get::<_, String>(3) == expected.database_id
-        && row.get::<_, String>(4) == expected.package_revision
-        && row.get::<_, String>(5) == expected.schema_fingerprint
-        && row.get::<_, i64>(6) == expected.package_sequence;
+        && row.get::<_, String>(1) == expected.database_id
+        && row.get::<_, String>(2) == expected.package_digest
+        && row.get::<_, String>(3) == expected.activation_id
+        && row.get::<_, String>(4) == expected.schema_fingerprint;
     if !ready {
         return Err(HistoryMaintenanceError::Unavailable);
     }

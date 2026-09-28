@@ -212,7 +212,9 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     // commits and serves the new field's own values under the same api name.
     let successor_chunks = plan_chunks(&serial_member_items("identity-successor", 1), 2);
     let mut successor_body = harness.run_body("create", &successor_chunks);
-    successor_body["packageRevision"] = json!("package-ingestion-2");
+    successor_body["packageRevision"] = json!(registry_breg::postgres::test_package_digest(
+        "package-ingestion-2"
+    ));
     let created = successor
         .post_json(
             "/v1/records/widgets/ingestion-runs",
@@ -1113,11 +1115,8 @@ impl IngestionHarness {
             &registry,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: "ingestion-instance",
                 database_id: "ingestion-database",
-                package_revision: PACKAGE_REVISION,
-                package_sequence: 1,
+                label: PACKAGE_REVISION,
             },
         )
         .await
@@ -1132,7 +1131,7 @@ impl IngestionHarness {
                     FieldEncryptionService::activate(
                         &FieldEncryptionProvider::LocalFile { dek_ref },
                         registry.registry_id(),
-                        PACKAGE_REVISION,
+                        &identity.activation_id,
                         &secrets,
                         &migration,
                     )
@@ -1177,8 +1176,8 @@ impl IngestionHarness {
         registry: Arc<registry_breg::CompiledRegistry>,
     ) -> Surface {
         let successor = registry_breg::postgres::ExpectedRegistryIdentity {
-            package_revision: "package-ingestion-2".to_owned(),
-            package_sequence: 2,
+            package_digest: registry_breg::postgres::test_package_digest("package-ingestion-2"),
+            activation_id: registry_breg::postgres::test_activation_id("package-ingestion-2"),
             ..self.identity.clone()
         };
         let changed = self
@@ -1186,13 +1185,13 @@ impl IngestionHarness {
             .admin
             .execute(
                 "UPDATE registry_internal.registry_state
-                    SET active_package_revision = $1, schema_fingerprint = $2,
-                        package_sequence = $3
+                    SET active_package_digest = $1, schema_fingerprint = $2,
+                        active_activation_id = $3::text::uuid
                   WHERE singleton",
                 &[
-                    &successor.package_revision,
+                    &successor.package_digest,
                     &successor.schema_fingerprint,
-                    &successor.package_sequence,
+                    &successor.activation_id,
                 ],
             )
             .await
@@ -1219,7 +1218,7 @@ impl IngestionHarness {
         json!({
             "operation": operation,
             "profileId": "operator",
-            "packageRevision": PACKAGE_REVISION,
+            "packageRevision": registry_breg::postgres::test_package_digest(PACKAGE_REVISION),
             "schemaFingerprint": self.identity.schema_fingerprint,
             "inputDigest": plan.input_digest,
             "inputLength": plan.input_length,
@@ -1365,6 +1364,7 @@ fn build_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "ingestion-instance",
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -1376,7 +1376,7 @@ fn build_router(
     let service = HttpService::new(
         registry,
         ReadRuntimeIdentity {
-            package_revision: identity.package_revision,
+            package_revision: identity.activation_id,
             schema_fingerprint: identity.schema_fingerprint,
         },
         records,

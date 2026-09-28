@@ -369,18 +369,14 @@ fn pre_io_record(
     let principal_reference = claims
         .principal()
         .map(|principal| {
-            key_hasher.audit_reference_hash(
-                "breg-principal-v1",
-                &expected.package_revision,
-                principal,
-            )
+            key_hasher.audit_reference_hash("breg-principal-v1", &expected.activation_id, principal)
         })
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
     let record_reference = event
         .target_record
         .map(|record| {
-            key_hasher.audit_reference_hash("breg-record-v1", &expected.package_revision, record)
+            key_hasher.audit_reference_hash("breg-record-v1", &expected.activation_id, record)
         })
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
@@ -390,7 +386,7 @@ fn pre_io_record(
         "operationId": event.operation_id,
         "requestId": event.correlation.request_id().to_string(),
         "traceId": event.correlation.trace_id().as_str(),
-        "packageRevision": expected.package_revision,
+        "packageRevision": expected.activation_id,
         "selectedAccessProfile": claims.access_profile(),
         "purposePresent": claims.purpose().is_some(),
         "principalReference": principal_reference,
@@ -398,12 +394,8 @@ fn pre_io_record(
     });
     if event.kind == PreIoAuditKind::Refusal {
         if let Some(grant) = claims.grant_audit() {
-            record["authorization"] = grant.record(
-                profile,
-                &expected.package_revision,
-                event.operation_id,
-                false,
-            )?;
+            record["authorization"] =
+                grant.record(profile, &expected.activation_id, event.operation_id, false)?;
         }
     }
     insert_refusal_reason(&mut record, event.refusal_reason);
@@ -461,7 +453,7 @@ fn action_pre_io_record(
     let principal_reference = key_hasher
         .audit_reference_hash(
             "breg-principal-v1",
-            &expected.package_revision,
+            &expected.activation_id,
             claims.principal(),
         )
         .map_err(|_| RegistryAuditError::InvalidContext)?;
@@ -471,7 +463,7 @@ fn action_pre_io_record(
         "operationId": event.operation_id,
         "requestId": event.correlation.request_id().to_string(),
         "traceId": event.correlation.trace_id().as_str(),
-        "packageRevision": expected.package_revision,
+        "packageRevision": expected.activation_id,
         "selectedAccessProfile": claims.access_profile(),
         "purposePresent": claims.purpose().is_some(),
         "principalReference": principal_reference,
@@ -580,18 +572,14 @@ async fn record_http_refusal_audit_inner(
     let principal_reference = event
         .principal
         .map(|principal| {
-            key_hasher.audit_reference_hash(
-                "breg-principal-v1",
-                &expected.package_revision,
-                principal,
-            )
+            key_hasher.audit_reference_hash("breg-principal-v1", &expected.activation_id, principal)
         })
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
     let record_reference = event
         .target_record
         .map(|record| {
-            key_hasher.audit_reference_hash("breg-record-v1", &expected.package_revision, record)
+            key_hasher.audit_reference_hash("breg-record-v1", &expected.activation_id, record)
         })
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
@@ -615,7 +603,7 @@ async fn record_http_refusal_audit_inner(
         ),
         (
             "packageRevision".to_owned(),
-            Value::String(expected.package_revision.clone()),
+            Value::String(expected.activation_id.clone()),
         ),
         (
             "purposePresent".to_owned(),
@@ -625,12 +613,7 @@ async fn record_http_refusal_audit_inner(
     if let Some(grant) = &event.grant {
         record.insert(
             "authorization".to_owned(),
-            grant.record(
-                profile,
-                &expected.package_revision,
-                event.operation_id,
-                false,
-            )?,
+            grant.record(profile, &expected.activation_id, event.operation_id, false)?,
         );
     }
     if let Some(slot_id) = attachment_slot {

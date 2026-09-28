@@ -456,11 +456,6 @@ pub async fn install_mutation_schema(
     install_history_commit_schema(migration, runtime_role)
         .await
         .map_err(MutationError::from)?;
-    // The claim reads the revision and commit head tables to decide whether
-    // this database is fresh, so it installs after them.
-    crate::instance_claim::install(migration, runtime_role)
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
     Ok(())
 }
 
@@ -865,6 +860,7 @@ pub struct MutationCoordinator {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     expected: ExpectedRegistryIdentity,
+    event_source: String,
     attachment_storage: crate::attachment_storage::AttachmentStorage,
     attachment_verification: crate::attachment_verification::AttachmentVerification,
     audit: RegistryAudit,
@@ -877,17 +873,27 @@ pub struct MutationCoordinator {
 impl MutationCoordinator {
     /// The event source this deployment stamps on every captured envelope.
     fn event_source(&self) -> String {
-        crate::webhook::delivery_source(&self.expected.package_id, &self.expected.instance_id)
+        self.event_source.clone()
     }
 
+    /// `instance_id` is the runtime file's `identity.instanceId`; the event
+    /// source every captured envelope carries names it.
     #[must_use]
     pub fn new(
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         expected: ExpectedRegistryIdentity,
+        instance_id: &str,
         audit: RegistryAudit,
     ) -> Self {
-        Self::new_with_event_destinations(lock_key, lock_timeout, expected, audit, None)
+        Self::new_with_event_destinations(
+            lock_key,
+            lock_timeout,
+            expected,
+            instance_id,
+            audit,
+            None,
+        )
     }
 
     #[must_use]
@@ -895,13 +901,16 @@ impl MutationCoordinator {
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         expected: ExpectedRegistryIdentity,
+        instance_id: &str,
         audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
+        let event_source = crate::webhook::delivery_source(&expected.package_id, instance_id);
         Self {
             lock_key,
             lock_timeout,
             expected,
+            event_source,
             attachment_storage: Default::default(),
             attachment_verification: Default::default(),
             audit,
@@ -1023,7 +1032,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 route: &request.plan.route.path,
                 target_record: request.record_id,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &request.response_fields,
                 canonical_request_digest: canonical_request_digest(request)?,
                 key_domain: IdempotencyKeyDomain::Caller,
@@ -1051,7 +1060,7 @@ impl MutationCoordinator {
             let etag = strong_record_etag_for_representation(
                 self.audit.profile(),
                 request.claims,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &current.record_id,
                 current.record_revision,
                 &request.response_fields,
@@ -1336,7 +1345,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 route: &request.plan.route.path,
                 target_record: request.record_id,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &request.response_fields,
                 canonical_request_digest,
                 key_domain: IdempotencyKeyDomain::Caller,
@@ -1461,7 +1470,7 @@ impl MutationCoordinator {
                     operation_id: request.plan.route.id.clone(),
                     entity_id: Some(request.plan.entity.id.clone()),
                     action_id: None,
-                    package_revision: self.expected.package_revision.clone(),
+                    package_revision: self.expected.activation_id.clone(),
                     selected_access_profile: request.claims.access_profile().to_owned(),
                     purpose_present: request.claims.purpose().is_some(),
                     principal_reference: Some(binding.principal_reference.clone()),
@@ -1513,7 +1522,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             request,
             self.audit.profile(),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &self.expected.database_id,
             &self.attachment_storage,
             &self.attachment_verification.binding_digest(),
@@ -1524,7 +1533,7 @@ impl MutationCoordinator {
             Some(_) => binding.record_reference.clone(),
             None => record_reference(
                 self.audit.profile(),
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &current.record_id,
             )?,
         };
@@ -1539,7 +1548,7 @@ impl MutationCoordinator {
                 record_revision: current.record_revision,
                 predecessor_revision: current.predecessor_revision,
                 lifecycle: &current.record_lifecycle,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 operation_id: &request.plan.route.id,
                 mutation_kind: mutation_kind(request.plan.route.operation),
                 principal_reference: &binding.principal_reference,
@@ -1580,7 +1589,8 @@ impl MutationCoordinator {
                 record_id: &current.record_id,
                 record_reference: &record_reference,
                 record_revision: current.record_revision,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
+                package_digest: &self.expected.package_digest,
                 schema_fingerprint: &self.expected.schema_fingerprint,
                 before: current.before_data.as_ref(),
                 after: (request.plan.route.operation != Operation::Tombstone)
@@ -1607,7 +1617,7 @@ impl MutationCoordinator {
         let committed = allocate_revision_commit(
             transaction.transaction(),
             CommitAllocation {
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
                     request_reference: &binding.binding_reference,
@@ -1630,7 +1640,7 @@ impl MutationCoordinator {
                 operation_id: request.plan.route.id.clone(),
                 entity_id: Some(request.plan.entity.id.clone()),
                 action_id: None,
-                package_revision: self.expected.package_revision.clone(),
+                package_revision: self.expected.activation_id.clone(),
                 selected_access_profile: request.claims.access_profile().to_owned(),
                 purpose_present: request.claims.purpose().is_some(),
                 principal_reference: Some(binding.principal_reference.clone()),
@@ -1730,7 +1740,7 @@ impl MutationCoordinator {
         let blocked_record = crate::ingestion_store::run_audit_record(
             "blocked",
             &audited_run,
-            &self.expected.package_revision,
+            &self.expected.package_digest,
             &run.created_principal_reference,
             Some(&correlation.request_id().to_string()),
         );
@@ -1752,7 +1762,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 route: &request.plan.route.path,
                 target_record: None,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 response_fields: &request.response_fields,
                 canonical_request_digest,
                 // A durable-run chunk drives this same batch plan under a
@@ -1878,7 +1888,7 @@ impl MutationCoordinator {
                 });
             }
             if !run.active_binding_matches(
-                &self.expected.package_revision,
+                &self.expected.package_digest,
                 &self.expected.schema_fingerprint,
             ) {
                 let (refusal, blocked_record) = self
@@ -1921,7 +1931,7 @@ impl MutationCoordinator {
                 let admitted = crate::import_authority::admit_chunk(
                     transaction.transaction(),
                     &mut authority_records,
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     authority_id,
                     chunk_items,
                 )
@@ -2041,7 +2051,7 @@ impl MutationCoordinator {
                     operation_id: request.plan.route.id.clone(),
                     entity_id: Some(request.plan.entity.id.clone()),
                     action_id: None,
-                    package_revision: self.expected.package_revision.clone(),
+                    package_revision: self.expected.activation_id.clone(),
                     selected_access_profile: request.claims.access_profile().to_owned(),
                     purpose_present: request.claims.purpose().is_some(),
                     principal_reference: Some(binding.principal_reference.clone()),
@@ -2122,7 +2132,7 @@ impl MutationCoordinator {
                 transaction.transaction(),
                 &item_request,
                 self.audit.profile(),
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &self.expected.database_id,
                 &self.attachment_storage,
                 &self.attachment_verification.binding_digest(),
@@ -2131,7 +2141,7 @@ impl MutationCoordinator {
             .await?;
             let record_reference = record_reference(
                 self.audit.profile(),
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &current.record_id,
             )?;
             let snapshot = canonical_snapshot(&current.data)?;
@@ -2145,7 +2155,7 @@ impl MutationCoordinator {
                     record_revision: current.record_revision,
                     predecessor_revision: current.predecessor_revision,
                     lifecycle: &current.record_lifecycle,
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.activation_id,
                     operation_id: &item_plan.route.id,
                     mutation_kind: mutation_kind(item_plan.route.operation),
                     principal_reference: &binding.principal_reference,
@@ -2185,7 +2195,8 @@ impl MutationCoordinator {
                     record_id: &current.record_id,
                     record_reference: &record_reference,
                     record_revision: current.record_revision,
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.activation_id,
+                    package_digest: &self.expected.package_digest,
                     schema_fingerprint: &self.expected.schema_fingerprint,
                     before: current.before_data.as_ref(),
                     after: Some(&current.data),
@@ -2229,7 +2240,7 @@ impl MutationCoordinator {
         let committed = allocate_revision_commit(
             transaction.transaction(),
             CommitAllocation {
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
                     request_reference: &binding.binding_reference,
@@ -2257,7 +2268,7 @@ impl MutationCoordinator {
                 operation_id: request.plan.route.id.clone(),
                 entity_id: Some(request.plan.entity.id.clone()),
                 action_id: None,
-                package_revision: self.expected.package_revision.clone(),
+                package_revision: self.expected.activation_id.clone(),
                 selected_access_profile: request.claims.access_profile().to_owned(),
                 purpose_present: request.claims.purpose().is_some(),
                 principal_reference: Some(binding.principal_reference.clone()),
@@ -2316,7 +2327,7 @@ impl MutationCoordinator {
                 crate::import_authority::consume(
                     transaction.transaction(),
                     &mut authority_records,
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     authority_id,
                     chunk_binding.item_count,
                 )
@@ -2332,7 +2343,7 @@ impl MutationCoordinator {
             run_record = Some(crate::ingestion_store::run_audit_record(
                 "committed",
                 &audited_run,
-                &self.expected.package_revision,
+                &self.expected.package_digest,
                 &chunk_binding.created_principal_reference,
                 Some(&request.correlation.request_id().to_string()),
             ));
@@ -2375,7 +2386,7 @@ impl MutationCoordinator {
         let etag = strong_record_etag(
             self.audit.profile(),
             request.claims,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &current.record_id,
             current.record_revision,
             &request.response_fields,
@@ -2421,7 +2432,7 @@ impl MutationCoordinator {
         let etag = strong_record_etag_for_representation(
             self.audit.profile(),
             request.claims,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &current.record_id,
             current.record_revision,
             &request.response_fields,

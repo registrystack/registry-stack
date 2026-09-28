@@ -10,15 +10,16 @@
 //! import authorities the backup carried open, and each would deliver the
 //! same outbox work.
 //!
-//! The claim is one row naming the physical identity the Registry serves
-//! from: the cluster's system identifier and the database oid. The first
-//! apply into a fresh database, one with no committed revision and no commit
-//! head, records the database it runs in. An apply into a database that
-//! already holds committed history, a Registry installed before the claim
-//! existed or a copy restored from a backup taken before it, records no
-//! claim, so that database refuses to serve until an operator adopts it. The
-//! serving runtime compares the claim with the database it is connected to at
-//! startup and on every readiness probe, and refuses by name when they differ.
+//! The claim is the part of the Registry state row naming the physical
+//! identity the Registry serves from: the cluster's system identifier and the
+//! database oid, with an epoch and the time the claim was recorded. An
+//! activation records the database it runs in when the state row carries no
+//! claim yet, so the first activation of a Registry claims its database. An
+//! activation into a database whose state row already carries a claim leaves
+//! it as it stands, so a restored copy keeps the claim of its original and
+//! refuses to serve until an operator adopts it. The serving runtime compares
+//! the claim with the database it is connected to at startup and on every
+//! readiness probe, and refuses by name when they differ.
 //! An operator makes a copy the Registry's database with an explicit adoption,
 //! which moves the claim, raises its epoch, supersedes every open import
 //! authority, and, once that commits, appends one audit entry naming the claim
@@ -44,13 +45,6 @@
 
 use serde::Serialize;
 use tokio_postgres::GenericClient;
-
-use crate::postgres::SqlIdentifier;
-
-/// The product-owned claim table and the table privileges the runtime role
-/// holds on it. Catalog closure consumes this list.
-pub(crate) const INSTANCE_CLAIM_TABLES: &[(&str, &[&str])] =
-    &[("registry_instance_claim", &["SELECT"])];
 
 const DATABASE_OID: &str = "SELECT oid
                               FROM pg_catalog.pg_database
@@ -100,53 +94,31 @@ pub(crate) enum ClaimCheck {
     Unavailable,
 }
 
-/// KERNEL INTERNAL SCHEMA MIGRATION (instance claim): creates
-/// `registry_internal.registry_instance_claim` and records the database the
-/// installing transaction runs in, only when no claim is present and the
-/// database is fresh: no committed revision and no commit head. A restored
-/// copy therefore keeps the claim of its original, and a database that
-/// already holds committed history gains no claim until an operator adopts
-/// it. The revision and commit head tables must already exist. Additive and
-/// idempotent.
-pub(crate) async fn install(
+/// Record the database the calling transaction runs in as the Registry's
+/// claim, only when the state row carries no claim yet. A state row that
+/// already names a database keeps it, so a restored copy keeps the claim of
+/// its original. The state row must already exist.
+pub(crate) async fn record_if_unclaimed(
     migration: &impl GenericClient,
-    runtime_role: &SqlIdentifier,
 ) -> Result<(), tokio_postgres::Error> {
-    migration
-        .batch_execute(&format!(
-            "CREATE TABLE IF NOT EXISTS registry_internal.registry_instance_claim (
-                 singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-                 system_identifier bigint,
-                 database_oid oid NOT NULL,
-                 epoch bigint NOT NULL DEFAULT 1 CHECK (epoch >= 1),
-                 claimed_at timestamptz NOT NULL DEFAULT transaction_timestamp()
-             );
-             REVOKE ALL ON registry_internal.registry_instance_claim FROM PUBLIC;
-             {runtime_revoke}
-             GRANT SELECT ON registry_internal.registry_instance_claim TO \"{role}\";",
-            role = runtime_role.as_str(),
-            runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
-                .await?
-                .revoke_all_on("registry_internal.registry_instance_claim"),
-        ))
-        .await?;
     let live = live_identity(migration).await?;
     migration
         .execute(
-            "INSERT INTO registry_internal.registry_instance_claim
-                 (singleton, system_identifier, database_oid)
-             SELECT true, $1::text::bigint, $2
-              WHERE NOT EXISTS (SELECT 1 FROM registry_internal.registry_revisions)
-                AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_commit_head)
-             ON CONFLICT (singleton) DO NOTHING",
+            "UPDATE registry_internal.registry_state
+                SET system_identifier = $1::text::bigint,
+                    database_oid = $2,
+                    epoch = epoch + 1,
+                    claimed_at = transaction_timestamp()
+              WHERE singleton AND database_oid IS NULL",
             &[&live.system_identifier, &live.database_oid],
         )
         .await?;
     Ok(())
 }
 
-/// Compare the claim with the database the connection reached. A missing
-/// claim row is a mismatch: no claim names this database.
+/// Compare the claim with the database the connection reached. A state row
+/// without a claim, or no state row, is a mismatch: no claim names this
+/// database.
 pub(crate) async fn check(client: &impl GenericClient) -> ClaimCheck {
     let Ok(live) = live_identity(client).await else {
         return ClaimCheck::Unavailable;
@@ -154,8 +126,8 @@ pub(crate) async fn check(client: &impl GenericClient) -> ClaimCheck {
     let row = match client
         .query_opt(
             "SELECT system_identifier, database_oid
-               FROM registry_internal.registry_instance_claim
-              WHERE singleton",
+               FROM registry_internal.registry_state
+              WHERE singleton AND database_oid IS NOT NULL",
             &[],
         )
         .await
@@ -237,10 +209,16 @@ mod operator {
     const AUDIT_OPERATION_ID: &str = "breg.instance_claim.adopt";
 
     /// Value-free refusal of an instance claim operation.
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+    #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
     pub enum InstanceClaimError {
         #[error("the instance claim is unavailable")]
         Unavailable,
+        /// The package the runtime file names was refused before any
+        /// database was reached. The message names the rule and the fix, such
+        /// as an `expectedDigest` pin the package root does not match, and
+        /// never a secret.
+        #[error("{0}")]
+        PackageRefused(String),
     }
 
     /// The recorded claim.
@@ -298,6 +276,21 @@ mod operator {
             }
             let config = crate::runtime_config::load_runtime_config(path)
                 .map_err(|_| InstanceClaimError::Unavailable)?;
+            // The runtime file's package pin and the package closure close
+            // before any database call, as they do for the serving runtime.
+            let shared = config
+                .verify_package_envelope()
+                .map_err(|error| InstanceClaimError::PackageRefused(error.to_string()))?;
+            let package = crate::package::load_package_with_verified_envelope(
+                config.package().root(),
+                &config.package_load_context(),
+                &shared,
+            )
+            .map_err(|error| {
+                InstanceClaimError::PackageRefused(format!(
+                    "the runtime package was refused: {error}"
+                ))
+            })?;
             let audit = RegistryAudit::open_companion(&config)
                 .await
                 .map_err(|_| InstanceClaimError::Unavailable)?;
@@ -311,9 +304,8 @@ mod operator {
                 .get()
                 .await
                 .map_err(|_| InstanceClaimError::Unavailable)?;
-            let startup = crate::startup::prepare_startup(
-                config.package().root(),
-                &config.package_load_context(),
+            let startup = crate::startup::prepare_loaded_startup(
+                package,
                 config.identity().database_id(),
                 &mut client,
                 config.database().roles().migration(),
@@ -425,7 +417,7 @@ mod operator {
             let request = json!({
                 "phase": "attempt",
                 "operationId": AUDIT_OPERATION_ID,
-                "packageRevision": self.expected.package_revision,
+                "packageRevision": self.expected.package_digest,
             });
             let mut attempt = self
                 .audit
@@ -496,8 +488,7 @@ mod operator {
             )
             .await
             .map_err(|_| InstanceClaimError::Unavailable)?;
-            let (adoption, record) =
-                adopt_in(&transaction, pending, &self.expected.package_revision).await?;
+            let (adoption, record) = adopt_in(&transaction, pending, &self.expected).await?;
             Ok(Adopted {
                 transaction,
                 adoption,
@@ -577,13 +568,13 @@ mod operator {
             .query_opt(
                 if lock {
                     "SELECT system_identifier, database_oid, epoch, claimed_at
-                       FROM registry_internal.registry_instance_claim
-                      WHERE singleton
+                       FROM registry_internal.registry_state
+                      WHERE singleton AND database_oid IS NOT NULL
                       FOR UPDATE"
                 } else {
                     "SELECT system_identifier, database_oid, epoch, claimed_at
-                       FROM registry_internal.registry_instance_claim
-                      WHERE singleton"
+                       FROM registry_internal.registry_state
+                      WHERE singleton AND database_oid IS NOT NULL"
                 },
                 &[],
             )
@@ -608,7 +599,7 @@ mod operator {
     pub(crate) async fn adopt_in(
         transaction: &Transaction<'_>,
         pending: &mut Vec<Value>,
-        package_revision: &str,
+        expected: &ExpectedRegistryIdentity,
     ) -> Result<(InstanceClaimAdoption, Value), InstanceClaimError> {
         let status = read_status(transaction, true).await?;
         // A claim that already names this database is a re-claim after a
@@ -620,30 +611,31 @@ mod operator {
         };
         let row = transaction
             .query_one(
-                "INSERT INTO registry_internal.registry_instance_claim
-                     (singleton, system_identifier, database_oid, epoch, claimed_at)
-                 VALUES (true, $1::text::bigint, $2, 1, transaction_timestamp())
-                 ON CONFLICT (singleton) DO UPDATE
-                    SET system_identifier = EXCLUDED.system_identifier,
-                        database_oid = EXCLUDED.database_oid,
-                        epoch = registry_instance_claim.epoch + 1,
-                        claimed_at = EXCLUDED.claimed_at
+                "UPDATE registry_internal.registry_state
+                    SET system_identifier = $1::text::bigint,
+                        database_oid = $2,
+                        epoch = epoch + 1,
+                        claimed_at = transaction_timestamp()
+                  WHERE singleton
                  RETURNING system_identifier, database_oid, epoch, claimed_at",
                 &[&status.live.system_identifier, &status.live.database_oid],
             )
             .await
             .map_err(|_| InstanceClaimError::Unavailable)?;
         let current = claim_from(&row)?;
-        let superseded_import_authorities =
-            crate::import_authority::supersede_every_open(transaction, pending, package_revision)
-                .await
-                .map_err(|_| InstanceClaimError::Unavailable)?;
+        let superseded_import_authorities = crate::import_authority::supersede_every_open(
+            transaction,
+            pending,
+            &expected.activation_id,
+        )
+        .await
+        .map_err(|_| InstanceClaimError::Unavailable)?;
         let record = json!({
             "phase": "terminal",
             "outcome": "committed",
             "event": event,
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": package_revision,
+            "packageRevision": expected.package_digest,
             "previous": status.claim.as_ref().map(audit_claim),
             "current": audit_claim(&current),
             "supersededImportAuthorities": superseded_import_authorities

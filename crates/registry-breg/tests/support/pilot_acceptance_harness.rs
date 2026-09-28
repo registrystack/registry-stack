@@ -159,11 +159,8 @@ impl PilotHarness {
             verified.registry(),
             RegistryStateTestIdentity {
                 package_id: &verified.manifest().package_id,
-                environment: PILOT_ENVIRONMENT,
-                instance_id: PILOT_INSTANCE_ID,
                 database_id: &database_id,
-                package_revision: verified.package_digest(),
-                package_sequence: 1,
+                label: verified.package_digest(),
             },
         )
         .await

@@ -58,7 +58,7 @@ async fn legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes(
     target_task.abort();
     rehearsal.cleanup().await;
     let successor = PackageFixture::build(
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         target_fingerprint.clone(),
         PlanChoice::SecondTable,
     );

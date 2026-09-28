@@ -75,7 +75,10 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     )
     .await
     .expect("initial package activates");
-    assert_eq!(active.package_sequence, 1);
+    assert_eq!(
+        ledger_apply_order(&database, &active.activation_id).await,
+        1
+    );
 
     let app = change_request_router(&database, base.clone(), active.clone());
     let steward = claims("steward", "unrelated-steward", None);
@@ -98,7 +101,10 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     )
     .await
     .expect("unrelated additive successor activates with an approved request present");
-    assert_eq!(successor_active.package_sequence, 2);
+    assert_eq!(
+        ledger_apply_order(&database, &successor_active.activation_id).await,
+        2
+    );
 
     let successor_app =
         change_request_router(&database, unrelated.clone(), successor_active.clone());
@@ -156,8 +162,8 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         approved.new_site_id
     );
     assert_eq!(
-        active_package_revision(&database).await,
-        successor_active.package_revision
+        active_activation_id(&database).await,
+        successor_active.activation_id
     );
 
     let retention = RequestRetentionOperatorService::new_for_test(
@@ -289,7 +295,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         "the relevant successor changes the request mapping/schema fingerprint"
     );
     let successor = prepare_successor_package(&database, &base, &active, &relevant).await;
-    let before_refusal = active_package_revision(&database).await;
+    let before_refusal = active_activation_id(&database).await;
     let refused = apply_package(
         &database,
         &successor.package,
@@ -302,7 +308,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         "approved proposals must block activation of a package that changes the relevant request contract"
     );
     assert_eq!(
-        active_package_revision(&database).await,
+        active_activation_id(&database).await,
         before_refusal,
         "the retention guard must run before installed package identity changes"
     );
@@ -343,8 +349,8 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
     .await
     .expect("explicit cancellation permits the exact relevant successor activation");
     assert_eq!(
-        active_package_revision(&database).await,
-        successor_active.package_revision
+        active_activation_id(&database).await,
+        successor_active.activation_id
     );
     assert!(
         column_exists(
@@ -373,8 +379,8 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
     .await
     .expect("successor activation preserves catalog identity and startup readiness");
     assert_eq!(
-        startup.expected_identity().package_revision,
-        successor_active.package_revision
+        startup.expected_identity().activation_id,
+        successor_active.activation_id
     );
     drop(runtime);
     drop(successor);
@@ -507,7 +513,7 @@ async fn prepare_successor_package(
     let provisional = publish_and_load(
         build_request(
             candidate,
-            Some(active.package_revision.as_str()),
+            Some(active.package_digest.as_str()),
             &active.schema_fingerprint,
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new((**prior).clone()),
@@ -520,7 +526,7 @@ async fn prepare_successor_package(
     publish_and_load(
         build_request(
             candidate,
-            Some(active.package_revision.as_str()),
+            Some(active.package_digest.as_str()),
             &target_fingerprint,
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new((**prior).clone()),
@@ -706,6 +712,7 @@ fn change_request_router(
         pool,
         registry.clone(),
         identity.clone(),
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -714,7 +721,7 @@ fn change_request_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -908,15 +915,28 @@ fn claims(profile: &str, principal: &str, purpose: Option<&str>) -> VerifiedRequ
     .unwrap_or_else(|_| panic!("{profile} claims are verified"))
 }
 
-async fn active_package_revision(database: &TestDatabase) -> String {
+async fn active_activation_id(database: &TestDatabase) -> String {
     database
         .admin
         .query_one(
-            "SELECT active_package_revision FROM registry_internal.registry_state WHERE singleton",
+            "SELECT active_activation_id::text FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
         .await
         .expect("registry state reads")
+        .get(0)
+}
+
+async fn ledger_apply_order(database: &TestDatabase, activation_id: &str) -> i64 {
+    database
+        .admin
+        .query_one(
+            "SELECT apply_order FROM registry_internal.registry_migrations
+             WHERE activation_id = $1::text::uuid",
+            &[&activation_id],
+        )
+        .await
+        .expect("the activation has one ledger row")
         .get(0)
 }
 

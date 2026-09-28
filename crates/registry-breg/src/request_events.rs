@@ -33,7 +33,12 @@ pub struct RequestLifecycleEvent<'a> {
     pub transition: &'a str,
     pub reason: Option<&'a str>,
     pub effect_digest: Option<&'a str>,
+    /// The activation the transition ran under, the scope value stored with
+    /// the captured event and its deliveries.
     pub package_revision: &'a str,
+    /// The active package digest, which event data names as
+    /// `packageRevision`.
+    pub package_digest: &'a str,
     pub schema_fingerprint: &'a str,
     pub request_values: &'a Map<String, Value>,
     pub payload_retention: Duration,
@@ -105,7 +110,7 @@ pub async fn insert_request_lifecycle_events(
             "recordId": event.request_id.to_string(),
             "revision": event.request_record_revision,
             "trigger": "request_lifecycle",
-            "packageRevision": event.package_revision,
+            "packageRevision": event.package_digest,
             "request": {
                 "proposalVersion": event.proposal_version,
                 "workflowRevision": event.workflow_revision,

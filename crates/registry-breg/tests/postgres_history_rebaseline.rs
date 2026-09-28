@@ -54,13 +54,13 @@ use registry_breg::history_rebaseline::{
 };
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryLockKey,
+    install_compiled_schema, managed_schema_fingerprint, test_package_digest,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
 };
 
 const ENTITY: &str = "membership";
 const OLD_PACKAGE: &str = "pkg-rebaseline-old";
-const CURRENT_PACKAGE: &str = "pkg-rebaseline-current";
+const CURRENT_PACKAGE: &str = "6d1f3a2b-8c4e-4f7a-9b0d-1e2f3a4b5c6d";
 const KEPT_RECORD: &str = "018feab0-68f9-4a45-b9e3-58436df07a01";
 const ERASED_RECORD: &str = "018feab0-68f9-4a45-b9e3-58436df07a02";
 const OPERATOR_CANARY: &str = "operator secret must not enter maintenance audit";
@@ -217,7 +217,7 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
         .execute(
             "UPDATE registry_internal.registry_state
                 SET maintenance_status = 'applying',
-                    maintenance_target_revision = 'pkg-rebaseline-next'
+                    maintenance_target_package_digest = 'pkg-rebaseline-next'
               WHERE singleton",
             &[],
         )
@@ -1115,28 +1115,23 @@ async fn install_ready_history_registry(
             .expect("managed schema fingerprint resolves");
     let expected = ExpectedRegistryIdentity {
         package_id: registry.registry_id().to_owned(),
-        environment: "local".to_owned(),
-        instance_id: "history-rebaseline-test".to_owned(),
         database_id: "history-rebaseline-db".to_owned(),
-        package_revision: CURRENT_PACKAGE.to_owned(),
+        package_digest: test_package_digest("pkg-rebaseline-current"),
+        activation_id: CURRENT_PACKAGE.to_owned(),
         schema_fingerprint,
-        package_sequence: 1,
     };
     migration
         .execute(
             "INSERT INTO registry_internal.registry_state (
-                 singleton, package_id, environment, instance_id, database_id,
-                 active_package_revision, schema_fingerprint, package_sequence,
-                 maintenance_status
-             ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')",
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint, maintenance_status
+             ) VALUES (true, $1, $2, $3, $4::text::uuid, $5, 'ready')",
             &[
                 &expected.package_id,
-                &expected.environment,
-                &expected.instance_id,
                 &expected.database_id,
-                &expected.package_revision,
+                &expected.package_digest,
+                &expected.activation_id,
                 &expected.schema_fingerprint,
-                &expected.package_sequence,
             ],
         )
         .await

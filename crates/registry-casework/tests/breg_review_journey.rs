@@ -520,6 +520,7 @@ fn breg_service(
     database: &TestDatabase,
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    instance_id: &str,
     authorities: Arc<registry_breg::review_store::ReviewAuthorityRegistry>,
     fault: Option<MutationFaultPoint>,
 ) -> Arc<HttpService> {
@@ -546,6 +547,7 @@ fn breg_service(
         pool,
         registry.clone(),
         identity.clone(),
+        instance_id,
         lock,
         Duration::from_secs(2),
         audit,
@@ -828,11 +830,8 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
         &registry,
         RegistryStateTestIdentity {
             package_id: REGISTRY_ID,
-            environment: "local",
-            instance_id: "composed-review",
             database_id: "composed-review-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -872,6 +871,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
         &database,
         registry.clone(),
         identity.clone(),
+        "composed-review",
         Arc::clone(&authorities),
         None,
     );
@@ -879,6 +879,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
         &database,
         registry.clone(),
         identity.clone(),
+        "composed-review",
         Arc::clone(&authorities),
         Some(MutationFaultPoint::AfterCommitBeforeResponseRelease),
     );
@@ -1478,11 +1479,8 @@ async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
         &registry,
         RegistryStateTestIdentity {
             package_id: REGISTRY_ID,
-            environment: "local",
-            instance_id: "composed-review",
             database_id: "composed-review-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -1521,6 +1519,7 @@ async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
         &database,
         registry.clone(),
         identity,
+        "composed-review",
         Arc::clone(&authorities),
         None,
     );
@@ -2097,11 +2096,8 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
         &registry,
         RegistryStateTestIdentity {
             package_id: STARTER_SOURCE_ID,
-            environment: "local",
-            instance_id: "professional-licences-starter",
             database_id: "professional-licences-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -2139,6 +2135,7 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
         &database,
         registry.clone(),
         identity,
+        "professional-licences-starter",
         Arc::clone(&authorities),
         None,
     );

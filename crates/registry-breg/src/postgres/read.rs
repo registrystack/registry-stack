@@ -598,7 +598,7 @@ impl PostgresRecordReadService {
         let etag = strong_record_etag_for_representation(
             self.audit.profile(),
             claims,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             record_id,
             record_revision,
             &request.selected_fields,
@@ -938,7 +938,7 @@ impl PostgresRecordReadService {
             .map(|principal| {
                 key_hasher.audit_reference_hash(
                     "breg-principal-v1",
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     principal,
                 )
             })
@@ -948,7 +948,7 @@ impl PostgresRecordReadService {
             .map(|record_id| {
                 key_hasher.audit_reference_hash(
                     "breg-record-v1",
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     record_id,
                 )
             })
@@ -956,7 +956,7 @@ impl PostgresRecordReadService {
             .map_err(|_| ReadServiceError::Unavailable)?;
         let field_set_reference = field_set_reference(
             self.audit.profile(),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &request.selected_fields,
         )?;
         Ok(TerminalAudit {
@@ -966,7 +966,7 @@ impl PostgresRecordReadService {
             operation_id: request.operation_id.clone(),
             entity_id: Some(plan.entity.id.clone()),
             action_id: None,
-            package_revision: self.expected.package_revision.clone(),
+            package_revision: self.expected.activation_id.clone(),
             selected_access_profile: claims.access_profile().to_owned(),
             purpose_present: claims.purpose().is_some(),
             principal_reference,
@@ -1868,7 +1868,7 @@ fn validate_compiled_query_request(
         || query.page_size > operation.max_page_size
         || request.maximum_records != expected_maximum
         || request.maximum_records > MAX_SQL_LIMIT
-        || query.cursor_binding.package_revision != expected.package_revision
+        || query.cursor_binding.package_revision != expected.activation_id
         || query.cursor_binding.schema_fingerprint != expected.schema_fingerprint
         || query.cursor_binding.registry_revision != registry.revision()
         || query.cursor_binding.route_id != query.route_id
@@ -3634,12 +3634,10 @@ mod tests {
         .expect("fixture compiles");
         let expected = ExpectedRegistryIdentity {
             package_id: "package".to_owned(),
-            environment: "local".to_owned(),
-            instance_id: "instance".to_owned(),
             database_id: "database".to_owned(),
-            package_revision: "package-revision".to_owned(),
+            package_digest: "package-digest".to_owned(),
+            activation_id: "3f2a7c1e-9b4d-4e8a-a1c6-5d0e7f9b2c41".to_owned(),
             schema_fingerprint: "schema-fingerprint".to_owned(),
-            package_sequence: 1,
         };
         let operation = registry
             .queries()
@@ -3662,7 +3660,7 @@ mod tests {
                     query_operation_id: operation.id.clone(),
                     kind: CompiledQueryKind::List,
                     cursor_binding: CursorBinding {
-                        package_revision: expected.package_revision.clone(),
+                        package_revision: expected.activation_id.clone(),
                         schema_fingerprint: expected.schema_fingerprint.clone(),
                         registry_revision: registry.revision().to_owned(),
                         route_id: operation.route_id.clone(),

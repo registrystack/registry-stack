@@ -69,11 +69,8 @@ async fn facility_registration_transfer_and_events_use_governed_actions() {
         &registry,
         RegistryStateTestIdentity {
             package_id: REGISTRY_ID,
-            environment: "acceptance",
-            instance_id: "facility-registry-actions-fixture",
             database_id: "facility-registry-actions-test",
-            package_revision: "facility-actions-1",
-            package_sequence: 1,
+            label: "facility-actions-1",
         },
     )
     .await
@@ -486,6 +483,7 @@ fn build_app(
         pool,
         registry.clone(),
         identity.clone(),
+        "facility-registry-actions-fixture",
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -500,7 +498,7 @@ fn build_app(
         HttpService::new(
             registry.clone(),
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,

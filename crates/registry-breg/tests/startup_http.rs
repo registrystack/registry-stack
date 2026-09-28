@@ -496,7 +496,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 19] {
+fn startup_errors() -> [StartupError; 21] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -505,6 +505,8 @@ fn startup_errors() -> [StartupError; 19] {
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
+        StartupError::DatabaseUninitialized,
+        StartupError::PreLedgerDatabase,
         StartupError::InstanceClaimMismatch,
         StartupError::FieldPatternSyntax {
             entity_id: "pattern-private-entity".to_owned(),
@@ -647,6 +649,12 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::DatabaseUninitialized => {
+            "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
+        }
+        StartupError::PreLedgerDatabase => {
+            "the Registry database predates the activation ledger; run `bregctl apply --package DIR` once to adopt this database into the ledger"
+        }
         StartupError::DatabaseIdentityMismatch => {
             "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
         }

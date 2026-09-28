@@ -58,6 +58,9 @@ const INSTANCE_ID: &str = "request-event-instance";
 const DATABASE_ID: &str = "request-event-database";
 const PACKAGE_REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// The activation the fixture registry state records for its package.
+static ACTIVATION_ID: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| registry_breg::postgres::test_activation_id(PACKAGE_REVISION));
 const SCHEMA_FINGERPRINT: &str =
     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const DESTINATION_ID: &str = "review-operations";
@@ -224,6 +227,10 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     );
     let payload = &envelope["data"];
     assert_eq!(payload["trigger"], "request_lifecycle");
+    assert_eq!(
+        payload["packageRevision"], PACKAGE_REVISION,
+        "event data names the active package by its digest"
+    );
     assert_eq!(payload["recordId"], request_id.to_string());
     assert_eq!(payload["revision"], 3);
     assert_eq!(payload["request"]["proposalVersion"], 1);
@@ -277,11 +284,8 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -353,10 +357,11 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         Arc::clone(&destinations),
         Arc::new(registry_breg::hook_handler::HookHandlerRegistry::new(
             &compiled,
-            &identity.package_revision,
+            &identity.activation_id,
         )),
         Arc::new(compiled.clone()),
         identity,
+        INSTANCE_ID,
         RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
         Duration::from_secs(2),
         registry_breg::audit::test_support::capturing(
@@ -446,11 +451,8 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
         &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -821,7 +823,8 @@ fn lifecycle_event<'a>(
         transition,
         reason: None,
         effect_digest: None,
-        package_revision: PACKAGE_REVISION,
+        package_revision: &ACTIVATION_ID,
+        package_digest: PACKAGE_REVISION,
         schema_fingerprint: SCHEMA_FINGERPRINT,
         request_values,
         payload_retention: Duration::from_secs(7 * 24 * 60 * 60),
@@ -886,6 +889,7 @@ fn event_authority_router(
         pool,
         registry.clone(),
         identity.clone(),
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -894,7 +898,7 @@ fn event_authority_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,

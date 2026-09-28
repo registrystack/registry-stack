@@ -408,6 +408,7 @@ fn request_query_router(
             pool,
             registry.clone(),
             identity.clone(),
+            "request-query-instance",
             lock_key,
             Duration::from_secs(2),
             audit,
@@ -418,7 +419,7 @@ fn request_query_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -557,11 +558,8 @@ async fn install_registry(
         registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: "request-query-instance",
             database_id: "request-query-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await

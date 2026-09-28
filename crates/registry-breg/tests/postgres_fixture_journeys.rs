@@ -114,11 +114,8 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
         &registry,
         RegistryStateTestIdentity {
             package_id: &package.package.manifest().package_id,
-            environment: "production",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: &package.revision,
-            package_sequence: 1,
+            label: &package.revision,
         },
     )
     .await

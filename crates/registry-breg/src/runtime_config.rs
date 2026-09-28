@@ -976,7 +976,7 @@ impl RuntimeConfig {
     }
 
     /// Verify the shared package envelope and optional package digest pin
-    /// before any product-specific signature or deployment-binding work.
+    /// before any product-specific closure or derivation work.
     pub fn verify_package_envelope(
         &self,
     ) -> std::result::Result<
@@ -990,7 +990,7 @@ impl RuntimeConfig {
     }
 
     /// Verify the configured package pin and consume that same shared
-    /// envelope through BReg's signature, binding, and derivation checks.
+    /// envelope through BReg's closure and derivation checks.
     pub fn load_active_package(&self) -> std::result::Result<VerifiedPackage, PackageError> {
         let shared = self
             .verify_package_envelope()

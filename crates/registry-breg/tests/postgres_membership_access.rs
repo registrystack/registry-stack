@@ -51,11 +51,8 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
             &registry,
             RegistryStateTestIdentity {
                 package_id: "membership-example",
-                environment: "local",
-                instance_id: "membership-instance",
                 database_id: "membership-database",
-                package_revision: "membership-package-1",
-                package_sequence: 1,
+                label: "membership-package-1",
             },
         )
         .await
@@ -100,6 +97,7 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
             pool.clone(),
             registry.clone(),
             identity.clone(),
+            "membership-instance",
             lock_key,
             Duration::from_secs(2),
             audit,
@@ -108,7 +106,7 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
             HttpService::new(
                 registry.clone(),
                 ReadRuntimeIdentity {
-                    package_revision: identity.package_revision.clone(),
+                    package_revision: identity.activation_id.clone(),
                     schema_fingerprint: identity.schema_fingerprint.clone(),
                 },
                 records,

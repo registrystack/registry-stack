@@ -96,15 +96,15 @@ use registry_breg::history_erasure::{
 };
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryLockKey,
+    install_compiled_schema, managed_schema_fingerprint, test_package_digest,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
 };
 use registry_breg_client::{BRegProblemCode, BRegRecordOptions, BRegSnapshotListRequest};
 
 const ENTITY: &str = "membership";
-const OLD_PACKAGE: &str = "pkg-erasure-old";
-const MIDDLE_PACKAGE: &str = "pkg-erasure-middle";
-const CURRENT_PACKAGE: &str = "pkg-erasure-current";
+const OLD_PACKAGE: &str = "3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b01";
+const MIDDLE_PACKAGE: &str = "3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b02";
+const CURRENT_PACKAGE: &str = "3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b03";
 const RECORD_CANARY: &str = "018feaa0-68f9-4a45-b9e3-58436df07af7";
 const REASON_CANARY: &str = "source reason must not enter maintenance audit";
 const OPERATOR_CANARY: &str = "operator secret must not enter maintenance audit";
@@ -2160,28 +2160,23 @@ async fn install_ready_history_registry(
             .expect("managed schema fingerprint resolves");
     let expected = ExpectedRegistryIdentity {
         package_id: registry.registry_id().to_owned(),
-        environment: "local".to_owned(),
-        instance_id: "history-erasure-test".to_owned(),
         database_id: "history-erasure-db".to_owned(),
-        package_revision: CURRENT_PACKAGE.to_owned(),
+        package_digest: test_package_digest("pkg-erasure-current"),
+        activation_id: CURRENT_PACKAGE.to_owned(),
         schema_fingerprint,
-        package_sequence: 3,
     };
     migration
         .execute(
             "INSERT INTO registry_internal.registry_state (
-                 singleton, package_id, environment, instance_id, database_id,
-                 active_package_revision, schema_fingerprint, package_sequence,
-                 maintenance_status
-             ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')",
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint, maintenance_status
+             ) VALUES (true, $1, $2, $3, $4::text::uuid, $5, 'ready')",
             &[
                 &expected.package_id,
-                &expected.environment,
-                &expected.instance_id,
                 &expected.database_id,
-                &expected.package_revision,
+                &expected.package_digest,
+                &expected.activation_id,
                 &expected.schema_fingerprint,
-                &expected.package_sequence,
             ],
         )
         .await
@@ -2263,15 +2258,31 @@ async fn insert_erase_field_flip(transaction: &tokio_postgres::Transaction<'_>, 
     transaction
         .execute(
             "INSERT INTO registry_internal.registry_migrations
-                 (target_package_revision, source_package_revision, package_sequence,
-                  plan_kind, statement_checksums, artifact_paths, artifact_checksums,
-                  outcome, completed_at)
-             VALUES ($1, $2, 1, 'metadata_only', ARRAY[]::text[], ARRAY[]::text[],
-                     ARRAY[]::text[], 'applied', transaction_timestamp()),
-                    ($3, $1, 3, 'metadata_only', ARRAY[]::text[], ARRAY[]::text[],
-                     ARRAY[]::text[], 'applied', transaction_timestamp())
-             ON CONFLICT (target_package_revision) DO NOTHING",
-            &[&MIDDLE_PACKAGE, &OLD_PACKAGE, &CURRENT_PACKAGE],
+                 (activation_id, apply_order, package_digest, predecessor_package_digest,
+                  registry_revision, plan_kind, migration_kind, statement_checksums,
+                  artifact_paths, artifact_checksums, outcome, completed_at, applied_at,
+                  role_mode, runtime_role)
+             VALUES ($1::text::uuid, 1, $4, NULL, 'erasure-test', 'initial',
+                     'compiled_additive', ARRAY['sha256:initial']::text[], ARRAY[]::text[],
+                     ARRAY[]::text[], 'applied', transaction_timestamp(),
+                     transaction_timestamp(), 'single', current_user),
+                    ($2::text::uuid, 2, $5, $4, 'erasure-test', 'successor',
+                     'metadata_only', ARRAY[]::text[], ARRAY[]::text[],
+                     ARRAY[]::text[], 'applied', transaction_timestamp(),
+                     transaction_timestamp(), 'single', current_user),
+                    ($3::text::uuid, 3, $6, $5, 'erasure-test', 'successor',
+                     'metadata_only', ARRAY[]::text[], ARRAY[]::text[],
+                     ARRAY[]::text[], 'applied', transaction_timestamp(),
+                     transaction_timestamp(), 'single', current_user)
+             ON CONFLICT (activation_id) DO NOTHING",
+            &[
+                &OLD_PACKAGE,
+                &MIDDLE_PACKAGE,
+                &CURRENT_PACKAGE,
+                &test_package_digest("pkg-erasure-old"),
+                &test_package_digest("pkg-erasure-middle"),
+                &test_package_digest("pkg-erasure-current"),
+            ],
         )
         .await
         .expect("field-encryption boundary ledger row inserts");
@@ -2503,7 +2514,7 @@ async fn snapshot_client_http(
         FieldEncryptionService::activate(
             &FieldEncryptionProvider::LocalFile { dek_ref },
             registry.registry_id(),
-            &identity.package_revision,
+            &identity.activation_id,
             &secrets,
             key_store,
         )
@@ -2541,7 +2552,7 @@ async fn snapshot_client_http(
     let service = HttpService::new(
         registry,
         ReadRuntimeIdentity {
-            package_revision: identity.package_revision,
+            package_revision: identity.activation_id,
             schema_fingerprint: identity.schema_fingerprint,
         },
         Arc::new(records),

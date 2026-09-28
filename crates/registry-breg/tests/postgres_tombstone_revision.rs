@@ -18,8 +18,9 @@ use registry_breg::mutation::{
     MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
@@ -33,7 +34,7 @@ const DATABASE_ID: &str = "tombstone-database";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
-    let fixture = Fixture::start(41, "package-tombstone-1", 1).await;
+    let fixture = Fixture::start(41, "package-tombstone-1").await;
     let mut client = fixture
         .database
         .runtime_config
@@ -61,18 +62,18 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
         .expect("create commits");
     let record_id = response_id(&created);
     let mut upgraded_identity = fixture.identity.clone();
-    upgraded_identity.package_revision = "package-tombstone-2".to_owned();
-    upgraded_identity.package_sequence = 2;
+    upgraded_identity.package_digest = test_package_digest("package-tombstone-2");
+    upgraded_identity.activation_id = test_activation_id("package-tombstone-2");
     fixture
         .database
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1, package_sequence = $2
+             SET active_package_digest = $1, active_activation_id = $2::text::uuid
              WHERE singleton",
             &[
-                &upgraded_identity.package_revision,
-                &upgraded_identity.package_sequence,
+                &upgraded_identity.package_digest,
+                &upgraded_identity.activation_id,
             ],
         )
         .await
@@ -81,12 +82,13 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
         fixture.lock_key,
         Duration::from_secs(2),
         upgraded_identity,
+        INSTANCE_ID,
         fixture.database.audit(fixture.profile.clone()),
     );
     let package_two_etag = response_etag(
         &fixture.profile,
         &claims,
-        "package-tombstone-2",
+        &test_activation_id("package-tombstone-2"),
         &record_id,
         1,
         &response_fields,
@@ -168,7 +170,7 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tombstone_refusals_faults_and_concurrency_have_no_duplicate_effects() {
-    let fixture = Fixture::start(42, "package-tombstone-faults-1", 1).await;
+    let fixture = Fixture::start(42, "package-tombstone-faults-1").await;
     let pool = fixture
         .database
         .runtime_config
@@ -475,7 +477,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn start(pool_size: usize, package_revision: &str, package_sequence: i64) -> Self {
+    async fn start(pool_size: usize, label: &str) -> Self {
         let database = TestDatabase::create(pool_size).await;
         let (migration, migration_task) = database.connect_migration().await;
         let compiled = compiled_registry(true);
@@ -488,11 +490,8 @@ impl Fixture {
             &compiled,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: INSTANCE_ID,
                 database_id: DATABASE_ID,
-                package_revision,
-                package_sequence,
+                label,
             },
         )
         .await
@@ -505,6 +504,7 @@ impl Fixture {
             lock_key,
             Duration::from_secs(2),
             identity.clone(),
+            INSTANCE_ID,
             database.audit(profile.clone()),
         );
         let table = compiled.entities()["widget"].physical_table.clone();
@@ -908,17 +908,26 @@ async fn assert_three_revisions_one_record_across_package_upgrade(
     assert_eq!(rows[0].get::<_, i64>(2), 1);
     assert_eq!(rows[0].get::<_, Option<i64>>(3), None);
     assert_eq!(rows[0].get::<_, String>(4), "active");
-    assert_eq!(rows[0].get::<_, String>(5), "package-tombstone-1");
+    assert_eq!(
+        rows[0].get::<_, String>(5),
+        test_activation_id("package-tombstone-1")
+    );
     assert_eq!(rows[0].get::<_, String>(6), "records.widget.create");
     assert_eq!(rows[0].get::<_, String>(7), "create");
     assert_eq!(rows[1].get::<_, i64>(2), 2);
     assert_eq!(rows[1].get::<_, Option<i64>>(3), Some(1));
-    assert_eq!(rows[1].get::<_, String>(5), "package-tombstone-2");
+    assert_eq!(
+        rows[1].get::<_, String>(5),
+        test_activation_id("package-tombstone-2")
+    );
     assert_eq!(rows[1].get::<_, String>(7), "patch");
     assert_eq!(rows[2].get::<_, i64>(2), 3);
     assert_eq!(rows[2].get::<_, Option<i64>>(3), Some(2));
     assert_eq!(rows[2].get::<_, String>(4), "tombstoned");
-    assert_eq!(rows[2].get::<_, String>(5), "package-tombstone-2");
+    assert_eq!(
+        rows[2].get::<_, String>(5),
+        test_activation_id("package-tombstone-2")
+    );
     assert_eq!(rows[2].get::<_, String>(6), "records.widget.tombstone");
     assert_eq!(rows[2].get::<_, String>(7), "tombstone");
     assert!(
@@ -946,7 +955,10 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id:
     assert_eq!(row.get::<_, String>(2), "tombstoned");
     assert_eq!(row.get::<_, String>(3), "widget");
     assert_eq!(row.get::<_, i64>(4), 3);
-    assert_eq!(row.get::<_, String>(5), "package-tombstone-2");
+    assert_eq!(
+        row.get::<_, String>(5),
+        test_activation_id("package-tombstone-2")
+    );
     assert!(row.get::<_, String>(6).starts_with("sha256:"));
     let payload: Vec<u8> = row.get(7);
     let envelope: Value =
@@ -958,7 +970,7 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id:
             "recordId": record_id,
             "revision": 3,
             "trigger": "tombstoned",
-            "packageRevision": "package-tombstone-2",
+            "packageRevision": test_package_digest("package-tombstone-2"),
             "values": {
                 "label": "patched-label",
                 "quantity": 7,

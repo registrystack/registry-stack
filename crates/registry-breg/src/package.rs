@@ -2526,7 +2526,7 @@ fn reviewed_successor_created_policies(table: &DdlTable) -> BTreeMap<&str, &DdlP
 }
 
 fn drop_policy_statement(entity_id: &str, table: &DdlTable, policy_name: &str) -> DdlStatement {
-    // A signed predecessor baseline may come from an older compiler that did
+    // A predecessor baseline may come from an older compiler that did
     // not emit this reconstructed policy. Tolerate absence of this exact name;
     // candidate catalog verification still refuses any unmanaged policies.
     DdlStatement {
@@ -3701,7 +3701,7 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
-    let registry = compile_signed_sources(&package.manifest, &loaded)?;
+    let registry = compile_package_sources(&package.manifest, &loaded)?;
     Ok((package, registry))
 }
 
@@ -3713,7 +3713,7 @@ fn load_predecessor_closure(
     let production = context.database_initialization_environment != "local";
     let (manifest, loaded) = load_verified_closure(root, shared, production)?;
     validate_source_inventory(&manifest)?;
-    let governed = signed_predecessor_governed_model(&manifest, &loaded)?;
+    let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
     let package_digest = shared.digest().to_owned();
     let migration_baseline = governed.migration_baseline(&package_digest);
@@ -3912,7 +3912,7 @@ impl PredecessorGovernedModel {
     }
 }
 
-fn signed_predecessor_governed_model(
+fn package_predecessor_governed_model(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<PredecessorGovernedModel> {
@@ -3960,12 +3960,13 @@ fn signed_predecessor_governed_model(
         .unwrap_or_default();
 
     let physical_names: PhysicalNameInventory =
-        signed_manifest_json(manifest, loaded, PackageFileRole::PhysicalNameInventory)?;
+        packaged_manifest_json(manifest, loaded, PackageFileRole::PhysicalNameInventory)?;
     let routes: CompiledRouteInventory =
-        signed_manifest_json(manifest, loaded, PackageFileRole::RouteInventory)?;
+        packaged_manifest_json(manifest, loaded, PackageFileRole::RouteInventory)?;
     let access: CompiledAccessInventory =
-        signed_manifest_json(manifest, loaded, PackageFileRole::AccessInventory)?;
-    let mut query_value = signed_manifest_value(manifest, loaded, PackageFileRole::QueryInventory)?;
+        packaged_manifest_json(manifest, loaded, PackageFileRole::AccessInventory)?;
+    let mut query_value =
+        packaged_manifest_value(manifest, loaded, PackageFileRole::QueryInventory)?;
     normalize_legacy_predecessor_query_temporal_scope_fields(
         &legacy_temporal_scopes,
         &mut query_value,
@@ -4013,16 +4014,16 @@ fn signed_predecessor_governed_model(
     })
 }
 
-fn signed_manifest_json<T: for<'de> Deserialize<'de>>(
+fn packaged_manifest_json<T: for<'de> Deserialize<'de>>(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
     role: PackageFileRole,
 ) -> Result<T> {
-    let value = signed_manifest_value(manifest, loaded, role)?;
+    let value = packaged_manifest_value(manifest, loaded, role)?;
     serde_json::from_value(value).map_err(|_| PackageError::Derivation)
 }
 
-fn signed_manifest_value(
+fn packaged_manifest_value(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
     role: PackageFileRole,
@@ -4375,9 +4376,9 @@ fn load_closure(
     Ok(loaded)
 }
 
-/// Compile the signed sources of one verified package closure. The caller
+/// Compile the sources of one verified package closure. The caller
 /// decides whether generated artifacts must also match byte for byte.
-fn compile_signed_sources(
+fn compile_package_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<CompiledRegistry> {
@@ -4450,7 +4451,7 @@ fn rederive(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
-    let compiled = compile_signed_sources(manifest, loaded)?;
+    let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
         .files

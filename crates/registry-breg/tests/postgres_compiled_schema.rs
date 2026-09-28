@@ -24,7 +24,6 @@ use registry_breg::postgres::{
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000201";
 const RECORD_BETA: &str = "00000000-0000-0000-0000-000000000202";
 const PACKAGE_ID: &str = "compiled-registry";
-const INSTANCE_ID: &str = "compiled-instance";
 const DATABASE_ID: &str = "compiled-database";
 const PRIOR_REVISION: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -49,11 +48,8 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "compiled-package-1",
-            package_sequence: 1,
+            label: "compiled-package-1",
         },
     )
     .await
@@ -941,11 +937,8 @@ async fn install_derived_view_fixture() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "derived-package-1",
-            package_sequence: 1,
+            label: "derived-package-1",
         },
     )
     .await
@@ -1527,11 +1520,8 @@ async fn install_asset_fixture() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "asset-package-1",
-            package_sequence: 1,
+            label: "asset-package-1",
         },
     )
     .await

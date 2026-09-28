@@ -33,7 +33,6 @@ use tower::Service as _;
 use zeroize::Zeroizing;
 
 const PACKAGE_ID: &str = "anonymous-refusal-registry";
-const INSTANCE_ID: &str = "anonymous-refusal-instance";
 const DATABASE_ID: &str = "anonymous-refusal-database";
 const PACKAGE_REVISION: &str = "package-anonymous-refusal-1";
 const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-anonymous-refusal-metrics";
@@ -100,11 +99,8 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -134,7 +130,7 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
     let service = Arc::new(HttpService::new(
         Arc::clone(&registry),
         ReadRuntimeIdentity {
-            package_revision: identity.package_revision.clone(),
+            package_revision: identity.activation_id.clone(),
             schema_fingerprint: identity.schema_fingerprint.clone(),
         },
         Arc::new(records),

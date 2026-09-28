@@ -752,11 +752,14 @@ impl PostgresRecordMutationService {
             }
         }
     }
+    /// `instance_id` is the runtime file's `identity.instanceId`, which the
+    /// event source of every captured envelope names.
     #[must_use]
     pub fn new(
         pool: RuntimePool,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
+        instance_id: &str,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         audit: RegistryAudit,
@@ -765,6 +768,7 @@ impl PostgresRecordMutationService {
             pool,
             registry,
             expected,
+            instance_id,
             lock_key,
             lock_timeout,
             audit,
@@ -773,10 +777,12 @@ impl PostgresRecordMutationService {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_event_destinations(
         pool: RuntimePool,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
+        instance_id: &str,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         audit: RegistryAudit,
@@ -786,6 +792,7 @@ impl PostgresRecordMutationService {
             lock_key,
             lock_timeout,
             expected.clone(),
+            instance_id,
             audit.clone(),
             event_destinations,
         );
@@ -1198,7 +1205,7 @@ impl PostgresRecordMutationService {
         if input.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
-        if input.package_revision != self.expected.package_revision
+        if input.package_revision != self.expected.package_digest
             || input.schema_fingerprint != self.expected.schema_fingerprint
         {
             // The caller planned against a different active package; the run
@@ -1270,7 +1277,7 @@ impl PostgresRecordMutationService {
                     transition: "create",
                     run_id: None,
                     chunk_index: None,
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.package_digest,
                     entity_id: &run.entity_id,
                     profile_id: &run.profile_id,
                     principal_reference: &run.created_principal_reference,
@@ -1306,7 +1313,7 @@ impl PostgresRecordMutationService {
             run.import_authority_id = crate::import_authority::admit_run(
                 tx,
                 &mut authority_records,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &run.entity_id,
                 &run.profile_id,
                 run.item_count,
@@ -1334,7 +1341,7 @@ impl PostgresRecordMutationService {
         let audit_record = ingestion_store::run_audit_record(
             "created",
             &record,
-            &self.expected.package_revision,
+            &self.expected.package_digest,
             &record.created_principal_reference,
             Some(&request_correlation),
         );
@@ -1357,7 +1364,7 @@ impl PostgresRecordMutationService {
         Ok(Self::run_response(
             &record,
             (
-                &self.expected.package_revision,
+                &self.expected.package_digest,
                 &self.expected.schema_fingerprint,
             ),
         ))
@@ -1430,7 +1437,7 @@ impl PostgresRecordMutationService {
         // already retired. An empty page carries no binding and discloses
         // nothing, so it serves.
         if let Some((revision, fingerprint)) = &page.active_binding {
-            if revision != &self.expected.package_revision
+            if revision != &self.expected.package_digest
                 || fingerprint != &self.expected.schema_fingerprint
             {
                 return Err(IngestionServiceError::Unavailable);
@@ -1499,7 +1506,7 @@ impl PostgresRecordMutationService {
         let response = Self::run_response(
             &run,
             (
-                &self.expected.package_revision,
+                &self.expected.package_digest,
                 &self.expected.schema_fingerprint,
             ),
         );
@@ -1538,7 +1545,7 @@ impl PostgresRecordMutationService {
                     transition: "cancel",
                     run_id: Some(run_id),
                     chunk_index: None,
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.package_digest,
                     entity_id,
                     profile_id: claims.access_profile(),
                     principal_reference: &self.ingestion_principal_reference(principal)?,
@@ -1584,7 +1591,7 @@ impl PostgresRecordMutationService {
         let audit_record = ingestion_store::run_audit_record(
             "cancelled",
             &cancelled,
-            &self.expected.package_revision,
+            &self.expected.package_digest,
             &cancelled.created_principal_reference,
             Some(&request_correlation),
         );
@@ -1603,7 +1610,7 @@ impl PostgresRecordMutationService {
         Ok(Self::run_response(
             &cancelled,
             (
-                &self.expected.package_revision,
+                &self.expected.package_digest,
                 &self.expected.schema_fingerprint,
             ),
         ))
@@ -1714,7 +1721,7 @@ impl PostgresRecordMutationService {
                         transition: "submitChunk",
                         run_id: Some(run.run_id),
                         chunk_index: Some(input.chunk_index),
-                        package_revision: &self.expected.package_revision,
+                        package_revision: &self.expected.package_digest,
                         entity_id: &run.entity_id,
                         profile_id: &run.profile_id,
                         principal_reference: &principal_reference,
@@ -1796,7 +1803,7 @@ impl PostgresRecordMutationService {
             self.open_receipt_members(
                 &input.entity_id,
                 !run.active_binding_matches(
-                    &self.expected.package_revision,
+                    &self.expected.package_digest,
                     &self.expected.schema_fingerprint,
                 ),
                 &mut batch,
@@ -1830,7 +1837,7 @@ impl PostgresRecordMutationService {
             let answer = json!({
                 "run": Self::run_response(
                     &current,
-                    (&self.expected.package_revision, &self.expected.schema_fingerprint),
+                    (&self.expected.package_digest, &self.expected.schema_fingerprint),
                 ),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
             });
@@ -2261,7 +2268,7 @@ impl PostgresRecordMutationService {
                     transition: "chunkReceipt",
                     run_id: Some(run_id),
                     chunk_index: Some(chunk_index),
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.package_digest,
                     entity_id,
                     profile_id: claims.access_profile(),
                     principal_reference: &principal_reference,
@@ -2341,7 +2348,7 @@ impl PostgresRecordMutationService {
         self.open_receipt_members(
             entity_id,
             !run.active_binding_matches(
-                &self.expected.package_revision,
+                &self.expected.package_digest,
                 &self.expected.schema_fingerprint,
             ),
             &mut batch,

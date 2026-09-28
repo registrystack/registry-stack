@@ -49,7 +49,7 @@ pub(crate) enum ApplyLifecycleActivation {
 pub(crate) struct ApplyLifecycleOutcome {
     pub package_digest: String,
     pub schema_fingerprint: String,
-    pub package_sequence: i64,
+    pub activation_id: String,
     pub activation: ApplyLifecycleActivation,
 }
 
@@ -148,7 +148,7 @@ pub(crate) fn run(
                 ))
                 .map_err(ApplyLifecycleError::Apply)?
                 .ok_or(ApplyLifecycleError::Uninitialized)?;
-            if target.package_digest() == recorded.identity.package_revision {
+            if target.package_digest() == recorded.identity.package_digest {
                 return Err(ApplyLifecycleError::Apply(MigrationError::AlreadyActive));
             }
             bind_active_package(
@@ -203,9 +203,9 @@ pub(crate) fn run(
         .block_on(apply_verified_package(apply))
         .map_err(ApplyLifecycleError::Apply)?;
     Ok(ApplyLifecycleOutcome {
-        package_digest: activated.package_revision,
+        package_digest: activated.package_digest,
         schema_fingerprint: activated.schema_fingerprint,
-        package_sequence: activated.package_sequence,
+        activation_id: activated.activation_id,
         activation: if request.initial {
             ApplyLifecycleActivation::Initial
         } else {

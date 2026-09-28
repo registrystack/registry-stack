@@ -27,9 +27,9 @@ use registry_breg::mutation::{
     MutationOutcome, MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Map, Value};
@@ -179,11 +179,8 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-mutation-1",
-            package_sequence: 1,
+            label: "package-mutation-1",
         },
     )
     .await
@@ -202,6 +199,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),
+        INSTANCE_ID,
         profile.clone(),
     );
     let create_plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
@@ -874,17 +872,17 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
     );
 
     let mut changed_identity = identity.clone();
-    changed_identity.package_revision = "package-mutation-2".to_owned();
-    changed_identity.package_sequence = 2;
+    changed_identity.package_digest = test_package_digest("package-mutation-2");
+    changed_identity.activation_id = test_activation_id("package-mutation-2");
     database
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1, package_sequence = $2
+             SET active_package_digest = $1, active_activation_id = $2::text::uuid
              WHERE singleton",
             &[
-                &changed_identity.package_revision,
-                &changed_identity.package_sequence,
+                &changed_identity.package_digest,
+                &changed_identity.activation_id,
             ],
         )
         .await
@@ -893,6 +891,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         changed_identity,
+        INSTANCE_ID,
         profile.clone(),
     );
     let before_changed_package = durable_counts(&database, table).await;
@@ -941,11 +940,8 @@ async fn prepared_mutation_registry(
         &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-mutation-1",
-            package_sequence: 1,
+            label: "package-mutation-1",
         },
     )
     .await
@@ -966,6 +962,7 @@ fn audited_coordinator(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),
+        INSTANCE_ID,
         database.audit(
             AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
                 .expect("test owns a strong keyed audit profile"),
@@ -1264,11 +1261,8 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-http-mutation-1",
-            package_sequence: 1,
+            label: "package-http-mutation-1",
         },
     )
     .await
@@ -2377,11 +2371,8 @@ async fn refusal_audit_records_only_compiled_access_profiles() {
         &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-refusal-profile-1",
-            package_sequence: 1,
+            label: "package-refusal-profile-1",
         },
     )
     .await
@@ -2495,13 +2486,14 @@ fn mutation_refusal_audit_fault_router(
         cursors.clone(),
     ));
     let read_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let mutations = PostgresRecordMutationService::new(
         pool,
         registry.clone(),
         identity,
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -2538,13 +2530,14 @@ fn mutation_router(
         cursors.clone(),
     ));
     let read_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let mutations = PostgresRecordMutationService::new(
         pool,
         registry.clone(),
         identity,
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -3177,7 +3170,7 @@ async fn assert_patch_preserved_omitted_field(
         "recordId": record_id,
         "revision": 2,
         "trigger": "patched",
-        "packageRevision": "package-mutation-1",
+        "packageRevision": test_package_digest("package-mutation-1"),
         "values": {
             "label": "after-patch",
             "quantity": 41,

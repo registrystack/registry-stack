@@ -3091,7 +3091,7 @@ impl SchemaTestRuntime {
         }
         let expected = database.expected().clone();
         let read_identity = ReadRuntimeIdentity {
-            package_revision: expected.package_revision.clone(),
+            package_revision: expected.activation_id.clone(),
             schema_fingerprint: expected.schema_fingerprint.clone(),
         };
         let records = Arc::new(PostgresRecordReadService::new(
@@ -3128,6 +3128,7 @@ impl SchemaTestRuntime {
             pool.clone(),
             Arc::clone(&registry),
             expected,
+            config.identity().instance_id(),
             database.lock_key(),
             config.operational_timeouts().record_lock,
             audit,
@@ -3282,7 +3283,7 @@ async fn database_execution_facts(
     let row = client
         .query_one(
             "SELECT current_database(), current_setting('server_version_num'),
-                    package_id, active_package_revision, schema_fingerprint,
+                    package_id, active_package_digest, schema_fingerprint,
                     maintenance_status
                FROM registry_internal.registry_state
               WHERE singleton",

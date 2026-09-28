@@ -24,11 +24,11 @@ use crate::package::{
     VerifiedPackage,
 };
 use crate::postgres::{
-    statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    MaintenanceTransition, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
-    MigrationLedgerStepKind, MigrationPlanKind, PackageDdlStatement, PostgresFailure,
-    RegistryLockKey, ReviewedExecutionOutcome, ReviewedFieldEncryptionContext,
-    ReviewedPackageExecutionRequest, SqlIdentifier, VerifiedPackageApplyConnection,
+    statement_checksum, ActivationPlanKind, ConnectionConfig, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, MaintenanceTransition, MigrationArtifactBinding, MigrationKind,
+    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind, PackageDdlStatement,
+    PostgresFailure, RegistryLockKey, ReviewedExecutionOutcome, ReviewedFieldEncryptionContext,
+    ReviewedPackageExecutionRequest, RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -145,33 +145,34 @@ impl<'a> ActivationDeployment<'a> {
     pub fn database_id(&self) -> &'a str {
         self.database_id
     }
+
+    #[must_use]
+    pub fn environment(&self) -> &'a str {
+        self.environment
+    }
+
+    #[must_use]
+    pub fn instance_id(&self) -> &'a str {
+        self.instance_id
+    }
 }
 
 /// The exact registry identity one verified package activates to: the
-/// deployment the runtime identity names, the package digest, and the next
-/// position in the database's own apply order.
+/// database the runtime identity names, the package digest, and the
+/// activation the apply lock resolved for it.
 pub(crate) fn target_package_identity(
     package: &VerifiedPackage,
-    deployment: ActivationDeployment<'_>,
-    current: Option<&ExpectedRegistryIdentity>,
-) -> Result<ExpectedRegistryIdentity> {
+    database_id: &str,
+    activation_id: uuid::Uuid,
+) -> ExpectedRegistryIdentity {
     let manifest = package.manifest();
-    let package_sequence = match current {
-        Some(current) => current
-            .package_sequence
-            .checked_add(1)
-            .ok_or(MigrationError::PackageBinding)?,
-        None => 1,
-    };
-    Ok(ExpectedRegistryIdentity {
+    ExpectedRegistryIdentity {
         package_id: manifest.package_id.clone(),
-        environment: deployment.environment.to_owned(),
-        instance_id: deployment.instance_id.to_owned(),
-        database_id: deployment.database_id.to_owned(),
-        package_revision: package.package_digest().to_owned(),
+        database_id: database_id.to_owned(),
+        package_digest: package.package_digest().to_owned(),
+        activation_id: activation_id.hyphenated().to_string(),
         schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence,
-    })
+    }
 }
 
 /// Confirms a verified package is the exact activation successor of one active
@@ -185,22 +186,22 @@ pub(crate) fn target_package_identity(
 /// and the package's `fromPackageDigest` is the active digest.
 pub(crate) fn verify_successor_package_binding(
     package: &VerifiedPackage,
-    deployment: ActivationDeployment<'_>,
+    database_id: &str,
     current: &ExpectedRegistryIdentity,
 ) -> Result<()> {
     current
         .validate()
         .map_err(|_| MigrationError::PackageBinding)?;
-    if deployment.database_id != current.database_id {
+    if database_id != current.database_id {
         return Err(MigrationError::DatabaseMismatch);
     }
-    if package.package_digest() == current.package_revision {
+    if package.package_digest() == current.package_digest {
         return Err(MigrationError::AlreadyActive);
     }
     let manifest = package.manifest();
     if manifest.package_id != current.package_id
         || manifest.migration_plan.from_package_digest.as_deref()
-            != Some(current.package_revision.as_str())
+            != Some(current.package_digest.as_str())
     {
         return Err(MigrationError::PackageBinding);
     }
@@ -216,30 +217,42 @@ pub(crate) fn compiler_statement_checksums(statements: &[DdlStatement]) -> Vec<S
 }
 
 /// The durable ledger entry one verified package binds for its activation.
+/// Its activation id is left nil: the apply resolves it under the apply lock,
+/// where a retry of the same target finds the activation it resumes.
 pub(crate) fn package_ledger_entry(
     package: &VerifiedPackage,
     current: Option<&ExpectedRegistryIdentity>,
-    target: &ExpectedRegistryIdentity,
+    roles: ApplyRoles<'_>,
     compiler_checksums: &[String],
 ) -> Result<MigrationLedgerEntry> {
-    if let (Some(plan), Some(current)) = (package.reviewed_migration_plan(), current) {
-        return reviewed_ledger(package, current, target, plan);
-    }
-    Ok(MigrationLedgerEntry {
-        source_revision: current.map(|identity| identity.package_revision.clone()),
-        target_revision: target.package_revision.clone(),
-        package_sequence: target.package_sequence,
-        plan_kind: if current.is_some()
+    let mut ledger = MigrationLedgerEntry {
+        activation_id: uuid::Uuid::nil(),
+        package_digest: package.package_digest().to_owned(),
+        predecessor_package_digest: current.map(|identity| identity.package_digest.clone()),
+        registry_revision: package.registry().revision().to_owned(),
+        plan_kind: if current.is_some() {
+            ActivationPlanKind::Successor
+        } else {
+            ActivationPlanKind::Initial
+        },
+        migration_kind: if current.is_some()
             && verified_metadata_only_plan(&package.manifest().migration_plan)
         {
-            MigrationPlanKind::MetadataOnly
+            MigrationKind::MetadataOnly
         } else {
-            MigrationPlanKind::CompiledAdditive
+            MigrationKind::CompiledAdditive
         },
+        role_mode: RoleMode::from_roles(roles.migration, roles.runtime),
+        runtime_role: roles.runtime.as_str().to_owned(),
+        operator_reference_hash: None,
         statement_checksums: compiler_checksums.to_vec(),
         artifact_bindings: Vec::new(),
         steps: Vec::new(),
-    })
+    };
+    if let (Some(plan), Some(current)) = (package.reviewed_migration_plan(), current) {
+        reviewed_ledger(package, current, plan, &mut ledger)?;
+    }
+    Ok(ledger)
 }
 
 /// Exact durable precondition under which a verified package may be applied.
@@ -351,7 +364,7 @@ pub async fn read_recorded_registry_state(
     match snapshot {
         Ok(snapshot) => Ok(Some(RecordedRegistryState {
             ready: snapshot.maintenance_status == "ready"
-                && snapshot.maintenance_target_revision.is_none(),
+                && snapshot.maintenance_target_package_digest.is_none(),
             identity: snapshot.identity,
         })),
         Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => Ok(None),
@@ -374,7 +387,7 @@ pub fn bind_active_package(
     if recorded.database_id != deployment.database_id {
         return Err(MigrationError::DatabaseMismatch);
     }
-    if recorded.package_revision != package_digest {
+    if recorded.package_digest != package_digest {
         return Err(MigrationError::ActivePackageMismatch);
     }
     Ok(())
@@ -541,7 +554,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
 }
 
 /// Apply the exact plan already rederived by the package verifier, verify the
-/// resulting managed catalog and signed schema fingerprint, and atomically
+/// resulting managed catalog and the package's schema fingerprint, and atomically
 /// activate its identity with an immutable applied-ledger outcome.
 ///
 /// Threat: a caller might try to run SQL outside the reviewed package, apply a
@@ -557,11 +570,14 @@ pub async fn apply_verified_package(
     let current = match request.precondition {
         ApplyPrecondition::InitialActivation => None,
         ApplyPrecondition::Successor { current } => {
-            verify_successor_package_binding(request.package, request.deployment, current)?;
+            verify_successor_package_binding(
+                request.package,
+                request.deployment.database_id(),
+                current,
+            )?;
             Some(current)
         }
     };
-    let target = target_package_identity(request.package, request.deployment, current)?;
     // An uninitialized database accepts any package of a chain: it installs
     // the package's full compiled catalog, so neither the package's successor
     // plan nor its reviewed migrations apply to it.
@@ -589,22 +605,33 @@ pub async fn apply_verified_package(
     {
         return Err(MigrationError::PackageBinding);
     }
+    let rescoped_descriptor;
     let successor_history = if let Some(plan_current) = current {
         let predecessor_baseline = bind_predecessor_baseline(
             manifest.migration_plan.prior_baseline.as_ref(),
             request.predecessor_migration_baseline,
         )?;
         if predecessor_baseline
-            .is_some_and(|baseline| baseline.package_digest != plan_current.package_revision)
+            .is_some_and(|baseline| baseline.package_digest != plan_current.package_digest)
             || request
                 .predecessor_history_descriptor
                 .is_some_and(|descriptor| {
-                    descriptor.package_revision != plan_current.package_revision
+                    descriptor.package_revision != plan_current.package_digest
                 })
         {
             return Err(MigrationError::PackageBinding);
         }
-        Some((predecessor_baseline, request.predecessor_history_descriptor))
+        // A package names its predecessor's history descriptor by package
+        // digest; the database retains it under the activation that made the
+        // predecessor active.
+        rescoped_descriptor =
+            request
+                .predecessor_history_descriptor
+                .map(|descriptor| HistorySchemaDescriptor {
+                    package_revision: plan_current.activation_id.clone(),
+                    ..descriptor.clone()
+                });
+        Some((predecessor_baseline, rescoped_descriptor.as_ref()))
     } else {
         None
     };
@@ -613,7 +640,11 @@ pub async fn apply_verified_package(
     }
 
     let compiler_checksums = compiler_statement_checksums(compiler_statements);
-    let ledger = package_ledger_entry(request.package, current, &target, &compiler_checksums)?;
+    let mut ledger =
+        package_ledger_entry(request.package, current, request.roles, &compiler_checksums)?;
+    ledger
+        .validate_plan()
+        .map_err(|_| MigrationError::PackageBinding)?;
     let statements = compiler_statements
         .iter()
         .zip(&compiler_checksums)
@@ -661,6 +692,24 @@ pub async fn apply_verified_package(
         let _ = connection.release().await;
         return Err(MigrationError::ApplyFailed);
     }
+    // A retry of the same target resumes the activation its first attempt
+    // recorded; any other apply is a fresh activation.
+    ledger.activation_id = match connection
+        .in_flight_activation(request.package.package_digest())
+        .await
+    {
+        Ok(Some(activation_id)) => activation_id,
+        Ok(None) => uuid::Uuid::new_v4(),
+        Err(error) => {
+            let _ = connection.release().await;
+            return Err(refusal_before_maintenance(error));
+        }
+    };
+    let target = target_package_identity(
+        request.package,
+        request.deployment.database_id(),
+        ledger.activation_id,
+    );
     if current.is_some() {
         // Existing registries may have been initialized by a binary that
         // predates newer product-owned control tables. Reconcile them while
@@ -727,7 +776,7 @@ pub async fn apply_verified_package(
                     secrets: key_source.secrets,
                 },
                 request.package.registry(),
-                &target.package_revision,
+                &target.activation_id,
             )
             .await
             .is_err()
@@ -750,7 +799,7 @@ pub async fn apply_verified_package(
             return fail_and_release(connection, &target, &ledger).await;
         }
         if connection
-            .retain_target_history_descriptor(request.package.registry(), &target.package_revision)
+            .retain_target_history_descriptor(request.package.registry(), &target.activation_id)
             .await
             .is_err()
         {
@@ -778,7 +827,7 @@ pub async fn apply_verified_package(
             .execute_reviewed_package_plan(ReviewedPackageExecutionRequest {
                 registry: request.package.registry(),
                 current: current.ok_or(MigrationError::PackageBinding)?,
-                target_package_revision: &target.package_revision,
+                target_package_revision: &target.activation_id,
                 plan,
                 predecessor_baseline: successor_history.and_then(|(baseline, _)| baseline),
                 predecessor_history_descriptor: successor_history
@@ -883,7 +932,7 @@ pub async fn apply_verified_package(
         connection
             .execute_initial_package_ddl(
                 request.package.registry(),
-                &target.package_revision,
+                &target.activation_id,
                 &statements,
                 request.roles.runtime,
                 request.timeouts.statement,
@@ -986,12 +1035,13 @@ async fn fail_with_error_and_release(
     })
 }
 
+/// Binds a reviewed plan's checksums, artifacts, and steps into `ledger`.
 fn reviewed_ledger(
     package: &VerifiedPackage,
     current: &ExpectedRegistryIdentity,
-    target: &ExpectedRegistryIdentity,
     plan: &ValidatedReviewedMigrationPlan,
-) -> Result<MigrationLedgerEntry> {
+    ledger: &mut MigrationLedgerEntry,
+) -> Result<()> {
     let manifest = package.manifest();
     if plan.migrations().is_empty()
         || manifest.migration_plan.prior_schema_fingerprint.as_deref()
@@ -1002,7 +1052,7 @@ fn reviewed_ledger(
 
     let mut statement_checksums = Vec::new();
     for migration in plan.migrations() {
-        if migration.rehearsal_receipt.prior_package_digest != current.package_revision
+        if migration.rehearsal_receipt.prior_package_digest != current.package_digest
             || migration.rehearsal_receipt.prior_schema_fingerprint != current.schema_fingerprint
             || migration.rehearsal_receipt.final_schema_fingerprint != manifest.schema_fingerprint
         {
@@ -1089,19 +1139,13 @@ fn reviewed_ledger(
         }
     }
 
-    let ledger = MigrationLedgerEntry {
-        source_revision: Some(current.package_revision.clone()),
-        target_revision: target.package_revision.clone(),
-        package_sequence: target.package_sequence,
-        plan_kind: MigrationPlanKind::Reviewed,
-        statement_checksums,
-        artifact_bindings,
-        steps,
-    };
+    ledger.migration_kind = MigrationKind::Reviewed;
+    ledger.statement_checksums = statement_checksums;
+    ledger.artifact_bindings = artifact_bindings;
+    ledger.steps = steps;
     ledger
-        .validate()
-        .map_err(|_| MigrationError::PackageBinding)?;
-    Ok(ledger)
+        .validate_plan()
+        .map_err(|_| MigrationError::PackageBinding)
 }
 
 fn bind_predecessor_baseline<'a>(
@@ -1208,7 +1252,7 @@ fn check_backup_binding(
     let max_age =
         i64::try_from(binding.max_age_seconds).map_err(|_| MigrationError::BackupEvidence)?;
     if binding.database_id != current.database_id
-        || binding.prior_package_digest != current.package_revision
+        || binding.prior_package_digest != current.package_digest
         || binding.prior_schema_fingerprint != current.schema_fingerprint
         || !Path::new(&binding.backup_file).is_absolute()
         || binding.byte_length == 0
@@ -1389,12 +1433,10 @@ mod tests {
     fn active_identity() -> ExpectedRegistryIdentity {
         ExpectedRegistryIdentity {
             package_id: "registry-a".to_owned(),
-            environment: "production".to_owned(),
-            instance_id: "instance-a".to_owned(),
             database_id: "database-a".to_owned(),
-            package_revision: format!("sha256:{}", "a".repeat(64)),
+            package_digest: format!("sha256:{}", "a".repeat(64)),
+            activation_id: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b".to_owned(),
             schema_fingerprint: format!("sha256:{}", "f".repeat(64)),
-            package_sequence: 3,
         }
     }
 
@@ -1402,7 +1444,7 @@ mod tests {
         let active = active_identity();
         ExternalBackupBinding {
             database_id: database_id.to_owned(),
-            prior_package_digest: active.package_revision,
+            prior_package_digest: active.package_digest,
             prior_schema_fingerprint: active.schema_fingerprint,
             backup_file: "/backups/registry.dump".to_owned(),
             sha256: "sha256:11".to_owned(),

@@ -123,11 +123,8 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         &compiled,
         RegistryStateTestIdentity {
             package_id: "webhook-outbox-registry",
-            environment: "local",
-            instance_id: "webhook-outbox-instance",
             database_id: "webhook-outbox-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -163,6 +160,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-outbox-instance",
         audit_profile.clone(),
     );
     let before_missing = durable_counts(&database, table).await;
@@ -185,6 +183,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-outbox-instance",
         audit_profile.clone(),
         Some(Arc::clone(&destinations)),
     );
@@ -228,6 +227,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
             lock_key,
             Duration::from_secs(2),
             identity.clone(),
+            "webhook-outbox-instance",
             audit_profile.clone(),
             Some(Arc::clone(&destinations)),
         );
@@ -1074,7 +1074,7 @@ fn assert_capture_matches(
         compiled.destination_id.as_deref()
     );
     assert_eq!(actual.destination_binding_digest, binding_digest);
-    assert_eq!(actual.package_revision, identity.package_revision);
+    assert_eq!(actual.package_revision, identity.activation_id);
     assert_eq!(actual.schema_fingerprint, identity.schema_fingerprint);
     assert_eq!(actual.data_schema, compiled.data_schema);
     assert_eq!(actual.classification_ceiling, "restricted");
