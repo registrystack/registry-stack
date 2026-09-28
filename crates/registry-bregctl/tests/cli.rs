@@ -4714,6 +4714,30 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     );
     assert!(!String::from_utf8_lossy(&malformed_backup.stdout).contains(PACKAGE_VALUE_CANARY));
 
+    let control_reference = format!("{PACKAGE_VALUE_CANARY}\u{7}");
+    let long_reference = format!("{PACKAGE_VALUE_CANARY}{}", "r".repeat(512));
+    for reference in [control_reference.as_str(), long_reference.as_str()] {
+        let refused = bregctl(&[
+            "--format",
+            "json",
+            "apply",
+            "--runtime-config",
+            path(&fixture.runtime_config),
+            "--package",
+            path(&fixture.package),
+            "--initial",
+            "--operator-reference",
+            reference,
+        ]);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert_eq!(
+            json_stdout(&refused)["diagnostics"][0]["code"],
+            "apply.operator_reference.refused"
+        );
+        assert!(!String::from_utf8_lossy(&refused.stdout).contains(PACKAGE_VALUE_CANARY));
+        assert!(!String::from_utf8_lossy(&refused.stderr).contains(PACKAGE_VALUE_CANARY));
+    }
+
     // A package names no place in the apply order, so whether another package
     // follows the active one is the database's answer: it reaches database
     // authority, and the refusal stays value free.

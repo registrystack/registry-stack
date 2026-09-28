@@ -214,6 +214,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::BackupEvidence
             | MigrationError::RetiredAuditRowsPresent
             | MigrationError::ActivationAuditIncomplete => Self::Unavailable,
+            MigrationError::OperatorReference => Self::InvalidInput,
         }
     }
 }

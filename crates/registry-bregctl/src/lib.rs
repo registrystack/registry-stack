@@ -619,6 +619,10 @@ struct ApplyArgs {
     /// while installing the current schema.
     #[arg(long)]
     acknowledge_retired_audit_discard: bool,
+
+    /// Operator change reference, at most 512 bytes, recorded as a keyed hash in the activation ledger and audit.
+    #[arg(long, value_name = "REFERENCE")]
+    operator_reference: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -4329,6 +4333,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         initial: args.initial,
         backups: &args.backups,
         acknowledge_retired_audit_discard: args.acknowledge_retired_audit_discard,
+        operator_reference: args.operator_reference.as_deref(),
     })
     .map_err(apply_lifecycle_failure)?;
     Ok(ApplySuccessReport {
@@ -4885,6 +4890,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 "apply.audit.incomplete",
                 "audit",
                 "the package was activated, but the audit destination refused a record the activation owed, so the audit trail is incomplete: do not apply again; check the audit path and its directory permissions, and run `bregctl status` to see the active package",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            registry_breg::migration::MigrationError::OperatorReference => (
+                "apply.operator_reference.refused",
+                "operatorReference",
+                "--operator-reference must be 1 to 512 bytes without control characters, and the runtime audit profile must be keyed to record its hash: correct the reference or the audit profile and apply again. Nothing was changed",
                 DiagnosticArtifact::RuntimeConfiguration,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
@@ -14806,6 +14818,29 @@ fn apply_reports_an_empty_successor_plan_as_nothing_to_apply() {
     for fragment in [
         "nothing to apply",
         "keep the active package",
+        "Nothing was changed",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_a_refused_operator_reference_without_repeating_it() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::OperatorReference,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.operator_reference.refused");
+    assert_eq!(diagnostic.path, "operatorReference");
+    for fragment in [
+        "--operator-reference",
+        "512 bytes",
+        "keyed",
         "Nothing was changed",
     ] {
         assert!(

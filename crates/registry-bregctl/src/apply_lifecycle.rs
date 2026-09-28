@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    apply_verified_package, bind_active_package, read_recorded_registry_state,
-    successor_plan_is_empty, ActivationDeployment, AppliedFieldEncryptionKeySource,
-    ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
-    DestructiveBackupEvidence, MigrationError,
+    apply_verified_package, bind_active_package, operator_reference_is_well_formed,
+    read_recorded_registry_state, successor_plan_is_empty, ActivationDeployment,
+    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::package::{load_package, PackageError, VerifiedPredecessorPackage};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
@@ -39,6 +39,7 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
     pub initial: bool,
     pub backups: &'a [String],
     pub acknowledge_retired_audit_discard: bool,
+    pub operator_reference: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +66,14 @@ pub(crate) fn run(
         return Err(ApplyLifecycleError::TargetPackagePath);
     }
     let backup_arguments = parse_backup_arguments(request.backups)?;
+    if request
+        .operator_reference
+        .is_some_and(|reference| !operator_reference_is_well_formed(reference))
+    {
+        return Err(ApplyLifecycleError::Apply(
+            MigrationError::OperatorReference,
+        ));
+    }
     let config =
         load_runtime_config(request.runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
 
@@ -192,6 +201,9 @@ pub(crate) fn run(
     .with_destructive_backup_evidence(&backup_evidence)
     .with_event_destination_compatibility_inventory(&event_destination_compatibility)
     .with_acknowledge_retired_audit_discard(request.acknowledge_retired_audit_discard);
+    if let Some(reference) = request.operator_reference {
+        apply = apply.with_operator_reference(reference);
+    }
     if let Some(package) = current_package.as_ref() {
         apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
     }
