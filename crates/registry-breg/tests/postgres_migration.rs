@@ -2554,6 +2554,81 @@ async fn real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activ
     database.cleanup().await;
 }
 
+/// An ingestion run a pre-ledger release opened is bound to the revision that
+/// release recorded as active. Adoption re-identifies that same active package
+/// by its digest, so the run stays bound to it and writable; a run bound to
+/// any other revision stays retired.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_adoption_keeps_an_ingestion_run_bound_to_the_adopted_revision() {
+    let (database, package) = initial_package_database().await;
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+    let digest = "a".repeat(64);
+    for (run_id, revision) in [
+        (
+            "00000000-0000-4000-8000-000000000001",
+            "pre-ledger-revision",
+        ),
+        (
+            "00000000-0000-4000-8000-000000000002",
+            "older-pre-ledger-revision",
+        ),
+    ] {
+        database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_ingestion_runs (
+                     run_id, created_principal_reference, package_revision,
+                     schema_fingerprint, entity_id, operation, profile_id,
+                     bound_context_reference, input_digest, input_length, item_count,
+                     chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
+                     status, next_chunk_index, committed_items, committed_prefix_digest
+                 )
+                 SELECT $1::text::uuid, 'principal', $2, schema_fingerprint, 'asset',
+                        'create', 'importer', 'context', $3, 1, 1, 1, 'v1', 1, 1,
+                        'open', 0, 0, $3
+                   FROM registry_internal.registry_state
+                  WHERE singleton",
+                &[&run_id, &revision, &digest],
+            )
+            .await
+            .expect("the pre-ledger release opened an ingestion run");
+    }
+
+    let adopted = apply(&database, &package, ApplyPrecondition::Adoption)
+        .await
+        .expect("the pre-ledger database is adopted");
+
+    let runs = database
+        .admin
+        .query(
+            "SELECT package_revision, schema_fingerprint
+               FROM registry_internal.registry_ingestion_runs
+              ORDER BY run_id",
+            &[],
+        )
+        .await
+        .expect("the ingestion runs read")
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        runs[0],
+        (
+            adopted.package_digest.clone(),
+            adopted.schema_fingerprint.clone()
+        ),
+        "the run bound to the adopted revision is bound to the adopted package"
+    );
+    assert_eq!(
+        runs[1].0, "older-pre-ledger-revision",
+        "a run bound to another revision stays retired"
+    );
+    database.cleanup().await;
+}
+
 /// A field encrypted before adoption keeps its erase-history lifecycle: the
 /// flip boundary and the originating package of a pre-flip proposal name
 /// revisions only the pre-ledger ledger ordered, and erasure after adoption
