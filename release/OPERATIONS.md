@@ -1074,11 +1074,12 @@ docset rebuilt archives mark indexable.
 3. In `docs/site/src/data/docsets.yaml`, set `released: v<version>`. In the
    `v<version>` docset, set `availability: released`, begin the description with
    `Released Registry Stack v<version> <release-id>` and drop `candidate`, and
-   set every product `ref` to the same commit. Leave the archive lock and every
-   other docset unchanged.
+   set every product `ref` to the same commit, except a product the manifest
+   lists under `external`, which keeps its own pinned ref. Leave the archive
+   lock and every other docset unchanged.
 4. From `docs/site`, run `npm test`, `npm run check:docset`, and
-   `npm run check:release-manifests`, and check the selector against the live
-   release list:
+   `npm run check:release-manifests`. Then, from the repository root, check the
+   selector against the live release list:
 
    ```sh
    gh api --paginate --slurp "repos/registrystack/registry-stack/releases?per_page=100" \
