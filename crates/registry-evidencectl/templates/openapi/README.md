@@ -22,7 +22,7 @@ purpose, because only the operation you select can decide what they hold.
 ## Next commands
 
 ```sh
-evidencectl source suggest --project . --source-id <id> --operation '<METHOD /path>'
+evidencectl source suggest . --source-id <id> --operation '<METHOD /path>'
 ```
 
 `source suggest` drafts one editable source from the retained description for

@@ -133,7 +133,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     run(binaries["evidencectl"], "source", "import", exported, "--project", project,
         "--target", target, environment=environment)
     fixtures = json.loads(run(
-        binaries["evidencectl"], "fixtures", "run", "--project", project,
+        binaries["evidencectl"], "fixtures", "run", project,
         "--target", target, "--json", environment=environment,
     ))
     assert len(fixtures["fixtures"]) == 2, "both questions need their own executed fixture"
@@ -281,7 +281,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     run(binaries["evidencectl"], "source", "import", exported, "--project", project,
         "--target", target, environment=environment)
     fixtures = json.loads(run(binaries["evidencectl"], "fixtures", "run",
-        "--project", project, "--target", target, "--json", environment=environment))
+        project, "--target", target, "--json", environment=environment))
     assert len(fixtures["fixtures"]) == 1
     assert fixtures["fixtures"][0]["passed"]
     assert fixtures["fixtures"][0]["evaluatedCases"] == 11
@@ -342,7 +342,7 @@ def verify_source_add_review(workspace: Path, binaries: dict[str, Path]) -> dict
         assert result.returncode, f"evidencectl {args} must refuse:\n{result.stdout[-4096:]}"
         return result.stderr[-8192:]
 
-    add_arguments = ("source", "add", registry, "--project", project, "--entity", "record",
+    add_arguments = ("source", "add", registry, project, "--entity", "record",
                      "--selector-field", "code", "--fields", "status", "--all-records")
     version = run(binaries["bregctl"], "--version", environment=environment).strip()
     help_text = run(binaries["evidencectl"], "source", "add", "--help", environment=environment)
@@ -537,7 +537,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             row_value_file = workspace / "row-value.json"
             row_value_file.write_text(json.dumps(value))
             row_value_file.chmod(0o600)
-            add_arguments = ("source", "add", registry, "--project", project, "--entity", "record",
+            add_arguments = ("source", "add", registry, project, "--entity", "record",
                              "--selector-field", "code", "--fields", fact,
                              "--row-field", "name", "--row-value-file", row_value_file,
                              "--source-id", source_id, "--selector-profile", "by-code")
@@ -587,7 +587,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             assert not list((project / "questions").glob("*.yaml")), "source add precedes question authoring"
             for directory in ["questions", "derivations", "fixtures"]:
                 shutil.copytree(INPUTS / "named-starter" / directory, project / directory, dirs_exist_ok=True)
-            fixtures = json.loads(command("evidencectl", "fixtures", "run", "--local", "--project", project,
+            fixtures = json.loads(command("evidencectl", "fixtures", "run", "--local", project,
                                           "--target", target, "--json"))
             assert len(fixtures["fixtures"]) == 1 and fixtures["fixtures"][0]["passed"]
             assert fixtures["fixtures"][0]["evaluatedCases"] == 11
@@ -601,7 +601,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             command("bregctl", "dev", "stop", registry)
             state_before_preview = {path: path.read_bytes() for path in
                 [state_root / "state.json", registry / "registry.yaml", registry / "dev-clients.yaml"]}
-            preview = json.loads(command("evidencectl", "source", "add", registry, "--project", project,
+            preview = json.loads(command("evidencectl", "source", "add", registry, project,
                 "--entity", "record", "--selector-field", "code", "--fields", "status",
                 "--all-records", "--format", "json"))
             assert preview["status"] == "preview"
@@ -649,7 +649,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             command("evidencectl", "target", "new", target, "--settings", settings_path,
                     "--signing-public-key", project / "secrets/signing-p256-public.jwk.json")
             command("evidencectl", "source", "import", exported, "--project", project, "--target", target)
-            command("evidencectl", "fixtures", "run", "--project", project, "--target", target)
+            command("evidencectl", "fixtures", "run", project, "--target", target)
             package_target = project / "targets/package"
             package_settings_path = workspace / "package-settings.json"
             package_settings_path.write_text(json.dumps(production_settings(

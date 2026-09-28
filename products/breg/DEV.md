@@ -458,7 +458,7 @@ Stop the retained registry normally, then use Evidence's guided local setup:
 
 ```sh
 bregctl dev stop ./registry
-evidencectl source add ./registry --project ./evidence
+evidencectl source add ./registry ./evidence
 ```
 
 Choose the entity, an existing required unique scalar field, readable facts, and

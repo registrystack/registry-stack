@@ -281,7 +281,7 @@ fn create(
     );
     match source {
         AuthoringSource::OpenApi(_) => println!(
-            "Next: run `evidencectl source suggest --project {}` to draft one editable source.",
+            "Next: run `evidencectl source suggest {}` to draft one editable source.",
             args.directory.display()
         ),
         AuthoringSource::SqliteExtract => {

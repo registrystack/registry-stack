@@ -404,7 +404,9 @@ fn local_openapi_is_retained_byte_for_byte_with_automatic_disposable_keys() {
     assert_minimal_project(&project, true);
     assert!(stdout(&output).contains("retained exactly"));
     assert!(stdout(&output).contains("No question, fixture case, runtime"));
-    assert!(stdout(&output).contains("evidencectl source suggest --project"));
+    let next = format!("evidencectl source suggest {}`", project.display());
+    assert!(stdout(&output).contains(&next), "{}", stdout(&output));
+    assert!(!stdout(&output).contains("--project"));
 }
 
 #[test]
@@ -668,7 +670,7 @@ fn the_retained_openapi_project_ships_a_readme_that_says_what_is_empty() {
         assert!(readme.contains(named), "the README names {named}");
     }
     assert!(
-        readme.contains("evidencectl source suggest --project ."),
+        readme.contains("evidencectl source suggest . --source-id"),
         "the README names the next command: {readme}"
     );
 }
