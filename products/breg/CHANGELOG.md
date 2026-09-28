@@ -60,6 +60,12 @@
     `apply.resume.roles_differ`, naming the role mode and runtime role the
     activation started with, and nothing changes. Rerun the apply with those
     roles, or assess the activation with `bregctl migration reconcile`.
+  - A successor package activates with the database roles the active
+    activation serves with. A runtime file whose `database.roles` name other
+    roles is refused as `apply.successor.roles_differ` before maintenance,
+    naming the role mode and runtime role the active activation records, and
+    nothing changes. Apply the active package under the new roles first,
+    which records a `role_change` activation, then apply the successor.
   - A Casework deployment repins each BReg source whose project declares a
     `package` block: that project's `registryRevision` changes (see below),
     so Casework treats the source's records as moved until the source

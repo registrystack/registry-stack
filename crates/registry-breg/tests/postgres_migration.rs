@@ -2121,6 +2121,85 @@ async fn real_postgres_a_role_change_activates_when_the_recorded_runtime_role_is
     database.cleanup().await;
 }
 
+/// A successor serves with the roles the active activation records. Only a
+/// role change retires a recorded runtime role, so a successor configured
+/// with other roles is refused before maintenance, and the registry stays
+/// active for the same successor applied with the recorded roles.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_successor_with_other_roles_is_refused_before_maintenance() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+    let base = compile_variant(Variant::Base);
+    let base_fingerprint = initial_fingerprint(&database, &base).await;
+    let added = compile_variant(Variant::PatternAdded);
+    let added_fingerprint = initial_fingerprint(&database, &added).await;
+    let active = apply(
+        &database,
+        &prepare_and_load_initial(&base, &base_fingerprint),
+        ApplyPrecondition::InitialActivation,
+    )
+    .await
+    .expect("the initial package activates in split mode");
+    let successor = publish_and_load(
+        prepare_package(build_request(
+            Variant::PatternAdded,
+            Some(&active.package_digest),
+            &added_fingerprint,
+            PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new(base.clone()),
+            },
+        ))
+        .expect("successor package prepares"),
+        local_context(),
+    );
+
+    let refused = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &successor,
+        deployment(),
+        ApplyPrecondition::Successor { current: &active },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect_err("a successor with other roles is refused");
+    assert_eq!(
+        refused,
+        MigrationError::SuccessorRolesDiffer {
+            role_mode: "split".to_owned(),
+            runtime_role: database.runtime_role.as_str().to_owned(),
+        }
+    );
+    assert!(refused
+        .to_string()
+        .contains("apply the active package with the new roles first"));
+    let activations: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_migrations",
+            &[],
+        )
+        .await
+        .expect("administrator reads the ledger")
+        .get(0);
+    assert_eq!(activations, 1, "the refusal records no activation");
+
+    apply(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the successor with the recorded roles activates");
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation() {
     let (database, package) = initial_package_database().await;

@@ -145,6 +145,17 @@ pub enum MigrationError {
         role_mode: String,
         runtime_role: String,
     },
+    /// Refused before maintenance: a successor serves with the roles the
+    /// active activation records, because only a role change retires a
+    /// recorded runtime role. Only the role mode and the runtime role name
+    /// cross this boundary.
+    #[error(
+        "the active activation serves with {role_mode} database roles and runtime role `{runtime_role}`; apply the active package with the new roles first, then apply this successor"
+    )]
+    SuccessorRolesDiffer {
+        role_mode: String,
+        runtime_role: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -1219,6 +1230,29 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                 SqlIdentifier::parse(&runtime_role)
                     .ok()
                     .filter(|retired| retired != request.roles.runtime)
+            }
+            Ok(None) | Err(_) => {
+                let _ = connection.release().await;
+                return Err(MigrationError::ApplyFailed);
+            }
+        }
+    } else if current.is_some() {
+        // Only a role change retires the runtime role the active activation
+        // records, so a successor serves with the roles that activation
+        // records.
+        match connection.active_activation_roles().await {
+            Ok(Some((role_mode, runtime_role)))
+                if role_mode == ledger.role_mode.as_str()
+                    && runtime_role == ledger.runtime_role =>
+            {
+                None
+            }
+            Ok(Some((role_mode, runtime_role))) => {
+                let _ = connection.release().await;
+                return Err(MigrationError::SuccessorRolesDiffer {
+                    role_mode,
+                    runtime_role,
+                });
             }
             Ok(None) | Err(_) => {
                 let _ = connection.release().await;
