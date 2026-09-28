@@ -319,8 +319,10 @@ the header's value. Tests:
 ### What an empty-inbox refusal reveals
 
 `GET /v1/review-tasks` without `Registry-Source-Profile` now answers
-`source-profile.required` when its page would be empty and at least one
-candidate was skipped only because the header is absent. The candidates are
+`source-profile.required` when its page would be empty, has no continuation,
+and at least one candidate was skipped only because the header is absent. An
+empty page cut short by its source-read budget, candidate scan, or deadline
+keeps its `nextCursor` and `status` instead. The candidates are
 already limited by the store to the caller's current membership and served
 queues. The refusal is the static six-field problem body with no header of
 its own: it names no task, request, subject, count, queue, or source, and it
@@ -328,8 +330,10 @@ is returned only in place of an empty page. What it discloses is one bit, that
 the caller's queues hold at least one source-backed candidate. A page that lists anything
 keeps today's behaviour. A source profile under which the source hides every
 task still yields an ordinary empty page, so the refusal reveals nothing
-about which tasks the source shows. Test:
-`an_inbox_emptied_only_by_the_missing_source_profile_says_so` (review_http).
+about which tasks the source shows. Tests:
+`an_inbox_emptied_only_by_the_missing_source_profile_says_so` and
+`an_inbox_page_short_only_of_its_source_read_budget_continues_without_a_source_profile`
+(review_http).
 
 ### A read across a binding change
 
@@ -347,8 +351,10 @@ caller-credentialed record read; a record read the source answers with 409 or
 the response carries no display reference and no routing copy, so no
 caller-filtered value reaches the caller from the service reader's copy. No
 action is exposed across the move, and every mutation still refuses it
-(`work-item.proposal-changed`). A superseded occurrence answers
-`work-item.superseded`. Tests:
+(`work-item.proposal-changed`). In those two cases a superseded occurrence
+answers `work-item.superseded`; within one binding generation a superseded
+occurrence keeps its historical read without actions, so its history stays
+readable. Tests:
 `a_plain_read_across_a_binding_move_returns_the_retained_item_without_actions`
 (service_visibility) and
 `a_conflicting_record_read_is_never_reported_as_a_moved_binding`

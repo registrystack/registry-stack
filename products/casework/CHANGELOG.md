@@ -140,10 +140,12 @@
   recovery body must drop it and send the value in `Registry-Source-Profile`
   (#1443).
 - `GET /v1/review-tasks` sent without `Registry-Source-Profile` answers 400
-  `source-profile.required` when the page would be empty and at least one
-  candidate was skipped only because that header is absent, instead of a
-  silent empty page. A page that lists anything, such as submitted-context
-  tasks, is unchanged (#1443).
+  `source-profile.required` when the page would be empty, has no
+  `nextCursor`, and at least one candidate was skipped only because that
+  header is absent, instead of a silent empty page. A page that lists
+  anything, such as submitted-context tasks, is unchanged, and an empty page
+  cut short by the source-read budget, candidate scan, or page deadline
+  keeps its `nextCursor` and `status` (#1443).
 - `caseworkctl dev token` writes the client's `Registry-Casework-Profile`
   line beneath `Authorization` in `secrets/<client>.header` for a client
   bound to a Casework access profile, so the file is usable as-is with
@@ -165,8 +167,10 @@
   the retained item without actions or routing copy when the source's
   binding generation moved or the adapter refused the caller read as a moved
   binding; without a caller view the display reference is withheld too. They
-  answered 409 `work-item.proposal-changed`. A superseded item answers 409
-  `work-item.superseded`, and mutations still refuse a moved binding.
+  answered 409 `work-item.proposal-changed`. In those two cases a superseded
+  item answers 409 `work-item.superseded`; a superseded item read within one
+  binding generation still returns its historical record without actions.
+  Mutations still refuse a moved binding.
   Current source visibility still gates every read (#1467).
 - A runtime source binding that breaks an adapter rule is refused at load
   with the member's key path, `sources.<id>.<member>`, and a static reason
@@ -180,11 +184,21 @@
   does not publish; the refusal names the policy key path and the field. A
   description that drifted from the adapter contract keeps the existing
   refusal (#1467).
-- Every mutating route parses its JSON body with the workspace's strict
-  parser, so a duplicate object member at any depth, including inside
+- BREAKING: every mutating route parses its JSON body with the workspace's
+  strict parser, so a duplicate object member at any depth, including inside
   free-form members such as a review draft body or a decision result, is
   refused with 422 `request.unprocessable` instead of the last occurrence
-  winning. Rejection classes are unchanged (#1209).
+  winning. The same parser refuses, with 422 `request.unprocessable`, a
+  well-formed raw JSON integer that IEEE 754 binary64 cannot represent
+  exactly, such as `9007199254740993` (above 2^53); send such a value as a
+  string. Media-type parsing is stricter: the whole `Content-Type` value must
+  parse as `application/json` or `application/*+json` with every parameter a
+  `name=token` or `name="quoted-string"` pair, so a value such as
+  `application/json; charset` is refused with 415
+  `request.unsupported-media-type`. The rejection classes are otherwise
+  those of the previous extractor: 413 over the body limit, 400
+  `request.invalid` for malformed JSON, and 422 for a document that does not
+  match the request type (#1209).
 - Each review-producer operation lists only the problems it can return: the
   reads no longer list initiator or idempotency codes, and every producer
   operation lists `profile.not-human` (#1340).
