@@ -286,6 +286,7 @@ export type KnownCaseworkProblemCode =
   | 'profile.not-human'
   | 'request.body-too-large'
   | 'request.invalid'
+  | 'request.limit-out-of-range'
   | 'request.method-not-allowed'
   | 'request.not-found'
   | 'request.reason-unsupported'
@@ -422,7 +423,7 @@ export interface ReviewerTask {
   state: ReviewerTaskState
   decidedByCaller?: boolean
 }
-export interface ReviewTaskPage { items: ReadonlyArray<ReviewerTask>; nextCursor?: Uuid }
+export interface ReviewTaskPage { items: ReadonlyArray<ReviewerTask>; nextCursor?: Uuid; status: PageStatus }
 export type ReviewSourceBindingStatus = 'current' | 'binding_changed'
 export interface ReviewSourceProjection { binding: SourceBinding; displayReference?: string; display: Readonly<Record<string, JsonValue>> }
 export type ReviewTaskContextData =

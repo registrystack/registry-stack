@@ -19,6 +19,7 @@
     - ['`profile.not-human`', '403', 'An action reserved for a human session was called under another session.']
     - ['`request.body-too-large`', '413', 'The request body exceeds the one MiB limit.']
     - ['`request.invalid`', '400', 'The path, query, or headers did not match the Casework contract.']
+    - ['`request.limit-out-of-range`', '400', 'The `limit` query parameter is zero or above the route''s maximum page size: 1 to 100, or 1 to 1000 on the directory absence list. Omit it for the default.']
     - ['`request.method-not-allowed`', '405', 'The route does not accept that HTTP method.']
     - ['`request.not-found`', '404', 'The requested Casework route does not exist.']
     - ['`request.reason-unsupported`', '422', 'The `reason` field was sent with an action the selected source does not accept it on, refused before a durable attempt is prepared. The BReg source accepts a reason on every promoted decision and apply.']

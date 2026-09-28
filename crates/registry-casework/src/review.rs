@@ -5,7 +5,7 @@ use registry_casework_core::{
     check_task_holder, evaluate_activity_clock, record_review_decision, resolve_absence_cover,
     submission_digest, AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy,
     CaseworkRole, ClockPolicy, ContentDigest, DelegateRequest, EphemeralCredential,
-    HolidaySetDocument, IssuerPrincipal, PolicyBinding, ReminderOccurrence,
+    HolidaySetDocument, IssuerPrincipal, PageStatus, PolicyBinding, ReminderOccurrence,
     ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
     ReviewClockOccurrence, ReviewClockState, ReviewCreateRequest, ReviewDecisionError,
     ReviewDecisionValidationError, ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage,
@@ -397,6 +397,7 @@ impl CaseworkService {
         let mut continuation = None;
         let mut completed_preflights = 0usize;
         let mut budget_exhausted = false;
+        let mut source_timed_out = false;
         while items.len() <= limit
             && examined < policy.maximum_candidate_scan
             && started.elapsed() < deadline
@@ -446,6 +447,7 @@ impl CaseworkService {
                             return Err(ReviewRuntimeError::SourceUnavailable);
                         }
                         budget_exhausted = true;
+                        source_timed_out = true;
                         break;
                     }
                     Ok(Err(
@@ -479,7 +481,8 @@ impl CaseworkService {
             scan_cursor = Some(next_cursor);
             continuation = Some(next_cursor);
         }
-        let next_cursor = if items.len() > limit {
+        let full = items.len() > limit;
+        let next_cursor = if full {
             Some(items[limit - 1].task_id)
         } else if budget_exhausted
             || examined >= policy.maximum_candidate_scan
@@ -489,8 +492,21 @@ impl CaseworkService {
         } else {
             None
         };
+        // A page that stopped before it filled says why, so a caller does not
+        // read a short page as the end of the inbox.
+        let status = if full || next_cursor.is_none() {
+            PageStatus::Complete
+        } else if source_timed_out {
+            PageStatus::SourceUnavailable
+        } else {
+            PageStatus::BudgetExhausted
+        };
         items.truncate(limit);
-        Ok(ReviewTaskPage { items, next_cursor })
+        Ok(ReviewTaskPage {
+            items,
+            next_cursor,
+            status,
+        })
     }
 
     pub async fn review_task(
@@ -1594,7 +1610,12 @@ impl PostgresStore {
             .collect::<Result<Vec<_>, _>>()?;
         let next_cursor = (items.len() > limit).then(|| items[limit - 1].task_id);
         items.truncate(limit);
-        Ok(ReviewTaskPage { items, next_cursor })
+        // One store batch; the service decides the page status.
+        Ok(ReviewTaskPage {
+            items,
+            next_cursor,
+            status: PageStatus::Complete,
+        })
     }
 
     async fn review_task(
