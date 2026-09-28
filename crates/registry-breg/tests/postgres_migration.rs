@@ -130,6 +130,8 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         "the committed chunk appended one revision per row it changed in one commit"
     );
     assert_non_ready_target(&database, &active, &required_package, "applying").await;
+    let interrupted_activation = activation_at(&database, 2).await;
+    assert_ne!(interrupted_activation, active.activation_id);
 
     let wrong_source = backfill_source(BackfillSourceRequest {
         id: "wrong-recovery-target",
@@ -168,6 +170,23 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     )
     .await
     .expect("the exact interrupted target resumes");
+    // The resumed run is the interrupted activation, not a second one, and
+    // every chunk either run committed is scoped to that one activation id.
+    assert_eq!(required_active.activation_id, interrupted_activation);
+    let chunk_scopes = database
+        .admin
+        .query(
+            "SELECT DISTINCT originating_package_revision
+               FROM registry_internal.registry_revision_commits
+              WHERE system_origin = 'breg-reviewed-migration-v1'",
+            &[],
+        )
+        .await
+        .expect("reviewed migration commit scopes read")
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(chunk_scopes, vec![interrupted_activation.clone()]);
     let completed = step_snapshot(&database, &required_package, "backfill-rank").await;
     assert_eq!(completed.0, "completed");
     assert_eq!(completed.2, 5);
