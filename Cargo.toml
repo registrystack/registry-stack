@@ -240,7 +240,7 @@ typst-pdf = { version = "0.15.1" }
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 comemo = { version = "0.5" }
 ttf-parser = { version = "0.25" }
-ulid = { version = "1" }
+ulid = { version = "3" }
 ureq = { version = "2" }
 url = { version = "2" }
 utoipa = { version = "5" }

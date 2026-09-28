@@ -1390,7 +1390,7 @@ mod tests {
     /// generated through `getrandom::fill`, which reports entropy failure as
     /// an ordinary error rather than panicking. The unguarded path is the
     /// private-key-JWT token provider's own `jti` claim, generated with
-    /// `Ulid::new()`, which reaches `rand::rng()` and panics when OS entropy
+    /// `Ulid::generate()`, which reaches `rand::rng()` and panics when OS entropy
     /// is unavailable, a case that provider deliberately leaves unguarded. It
     /// is reachable only in a deployment configured for private-key-JWT: a
     /// static-authorization deployment never calls that provider, so short of that

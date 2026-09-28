@@ -139,7 +139,7 @@ pub fn sign_client_assertion(
         // Every assertion is single use. A server that caches identifiers to
         // refuse a replay needs each request to bring its own, so one is
         // generated per assertion and never reused.
-        "jti": Ulid::new().to_string(),
+        "jti": Ulid::generate().to_string(),
     });
 
     let signing_input = format!("{}.{}", encode(&header)?, encode(&claims)?);

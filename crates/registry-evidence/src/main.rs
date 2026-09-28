@@ -2063,8 +2063,10 @@ struct FixtureExtract {
 
 impl FixtureExtract {
     fn create() -> Result<Self, CliError> {
-        let directory =
-            std::env::temp_dir().join(format!("evidence-fixture-extract-{}", ulid::Ulid::new()));
+        let directory = std::env::temp_dir().join(format!(
+            "evidence-fixture-extract-{}",
+            ulid::Ulid::generate()
+        ));
         fs::create_dir_all(&directory)
             .map_err(|_| CliError("reference fixture extract directory is unavailable"))?;
         let path = directory.join("fixture.sqlite");
@@ -3217,7 +3219,7 @@ async fn sign_and_verify_fixture_evidence(
         })
         .collect::<Result<Vec<_>, CliError>>()?;
     let issued_at = observed_at + chrono::Duration::seconds(1);
-    let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+    let evidence_id = format!("urn:ulid:{}", ulid::Ulid::generate());
     let evidence = kernel
         .construct_evidence(
             &requirement.id,

@@ -2336,7 +2336,7 @@ impl EvidenceRuntime {
                     return Err(error);
                 }
             };
-            let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+            let evidence_id = format!("urn:ulid:{}", ulid::Ulid::generate());
             let evidence = match self.kernel.construct_evidence(
                 &request.requirement,
                 values.clone(),
@@ -2771,7 +2771,7 @@ impl EvidenceRuntime {
             }
         };
         let subjects = self.subject_bindings(&item.resolved, &item.resolved.subject_scope)?;
-        let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+        let evidence_id = format!("urn:ulid:{}", ulid::Ulid::generate());
         let evidence = self
             .kernel
             .construct_evidence(

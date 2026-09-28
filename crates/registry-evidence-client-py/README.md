@@ -178,7 +178,7 @@ generated through `getrandom::fill`, which reports entropy failure as an
 ordinary error and cannot panic. Aside from `to_py_err`'s `set_attr!` calls,
 which can only panic under allocation failure, the one latent panic path is
 upstream and left unguarded on purpose: the private-key-JWT token provider's
-`jti` claim, generated with `Ulid::new()`, reaches `rand::rng()` and panics if
+`jti` claim, generated with `Ulid::generate()`, reaches `rand::rng()` and panics if
 OS entropy is unavailable. It is reachable only in a deployment configured for
 private-key-JWT; short of that same allocation-failure-only path, a
 static-authorization deployment has no reachable panic at all. This crate adds no

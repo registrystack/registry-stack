@@ -98,7 +98,7 @@ impl EvidenceAuthorizationRefusalAuditEvent {
     ) -> Self {
         Self {
             assurance_profile,
-            event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
+            event_id: format!("urn:ulid:{}", ulid::Ulid::generate()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             operation,
             phase: AuditPhase::Denial,
@@ -309,7 +309,7 @@ impl EvidenceRequestBatchAuditEvent {
     ) -> Self {
         Self {
             assurance_profile,
-            event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
+            event_id: format!("urn:ulid:{}", ulid::Ulid::generate()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             operation,
             phase,
@@ -603,7 +603,7 @@ impl EvidenceAuditEvent {
     ) -> Self {
         Self {
             assurance_profile,
-            event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
+            event_id: format!("urn:ulid:{}", ulid::Ulid::generate()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             operation,
             phase,
@@ -2999,7 +2999,7 @@ mod tests {
 
     fn local_release(access: &EvidenceAuditEvent) -> EvidenceAuditEvent {
         let mut release = access.clone();
-        release.event_id = format!("urn:ulid:{}", ulid::Ulid::new());
+        release.event_id = format!("urn:ulid:{}", ulid::Ulid::generate());
         release.occurred_at = chrono::Utc::now()
             .checked_add_signed(chrono::Duration::milliseconds(1))
             .expect("timestamp advances")
@@ -3007,7 +3007,7 @@ mod tests {
         release.phase = AuditPhase::DisclosureRelease;
         release.decision = AuditDecision::Released;
         release.disclosed_concepts = Some(vec!["urn:example:concept:age-bracket".to_owned()]);
-        release.evidence_id = Some(format!("urn:example:evidence:{}", ulid::Ulid::new()));
+        release.evidence_id = Some(format!("urn:example:evidence:{}", ulid::Ulid::generate()));
         release.signing_key_id = Some("local-signing-key-1".to_owned());
         release.duration_milliseconds = 19;
         release
@@ -3608,7 +3608,7 @@ mod tests {
         let stages = |log: &EvidenceAuditLog| {
             let search = local_access(log, operation);
             let mut fetch = search.clone();
-            fetch.event_id = format!("urn:ulid:{}", ulid::Ulid::new());
+            fetch.event_id = format!("urn:ulid:{}", ulid::Ulid::generate());
             fetch.occurred_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             fetch.source_id = Some("fetch-source-private-canary".to_owned());
