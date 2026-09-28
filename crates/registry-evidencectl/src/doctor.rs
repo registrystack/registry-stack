@@ -487,7 +487,7 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
             format!("is a destination the audit writer refuses: {error}"),
         );
     }
-    let lock = lock_companion(&path);
+    let lock = registry_platform_audit::AuditSegments::new(&path).lock();
     if !lock.exists() {
         return run.finish();
     }
@@ -977,13 +977,6 @@ fn group_or_other(metadata: &Metadata, required: u32) -> String {
     format!(
         "has mode {mode:04o}; the runtime requires no group or other access (chmod {required:o})"
     )
-}
-
-/// The audit sink's lock companion, `<audit file>.lock`.
-fn lock_companion(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".lock");
-    PathBuf::from(name)
 }
 
 /// Whether the filesystem carrying `path` is mounted read-only, in which case
