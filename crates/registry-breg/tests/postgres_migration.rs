@@ -2072,6 +2072,16 @@ async fn real_postgres_split_apply_names_the_fix_for_every_runtime_write_authori
             format!("`REVOKE {migration} FROM {runtime}`, then rerun the refused command"),
         ),
         (
+            format!("ALTER ROLE {intruder} SUPERUSER; GRANT {intruder} TO {runtime}"),
+            format!("REVOKE {intruder} FROM {runtime}; ALTER ROLE {intruder} NOSUPERUSER"),
+            format!("`REVOKE {intruder} FROM {runtime}`, then rerun the refused command"),
+        ),
+        (
+            format!("GRANT pg_write_all_data TO {runtime}"),
+            format!("REVOKE pg_write_all_data FROM {runtime}"),
+            format!("`REVOKE pg_write_all_data FROM {runtime}`, then rerun the refused command"),
+        ),
+        (
             format!(
                 "CREATE FUNCTION registry_data.foreign_helper() RETURNS integer \
                  LANGUAGE sql AS 'SELECT 1'; \
