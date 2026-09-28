@@ -945,9 +945,6 @@ async fn decide(
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let selected_source_profile = source_profile(&headers)?;
-    if request.source_profile_id != selected_source_profile {
-        return Err(HttpError::Invalid);
-    }
     let response = state
         .service
         .decide_mutation(
@@ -970,13 +967,10 @@ async fn recover(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(path): Path<AttemptPath>,
-    Json(request): Json<RecoverAttemptRequest>,
+    Json(RecoverAttemptRequest {}): Json<RecoverAttemptRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let selected_source_profile = source_profile(&headers)?;
-    if request.source_profile_id != selected_source_profile {
-        return Err(HttpError::Invalid);
-    }
     let response = state
         .service
         .recover_mutation(
@@ -994,13 +988,10 @@ async fn recover_by_key(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Json(request): Json<RecoverAttemptRequest>,
+    Json(RecoverAttemptRequest {}): Json<RecoverAttemptRequest>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let selected_source_profile = source_profile(&headers)?;
-    if request.source_profile_id != selected_source_profile {
-        return Err(HttpError::Invalid);
-    }
     let response = state
         .service
         .recover_mutation_by_key(

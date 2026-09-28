@@ -1810,9 +1810,7 @@ async fn recovery_by_key_uses_bound_profiles_and_never_invents_a_revision() {
             CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
             Uuid::nil(),
             "attempt-7",
-            &RecoverAttemptRequest {
-                source_profile_id: "reviewer".into(),
-            },
+            &RecoverAttemptRequest {},
         )
         .await;
 
@@ -1871,7 +1869,6 @@ async fn decision_forwards_the_selected_source_profile() {
             "attempt-9",
             &DecideRequest {
                 displayed_binding: binding,
-                source_profile_id: "reviewer".into(),
                 operation: registry_casework_client::OperationName::parse("approve")
                     .expect("approve operation"),
                 reason: None,
@@ -1893,6 +1890,63 @@ async fn decision_forwards_the_selected_source_profile() {
     assert_eq!(headers["registry-source-profile"], "reviewer");
     assert_eq!(headers["if-match"], "\"9\"");
     assert_eq!(headers["idempotency-key"], "attempt-9");
+    server.abort();
+}
+
+#[tokio::test]
+async fn decision_and_recovery_bodies_leave_the_source_profile_to_the_header() {
+    let bodies = CapturedBodies::default();
+    let app = Router::new()
+        .route("/v1/work-items/{item}/decisions", post(capture_body))
+        .route("/v1/work-items/{item}/attempts/recover", post(capture_body))
+        .with_state(bodies.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let auth = || CaseworkAuth::new(&token, "staff").with_source_profile("reviewer");
+    let _ = client
+        .decide_work_item(
+            auth(),
+            &CaseworkAction {
+                operation: "approve".into(),
+                href: format!("/v1/work-items/{}/decisions", Uuid::nil()),
+                if_match: "\"9\"".into(),
+            },
+            "attempt-9",
+            &DecideRequest {
+                displayed_binding: SourceBinding {
+                    source_revision: "revision-9".into(),
+                    version: "version-9".into(),
+                    integrity: None,
+                    generation: "generation-9".into(),
+                },
+                operation: registry_casework_client::OperationName::parse("approve")
+                    .expect("approve operation"),
+                reason: None,
+                flagged_fields: Vec::new(),
+            },
+        )
+        .await;
+    let _ = client
+        .recover_decision_by_key(auth(), Uuid::nil(), "attempt-9", &RecoverAttemptRequest {})
+        .await;
+
+    let bodies = bodies.lock().expect("bodies");
+    assert_eq!(bodies.len(), 2);
+    for (headers, body) in bodies.iter() {
+        assert_eq!(headers["registry-source-profile"], "reviewer");
+        assert!(body.get("sourceProfileId").is_none(), "{body}");
+    }
+    assert_eq!(bodies[1].1, serde_json::json!({}));
     server.abort();
 }
 
@@ -2209,6 +2263,19 @@ fn cancel_response(request_id: Uuid, subject_id: &str, outcome: &str, status: &s
         "completedAt": "2026-09-19T00:00:00Z",
         "availableUntil": available_until
     }})
+}
+
+/// Each request's headers and JSON body, in arrival order.
+type CapturedBodies = Arc<Mutex<Vec<(HeaderMap, serde_json::Value)>>>;
+
+async fn capture_body(
+    State(bodies): State<CapturedBodies>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let body = serde_json::from_slice(&body).expect("the client sends a JSON body");
+    bodies.lock().expect("bodies").push((headers, body));
+    (StatusCode::BAD_REQUEST, "")
 }
 
 async fn capture_headers(

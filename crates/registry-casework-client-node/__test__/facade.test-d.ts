@@ -23,9 +23,15 @@ const sourceProfile: string = 'reviewer'
 const item: WorkItem = {} as WorkItem
 const decision: DecideRequest = {
   displayedBinding: item.binding,
+  operation: 'approve',
+}
+const staleDecision: DecideRequest = {
+  displayedBinding: item.binding,
+  // @ts-expect-error the Registry-Source-Profile header alone selects the source profile
   sourceProfileId: 'reviewer',
   operation: 'approve',
 }
+void staleDecision
 void client.decideWorkItem(token, profile, sourceProfile, item.actions[0], 'attempt-1', decision)
 void client.claimWorkItem(token, profile, sourceProfile, item.actions[0], 'claim-1')
 void client.recoverDecisionByKey(
@@ -34,6 +40,15 @@ void client.recoverDecisionByKey(
   sourceProfile,
   item.itemId,
   'attempt-1',
+  {},
+)
+void client.recoverDecisionByKey(
+  token,
+  profile,
+  sourceProfile,
+  item.itemId,
+  'attempt-1',
+  // @ts-expect-error the recovery body is empty
   { sourceProfileId: sourceProfile },
 )
 void client.workItemHistory(token, profile, sourceProfile, item.itemId, { cursor: 'opaque', limit: 25 })

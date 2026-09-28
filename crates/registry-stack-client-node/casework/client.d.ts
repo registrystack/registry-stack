@@ -134,12 +134,12 @@ export interface Draft {
 export interface DraftResponse { draft: Draft }
 export interface DecideRequest {
   displayedBinding: SourceBinding
-  sourceProfileId: string
   operation: OperationName
   reason?: string
   flaggedFields?: ReadonlyArray<string>
 }
-export interface RecoverAttemptRequest { sourceProfileId: string }
+/** The Registry-Source-Profile header selects the source profile; the body is empty. */
+export type RecoverAttemptRequest = Record<string, never>
 export interface SourceReceipt {
   sourceRevision: string
   resultingState: string
