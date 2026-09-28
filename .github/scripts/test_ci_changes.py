@@ -39,6 +39,7 @@ from ci_changes import (
     Workspace,
     classify,
     lock_change,
+    repo_docs_sources,
 )
 from run_cargo_packages import command_args, package_args
 from ci_event_routing import select_event, selection_outputs
@@ -2055,6 +2056,30 @@ on:
             {"Cargo.lock", "Cargo.toml"},
         )
         for _pattern, source in CLI_REFERENCE_INPUTS:
+            with self.subTest(source=source):
+                self.assertTrue(classify(self.workspace, (source,))["docs"])
+
+    def test_operator_docs_outside_the_site_run_docs(self) -> None:
+        """The docs release-pin suite scans docker/README.md directly."""
+        outputs = classify(self.workspace, ("docker/README.md",))
+        self.assertTrue(outputs["docs"])
+        self.assertFalse(outputs["rust"])
+
+    def test_every_repo_docs_source_runs_docs(self) -> None:
+        """Each current page the site generates from repo-docs.yaml is scanned
+        by the docs suite, so a change to its owning source runs docs."""
+        root = Path(__file__).resolve().parents[2]
+        manifest = yaml.safe_load(
+            (root / "docs/site/src/data/repo-docs.yaml").read_text(encoding="utf-8")
+        )
+        sources = {
+            entry["src"]
+            for repo in manifest["repos"].values()
+            for entry in repo.get("docs", ())
+        }
+        self.assertIn("products/evidence/README.md", sources)
+        self.assertEqual(repo_docs_sources(root), sources)
+        for source in sorted(sources):
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
 import tomllib
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -876,6 +877,25 @@ def matches(path: str, *patterns: str) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_DOCS_MANIFEST = "docs/site/src/data/repo-docs.yaml"
+REPO_DOCS_SOURCE = re.compile(r"^\s*(?:-\s+)?src:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def repo_docs_sources(root: Path = REPO_ROOT) -> frozenset[str]:
+    """Return the owning source of every page the site generates from repo-docs.yaml.
+
+    The classifier runs without PyYAML, so this reads each docs entry's
+    ``src:`` key by line; test_ci_changes.py holds the result equal to a full
+    YAML parse of the manifest.
+    """
+
+    text = (root / REPO_DOCS_MANIFEST).read_text(encoding="utf-8")
+    return frozenset(
+        match.group(1).strip("'\"") for match in REPO_DOCS_SOURCE.finditer(text)
+    )
+
+
 def is_root_workflow(path: str) -> bool:
     """Return whether path is an executable GitHub workflow at the root."""
 
@@ -1068,6 +1088,9 @@ def classify(
             for path in changed
         )
     )
+    # The docs suite scans every current page generated from repo-docs.yaml,
+    # so a change to one of their owning sources needs a docs run.
+    repo_docs = repo_docs_sources()
     docs = complete or "docs" in security_workflow_gates or any(
         matches(
             path,
@@ -1093,8 +1116,13 @@ def classify(
             *EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS,
             *CLI_REFERENCE_PATTERNS,
         )
+        or path in repo_docs
         or path
         in {
+            # An operator document outside the site that the docs release-pin
+            # suite (scripts/current-docs-release-pins.test.mjs) scans as a
+            # current page.
+            "docker/README.md",
             # The two Relay V2 product documents the site publishes through
             # repo-docs.yaml. Relay V2 generates no docs-site page from crate
             # source: relayctl compiles a project instead of exposing a schema
