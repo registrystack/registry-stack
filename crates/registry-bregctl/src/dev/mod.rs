@@ -2006,8 +2006,10 @@ enum Activation {
 }
 
 /// Classify the doctor report taken before activation. Only a database that is
-/// not ready for the runtime package means activation never committed; every
-/// other refusal is a real prerequisite failure and must stop the start.
+/// not ready for the runtime package, records no activated package, or has
+/// not activated the configured package means activation never committed;
+/// `apply` then decides whether the package may be activated. Every other
+/// refusal is a real prerequisite failure and must stop the start.
 fn activation(success: bool, report: &[u8]) -> Result<Activation> {
     if success {
         return Ok(Activation::Activated);
@@ -2019,10 +2021,11 @@ fn activation(success: bool, report: &[u8]) -> Result<Activation> {
         .as_array()
         .filter(|diagnostics| !diagnostics.is_empty())
         .context("doctor refused without naming a diagnostic; inspect private logs")?;
-    if diagnostics
-        .iter()
-        .all(|entry| entry["code"] == "startup.database.unready")
-    {
+    if diagnostics.iter().all(|entry| {
+        entry["code"] == "startup.database.unready"
+            || entry["code"] == "startup.database.uninitialized"
+            || entry["code"] == "startup.package.not_active"
+    }) {
         return Ok(Activation::NotActivated);
     }
     bail!(
@@ -2287,7 +2290,13 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 statements.push_str(&format!("CREATE SCHEMA IF NOT EXISTS {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
             }
             if state.requires_postgis {
-                statements.push_str(&spatial_prerequisites_sql());
+                // The served database runs with one role; the schema-test
+                // rehearsal keeps a separate runtime role.
+                statements.push_str(&spatial_prerequisites_sql(if database == "breg_dev" {
+                    MIGRATION_ROLE
+                } else {
+                    RUNTIME_ROLE
+                }));
             }
             sql(docker, state, database, statements.as_bytes(), None)?;
         }
@@ -2297,14 +2306,15 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
     Ok(())
 }
 /// Same role boundary as the runtime spatial prerequisite contract: the
-/// migration role may SET the no-login bbox owner; runtime is never a member.
-fn spatial_prerequisites_sql() -> String {
-    let bbox_role = format!("{RUNTIME_ROLE}__spatial_bbox");
+/// migration role may SET the no-login bbox owner derived from the runtime
+/// role; a separate runtime role is never a member.
+fn spatial_prerequisites_sql(runtime_role: &str) -> String {
+    let bbox_role = format!("{runtime_role}__spatial_bbox");
     format!(
         "CREATE SCHEMA IF NOT EXISTS registry_spatial_ext; \
          REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC; \
          CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext; \
-         GRANT USAGE ON SCHEMA registry_spatial_ext TO {MIGRATION_ROLE}, {RUNTIME_ROLE}; \
+         GRANT USAGE ON SCHEMA registry_spatial_ext TO {MIGRATION_ROLE}, {runtime_role}; \
          DO $breg_spatial$ BEGIN \
          IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{bbox_role}') THEN \
          CREATE ROLE {bbox_role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; \
@@ -2528,7 +2538,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         initialization.push_str(&format!("CREATE SCHEMA {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
     }
     if state.requires_postgis {
-        initialization.push_str(&spatial_prerequisites_sql());
+        initialization.push_str(&spatial_prerequisites_sql(RUNTIME_ROLE));
     }
     sql(
         docker,

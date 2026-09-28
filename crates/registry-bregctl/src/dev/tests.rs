@@ -118,6 +118,40 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     assert_eq!(runtime["database"]["roles"]["runtime"], RUNTIME_ROLE);
 }
 
+#[test]
+fn the_dev_registry_serves_with_one_role_and_its_rehearsal_stays_split() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let root = state.root();
+    private::directory(&root.join("build")).unwrap();
+    private::directory(&root.join("build/package")).unwrap();
+    config::runtime(&root, &state, &clients, false).unwrap();
+    let served: Value =
+        serde_norway::from_slice(&private::read(&root.join("runtime.yaml"), MAX_BYTES).unwrap())
+            .unwrap();
+    assert_eq!(served["database"]["roles"]["migration"], MIGRATION_ROLE);
+    assert_eq!(served["database"]["roles"]["runtime"], MIGRATION_ROLE);
+    assert_eq!(
+        served["database"]["runtimeUrlRef"],
+        "secret:file/migration-database-url"
+    );
+    assert_eq!(
+        served["database"]["migrationUrlRef"],
+        "secret:file/migration-database-url"
+    );
+    // The schema-test rehearsal computes the package fingerprint, which is
+    // defined against a separate runtime role.
+    let rehearsal: Value = serde_norway::from_slice(
+        &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rehearsal["database"]["roles"]["runtime"], RUNTIME_ROLE);
+    assert_eq!(
+        rehearsal["database"]["runtimeUrlRef"],
+        "secret:file/test-runtime-database-url"
+    );
+}
+
 fn write_init_project() -> (tempfile::TempDir, PathBuf) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");
@@ -1417,8 +1451,26 @@ fn doctor_refusal(code: &str, message: &str) -> Vec<u8> {
 }
 
 #[test]
-fn only_an_unready_database_classifies_a_doctor_refusal_as_not_activated() {
+fn only_a_database_without_the_package_activated_classifies_a_doctor_refusal_as_not_activated() {
     assert_eq!(activation(true, b"{}").unwrap(), Activation::Activated);
+    // The one-role session reads the ledger, so a database no apply has
+    // committed to is reported as uninitialized, and one whose successor
+    // apply has not committed as not having the package active.
+    for (code, message) in [
+        (
+            "startup.database.uninitialized",
+            "the database records no activated package",
+        ),
+        (
+            "startup.package.not_active",
+            "the database has not activated the package at package.root",
+        ),
+    ] {
+        assert_eq!(
+            activation(false, &doctor_refusal(code, message)).unwrap(),
+            Activation::NotActivated
+        );
+    }
     assert_eq!(
         activation(
             false,
@@ -3090,4 +3142,28 @@ fn retained_database_selection_preserves_spatial_and_legacy_sessions() {
     state.requires_postgis = true;
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.database_image(), SPATIAL_IMAGE);
+}
+
+#[test]
+fn spatial_prerequisites_provision_the_bbox_role_each_runtime_file_serves_with() {
+    // The served database runs with one role and the schema-test rehearsal
+    // with a separate runtime role; each derives its bbox owner from its own
+    // runtime role, and only the migration role may SET it.
+    for runtime in [MIGRATION_ROLE, RUNTIME_ROLE] {
+        let bbox = registry_breg::postgres::spatial_bbox_role(
+            &registry_breg::postgres::SqlIdentifier::parse(runtime).unwrap(),
+        );
+        let statements = spatial_prerequisites_sql(runtime);
+        assert!(
+            statements.contains(&format!("CREATE ROLE {} NOLOGIN", bbox.as_str())),
+            "{statements}"
+        );
+        assert!(
+            statements.contains(&format!(
+                "GRANT {} TO {MIGRATION_ROLE} WITH INHERIT FALSE, SET TRUE",
+                bbox.as_str()
+            )),
+            "{statements}"
+        );
+    }
 }

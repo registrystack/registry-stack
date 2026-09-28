@@ -1315,6 +1315,15 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         .chain(clients.issuer.browser_clients.iter())
         .collect::<Vec<_>>();
     let assertion_issuers = assertion_issuers(state, clients)?;
+    // The local registry serves with the migration role, the one-role mode
+    // a small deployment runs in. The schema-test rehearsal stays split,
+    // because the package fingerprint is defined against a separate runtime
+    // role.
+    let (runtime_url, runtime_role) = if test {
+        ("test-runtime-database-url", RUNTIME_ROLE)
+    } else {
+        ("migration-database-url", MIGRATION_ROLE)
+    };
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -1326,7 +1335,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
             "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
-            "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
+            "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
             "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
