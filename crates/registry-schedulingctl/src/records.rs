@@ -116,7 +116,7 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
     record_applied(&runtime, &audit, correlation, &counts)?;
     Ok(json!({
         "ok": true,
-        "command": "records-apply",
+        "command": "records apply",
         "config": config_path,
         "records": records_path,
         "applied": counts,
