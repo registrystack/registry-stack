@@ -1174,7 +1174,9 @@ async fn a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_spli
     let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
 
     // A default privilege would hand the runtime role TRIGGER on every table
-    // the first apply creates; the grants apply issues take it away.
+    // the first apply creates. Apply does not take it away: it refuses before
+    // any migration, naming the default privilege to revoke, since the tables
+    // a later refusal would name do not survive its rollback.
     deployment
         .admin
         .batch_execute(&format!(
@@ -1183,6 +1185,18 @@ async fn a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_spli
         ))
         .await
         .unwrap();
+    let default_fix = format!(
+        "ALTER DEFAULT PRIVILEGES FOR ROLE {migration_role} IN SCHEMA {schema} \
+         REVOKE TRIGGER ON TABLES FROM {runtime_role}"
+    );
+    let error = refusal(apply(&config));
+    assert!(names_fix(&error, &default_fix, THEN_RERUN), "{error}");
+    assert_eq!(
+        deployment.tables().await,
+        0,
+        "a refused apply created tables"
+    );
+    deployment.admin.batch_execute(&default_fix).await.unwrap();
     assert_eq!(
         apply(&config).expect("the package activates")["roleMode"],
         "split"

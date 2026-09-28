@@ -90,8 +90,12 @@ credential and only read; `schedulingctl apply` connects with the migration
 credential. When the two credentials log in as different PostgreSQL roles
 (split role mode), apply grants the runtime role USAGE on the schema,
 SELECT, INSERT, UPDATE, and DELETE on its tables, use of its sequences, and
-EXECUTE on its functions, then revokes TRIGGER on its tables and INSERT,
-UPDATE, DELETE, and TRUNCATE on the activation ledger and the schema history. The runtime role can read the
+EXECUTE on its functions, then revokes INSERT, UPDATE, DELETE, and TRUNCATE
+on the activation ledger and the schema history. It never grants or revokes
+TRIGGER: before any migration it refuses a default privilege of the
+migration role that would grant the runtime role TRIGGER on the tables it
+creates, naming `ALTER DEFAULT PRIVILEGES FOR ROLE <migrator> IN SCHEMA
+<schema> REVOKE TRIGGER ON TABLES FROM <grantee>` then a rerun. The runtime role can read the
 ledger but not write it; it keeps ordinary write access to the product tables
 it serves from. When both
 credentials are the same role (single role mode), `plan`, `apply`, and
