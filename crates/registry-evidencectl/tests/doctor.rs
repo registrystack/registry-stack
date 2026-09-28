@@ -348,6 +348,125 @@ fn doctor_json_puts_one_envelope_on_stdout_and_nothing_on_stderr() {
     );
 }
 
+/// Append rate limits and requirements to the fixture bundle.
+fn declare_rate_limits(project: &Path, burst: u32, extra: &str) {
+    let path = project.join("bundle/evidence.yaml");
+    let mut document = fs::read_to_string(&path).expect("Evidence configuration");
+    document.push_str(&format!(
+        "rateLimits: {{requestsPerPrincipalPerMinute: 60, burstPerPrincipal: {burst}, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}}\n"
+    ));
+    document.push_str(extra);
+    fs::write(&path, document).expect("declare rate limits");
+}
+
+const AUDIENCE_SCOPED_REQUIREMENT: &str = "requirements:\n  - id: urn:example:doctor:requirement:one-call:v1\n    acquisition: {kind: single, source: registry-lookup}\n";
+
+const HOLDER_BOUND_RELEASE: &str = "responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 12\nrequirements:\n  - id: urn:example:doctor:requirement:holder:v1\n    subjectBinding: holder-bound\n    acquisition: {kind: single, source: registry-lookup}\n";
+
+/// Run doctor in both output forms over a frozen project.
+fn doctor_both_forms(project: &Path) -> (Output, Output) {
+    freeze(project);
+    let text = doctor(project, &[]);
+    let json = doctor(project, &["--json"]);
+    unfreeze(project);
+    (text, json)
+}
+
+fn burst_warnings(report: &serde_json::Value) -> Vec<&serde_json::Value> {
+    report["diagnostics"]
+        .as_array()
+        .map(|diagnostics| {
+            diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic["code"] == "evidencectl.doctor.burst-below-request-cost"
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Doctor surfaces the same shortfall `evidence check` reports, as a warning:
+/// the project still passes, the summary names both numbers and the key, and
+/// the JSON report carries one warning diagnostic.
+#[test]
+fn doctor_warns_when_the_burst_cannot_hold_a_full_request_batch() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_rate_limits(&project, 10, AUDIENCE_SCOPED_REQUIREMENT);
+
+    let (text, json) = doctor_both_forms(&project);
+    let stdout = stdout_of(&text);
+    assert!(
+        text.status.success(),
+        "a low burst is a warning, not a failure:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("WARN: rate limits (1 inspected)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "bundle/evidence.yaml: rateLimits.burstPerPrincipal is 10, below 16, the largest request cost this bundle admits"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Raise rateLimits.burstPerPrincipal to at least 16"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("0 failed"), "{stdout}");
+
+    assert!(json.status.success());
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&json).trim()).expect("parse the JSON report");
+    assert_eq!(report["passed"], true);
+    let warnings = burst_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["severity"], "finding");
+    assert_eq!(warnings[0]["path"], "$.rateLimits.burstPerPrincipal");
+}
+
+#[test]
+fn doctor_warns_when_the_burst_cannot_hold_the_holder_bound_ceiling() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_rate_limits(&project, 10, HOLDER_BOUND_RELEASE);
+
+    let (text, _) = doctor_both_forms(&project);
+    let stdout = stdout_of(&text);
+    assert!(text.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("rateLimits.burstPerPrincipal is 10, below 12"),
+        "no request batch can name a holder-bound requirement, so the release ceiling is the cost: {stdout}"
+    );
+}
+
+#[test]
+fn doctor_is_silent_once_the_burst_holds_the_largest_request_cost() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_rate_limits(&project, 16, AUDIENCE_SCOPED_REQUIREMENT);
+
+    let (text, json) = doctor_both_forms(&project);
+    let stdout = stdout_of(&text);
+    assert!(text.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("PASS: rate limits (1 inspected)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("WARN"), "{stdout}");
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&json).trim()).expect("parse the JSON report");
+    assert!(burst_warnings(&report).is_empty(), "{report}");
+}
+
 #[test]
 fn retired_mint_compatibility_option_is_not_accepted() {
     for arguments in [

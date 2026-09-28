@@ -27,6 +27,8 @@ use thiserror::Error;
 use url::{Host, Url};
 use utoipa::ToSchema;
 
+use crate::model::EVIDENCE_REQUEST_BATCH_MAX_ITEMS;
+
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 pub const MAXIMUM_SOURCE_BATCH_ITEMS: u16 = 16;
@@ -763,11 +765,83 @@ pub fn subject_binding_permits_response_format(
     }
 }
 
+/// A burst smaller than the largest request cost the bundle admits.
+///
+/// A principal's bucket never holds more than the burst, so a request that
+/// costs more is refused however long its caller waits. That can be deliberate,
+/// a way to cap how much one principal asks for at once, so it is reported as
+/// a warning rather than refused. It carries configured numbers only, never a
+/// request value.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct BurstShortfall {
+    pub burst: u64,
+    pub largest_request_cost: u16,
+}
+
+impl fmt::Display for BurstShortfall {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            burst,
+            largest_request_cost: cost,
+        } = self;
+        write!(
+            formatter,
+            "rateLimits.burstPerPrincipal is {burst}, below {cost}, the largest request cost \
+             this bundle admits: a request batch or holder-bound release that costs more than \
+             the burst is always refused as evidence.invalid_request. Raise \
+             rateLimits.burstPerPrincipal to at least {cost} unless capping those requests \
+             below {cost} is intended"
+        )
+    }
+}
+
 impl EvidenceConfig {
     /// The declared holder-bound batch ceiling, or one when none is declared.
     pub fn holder_bound_batch_ceiling(&self) -> u16 {
         self.holder_bound_batch_max_size
             .unwrap_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE)
+    }
+
+    /// The largest request-rate cost a request this bundle can serve charges.
+    ///
+    /// A request batch costs one token per item and is served for every
+    /// audience-scoped requirement up to the route's item ceiling. A source's
+    /// own `batch.maximumItems` does not bound it: items above that ceiling run
+    /// sequentially rather than being refused. A holder-bound release costs one
+    /// token per holder key, and more than one key is served only when the
+    /// bundle both enables the batch container and declares a holder-bound
+    /// requirement, up to the declared ceiling. Every other request costs one.
+    pub fn largest_request_cost(&self) -> u16 {
+        let request_batch = if self.requirements.iter().any(|requirement| {
+            requirement.subject_binding_mode() == SubjectBindingMode::AudienceScoped
+        }) {
+            u16::try_from(EVIDENCE_REQUEST_BATCH_MAX_ITEMS).unwrap_or(u16::MAX)
+        } else {
+            1
+        };
+        let holder_bound_release = if self
+            .response_formats
+            .contains(&ResponseFormat::SdJwtVcBatch)
+            && self.requirements.iter().any(|requirement| {
+                requirement.subject_binding_mode() == SubjectBindingMode::HolderBound
+            }) {
+            self.holder_bound_batch_ceiling()
+        } else {
+            1
+        };
+        request_batch.max(holder_bound_release).max(1)
+    }
+
+    /// The shortfall when the configured burst cannot hold the largest request
+    /// cost this bundle admits, so some requests could never be admitted.
+    pub fn burst_shortfall(&self) -> Option<BurstShortfall> {
+        let largest_request_cost = self.largest_request_cost();
+        (self.rate_limits.burst_per_principal < u64::from(largest_request_cost)).then_some(
+            BurstShortfall {
+                burst: self.rate_limits.burst_per_principal,
+                largest_request_cost,
+            },
+        )
     }
 
     pub fn requirement_acquisition_posture(
@@ -11231,6 +11305,65 @@ outboundTls:
             EvidenceConfig::parse_yaml(audience_scoped.as_bytes())
                 .expect("an audience-scoped requirement may disclose an entity reference");
         }
+    }
+
+    /// A request batch costs one token per item and a holder-bound release one
+    /// per holder key, so the burst has to hold the larger of the two for any
+    /// such request to be admitted at all. The request-batch route accepts up to
+    /// sixteen items for every audience-scoped requirement whatever a source's
+    /// own batch ceiling says, because items above that ceiling run
+    /// sequentially rather than being refused.
+    #[test]
+    fn the_largest_request_cost_follows_the_batches_the_bundle_admits() {
+        let all_definitions = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        let audience_scoped =
+            EvidenceConfig::parse_yaml(all_definitions.as_bytes()).expect("fixture parses");
+        assert_eq!(audience_scoped.largest_request_cost(), 16);
+        let shortfall = audience_scoped
+            .burst_shortfall()
+            .expect("a burst of ten cannot hold a sixteen-item request batch");
+        assert_eq!(
+            shortfall,
+            BurstShortfall {
+                burst: 10,
+                largest_request_cost: 16
+            }
+        );
+        assert_eq!(
+            shortfall.to_string(),
+            "rateLimits.burstPerPrincipal is 10, below 16, the largest request cost this bundle \
+             admits: a request batch or holder-bound release that costs more than the burst is \
+             always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at \
+             least 16 unless capping those requests below 16 is intended"
+        );
+
+        let raised = all_definitions.replace("burstPerPrincipal: 10", "burstPerPrincipal: 16");
+        assert_ne!(raised, all_definitions, "the burst mutation applies");
+        let raised = EvidenceConfig::parse_yaml(raised.as_bytes()).expect("fixture parses");
+        assert_eq!(raised.burst_shortfall(), None);
+
+        // Every requirement here is holder-bound, so no request batch can name
+        // one, and the release ceiling the bundle declares is the whole cost.
+        let holder_bound = include_str!(
+            "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
+        );
+        let holder_only =
+            EvidenceConfig::parse_yaml(holder_bound.as_bytes()).expect("fixture parses");
+        assert_eq!(holder_only.largest_request_cost(), 4);
+        assert_eq!(holder_only.burst_shortfall(), None);
+        let narrow = holder_bound.replace("burstPerPrincipal: 10", "burstPerPrincipal: 3");
+        assert_ne!(narrow, holder_bound, "the burst mutation applies");
+        assert_eq!(
+            EvidenceConfig::parse_yaml(narrow.as_bytes())
+                .expect("fixture parses")
+                .burst_shortfall(),
+            Some(BurstShortfall {
+                burst: 3,
+                largest_request_cost: 4
+            })
+        );
     }
 
     #[test]

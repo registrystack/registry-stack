@@ -3745,7 +3745,23 @@ async fn request_batch_larger_than_the_burst_is_refused_without_a_retry_hint() {
         .json(&three_items)
         .await;
     assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
-    assert_eq!(response.json::<Value>()["code"], "evidence.invalid_request");
+    // The frozen public problem contract selects title and detail by code
+    // alone, and every shipped client matches the exact tuple, so the caller
+    // gets the registered invalid-request body: no batch size, burst, or other
+    // configured limit, and no Retry-After.
+    let problem = response.json::<Value>();
+    let trace_id = problem["traceId"].clone();
+    assert_eq!(
+        problem,
+        json!({
+            "type": "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
+            "title": "Evidence request is invalid",
+            "status": 400,
+            "detail": "the Evidence request is invalid",
+            "code": "evidence.invalid_request",
+            "traceId": trace_id,
+        })
+    );
     assert!(response.maybe_header("retry-after").is_none());
     assert!(server
         .received_requests()
