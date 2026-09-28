@@ -414,19 +414,30 @@ mod tests {
 
     #[test]
     fn decision_contract_rejects_unknown_fields() {
-        let body = r#"{
-            "expectedRevision": 2,
+        let body = serde_json::json!({
             "displayedBinding": {
                 "sourceRevision": "4",
                 "version": "proposal-2",
                 "integrity": "sha256:abc",
                 "generation": "package-a"
             },
-            "sourceProfileId": "reviewer",
-            "operation": "approve",
-            "surprise": true
-        }"#;
-        assert!(serde_json::from_str::<DecideRequest>(body).is_err());
+            "operation": "approve"
+        });
+        serde_json::from_value::<DecideRequest>(body.clone()).expect("the closed body decodes");
+        // The source profile travels only in the Registry-Source-Profile
+        // header, so a body that still names it is refused like any other
+        // unknown member.
+        for (field, value) in [
+            ("sourceProfileId", serde_json::json!("reviewer")),
+            ("surprise", serde_json::json!(true)),
+        ] {
+            let mut extended = body.clone();
+            extended[field] = value;
+            assert!(
+                serde_json::from_value::<DecideRequest>(extended).is_err(),
+                "{field}"
+            );
+        }
     }
 
     #[test]
