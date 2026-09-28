@@ -357,8 +357,8 @@ impl ActivationRefusal {
 #[must_use]
 pub fn database_id_mismatch_message() -> String {
     "the package deployment binding differs from the runtime configuration at \
-     identity.databaseId; point database.runtimeUrlRef at the database this \
-     configuration belongs to, or correct identity.databaseId"
+     identity.databaseId; point database.runtimeUrlRef at the \
+     database this configuration belongs to, or correct identity.databaseId"
         .to_owned()
 }
 
@@ -717,7 +717,8 @@ async fn apply_in(
         .get(0);
     let split = current_user != runtime_user;
     if split {
-        let stray = stray_authority(transaction, Some(runtime_user)).await?;
+        let mut stray = stray_authority(transaction, Some(runtime_user)).await?;
+        stray.extend(default_trigger_grant(transaction, runtime_user).await?);
         if !stray.is_empty() {
             return Err(ActivationError::Refused(vec![
                 ActivationRefusal::role_mode_weakened(&stray),
@@ -1471,6 +1472,40 @@ async fn stray_authority(
                 .map(|trigger| format!("DROP TRIGGER {trigger}")),
         )
         .collect())
+}
+
+/// The `ALTER DEFAULT PRIVILEGES` statement that takes away a default
+/// privilege of this connection's role, the migration role, granting
+/// `role` TRIGGER on the tables it creates in the Casework schema, directly,
+/// through `PUBLIC`, or through a role `role` belongs to. Apply refuses it
+/// before any migration: a refusal after the migrations would name tables
+/// its rollback removes, and apply never revokes TRIGGER itself.
+async fn default_trigger_grant(
+    transaction: &Transaction<'_>,
+    role: &str,
+) -> Result<Option<String>, StoreError> {
+    Ok(transaction
+        .query_opt(
+            "SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %s%s REVOKE TRIGGER ON TABLES FROM %s',
+                 quote_ident(current_user::text),
+                 CASE WHEN d.defaclnamespace=0 THEN '' ELSE ' IN SCHEMA ' || quote_ident(n.nspname) END,
+                 CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END)
+             FROM pg_roles r
+             CROSS JOIN pg_default_acl d
+             CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+             LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
+             WHERE r.rolname=$1::text
+               AND d.defaclrole=(SELECT oid FROM pg_roles WHERE rolname=current_user::text)
+               AND d.defaclobjtype='r'
+               AND (d.defaclnamespace=0 OR n.nspname=current_schema())
+               AND a.privilege_type='TRIGGER'
+               AND (a.grantee=0 OR pg_has_role(r.oid, a.grantee, 'MEMBER'))
+             ORDER BY a.grantee=r.oid DESC, a.grantee=0 DESC, d.defaclnamespace DESC
+             LIMIT 1",
+            &[&role],
+        )
+        .await?
+        .map(|row| row.get(0)))
 }
 
 /// The next action for stray authority `statements` from

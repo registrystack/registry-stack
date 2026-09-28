@@ -46,7 +46,10 @@
   refusal names the `REASSIGN OWNED BY`, `REVOKE CREATE ON SCHEMA`, `REVOKE
   TRIGGER`, or `DROP TRIGGER` statement to run, `FROM PUBLIC` when that is how
   the runtime role holds the privilege, then the command to run next. Apply
-  never revokes TRIGGER or drops a trigger itself.
+  never revokes TRIGGER or drops a trigger itself: before any migration it
+  refuses a default privilege of the migration role that would grant the
+  runtime role TRIGGER on the tables it creates, naming `ALTER DEFAULT
+  PRIVILEGES ... REVOKE TRIGGER ON TABLES FROM <grantee>`.
 - BREAKING: startup refuses a BReg source whose imported description pins a
   `sourceRevision` other than the registry revision the source serves, naming
   `caseworkctl check PROJECT --against-breg-package DIR --source-id ID`, the
