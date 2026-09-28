@@ -803,6 +803,7 @@ const LEDGER_AND_STATE_TABLES: &[&str] = &[
     "registry_state",
     "registry_migrations",
     "registry_migration_steps",
+    "registry_pre_ledger_package_positions",
 ];
 
 async fn verify_schema_owner(

@@ -2343,6 +2343,134 @@ async fn real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activ
     database.cleanup().await;
 }
 
+/// A field encrypted before adoption keeps its erase-history lifecycle: the
+/// flip boundary and the originating package of a pre-flip proposal name
+/// revisions only the pre-ledger ledger ordered, and erasure after adoption
+/// still orders them and scrubs the plaintext the proposal holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_erasure_after_adoption_orders_the_revisions_the_pre_ledger_ledger_named() {
+    let (database, package) = initial_package_database().await;
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package the deployed release installed activates");
+    let request_id = Uuid::from_u128(0xAD01);
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+                 (request_entity_id, request_id, owner_reference, state,
+                  proposal_version, workflow_revision)
+             VALUES ('asset-request', $1, 'owner:hash', 'cancelled', 1, 1)",
+            &[&request_id],
+        )
+        .await
+        .expect("a pre-flip request state inserts");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_proposals
+                 (request_entity_id, request_id, proposal_version, request_record_revision,
+                  contract_fingerprint, effect_digest, snapshot)
+             VALUES ('asset-request', $1, 1, 1, $2, $2, $3)",
+            &[
+                &request_id,
+                &format!("sha256:{}", "7".repeat(64)),
+                &serde_json::json!({
+                    "originatingPackage": "pre-ledger-origin",
+                    "effects": [{
+                        "id": "create-asset",
+                        "operation": "create",
+                        "target": {"kind": "ReservedCreate", "entityId": "asset"},
+                        "fieldChanges": [{
+                            "field": "code",
+                            "before": {"kind": "Missing"},
+                            "after": {"kind": "Present", "value": "pre-flip-plaintext"}
+                        }]
+                    }]
+                }),
+            ],
+        )
+        .await
+        .expect("a pre-flip proposal inserts");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_flips
+                 (entity_id, field_id, boundary_package_revision, history_choice,
+                  history_commit_position,
+                  sealed_row_count, sealed_journal_row_count,
+                  accepted_plaintext_journal_row_count,
+                  accepted_request_target_row_count,
+                  accepted_request_proposal_row_count,
+                  accepted_idempotency_row_count, accepted_outbox_row_count)
+             SELECT 'asset', 'code', 'pre-ledger-revision', 'erase-and-rebaseline',
+                    latest_position + 1, 0, 0, 0, 0, 0, 0, 0
+               FROM registry_internal.registry_commit_head
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the pre-adoption flip inserts");
+    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+    // The deployed release activated the flip's boundary from the revision
+    // the proposal originated under, which it ordered only as that source.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET source_package_revision = 'pre-ledger-origin', package_sequence = 2
+              WHERE target_package_revision = 'pre-ledger-revision'",
+            &[],
+        )
+        .await
+        .expect("the pre-ledger ledger names the origin as the boundary's source");
+    let adopted = apply(&database, &package, ApplyPrecondition::Adoption)
+        .await
+        .expect("the pre-ledger database is adopted");
+
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compile_variant(Variant::Base);
+    let outcome = registry_breg::field_encryption_backfill::erase_field_encryption_history(
+        &mut migration,
+        registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureRequest {
+            expected: &adopted,
+            migration_role: &database.migration_role,
+            lock_key: registry_breg::postgres::RegistryLockKey::derive(&adopted.package_id)
+                .expect("lock key derives"),
+            timeouts: registry_breg::history_erasure::HistoryErasureTimeouts::new(
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            )
+            .expect("erasure timeouts are bounded"),
+            audit: &database.audit(
+                AuditProfile::production_from_secret_bytes(vec![0x76; 32].into())
+                    .expect("test owns a keyed audit profile"),
+            ),
+            operator_reference: "field-encryption-operator",
+            reason: "destroy pre-flip request snapshots",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect("erasure after adoption orders the pre-ledger revisions");
+
+    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
+    let erased: bool = database
+        .admin
+        .query_one(
+            "SELECT snapshot IS NULL AND erased_at IS NOT NULL
+               FROM registry_internal.registry_request_proposals
+              WHERE request_id = $1",
+            &[&request_id],
+        )
+        .await
+        .expect("the proposal reads")
+        .get(0);
+    assert!(erased, "the pre-flip proposal's plaintext is scrubbed");
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 /// A package whose schema fingerprint is not the live catalog's is refused
 /// and the reshape rolls back, so the database is still the one the deployed
 /// release kept.

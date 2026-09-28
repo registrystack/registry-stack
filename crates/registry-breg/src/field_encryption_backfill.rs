@@ -698,9 +698,10 @@ pub async fn erase_field_encryption_history(
 
 /// Clear whole request snapshots when their frozen originating package
 /// predates a recorded erase-and-rebaseline flip and they mention its field.
-/// Package order comes from the migration ledger, not request revision timing:
-/// a draft can predate the flip while its frozen proposal and target snapshots
-/// are created afterward. This also reaches canceled and rejected creates
+/// Package order comes from the migration ledger, and for the revisions a
+/// pre-ledger database named, from the order adoption kept; it never comes
+/// from request revision timing: a draft can predate the flip while its frozen
+/// proposal and target snapshots are created afterward. This also reaches canceled and rejected creates
 /// whose target never produced a retained record revision.
 async fn scrub_plaintext_request_snapshots(
     client: &mut Client,
@@ -774,6 +775,9 @@ async fn scrub_plaintext_request_snapshots(
                         apply_order AS package_sequence,
                         1::bigint AS inferred_count
                    FROM registry_internal.registry_migrations
+                 UNION ALL
+                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
+                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              SELECT EXISTS (
                  SELECT 1
@@ -849,6 +853,9 @@ async fn scrub_plaintext_request_snapshots(
                         apply_order AS package_sequence,
                         1::bigint AS inferred_count
                    FROM registry_internal.registry_migrations
+                 UNION ALL
+                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
+                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              UPDATE registry_internal.registry_request_targets AS target
                 SET base_snapshot = NULL,
@@ -889,6 +896,9 @@ async fn scrub_plaintext_request_snapshots(
                         apply_order AS package_sequence,
                         1::bigint AS inferred_count
                    FROM registry_internal.registry_migrations
+                 UNION ALL
+                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
+                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              UPDATE registry_internal.registry_request_proposals AS proposal
                 SET snapshot = NULL,
