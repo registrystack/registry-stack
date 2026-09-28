@@ -1148,7 +1148,9 @@ fn export_client(
     Ok(report)
 }
 
-/// The event source a registry names for itself, from its authored registry.yaml.
+/// The event source a local registry session names for itself, from its
+/// authored registry.yaml. A package names no deployment, so `bregctl dev`
+/// serves it with its registry id as the runtime `identity.instanceId`.
 fn event_source(registry: &Path) -> Result<String> {
     let authored: Value =
         serde_norway::from_slice(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
@@ -1156,12 +1158,7 @@ fn event_source(registry: &Path) -> Result<String> {
     let id = authored["registry"]["id"]
         .as_str()
         .context("registry.yaml declares no registry.id")?;
-    let instance = authored["package"]["instanceId"]
-        .as_str()
-        .context("registry.yaml declares no package.instanceId")?;
-    Ok(format!(
-        "urn:registrystack:registry:{id}:instance:{instance}"
-    ))
+    Ok(format!("urn:registrystack:registry:{id}:instance:{id}"))
 }
 
 /// The published keys of the borrowed issuer, located through its discovery
