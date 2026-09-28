@@ -15675,7 +15675,7 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             }),
             "apply.resume.roles_differ",
             "database.roles",
-            "runtime role `registry_runtime`; rerun the apply with the database roles it started with",
+            "runtime role `registry_runtime`; rerun the apply with the database roles it started with, or, for a new package, assess it with `bregctl migration reconcile`",
         ),
         (
             ApplyLifecycleError::Apply(MigrationError::SuccessorRolesDiffer {
