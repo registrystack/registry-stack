@@ -97,6 +97,19 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-schedulingctl/src/activation.rs;
     crates/registry-schedulingctl/tests/activation_postgres.rs. */}
 
+- BREAKING: every `caseworkctl` and `schedulingctl` `--format json` report
+  opens with `ok`, `command`, and `status`, in that order, as `evidencectl`
+  reports do. `ok` is true exactly when the exit code is 0, and a failure
+  without a report of its own names its exit class as `domain-refusal`,
+  `usage-error`, or `operational-failure` with at least one diagnostic.
+  `caseworkctl` reports move to `caseworkctl/v1alpha3`, and the
+  `schedulingctl` records report's command is `records apply`. See
+  `products/casework/CHANGELOG.md` and `products/scheduling/CHANGELOG.md`.
+
+{/* Evidence: crates/registry-caseworkctl/src/report.rs;
+    crates/registry-schedulingctl/src/report.rs;
+    products/casework/contracts/cli/. */}
+
 ## v0.35.0 beta-47
 
 - BREAKING: Base Registry Engine (BReg) gives every `reference` field a btree
