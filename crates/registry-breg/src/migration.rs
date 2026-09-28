@@ -1263,14 +1263,41 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         // Existing registries may have been initialized by a binary that
         // predates newer product-owned control tables. Reconcile them while
         // the verified migration session holds the apply lock and before the
-        // successor can enter durable maintenance.
-        if connection
-            .reconcile_successor_control_plane(request.roles.runtime)
-            .await
-            .is_err()
-        {
-            return refuse_and_release(connection, attempt, &target, MigrationError::ApplyFailed)
+        // successor can enter durable maintenance. A role change reconciles
+        // them for the runtime role still serving: the role it activates
+        // receives its grants inside the activation transaction, so a
+        // refusal before maintenance leaves that role nothing. When the role
+        // the ledger names no longer exists, nothing serves to reconcile for.
+        let control_plane_role = match retired_runtime_role.as_ref() {
+            None => Some(request.roles.runtime),
+            Some(retired) => match connection.role_exists(retired).await {
+                Ok(true) => Some(retired),
+                Ok(false) => None,
+                Err(_) => {
+                    return refuse_and_release(
+                        connection,
+                        attempt,
+                        &target,
+                        MigrationError::ApplyFailed,
+                    )
+                    .await;
+                }
+            },
+        };
+        if let Some(control_plane_role) = control_plane_role {
+            if connection
+                .reconcile_successor_control_plane(control_plane_role)
+                .await
+                .is_err()
+            {
+                return refuse_and_release(
+                    connection,
+                    attempt,
+                    &target,
+                    MigrationError::ApplyFailed,
+                )
                 .await;
+            }
         }
         // A role change keeps the compiled model, so no request proposal
         // needs a rebase.

@@ -1555,10 +1555,11 @@ impl DedicatedApplyConnection {
 
     /// Activates a re-apply that changes only the roles the registry serves
     /// with. The move of each spatial candidate view to the serving bbox
-    /// role, the runtime grants, the retirement of the runtime role the
-    /// activation stops serving with and of its bbox role, and the activation
-    /// commit in one transaction, so a refused activation leaves the role the
-    /// ledger still names with every view and grant it serves with.
+    /// role, the control-plane and runtime grants, the retirement of the
+    /// runtime role the activation stops serving with and of its bbox role,
+    /// and the activation commit in one transaction, so a refused activation
+    /// leaves the role the ledger still names with every view and grant it
+    /// serves with, and the role it would have served with holds nothing.
     pub(crate) async fn activate_role_change(
         &mut self,
         registry: &CompiledRegistry,
@@ -1581,6 +1582,10 @@ impl DedicatedApplyConnection {
             )
             .await?;
         }
+        install_registry_state_schema(&transaction, transition.runtime_role).await?;
+        install_history_schema_store(&transaction, transition.runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
         reconcile_runtime_acl_in(
             &transaction,
             registry,
@@ -2320,6 +2325,17 @@ impl DedicatedApplyConnection {
             )
             .await?;
         Ok(row.map(|row| (row.get(0), row.get(1))))
+    }
+
+    /// Whether a role of this name exists. A runtime role the ledger records
+    /// can be dropped or renamed by an administrator after its activation.
+    pub(crate) async fn role_exists(&mut self, role: &SqlIdentifier) -> Result<bool> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        Ok(self
+            .client
+            .query_one("SELECT to_regrole($1) IS NOT NULL", &[&role.as_str()])
+            .await?
+            .try_get(0)?)
     }
 
     /// Reads the durable maintenance state while this session holds the
