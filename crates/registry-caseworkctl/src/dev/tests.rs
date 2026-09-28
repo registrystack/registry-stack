@@ -3294,7 +3294,7 @@ impl RegistrySession {
             project.join("registry.yaml"),
             serde_json::to_vec(&json!({
                 "registry": {"id": "professional-licences"},
-                "package": {"instanceId": "professional-licences-starter"}
+                "package": {}
             }))
             .unwrap(),
         )
@@ -3462,7 +3462,7 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
     assert_eq!(binding.audience, "urn:breg:dev:fixture");
     assert_eq!(
         binding.event_source,
-        "urn:registrystack:registry:professional-licences:instance:professional-licences-starter"
+        "urn:registrystack:registry:professional-licences:instance:professional-licences"
     );
     assert_eq!(
         fs::read_to_string(root.join("secrets/professional-licences-reader-client-id")).unwrap(),
