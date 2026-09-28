@@ -587,16 +587,7 @@ relevant product pages on this site rather than duplicating release notes.
   handle the new variant. See
   [back up and restore the database](../operate/breg-changes/#back-up-and-restore-the-database).
 
-{/* Evidence: crates/registry-breg/src/instance_claim.rs;
-    crates/registry-breg/src/startup.rs, verify_instance_claim();
-    crates/registry-breg/src/import_authority.rs, supersede_every_open();
-    crates/registry-breg/tests/postgres_startup.rs, a_restored_copy_refuses_to_serve_until_adopted
-    and a_database_that_withholds_its_system_identifier_still_serves_and_refuses_a_copy;
-    crates/registry-breg/tests/postgres_import_authority.rs,
-    installing_the_claim_beside_committed_history_leaves_the_database_to_adopt and
-    adopting_a_restored_copy_supersedes_every_open_authority;
-    crates/registry-bregctl/src/instance_claim_lifecycle.rs;
-    crates/registry-bregctl/tests/instance_claim.rs. */}
+{/* Evidence: release/notes/v0.35.0.md. */}
 
 ## v0.34.0 beta-46
 
@@ -613,11 +604,7 @@ relevant product pages on this site rather than duplicating release notes.
   names `--initial`. See
   [review and apply changes](../operate/breg-changes/#troubleshooting).
 
-{/* Evidence: crates/registry-breg/src/migration.rs, MigrationError::DatabaseUnavailable and refusal_before_maintenance();
-    crates/registry-breg/src/postgres/interlock.rs, maintenance_snapshot();
-    crates/registry-breg/tests/postgres_migration.rs, real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged;
-    crates/registry-breg/tests/postgres_migration.rs, real_postgres_refuses_a_never_activated_database_as_an_active_package_mismatch;
-    crates/registry-bregctl/src/lib.rs, apply_reports_an_unavailable_database_before_maintenance_as_retryable. */}
+{/* Evidence: release/notes/v0.34.0.md. */}
 
 - `bregctl apply` treats the already-active package as a no-op, so a repeated
   deploy exits 0 with `activation: already_active` and changes nothing. The
@@ -632,12 +619,7 @@ relevant product pages on this site rather than duplicating release notes.
   instead of the generic `apply.package.refused`, and never either value. See
   [review and apply changes](../operate/breg-changes/#activate-the-successor).
 
-{/* Evidence: crates/registry-breg/src/package.rs, PackageBindingField and validate_bindings();
-    crates/registry-breg/src/migration.rs, confirm_active_package();
-    crates/registry-bregctl/src/apply_lifecycle.rs, confirm_already_active();
-    crates/registry-breg/tests/postgres_package.rs, activation_names_the_active_package_itself_and_nothing_else;
-    crates/registry-breg/tests/postgres_migration.rs, real_postgres_confirms_only_the_exact_active_ready_package;
-    crates/registry-bregctl/tests/cli.rs, apply_verifies_package_intent_before_database_authority_and_stays_value_free. */}
+{/* Evidence: release/notes/v0.34.0.md. */}
 
 - `bregctl apply` reports a successor refused because retained history coverage
   does not admit it as `apply.history.coverage_incomplete`, with the suggested
