@@ -12,7 +12,10 @@ const siteRoot = resolve(import.meta.dirname, '..');
 const repoRoot = resolve(siteRoot, '../..');
 const contentRoot = resolve(siteRoot, 'src/content/docs');
 
-const RELEASE = String.raw`v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?`;
+// A release tag: `vX.Y.Z` (a prerelease suffix included), or one of the tag forms the stack used
+// before semantic versions, such as registry-stack-beta-5-2026-06-24 or beta-2026-06-12.
+const LEGACY_RELEASE = String.raw`(?:legacy/[a-z-]+/)?(?:registry-stack-)?(?:beta-\d+(?:\.\d+)?(?:-\d{4}-\d{2}-\d{2})?|beta-\d{4}-\d{2}-\d{2}|technical-preview-\d{4}-\d{2}-\d{2})`;
+const RELEASE = String.raw`(?:v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?|${LEGACY_RELEASE})`;
 
 // Each rule names an install or download target that a pinned release version would freeze.
 const TARGET_RULES = [
@@ -23,7 +26,7 @@ const TARGET_RULES = [
   {
     id: 'release-asset-download',
     pattern: new RegExp(
-      String.raw`github\.com/registrystack/registry-stack/releases/(?:download|tag)/${RELEASE}\b`,
+      String.raw`github\.com/registrystack/registry-stack/(?:releases/(?:download|tag)/${RELEASE}\b|archive/(?:refs/tags/)?${RELEASE}\.(?:tar\.gz|zip)\b)`,
       'g',
     ),
   },
@@ -187,6 +190,32 @@ test('each release-pin rule flags its install or download target', () => {
     flagged('https://github.com/registrystack/registry-stack/releases/download/v0.26.1/relay-install.sh'),
     ['release-asset-download'],
   );
+  for (const archive of [
+    'https://github.com/registrystack/registry-stack/archive/refs/tags/v0.35.0.tar.gz',
+    'https://github.com/registrystack/registry-stack/archive/v0.35.0-rc.1.zip',
+  ]) {
+    assert.deepEqual(flagged(archive), ['release-asset-download'], archive);
+  }
+  for (const legacy of ['beta-5', 'beta-2026-06-12', 'registry-stack-beta-5.1-2026-06-24']) {
+    assert.deepEqual(
+      flagged(`https://github.com/registrystack/registry-stack/releases/download/${legacy}/relay`),
+      ['release-asset-download'],
+      legacy,
+    );
+    assert.deepEqual(flagged(`ghcr.io/registrystack/relay:${legacy}`), ['container-image-tag'], legacy);
+    assert.deepEqual(
+      flagged(`https://github.com/registrystack/registry-stack/blob/${legacy}/release/VERIFY.md`, true),
+      ['repository-link-at-release-tag'],
+      legacy,
+    );
+  }
+  assert.deepEqual(
+    flagged(
+      'https://github.com/registrystack/registry-stack/tree/legacy/registry-lab/registry-stack-beta-5-2026-06-24/lab/',
+      true,
+    ),
+    ['repository-link-at-release-tag'],
+  );
   assert.deepEqual(flagged('CASEWORK_VERSION=v0.30.0 bash'), ['installer-version-variable']);
   assert.deepEqual(flagged('pip install "registry-stack-client==0.26.1"'), ['package-install-version']);
   assert.deepEqual(flagged('npm install @registrystack/client@0.26.1'), ['package-install-version']);
@@ -227,6 +256,8 @@ test('release-pin rules leave tags, latest releases and history alone', () => {
     'The package ships from Registry Stack v0.26.1, so install a v0.26.1 or later release.',
     'python -m pip install "registry-stack-client==${version}"',
     'CASEWORK_VERSION=<tag> bash',
+    'The archived [Beta 5 documentation](/v/beta-5/) keeps its own pins.',
+    'https://github.com/registrystack/registry-stack/archive/refs/heads/main.zip',
     'pip install ./registry_stack_client-<version>-cp310-abi3-<platform>.whl',
     'listener.bind: 127.0.0.1:8080',
   ]) {
