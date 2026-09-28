@@ -51,11 +51,11 @@ The signed checksum chain that does, and the checks behind it, are recorded in
 [OpenSSF and release trust](../security/openssf-evidence/).
 Replace `| bash` with `| less` to read the installer before you run it on a host
 you operate.
-For a higher-assurance installation, follow
-[release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
-for the `<tag>` of the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest), then rerun the
-installer with `RELAY_ASSET_DIR` pointing at the verified directory.
+For a higher-assurance installation, follow the release verification procedure in
+`release/VERIFY.md` at the tag you install,
+`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, where `<tag>` is the tag of the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest). Then rerun the installer with `RELAY_ASSET_DIR`
+pointing at the verified directory.
 `RELAY_INSTALL_DIR` selects the install directory; the default is
 `~/.local/bin`.
 
