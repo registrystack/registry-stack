@@ -526,10 +526,11 @@ pub async fn verify_runtime_role(
 ///
 /// Threat: an owner of a table apply touches can add a deferred constraint
 /// trigger that runs as the migration role when an apply commits and writes
-/// the ledger; a superuser, a member of the migration role, a holder of
-/// CREATE on a registry schema or TRIGGER on a registry table, or a holder of
-/// a write privilege on the ledger or the state can write it directly or
-/// through an object it adds. Enforcement: split-role apply and startup call
+/// the ledger; a superuser, a member of the migration role, of another
+/// superuser role, or of `pg_write_all_data`, a holder of CREATE on a
+/// registry schema or TRIGGER on a registry table, or a holder of a write
+/// privilege on the ledger or the state can write it directly or through an
+/// object it adds. Enforcement: split-role apply and startup call
 /// [`find_runtime_write_authority`] before any other database check and
 /// refuse the first finding by name. Every fix names its grantee exactly, so
 /// a privilege PUBLIC holds names `FROM PUBLIC`.
@@ -541,6 +542,12 @@ pub enum RuntimeWriteAuthority {
     MigrationRoleMember {
         runtime: String,
         migration: String,
+    },
+    /// A member of a superuser role or of `pg_write_all_data`, either of
+    /// which writes every table.
+    PrivilegedRoleMember {
+        runtime: String,
+        role: String,
     },
     /// The runtime role owns a registry object. Reassigning ownership strips
     /// the runtime grants the object carried, so the fix ends with the apply
@@ -559,6 +566,11 @@ pub enum RuntimeWriteAuthority {
         grantee: String,
         privilege: String,
         object: String,
+    },
+    /// A write on the ledger or the state that no finding above names.
+    TableWrite {
+        runtime: String,
+        table: String,
     },
     /// A trigger no compiled migration creates.
     ForeignTrigger {
@@ -581,6 +593,11 @@ impl fmt::Display for RuntimeWriteAuthority {
                 "the runtime role {runtime} is a member of the migration role {migration} and \
                  can write the activation ledger; run `REVOKE {migration} FROM {runtime}`, \
                  {RERUN}"
+            ),
+            Self::PrivilegedRoleMember { runtime, role } => write!(
+                formatter,
+                "the runtime role {runtime} is a member of {role}, which can write the \
+                 activation ledger; run `REVOKE {role} FROM {runtime}`, {RERUN}"
             ),
             Self::Owner {
                 object,
@@ -611,6 +628,12 @@ impl fmt::Display for RuntimeWriteAuthority {
                 "{grantee} holds {privilege} on {object}, which lets the runtime role write \
                  the activation ledger; run `REVOKE {privilege} ON {object} FROM {grantee}`, \
                  {RERUN}"
+            ),
+            Self::TableWrite { runtime, table } => write!(
+                formatter,
+                "the runtime role {runtime} can write {table}, which holds the activation \
+                 ledger or the registry state; run `REVOKE ALL ON TABLE {table} FROM {runtime}` \
+                 and revoke the membership that grants the write, {RERUN}"
             ),
             Self::ForeignTrigger { trigger, table } => write!(
                 formatter,
@@ -656,6 +679,29 @@ pub async fn find_runtime_write_authority(
         return Ok(Some(RuntimeWriteAuthority::MigrationRoleMember {
             runtime,
             migration,
+        }));
+    }
+    // A superuser role writes every table once the runtime role sets it, and
+    // `pg_write_all_data` grants INSERT, UPDATE, and DELETE on every table
+    // without an entry in any ACL the checks below read.
+    if let Some(privileged) = client
+        .query_opt(
+            "SELECT pg_catalog.quote_ident(privileged.rolname)
+               FROM pg_catalog.pg_roles runtime
+               JOIN pg_catalog.pg_roles privileged
+                 ON (privileged.rolsuper OR privileged.rolname = 'pg_write_all_data')
+                AND privileged.oid <> runtime.oid
+              WHERE runtime.rolname = $1
+                AND pg_catalog.pg_has_role(runtime.oid, privileged.oid, 'MEMBER')
+              ORDER BY privileged.rolsuper DESC, privileged.rolname
+              LIMIT 1",
+            &[&runtime],
+        )
+        .await?
+    {
+        return Ok(Some(RuntimeWriteAuthority::PrivilegedRoleMember {
+            runtime,
+            role: privileged.get(0),
         }));
     }
     if let Some(owned) = client
@@ -771,6 +817,30 @@ pub async fn find_runtime_write_authority(
             object: privilege.get(0),
             privilege: privilege.get(1),
             grantee: privilege.get(2),
+        }));
+    }
+    // PostgreSQL's own answer, whatever grants it, for a write path no
+    // finding above names.
+    if let Some(table) = client
+        .query_opt(
+            "SELECT 'registry_internal.' || pg_catalog.quote_ident(c.relname)
+               FROM pg_catalog.pg_class c
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+               CROSS JOIN pg_catalog.pg_roles runtime
+              WHERE n.nspname = 'registry_internal'
+                AND c.relname = ANY($2::text[])
+                AND runtime.rolname = $1
+                AND pg_catalog.has_table_privilege(
+                        runtime.oid, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE')
+              ORDER BY c.relname
+              LIMIT 1",
+            &[&runtime, &LEDGER_AND_STATE_TABLES],
+        )
+        .await?
+    {
+        return Ok(Some(RuntimeWriteAuthority::TableWrite {
+            runtime,
+            table: table.get(0),
         }));
     }
     // The compiled migrations create no trigger, so every trigger PostgreSQL
