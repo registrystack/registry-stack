@@ -94,6 +94,7 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_expired_hold_returns_capacity_and_refuses_confirmation}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_release_returns_capacity_answers_replay_and_blocks_confirmation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl}
   - id: SCHEDULING-SEC-12
     tests:
       - {path: crates/registry-scheduling/src/config.rs, name: listener_requires_a_private_address_or_explicit_container_network}

@@ -2052,6 +2052,107 @@ async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
     assert_eq!(problem["code"], "hold.released");
 }
 
+/// A hold's time to live starts when its capacity transaction decides, after
+/// every lock wait, not when the request arrived. A create that queued behind
+/// another transaction on the supply anchor still hands its caller the whole
+/// authored ten minutes. The store's clock is pinned later while the create
+/// waits, so the wait shows as a clock difference and the test sleeps on no
+/// timing assumption.
+#[tokio::test]
+async fn a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let body = admission(&fx, OFFERING, slot);
+    let (http, agent, store) = (fx.http.clone(), fx.agent.clone(), fx.store.clone());
+    let mut admin = fx.admin;
+
+    // Stand in for a commitment mid-evaluation on the same pool.
+    let holder = admin
+        .transaction()
+        .await
+        .expect("the stand-in capacity transaction opens");
+    holder
+        .execute(
+            "SELECT supply_id FROM scheduling_supply WHERE supply_id='north-counter' FOR UPDATE",
+            &[],
+        )
+        .await
+        .expect("the stand-in holds the pool anchor");
+    let holder_pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("the stand-in's backend")
+        .get(0);
+
+    let entered = Utc::now();
+    let create = tokio::spawn(send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        agent,
+        Some("hold-after-wait".to_owned()),
+        Some(body),
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = holder
+            .query_one(
+                "SELECT count(DISTINCT pid) FROM pg_locks WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&holder_pid],
+            )
+            .await
+            .expect("read the waiting hold")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            !create.is_finished(),
+            "the hold finished before reaching the supply lock"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the hold never waited on the supply lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Five minutes pass on the store's clock while the create waits: half
+    // the authored TTL, and still inside the test grant's ten minutes.
+    let decided = DateTime::from_timestamp(entered.timestamp() + 300, 0).expect("an instant");
+    store.pin_clock(Arc::new(move || decided));
+    holder.commit().await.expect("the stand-in commits");
+
+    let (status, hold) = create.await.expect("the hold task answers");
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let expected = decided + TimeDelta::minutes(10);
+    assert_eq!(
+        moment(&hold, "expiresAt"),
+        expected,
+        "the receipt's TTL starts after the lock wait"
+    );
+    let hold_id = Uuid::parse_str(hold["holdId"].as_str().expect("a hold id")).expect("a UUID");
+    let stored = admin
+        .query_one(
+            "SELECT c.hold_expires_at, h.detail->>'expiresAt' \
+             FROM scheduling_claims AS c \
+             JOIN scheduling_history AS h ON h.claim_id = c.claim_id AND h.kind = 'held' \
+             WHERE c.claim_id = $1",
+            &[&hold_id],
+        )
+        .await
+        .expect("read the stored hold");
+    assert_eq!(
+        stored.get::<_, DateTime<Utc>>(0),
+        expected,
+        "the ledger expires the hold when its receipt says"
+    );
+    let recorded = DateTime::parse_from_rfc3339(&stored.get::<_, String>(1))
+        .expect("an RFC 3339 history expiry")
+        .with_timezone(&Utc);
+    assert_eq!(recorded, expected, "the held event records the same expiry");
+}
+
 /// A caller without a task grant learns nothing about whether a hold id
 /// names something by releasing it: a nonexistent id and an existing hold
 /// the caller has no grant for both answer the same way.

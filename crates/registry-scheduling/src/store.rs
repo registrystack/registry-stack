@@ -20,7 +20,9 @@
 //! 4. The pure evaluators from `registry-scheduling-core`, in memory, inside
 //!    the lock but never doing I/O. The task grant's expiry is re-checked
 //!    here too, against a fresh observation of the clock taken after the
-//!    waits, so a grant that lapses before the commit never books.
+//!    waits, so a grant that lapses before the commit never books. A new
+//!    hold's expiry starts at that same observation, so lock waits do not
+//!    shorten its time to live.
 //! 5. The claim, the idempotency attempt, the history event, and the outbox
 //!    rows, written in that same transaction. The lifecycle writes carry
 //!    the observed revision and the active state in their own predicates,
@@ -320,8 +322,10 @@ impl PostgresStore {
     /// the store's clock, taken after every wait and immediately before the
     /// final writes, so a grant that lapsed while this transaction waited
     /// for a lock never commits. The rest of the transaction keeps the
-    /// request's own single `now`; this is the one authorization-currency
-    /// exception to it.
+    /// request's own single `now`, with two exceptions, both decided at that
+    /// post-lock observation: this authorization-currency re-check, and a
+    /// new hold's expiry. `create_hold` takes the observation itself, checks
+    /// the grant against it, and starts the hold's TTL at the same instant.
     fn recheck_grant(&self, commitment: &Commitment<'_>) -> Result<(), CommitError> {
         check_grant_current_at(commitment, self.observed_now())
     }
@@ -1290,12 +1294,14 @@ impl PostgresStore {
         }
         guard_revisions(&transaction, &commitment).await?;
         let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
-        // The last authorization fact before the writes: the grant must
-        // still stand at the time this transaction decides, observed after
-        // every wait rather than at the door.
-        self.recheck_grant(&commitment)?;
-        let expires_at = commitment
-            .now
+        // One observation of the store's clock, after the supply and caller
+        // locks and immediately before the hold is written: the grant must
+        // still stand at the instant this transaction decides, and the hold's
+        // time to live starts at that same instant, so a create that waited
+        // on either lock still hands its caller the whole authored TTL.
+        let decided_at = self.observed_now();
+        check_grant_current_at(&commitment, decided_at)?;
+        let expires_at = decided_at
             .checked_add_signed(TimeDelta::minutes(i64::from(ttl_minutes)))
             .ok_or(AdmissionRefusal::ScheduleUnpublished)?;
         let hold_id = Uuid::new_v4();
