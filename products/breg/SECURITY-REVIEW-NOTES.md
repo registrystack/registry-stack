@@ -245,6 +245,16 @@ attempted.
   database id and the active package digest are the bindings startup checks;
   the environment and instance id come from the runtime file for reporting
   and audit.
+- The instance id also derives the webhook event source the delivery
+  worker requires of every stored envelope, so a rename while deliveries
+  are pending would dead-letter them silently. Startup refuses while any
+  pending or leased delivery with an unexpired payload names another
+  source, naming the stored source, the configured instance id, and the
+  count; delivered, dead-lettered, and expired work does not block. A
+  durable binding of the instance id in the registry state is not taken
+  here; it is tracked in #1710.
+  Test: `crates/registry-breg/tests/postgres_startup.rs`:
+  `startup_refuses_an_instance_id_change_while_deliveries_are_pending`.
 - Re-applying the active package is refused as already active; an older
   package folds into `apply.package.refused`, which names the roll-forward
   remedy, rather than a separate older-than-active refusal. Tests:

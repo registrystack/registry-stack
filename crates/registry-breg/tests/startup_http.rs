@@ -498,7 +498,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 24] {
+fn startup_errors() -> [StartupError; 25] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -523,6 +523,11 @@ fn startup_errors() -> [StartupError; 24] {
         StartupError::Oidc,
         StartupError::Authentication,
         StartupError::EventDestinations,
+        StartupError::InstanceIdChangedWithPendingDeliveries {
+            stored_source: "instance-source-private-canary".to_owned(),
+            configured_instance_id: "instance-id-private-canary".to_owned(),
+            pending_deliveries: 2,
+        },
         StartupError::ReviewAuthorityMissing {
             authority: "review-authority-private-canary".to_owned(),
             retained_submissions: 2,
@@ -701,6 +706,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
+        StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
+            "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+        }
         StartupError::ReviewBindings | StartupError::ReviewAuthorityMissing { .. } => {
             "the Registry retained review bindings were refused"
         }
@@ -783,6 +791,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     let output = writer.text();
     assert!(!output.contains("pattern-private-entity"));
     assert!(!output.contains("pattern-private-field"));
+    assert!(!output.contains("instance-source-private-canary"));
+    assert!(!output.contains("instance-id-private-canary"));
     assert_forbidden_values_absent(&output);
     let rendered = output
         .lines()
