@@ -135,7 +135,8 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
             // never does, so it joins the storage class.
             EvidenceAuditError::InvalidEvent
             | EvidenceAuditError::Unavailable(_)
-            | EvidenceAuditError::NoOperation => Self::Storage,
+            | EvidenceAuditError::NoOperation
+            | EvidenceAuditError::RequestBatchOperation => Self::Storage,
             EvidenceAuditError::Audit(audit) => match audit {
                 AuditError::EmptyEnvVarName
                 | AuditError::EnvVarUnavailable { .. }
