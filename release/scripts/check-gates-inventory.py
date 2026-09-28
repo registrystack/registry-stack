@@ -272,6 +272,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
     ),
     (
+        "Casework package activation suite",
+        "cargo test --locked -p registry-casework --features postgres-test --test activation_postgres",
+    ),
+    (
         "Casework caller visibility suite",
         "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
     ),

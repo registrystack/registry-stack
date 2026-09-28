@@ -849,6 +849,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework claim, reconciliation, and attempt suite",
             ),
             (
+                "cargo test --locked -p registry-casework --features postgres-test --test activation_postgres",
+                "true # Casework package activation disabled",
+                "Casework package activation suite",
+            ),
+            (
                 "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
                 "true # Casework visibility disabled",
                 "Casework caller visibility suite",
