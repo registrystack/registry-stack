@@ -664,7 +664,10 @@
       "description": "The logical identity of the database this deployment owns. The first\n`schedulingctl apply` records it; every later apply and every startup\nrefuses a database that recorded another.",
       "properties": {
         "databaseId": {
-          "description": "An operator-chosen logical id for the database, for example\n`scheduling-production`. It is never derived from a URL or a\nPostgreSQL database name.",
+          "description": "An operator-chosen logical id for the database, for example\n`scheduling-production`. It is never derived from a URL or a\nPostgreSQL database name. It is at most 256 UTF-8 bytes, carries no\ncontrol character, and has no leading or trailing whitespace.",
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0000-\\u001f\\u007f-\\u009f \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?$",
           "type": "string"
         }
       },

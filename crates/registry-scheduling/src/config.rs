@@ -86,6 +86,13 @@ pub struct RuntimeConfig {
 /// The longest `identity.databaseId` accepted, in bytes.
 pub const MAX_DATABASE_ID_BYTES: usize = 256;
 
+/// The `identity.databaseId` grammar as a JSON Schema pattern: no control
+/// character, and no leading or trailing Unicode whitespace. The schema's
+/// `maxLength` counts characters, so the byte bound
+/// [`MAX_DATABASE_ID_BYTES`] is enforced only when the document is loaded.
+#[cfg(feature = "schema")]
+const DATABASE_ID_PATTERN: &str = r"^[^\u0000-\u001f\u007f-\u009f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000](?:[^\u0000-\u001f\u007f-\u009f]*[^\u0000-\u001f\u007f-\u009f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000])?$";
+
 /// The deployment identity block.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
@@ -93,7 +100,12 @@ pub const MAX_DATABASE_ID_BYTES: usize = 256;
 pub struct IdentityConfig {
     /// An operator-chosen logical id for the database, for example
     /// `scheduling-production`. It is never derived from a URL or a
-    /// PostgreSQL database name.
+    /// PostgreSQL database name. It is at most 256 UTF-8 bytes, carries no
+    /// control character, and has no leading or trailing whitespace.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAX_DATABASE_ID_BYTES), regex(pattern = DATABASE_ID_PATTERN))
+    )]
     pub database_id: String,
 }
 
