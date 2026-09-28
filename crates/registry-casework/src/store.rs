@@ -110,6 +110,37 @@ const HOSTED_WORK_TABLES: [&str; 9] = [
     "casework_hosted_actor_references",
 ];
 
+/// How a destructive-migration guard reads the rows it would drop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DropGuard {
+    /// Inside the migration transaction: lock each table, then count.
+    Migrate,
+    /// Inside a read-only plan: count without a lock, and pass over a table
+    /// the planning role cannot read. Apply counts again under the lock.
+    Plan,
+}
+
+/// Whether `table` exists and, for a plan, whether this role can read it.
+async fn guarded_table(
+    transaction: &tokio_postgres::Transaction<'_>,
+    table: &str,
+    guard: DropGuard,
+) -> Result<bool, StoreError> {
+    let exists: bool = transaction
+        .query_one(
+            "SELECT to_regclass($1) IS NOT NULL AND ($2 OR has_table_privilege(to_regclass($1),'SELECT'))",
+            &[&table, &(guard == DropGuard::Migrate)],
+        )
+        .await?
+        .get(0);
+    if exists && guard == DropGuard::Migrate {
+        transaction
+            .batch_execute(&format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
+            .await?;
+    }
+    Ok(exists)
+}
+
 /// Refuse a migration that would drop hosted work rows. The hosted tables have
 /// no successor in the unified review schema, so any row they still hold is
 /// named to the operator instead of being dropped. The caller runs this from
@@ -117,21 +148,16 @@ const HOSTED_WORK_TABLES: [&str; 9] = [
 /// it has already confirmed this version is unapplied, so the exclusive lock
 /// taken here on each table holds for the rest of that transaction and no
 /// concurrent writer can insert a row between this count and that drop.
+/// A plan reads the same refusal without the lock.
 async fn refuse_to_drop_hosted_work(
     transaction: &tokio_postgres::Transaction<'_>,
+    guard: DropGuard,
 ) -> Result<(), StoreError> {
     let mut tables = Vec::new();
     for table in HOSTED_WORK_TABLES {
-        let exists: bool = transaction
-            .query_one("SELECT to_regclass($1) IS NOT NULL", &[&table])
-            .await?
-            .get(0);
-        if !exists {
+        if !guarded_table(transaction, table, guard).await? {
             continue;
         }
-        transaction
-            .batch_execute(&format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
-            .await?;
         let rows: i64 = transaction
             .query_one(&format!("SELECT count(*) FROM {table}"), &[])
             .await?
@@ -160,22 +186,14 @@ const AUDIT_OUTBOX_DROP_VERSION: i64 = 17;
 /// the drop, after it has already confirmed this version is unapplied, so the
 /// exclusive lock taken here holds for the rest of that transaction and no
 /// concurrent writer can insert a row between this count and that drop.
+/// A plan reads the same refusal without the lock.
 async fn refuse_to_drop_unpublished_audit(
     transaction: &tokio_postgres::Transaction<'_>,
+    guard: DropGuard,
 ) -> Result<(), StoreError> {
-    let exists: bool = transaction
-        .query_one(
-            "SELECT to_regclass('casework_audit_outbox') IS NOT NULL",
-            &[],
-        )
-        .await?
-        .get(0);
-    if !exists {
+    if !guarded_table(transaction, "casework_audit_outbox", guard).await? {
         return Ok(());
     }
-    transaction
-        .batch_execute("LOCK TABLE casework_audit_outbox IN ACCESS EXCLUSIVE MODE")
-        .await?;
     let rows: i64 = transaction
         .query_one(
             "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL",
@@ -286,6 +304,33 @@ pub(crate) async fn pinned_work_inventory_in(
     Ok(inventory)
 }
 
+/// Read, without a lock or a write, the refusal each destructive migration
+/// in `pending` would meet, in migration order, so a plan names every one
+/// that apply would refuse.
+pub(crate) async fn pending_migration_refusals(
+    transaction: &tokio_postgres::Transaction<'_>,
+    pending: &[i64],
+) -> Result<Vec<StoreError>, StoreError> {
+    let mut refusals = Vec::new();
+    if pending.contains(&HOSTED_WORK_DROP_VERSION) {
+        match refuse_to_drop_hosted_work(transaction, DropGuard::Plan).await {
+            Ok(()) => {}
+            Err(refusal @ StoreError::HostedWorkWouldBeDropped { .. }) => refusals.push(refusal),
+            Err(error) => return Err(error),
+        }
+    }
+    if pending.contains(&AUDIT_OUTBOX_DROP_VERSION) {
+        match refuse_to_drop_unpublished_audit(transaction, DropGuard::Plan).await {
+            Ok(()) => {}
+            Err(refusal @ StoreError::UnpublishedAuditWouldBeDropped { .. }) => {
+                refusals.push(refusal);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(refusals)
+}
+
 /// Apply every unapplied migration in order under the ledger, inside the
 /// caller's transaction, and return the versions applied. The caller holds
 /// the migration lock for that transaction, so a refusal or a failure at any
@@ -323,13 +368,13 @@ pub(crate) async fn migrate_in(
             // Checked here, inside the same transaction that runs this
             // version's SQL, so nothing can add a hosted-work row
             // between the check and the drop below.
-            refuse_to_drop_hosted_work(transaction).await?;
+            refuse_to_drop_hosted_work(transaction, DropGuard::Migrate).await?;
         }
         if version == AUDIT_OUTBOX_DROP_VERSION {
             // Checked here, inside the same transaction that runs this
             // version's SQL, so nothing can add an unpublished row
             // between the check and the drop below.
-            refuse_to_drop_unpublished_audit(transaction).await?;
+            refuse_to_drop_unpublished_audit(transaction, DropGuard::Migrate).await?;
         }
         transaction.batch_execute(migration).await?;
         transaction

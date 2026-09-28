@@ -560,7 +560,10 @@ disposable local session, use `caseworkctl dev stop PROJECT --remove` and start 
 
 {/* Evidence: crates/registry-casework/src/store.rs, refuse_to_drop_hosted_work(),
     HOSTED_WORK_TABLES, and StoreError::HostedWorkWouldBeDropped;
-    crates/registry-casework/src/activation.rs, migration_refusal_code();
+    crates/registry-casework/src/activation.rs, migration_refusal_code() and analyze();
+    crates/registry-casework/src/store.rs, pending_migration_refusals();
+    crates/registry-casework/tests/activation_postgres.rs,
+    plan_reports_the_destructive_migration_refusals_apply_meets();
     crates/registry-casework/migrations/0015_unified_reviews.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
     migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() and
@@ -651,8 +654,9 @@ the audit destination, and schema migration 17 drops that table. Before the firs
 
 1. Keep the earlier release serving until its audit publisher has published every pending record.
    While the table still holds an unpublished record, `apply` refuses before applying anything
-   and writes nothing. The refusal begins `the Casework database holds N audit record(s) that
-   schema migration 17 would drop before they reach the audit journal`.
+   and writes nothing, and `caseworkctl plan` reports the same refusal. The refusal begins `the
+   Casework database holds N audit record(s) that schema migration 17 would drop before they reach
+   the audit journal`.
 2. Stop every earlier `casework` process. While one still holds the lock beside the audit file,
    the new process refuses to start with `another process holds the single-writer lock beside the
    audit file; stop it before starting this one`.
@@ -676,8 +680,8 @@ the audit destination, and schema migration 17 drops that table. Before the firs
 4. Keep the audit directory owned by the runtime user and not group- or world-writable, and the
    audit file and its `.lock` file mode `0600`, owned by the same user.
 
-{/* Evidence: crates/registry-casework/src/store.rs, refuse_to_drop_unpublished_audit() and
-    StoreError::UnpublishedAuditWouldBeDropped;
+{/* Evidence: crates/registry-casework/src/store.rs, refuse_to_drop_unpublished_audit(),
+    pending_migration_refusals(), and StoreError::UnpublishedAuditWouldBeDropped;
     crates/registry-casework/migrations/0017_audit_writer.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
     migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox();

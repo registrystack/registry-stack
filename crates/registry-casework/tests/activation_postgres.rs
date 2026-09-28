@@ -1013,6 +1013,92 @@ async fn startup_refuses_work_stranded_after_apply_until_the_package_is_acknowle
         .expect("the acknowledged package starts");
 }
 
+/// A pending migration that would drop hosted work or unpublished audit is
+/// named by `plan`, read without a lock, and `apply` refuses the same.
+#[tokio::test]
+async fn plan_reports_the_destructive_migration_refusals_apply_meets() {
+    let fixture = Fixture::single("plan_migration_blockers").await;
+    let project = project();
+    fixture
+        .apply(&candidate(&project, &digest('a'), &[]))
+        .await
+        .expect("initial apply");
+    // The schema of a release before the hosted tables and the audit outbox
+    // were dropped, each still holding a row.
+    fixture
+        .client
+        .batch_execute(
+            "CREATE TABLE casework_hosted_items (item_id uuid PRIMARY KEY); \
+             INSERT INTO casework_hosted_items VALUES('00000000-0000-4000-8000-0000000000a1'); \
+             CREATE TABLE casework_audit_outbox (event_id uuid PRIMARY KEY, audit_record jsonb NOT NULL, published_at timestamptz); \
+             INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES('00000000-0000-4000-8000-0000000000c1','{}'); \
+             DELETE FROM casework_schema_migrations WHERE version>=15;",
+        )
+        .await
+        .expect("simulate the schema before migration 15");
+    let successor = digest('b');
+
+    let plan = fixture
+        .runtime()
+        .plan_activation(&candidate(&project, &successor, &[]))
+        .await
+        .expect("plan");
+    let codes: Vec<&str> = plan
+        .refusals
+        .iter()
+        .map(|refusal| refusal.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "casework.activation.hosted-work-would-be-dropped",
+            "casework.activation.unpublished-audit-would-be-dropped"
+        ],
+        "{:?}",
+        plan.refusals
+    );
+    assert!(!plan.changes_pending);
+    assert!(
+        plan.refusals[0]
+            .message
+            .contains("casework_hosted_items (1 row)"),
+        "{:?}",
+        plan.refusals
+    );
+
+    let error = fixture
+        .apply(&candidate(&project, &successor, &[]))
+        .await
+        .expect_err("apply refuses what the plan named");
+    assert_eq!(
+        refusal_codes(&error),
+        [
+            "casework.activation.hosted-work-would-be-dropped",
+            "casework.activation.unpublished-audit-would-be-dropped"
+        ]
+    );
+    fixture
+        .client
+        .batch_execute("DELETE FROM casework_hosted_items")
+        .await
+        .expect("the hosted work is exported");
+    let plan = fixture
+        .runtime()
+        .plan_activation(&candidate(&project, &successor, &[]))
+        .await
+        .expect("plan");
+    let codes: Vec<&str> = plan
+        .refusals
+        .iter()
+        .map(|refusal| refusal.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        ["casework.activation.unpublished-audit-would-be-dropped"]
+    );
+    assert_eq!(fixture.ledger().await.len(), 1);
+}
+
 #[tokio::test]
 async fn plan_with_the_runtime_credential_before_the_first_split_apply_reports_an_initial_activation(
 ) {

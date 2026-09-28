@@ -66,6 +66,11 @@
   activation ledger with `casework.activation.ledger-unreadable`, naming
   `caseworkctl apply --runtime-config FILE` with the migration credential to
   grant it, then `caseworkctl plan --runtime-config FILE`.
+- `caseworkctl plan` names `casework.activation.hosted-work-would-be-dropped`
+  and `casework.activation.unpublished-audit-would-be-dropped` when schema
+  migration 15 or 17 is pending and the table it drops still holds rows,
+  counted without a lock; apply counts them again under an exclusive lock and
+  refuses the same.
 - `caseworkctl package --help` says that its package is the unit `caseworkctl
   plan` and `apply` activate, and that `bregctl package` is a different verb
   that builds a BReg registry package.
