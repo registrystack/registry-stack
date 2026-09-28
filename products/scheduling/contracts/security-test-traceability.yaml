@@ -222,6 +222,7 @@ entries:
   - id: SCHEDULING-SEC-29
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: startup_refuses_a_database_the_ledger_does_not_name_for_this_package, features: [postgres-test]}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_divergent_startup_leaves_the_published_policy_untouched}
       - {path: crates/registry-scheduling/src/runtime.rs, name: the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply}
       - {path: crates/registry-scheduling/src/config.rs, name: a_pinned_package_digest_must_match_the_verified_package}
       - {path: crates/registry-scheduling/src/config.rs, name: identity_database_id_is_required_and_names_the_key_to_add}

@@ -3596,11 +3596,27 @@ async fn a_history_cursor_is_re_authorized_against_the_caller_of_the_page() {
 /// Write a runtime configuration whose database is a port nothing listens
 /// on, so `scheduling serve` fails at the connection and nowhere else.
 fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
+    sealed_deployment(
+        root,
+        POLICY,
+        "postgres://scheduling:scheduling@127.0.0.1:1/scheduling_runtime",
+        "scheduling-closed-port",
+    )
+}
+
+/// Write a sealed package authoring `policy_yaml` and a runtime configuration
+/// that serves it from the database at `database_url` under `database_id`.
+fn sealed_deployment(
+    root: &std::path::Path,
+    policy_yaml: &str,
+    database_url: &str,
+    database_id: &str,
+) -> std::path::PathBuf {
     let package = root.join("package");
     std::fs::create_dir_all(&package).expect("a package directory");
     std::fs::write(
         package.join(registry_scheduling_core::AUTHORED_POLICY_FILE),
-        POLICY,
+        policy_yaml,
     )
     .expect("the authored policy");
     registry_platform_config::package::write_sum_file(
@@ -3611,17 +3627,14 @@ fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
     )
     .expect("the package is sealed");
     let secret_name = format!("SCHEDULING_CLOSED_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-    std::env::set_var(
-        &secret_name,
-        "postgres://scheduling:scheduling@127.0.0.1:1/scheduling_runtime",
-    );
+    std::env::set_var(&secret_name, database_url);
     let document = json!({
         "apiVersion": registry_scheduling_core::SCHEDULING_RUNTIME_API_VERSION,
         "kind": registry_scheduling_core::SCHEDULING_RUNTIME_KIND,
         "package": {"root": package},
         "listener": {"bind": "127.0.0.1:8199", "tlsTermination": "development-loopback"},
         "secretProviders": {"environment": {}},
-        "identity": {"databaseId": "scheduling-closed-port"},
+        "identity": {"databaseId": database_id},
         "database": {
             "runtimeUrlRef": format!("secret:env/{secret_name}"),
             "migrationUrlRef": format!("secret:env/{secret_name}"),
@@ -3666,6 +3679,131 @@ async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
         !message.contains("scheduling:scheduling"),
         "the startup failure repeats the database credentials"
     );
+}
+
+/// Since package activation, runtime startup never publishes a policy: only
+/// `schedulingctl apply` does, under the migration lock. A runtime that
+/// starts with a package the activation ledger does not name, or with the
+/// named package while the stored policy is another one, refuses before it
+/// serves and leaves the published policy exactly as it found it: the
+/// `scheduling_meta` row with its revision and digest, the retained policy
+/// revisions, and the ledger. Two divergent deployments therefore cannot
+/// race each other's publication at startup.
+#[tokio::test]
+async fn a_divergent_startup_leaves_the_published_policy_untouched() {
+    let fx = fixture().await;
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .expect("a temporary deployment root");
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{}", fx.schema);
+    let divergent = POLICY.replacen(
+        "label: 30-minute counter update",
+        "label: 30-minute counter update, divergent",
+        1,
+    );
+    let operator = sealed_deployment(root.path(), &divergent, &scoped, "divergent-startup");
+    let candidate = registry_scheduling::config::RuntimeConfig::load(&operator)
+        .expect("the divergent runtime configuration")
+        .load_policy()
+        .expect("the divergent package verifies")
+        .package_digest;
+    let published = parse_policy_yaml(POLICY).expect("the published policy");
+    assert_ne!(
+        parse_policy_yaml(&divergent)
+            .expect("the divergent policy")
+            .policy_digest(),
+        published.policy_digest(),
+        "the startup carries another policy than the published one"
+    );
+    let runtime_role: String = fx
+        .admin
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .expect("the test role")
+        .get(0);
+    let activate = |package_digest: String| {
+        let store = fx.store.clone();
+        let published = published.clone();
+        let runtime_role = runtime_role.clone();
+        async move {
+            store
+                .activate(
+                    &ActivationRequest {
+                        activation_id: Uuid::new_v4(),
+                        package_digest: &package_digest,
+                        database_id: "divergent-startup",
+                        policy: &published,
+                        operator_reference_hash: None,
+                        backup_references: &[],
+                        role_mode: RoleMode::Single,
+                        runtime_role: &runtime_role,
+                    },
+                    |_| async { Ok(()) },
+                )
+                .await
+                .expect("the published policy activates")
+        }
+    };
+    let state = "SELECT jsonb_build_array( \
+        (SELECT to_jsonb(m) FROM scheduling_meta m), \
+        (SELECT jsonb_agg(to_jsonb(p) ORDER BY policy_revision) \
+         FROM scheduling_policy_revisions p), \
+        (SELECT count(*) FROM scheduling_activations))";
+
+    // The ledger names another package than the one on disk.
+    activate("sha256:1111111111111111111111111111111111111111111111111111111111111111".to_owned())
+        .await;
+    let before: Value = fx
+        .admin
+        .query_one(state, &[])
+        .await
+        .expect("the published state")
+        .get(0);
+    let error = registry_scheduling::runtime::serve_from_path(&operator)
+        .await
+        .expect_err("startup refuses a package the ledger does not name")
+        .to_string();
+    assert!(error.contains("is not the active package"), "{error}");
+    let after: Value = fx
+        .admin
+        .query_one(state, &[])
+        .await
+        .expect("the published state")
+        .get(0);
+    assert_eq!(after, before, "a refused startup wrote nothing");
+
+    // The ledger names the package on disk, but the policy stored is the one
+    // another apply published: startup reads it as a database it does not
+    // expect, and publishes nothing over it.
+    activate(candidate).await;
+    let before: Value = fx
+        .admin
+        .query_one(state, &[])
+        .await
+        .expect("the published state")
+        .get(0);
+    assert_eq!(
+        before[0]["policy_digest"],
+        json!(published.policy_digest()),
+        "the stored policy is still the published one"
+    );
+    let error = registry_scheduling::runtime::serve_from_path(&operator)
+        .await
+        .expect_err("startup refuses a stored policy its package does not carry")
+        .to_string();
+    assert!(
+        error.contains("not in the state this runtime expects"),
+        "{error}"
+    );
+    let after: Value = fx
+        .admin
+        .query_one(state, &[])
+        .await
+        .expect("the published state")
+        .get(0);
+    assert_eq!(after, before, "a refused startup wrote nothing");
 }
 
 /// A booking agent whose grant names another location, so its bounds cover no
