@@ -3961,6 +3961,10 @@ fn map_authority(error: AuthorizationError) -> RuntimeFailure {
 fn map_request_limit(error: RateLimitError) -> RuntimeFailure {
     match error {
         RateLimitError::RequestExceeded => failure(ProblemCode::RateLimited, "request-rate"),
+        // No wait admits a cost the burst cannot hold, so this is a request
+        // the deployment will never accept, not a retryable rate limit: it
+        // carries no Retry-After and charges nothing.
+        RateLimitError::CostExceedsBurst => failure(ProblemCode::MalformedRequest, "request-cost"),
         _ => failure(ProblemCode::ServiceUnavailable, "request-rate"),
     }
 }
