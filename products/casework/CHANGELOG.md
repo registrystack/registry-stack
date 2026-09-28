@@ -100,6 +100,10 @@
   a session retained from an earlier release keeps its split runtime and
   migration roles, and apply alone grants that runtime role, so both
   activation ledgers stay read-only to it.
+- A command line `caseworkctl` refuses is described by the kind of error and
+  the argument name only, such as `invalid value for --operator-reference`,
+  and names `caseworkctl --help` as the next step. The refused value is
+  never repeated on standard output or standard error.
 
 ## v0.35.0 - 2026-09-28
 

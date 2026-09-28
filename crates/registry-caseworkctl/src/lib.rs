@@ -362,6 +362,9 @@ enum OutputFormat {
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 use report::{OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
+/// The next step for a command line clap refused.
+const USAGE_ACTION: &str =
+    "Run caseworkctl --help, or the command with --help, and retry with the documented arguments.";
 const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha3";
 
 pub fn main_entry() -> ExitCode {
@@ -398,18 +401,13 @@ where
             return ExitCode::SUCCESS;
         }
         Err(error) => {
+            let message = report::usage_message(&error);
             if machine_mode {
-                write_usage_report(
-                    "usage.invalid",
-                    error.to_string(),
-                    "Correct the command arguments and retry.",
-                    stdout,
-                    stderr,
-                );
+                write_usage_report("usage.invalid", message, USAGE_ACTION, stdout, stderr);
             } else {
-                let _ = write!(stderr, "{error}");
+                let _ = writeln!(stderr, "error: {message}\n  next: {USAGE_ACTION}");
             }
-            return ExitCode::from(2);
+            return ExitCode::from(USAGE_EXIT);
         }
     };
     if let Some((code, message, action)) = usage_refusal(&cli.command) {
@@ -2082,6 +2080,44 @@ mod tests {
     }
 
     #[test]
+    fn a_usage_error_never_repeats_a_rejected_argument_value() {
+        let sentinel = "sentinel-7f3a9c";
+        let rejected = format!("{sentinel}\n");
+        let unknown = format!("--operator-reference={sentinel}");
+        let refusals: [&[&str]; 2] = [
+            &[
+                "apply",
+                "--runtime-config",
+                "runtime.yaml",
+                "--operator-reference",
+                &rejected,
+            ],
+            &["check", "project", &unknown],
+        ];
+        for arguments in refusals {
+            for format in ["human", "json"] {
+                let mut all = vec!["--format", format];
+                all.extend_from_slice(arguments);
+                let (exit, stdout, stderr) = run_args(&all);
+                assert_eq!(exit, ExitCode::from(2), "{stdout}{stderr}");
+                assert!(
+                    !stdout.contains(sentinel) && !stderr.contains(sentinel),
+                    "{stdout}{stderr}"
+                );
+                assert!(
+                    stdout.contains("--operator-reference")
+                        || stderr.contains("--operator-reference"),
+                    "{stdout}{stderr}"
+                );
+                assert!(
+                    stdout.contains("--help") || stderr.contains("--help"),
+                    "{stdout}{stderr}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn apply_bounds_its_operator_references_as_usage_errors() {
         let long = "r".repeat(registry_casework::MAX_OPERATOR_REFERENCE_BYTES + 1);
         for reference in ["", "change\n42", long.as_str()] {
@@ -2098,7 +2134,7 @@ mod tests {
         let (exit, _, stderr) =
             run_args(&["apply", "--runtime-config", "runtime.yaml", "--backup", ""]);
         assert_eq!(exit, ExitCode::from(2), "{stderr}");
-        assert!(stderr.contains("--backup must not be empty"), "{stderr}");
+        assert!(stderr.contains("invalid value for --backup"), "{stderr}");
 
         let mut arguments = vec!["apply", "--runtime-config", "runtime.yaml"];
         for _ in 0..=registry_casework::MAX_BACKUP_REFERENCES {
