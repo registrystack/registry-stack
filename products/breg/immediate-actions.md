@@ -664,7 +664,7 @@ URI, subject role/profile, output handles and `maximumObservationAgeSeconds`.
 Provider IDs and capability aliases use the action ID grammar: 1–64 ASCII
 characters, starting with a lowercase letter and continuing with lowercase
 letters, digits, hyphens or underscores.
-The imported contract becomes part of the signed package closure. Compilation
+The imported contract becomes part of the package closure. Compilation
 and explanation require no network. Runtime discovery and live contract
 substitution cannot change reviewed authority.
 

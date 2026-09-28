@@ -22,7 +22,7 @@ have exactly one resolving negative executable test.
 
 The pilot catalog is now enforced. Its closing proof combines the
 real-PostgreSQL five-domain acceptance test with a clean public-binary lifecycle
-that exercises production checking, isolated schema tests, external signing,
+that exercises production checking, isolated schema tests, packaging,
 operator apply, authenticated serving, compatible additive upgrade, durable
 failed maintenance, exact fix-forward recovery, and restart with unchanged
 server bytes. A second migration recovery path, `migration reconcile`, assesses

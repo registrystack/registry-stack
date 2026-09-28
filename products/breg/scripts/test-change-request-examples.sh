@@ -21,7 +21,7 @@ usage: products/breg/scripts/test-change-request-examples.sh [--installed] [--en
 
 Runs the Base Registry Engine change-request example fixtures through bregctl test.
 Use --mode immediate-actions to run the fixed actions and the person-registration Rhai handler,
-including its signed-package activation and live HTTP checks.
+including its package activation and live HTTP checks.
 Both modes run their Rhai fixture by default; --rhai-project DIR selects an edited copy.
 Set BREG_TEST_DATABASE_URL and BREG_TEST_TLS_CA_PEM_PATH, or pass --env FILE.
 Requires Python 3 with PyYAML. Use a project override to run a disposable edited copy instead of the committed fixture.

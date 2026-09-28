@@ -25,7 +25,7 @@ The runner needs Docker. It copies this authored project into an owner-only
 temporary directory and invokes `bregctl check` and the maintained `bregctl dev`
 lifecycle. Native dev creates its own TLS PostgreSQL container, separate test and
 live databases, migration/runtime roles, local issuer, schema-test receipt,
-signed package and activated runtime. The runner never modifies another
+package and activated runtime. The runner never modifies another
 project's database or services. `--bin-dir DIR` selects another matching binary
 installation. `--keep` preserves private reports after success.
 
