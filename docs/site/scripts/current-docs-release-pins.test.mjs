@@ -35,9 +35,14 @@ const TARGET_RULES = [
     // like. Write the reader's release as `<tag>`.
     id: 'git-checkout-at-release',
     pattern: new RegExp(
-      String.raw`\bgit\s+(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:tags/)?|switch\s+(?:--detach\s+|-d\s+)|fetch\b[^\n\`]*?\stag\s+)${RELEASE}\b`,
+      String.raw`\bgit\s+(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:-[-a-z]+\s+)*(?:tags/)?|switch\s+(?:-[-a-z]+\s+)*(?:--detach|-d)\s+(?:-[-a-z]+\s+)*|fetch\b[^\n\`]*?\stag\s+)${RELEASE}\b`,
       'g',
     ),
+  },
+  {
+    // `gh release download [<tag>]` takes the latest release when the tag is left out.
+    id: 'github-cli-release-download',
+    pattern: new RegExp(String.raw`\bgh\s+release\s+(?:download|view)\s+(?:-[-a-zA-Z]+(?:[= ]\S+)?\s+)*${RELEASE}\b`, 'g'),
   },
   {
     id: 'installer-version-variable',
@@ -232,10 +237,19 @@ test('each release-pin rule flags its install or download target', () => {
     'git clone --depth 1 -b v0.35.0 https://github.com/registrystack/registry-stack.git',
     'git checkout v0.35.0',
     'git checkout tags/v0.35.0-rc.1',
+    'git checkout --detach v0.35.0',
+    'git checkout -q --detach v0.35.0',
+    'git switch --quiet --detach v0.35.0',
     'git switch --detach v0.35.0',
     'git fetch origin tag v0.35.0',
   ]) {
     assert.deepEqual(flagged(checkout), ['git-checkout-at-release'], checkout);
+  }
+  for (const download of [
+    'gh release download v0.35.0 -R registrystack/registry-stack',
+    'gh release download --repo registrystack/registry-stack v0.35.0',
+  ]) {
+    assert.deepEqual(flagged(download), ['github-cli-release-download'], download);
   }
   assert.deepEqual(flagged('CASEWORK_VERSION=v0.30.0 bash'), ['installer-version-variable']);
   assert.deepEqual(flagged('pip install "registry-stack-client==0.26.1"'), ['package-install-version']);
@@ -279,6 +293,8 @@ test('release-pin rules leave tags, latest releases and history alone', () => {
     'CASEWORK_VERSION=<tag> bash',
     'git clone --branch <tag> https://github.com/registrystack/registry-stack.git',
     'git checkout main',
+    'gh release download -R registrystack/registry-stack --pattern "relay-*"',
+    'gh release download <tag> -R registrystack/registry-stack',
     'The archived [Beta 5 documentation](/v/beta-5/) keeps its own pins.',
     'https://github.com/registrystack/registry-stack/archive/refs/heads/main.zip',
     'pip install ./registry_stack_client-<version>-cp310-abi3-<platform>.whl',
@@ -286,6 +302,29 @@ test('release-pin rules leave tags, latest releases and history alone', () => {
   ]) {
     assert.deepEqual(findReleasePins(text, { operator: true }), [], text);
   }
+});
+
+// A page that asks the reader for a release tag must say where to find it.
+const TAG_PLACEHOLDER_TARGET =
+  /releases\/download\/<|ghcr\.io\/registrystack\/[a-z0-9-]+:<|registry-stack\/(?:blob|tree|raw)\/<|_VERSION=<|gh release download <|--branch <|git checkout <|git switch [^\n`]*<[a-z-]*tag>/;
+const LATEST_RELEASE_POINTER = 'github.com/registrystack/registry-stack/releases/latest';
+
+export function missingLatestPointer(documents) {
+  return documents
+    .filter((document) => TAG_PLACEHOLDER_TARGET.test(document.text))
+    .filter((document) => !document.text.includes(LATEST_RELEASE_POINTER))
+    .map((document) => document.file);
+}
+
+test('a page that asks for a release tag points at the latest release', () => {
+  const placeholder = 'curl -fsSL https://github.com/registrystack/registry-stack/releases/download/<tag>/relay-install.sh';
+  assert.deepEqual(missingLatestPointer([{ file: 'a', text: placeholder }]), ['a']);
+  assert.deepEqual(
+    missingLatestPointer([{ file: 'a', text: `${placeholder}\nSee https://${LATEST_RELEASE_POINTER}.` }]),
+    [],
+  );
+  assert.deepEqual(missingLatestPointer([{ file: 'a', text: 'No install target.' }]), []);
+  assert.deepEqual(missingLatestPointer(currentDocuments()), []);
 });
 
 test('current docs carry no exact release pin as an install or download target', () => {
