@@ -1069,8 +1069,10 @@ docker run --rm \
 ```
 
 Run `apply` the same way, replacing the last three lines with
-`--format json apply --runtime-config /etc/breg/runtime.yaml --package /var/lib/breg/package --initial`,
+`--format json apply --runtime-config /etc/breg/runtime.yaml --package /var/lib/breg/package`,
 then read the ledger with `--format json status --runtime-config /etc/breg/runtime.yaml`.
+Add `--initial` to `apply` only when `plan` reports `activation: initial`, for the first package
+in an uninitialized database; a later package is applied without it.
 `plan`, `apply`, and `status` connect with the migration credential that
 `database.migrationUrlRef` names, so mount a secret directory that holds it beside the files the
 runtime document references, and keep that credential out of the serving container's secret
