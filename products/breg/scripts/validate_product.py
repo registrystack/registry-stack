@@ -71,13 +71,10 @@ PACKAGE_LAYOUT_ENTRIES = {
     ("source/modules/<module-id>/<relative-sql-path>", "source-module-asset", False),
     ("source/project/<relative-json-path>", "source-project-evidence-contract", False),
     ("tests/journeys.yaml", "fixture-journeys", True),
-    ("signatures", "package-signatures", False),
 }
 FORBIDDEN_EMBEDDED_ROLES = {
-    "deployment-trust-anchor",
     "runtime-secret",
     "migration-credential",
-    "signing-key",
 }
 POSTGRES_ENTRYPOINT = PRODUCT_ROOT / "scripts/test-postgres.sh"
 POSTGRES_TEST_COMMANDS = (

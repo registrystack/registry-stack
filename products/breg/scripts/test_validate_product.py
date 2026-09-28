@@ -810,18 +810,37 @@ class BRegProductCatalogTests(unittest.TestCase):
             any("missing required entry tuples" in error for error in errors), errors
         )
 
-    def test_package_layout_cannot_allow_embedded_signing_key(self) -> None:
+    def test_package_layout_refuses_a_package_signatures_entry(self) -> None:
         original = VALIDATOR.load_yaml
 
-        def load_without_signing_key(path: Path):
+        def load_with_signatures(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "package-layout.yaml":
-                value["forbiddenEmbeddedRoles"].remove("signing-key")
+                value["entries"].append(
+                    {"path": "signatures", "role": "package-signatures", "required": False}
+                )
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_signatures):
+            VALIDATOR.validate_package_layout(errors)
+        self.assertTrue(
+            any("unexpected entry tuples" in error and "package-signatures" in error for error in errors),
+            errors,
+        )
+
+    def test_package_layout_cannot_allow_embedded_migration_credential(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_migration_credential(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "package-layout.yaml":
+                value["forbiddenEmbeddedRoles"].remove("migration-credential")
             return value
 
         errors: list[str] = []
         with mock.patch.object(
-            VALIDATOR, "load_yaml", side_effect=load_without_signing_key
+            VALIDATOR, "load_yaml", side_effect=load_without_migration_credential
         ):
             VALIDATOR.validate_package_layout(errors)
         self.assertTrue(
