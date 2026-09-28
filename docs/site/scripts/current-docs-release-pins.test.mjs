@@ -31,6 +31,15 @@ const TARGET_RULES = [
     ),
   },
   {
+    // A source checkout at a release tag: `git clone --branch <tag>`, `git checkout <tag>`, and the
+    // like. Write the reader's release as `<tag>`.
+    id: 'git-checkout-at-release',
+    pattern: new RegExp(
+      String.raw`\bgit\s+(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:tags/)?|switch\s+(?:--detach\s+|-d\s+)|fetch\b[^\n\`]*?\stag\s+)${RELEASE}\b`,
+      'g',
+    ),
+  },
+  {
     id: 'installer-version-variable',
     pattern: new RegExp(String.raw`\b[A-Z][A-Z0-9_]*_VERSION=["']?${RELEASE}\b`, 'g'),
   },
@@ -110,8 +119,9 @@ function listContentPages(dir = contentRoot) {
   return pages.sort();
 }
 
-// Generated product pages carry the doc_type repo-docs.yaml declares; a how-to or tutorial there
-// is an operator page like any under operate/ or tutorials/.
+// A page whose frontmatter doc_type is how-to or tutorial is an operator page wherever it lives:
+// generated product pages carry the doc_type repo-docs.yaml declares, and hand-written pages such
+// as security/hardening-checklist.mdx declare their own.
 const OPERATOR_DOC_TYPES = new Set(['how-to', 'tutorial']);
 
 function frontmatterDocType(text) {
@@ -120,8 +130,9 @@ function frontmatterDocType(text) {
 }
 
 function isOperatorPage(page, text) {
-  if (page.startsWith('products/')) return OPERATOR_DOC_TYPES.has(frontmatterDocType(text));
-  if (GENERATED_PREFIXES.some((prefix) => page.startsWith(prefix))) return false;
+  if (page.startsWith('reference/cli/')) return false;
+  if (OPERATOR_DOC_TYPES.has(frontmatterDocType(text))) return true;
+  if (page.startsWith('products/')) return false;
   return OPERATOR_PAGE_PREFIXES.some((prefix) => page.startsWith(prefix)) || OPERATOR_PAGES.has(page);
 }
 
@@ -216,6 +227,16 @@ test('each release-pin rule flags its install or download target', () => {
     ),
     ['repository-link-at-release-tag'],
   );
+  for (const checkout of [
+    'git clone --branch v0.35.0 https://github.com/registrystack/registry-stack.git',
+    'git clone --depth 1 -b v0.35.0 https://github.com/registrystack/registry-stack.git',
+    'git checkout v0.35.0',
+    'git checkout tags/v0.35.0-rc.1',
+    'git switch --detach v0.35.0',
+    'git fetch origin tag v0.35.0',
+  ]) {
+    assert.deepEqual(flagged(checkout), ['git-checkout-at-release'], checkout);
+  }
   assert.deepEqual(flagged('CASEWORK_VERSION=v0.30.0 bash'), ['installer-version-variable']);
   assert.deepEqual(flagged('pip install "registry-stack-client==0.26.1"'), ['package-install-version']);
   assert.deepEqual(flagged('npm install @registrystack/client@0.26.1'), ['package-install-version']);
@@ -256,6 +277,8 @@ test('release-pin rules leave tags, latest releases and history alone', () => {
     'The package ships from Registry Stack v0.26.1, so install a v0.26.1 or later release.',
     'python -m pip install "registry-stack-client==${version}"',
     'CASEWORK_VERSION=<tag> bash',
+    'git clone --branch <tag> https://github.com/registrystack/registry-stack.git',
+    'git checkout main',
     'The archived [Beta 5 documentation](/v/beta-5/) keeps its own pins.',
     'https://github.com/registrystack/registry-stack/archive/refs/heads/main.zip',
     'pip install ./registry_stack_client-<version>-cp310-abi3-<platform>.whl',
@@ -316,4 +339,6 @@ test('generated product how-to and tutorial pages are operator pages', () => {
   assert.equal(isOperatorPage('products/registry-evidence/authoring-form.md', page('reference')), false);
   assert.equal(isOperatorPage('reference/cli/relay.mdx', page('how-to')), false);
   assert.equal(isOperatorPage('operate/index.mdx', 'no frontmatter'), true);
+  assert.equal(isOperatorPage('security/hardening-checklist.mdx', page('how-to')), true);
+  assert.equal(isOperatorPage('security/support-window.mdx', page('reference')), false);
 });
