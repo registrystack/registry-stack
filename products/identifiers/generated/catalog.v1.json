@@ -2813,11 +2813,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "3e7923770567f0339ba3e0173f4ac7735f2bb0f5133bc72488e6f61b99a2804e"
+        "sha256": "dee8c52d982ca4944035f8639537acfb6b3f5923c8b1abb55e7989e5e70f99ae"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "8b4dc0fbd680c404011403031e5865829a934758ea6cb36b11da0f8007e756fd",
+        "sha256": "705cd67f51b7ff738541527afe1a63bed95eef12f7b910b76fb0ee6885c74648",
         "mediaType": "application/schema+json"
       }
     },
@@ -2925,7 +2925,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "b51c462eba370acb45ef5f20a09aead5cab3d0d98d42f55947ab7352eed77ccf",
+        "sha256": "5f14f7c436ff2ded7862e5da54d5466d25703d57bbaf87d96d7d423c7982d321",
         "mediaType": "application/schema+json"
       }
     },
