@@ -823,12 +823,10 @@ def schemas(problem_entries: list[dict]) -> dict:
         "DraftResponse": obj({"draft": ref("Draft")}, ["draft"]),
         "SaveDraftRequest": obj({"binding": ref("SourceBinding"), "reason": text, "flaggedFields": array(text)}, ["binding", "reason"]),
         "DecideRequest": obj(
-            {"displayedBinding": ref("SourceBinding"), "sourceProfileId": PROFILE_SCHEMA, "operation": ref("OperationName"), "reason": nullable(text), "flaggedFields": array(text)},
-            ["displayedBinding", "sourceProfileId", "operation"],
+            {"displayedBinding": ref("SourceBinding"), "operation": ref("OperationName"), "reason": nullable(text), "flaggedFields": array(text)},
+            ["displayedBinding", "operation"],
         ),
-        "RecoverAttemptRequest": obj(
-            {"sourceProfileId": PROFILE_SCHEMA}, ["sourceProfileId"]
-        ),
+        "RecoverAttemptRequest": obj({}),
         "SourceReceipt": obj(
             {"sourceRevision": text, "resultingState": text, "binding": ref("SourceBinding"), "actorReference": nullable(text), "metadata": {"type": "object", "additionalProperties": True}},
             ["sourceRevision", "resultingState", "binding", "metadata"],
@@ -1851,6 +1849,8 @@ def camel_case(value: str) -> str:
 
 
 def rust_struct_fields(source: str, name: str) -> set[str]:
+    if re.search(rf"pub struct {re.escape(name)}\s*\{{\}}", source):
+        return set()
     match = re.search(rf"pub struct {re.escape(name)}(?:<[^>]+>)?\s*\{{(?P<body>.*?)^\}}", source, re.S | re.M)
     if not match:
         raise ValueError(f"Rust DTO is missing: {name}")

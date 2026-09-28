@@ -195,7 +195,6 @@ test('decision forwards the selected source profile with mutation headers', asyn
     'attempt-9',
     {
       displayedBinding: binding,
-      sourceProfileId: 'reviewer',
       operation: 'approve',
     },
   ), (error) => error.kind === 'protocol');

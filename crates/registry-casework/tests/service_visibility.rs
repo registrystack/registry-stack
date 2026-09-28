@@ -2321,7 +2321,6 @@ async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
     let decision_path = format!("/v1/work-items/{}/decisions", claimed.item_id);
     let decision_body = json!({
         "displayedBinding": claimed.binding,
-        "sourceProfileId": "reader",
         "operation": "approve"
     });
     let decision_headers = [
@@ -2401,7 +2400,6 @@ async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
             "staff",
             json!({
                 "displayedBinding": claimed.binding,
-                "sourceProfileId": "other-reader",
                 "operation": "approve"
             }),
             &[
@@ -2446,7 +2444,7 @@ async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
             &recovery_path,
             &access_token("staff"),
             "staff",
-            json!({"sourceProfileId":"reader"}),
+            json!({}),
             &[(SOURCE_PROFILE_HEADER, "reader")],
         ))
         .await
@@ -2502,7 +2500,7 @@ async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
             &recovery_path,
             &access_token("staff"),
             "staff",
-            json!({"sourceProfileId":"reader"}),
+            json!({}),
             &[(SOURCE_PROFILE_HEADER, "reader")],
         ))
         .await
@@ -2563,7 +2561,6 @@ async fn assert_decision_refusal_problem(
             "staff",
             json!({
                 "displayedBinding": claimed.binding,
-                "sourceProfileId": "reader",
                 "operation": "approve"
             }),
             &[
@@ -2590,6 +2587,123 @@ async fn source_request_rejection_has_a_distinct_http_problem() {
         "The source refused the request body. Fix the request before trying again.",
     )
     .await;
+}
+
+#[tokio::test]
+async fn the_source_profile_header_alone_selects_the_profile_to_decide_and_recover() {
+    let _database = DATABASE.lock().await;
+    let subject_id = Uuid::from_u128(1_021);
+    let source = MockSource::with_reads([(subject_id, CallerRead::Visible("authorized"))]);
+    let prepare_calls = Arc::clone(&source.prepare_calls);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    add_item(&fixture.service, subject_id, None).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    let claimed = fixture
+        .service
+        .store()
+        .claim(&fixture.staff, item.item_id, item.revision, "claim-header")
+        .await
+        .unwrap();
+    let configured_project = project(policy(10, 1_000));
+    let app = router(HttpState {
+        service: fixture.service.clone(),
+        authenticator: Arc::new(authenticator(&configured_project)),
+        project: Arc::new(configured_project),
+    });
+    let decision_path = format!("/v1/work-items/{}/decisions", claimed.item_id);
+    let recovery_path = format!("/v1/work-items/{}/attempts/recover", claimed.item_id);
+    let expected_revision = format!("\"{}\"", claimed.revision);
+    let send = |path: &str, body: serde_json::Value, headers: Vec<(&'static str, String)>| {
+        let headers = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect::<Vec<_>>();
+        app.clone().oneshot(authenticated_request(
+            "POST",
+            path,
+            &access_token("staff"),
+            "staff",
+            body,
+            &headers,
+        ))
+    };
+    let decision = json!({
+        "displayedBinding": claimed.binding,
+        "operation": "approve"
+    });
+    let mut with_body_profile = decision.clone();
+    with_body_profile["sourceProfileId"] = json!("reader");
+    let decision_headers = |with_source_profile: bool| {
+        let mut headers = vec![
+            (IF_MATCH_HEADER, expected_revision.clone()),
+            (IDEMPOTENCY_KEY_HEADER, "header-decision".to_owned()),
+        ];
+        if with_source_profile {
+            headers.push((SOURCE_PROFILE_HEADER, "reader".to_owned()));
+        }
+        headers
+    };
+    let recovery_headers = |with_source_profile: bool| {
+        let mut headers = vec![(IDEMPOTENCY_KEY_HEADER, "header-decision".to_owned())];
+        if with_source_profile {
+            headers.push((SOURCE_PROFILE_HEADER, "reader".to_owned()));
+        }
+        headers
+    };
+
+    for (path, body, headers, status, code) in [
+        (
+            &decision_path,
+            with_body_profile,
+            decision_headers(true),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request.unprocessable",
+        ),
+        (
+            &decision_path,
+            decision.clone(),
+            decision_headers(false),
+            StatusCode::BAD_REQUEST,
+            "source-profile.required",
+        ),
+        (
+            &recovery_path,
+            json!({"sourceProfileId": "reader"}),
+            recovery_headers(true),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request.unprocessable",
+        ),
+        (
+            &recovery_path,
+            json!({}),
+            recovery_headers(false),
+            StatusCode::BAD_REQUEST,
+            "source-profile.required",
+        ),
+    ] {
+        let response = send(path, body, headers).await.unwrap();
+        assert_eq!(response.status(), status, "{path}");
+        assert_eq!(response_body(response).await["code"], code, "{path}");
+    }
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
+
+    // With only the header, recovery reaches the attempt lookup.
+    let response = send(&recovery_path, json!({}), recovery_headers(true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_body(response).await["code"],
+        "work-item.not-visible"
+    );
 }
 
 #[tokio::test]
@@ -3709,7 +3823,6 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         "staff",
         json!({
             "displayedBinding": binding(),
-            "sourceProfileId": "reader",
             "operation": "approve"
         }),
         &[
@@ -3813,7 +3926,6 @@ async fn http_authentication_and_directory_authority_are_enforced() {
             profile,
             json!({
                 "displayedBinding": binding(),
-                "sourceProfileId": "reader",
                 "operation": "approve"
             }),
             &[
@@ -3837,7 +3949,6 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         "staff",
         json!({
             "displayedBinding": binding(),
-            "sourceProfileId": "reader",
             "operation": "approve",
             "reason": "not accepted by this source operation"
         }),
