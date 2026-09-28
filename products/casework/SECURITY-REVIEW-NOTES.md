@@ -141,8 +141,13 @@ two-person rule enforce it on who can read the migration credential.
   `caseworkctl plan --runtime-config FILE` to confirm. `plan` reports the same
   refusal once the ledger exists, and startup's refusal of a weakened
   split-role activation names the same statements from the same check
-  (`activation::stray_authority`). A single-role deployment already holds the
-  ledger and is refused none of these.
+  (`activation::stray_authority`). Split-role apply also refuses, before any
+  migration, a default privilege of the migration role that would grant the
+  runtime role `TRIGGER` on the tables a migration creates, naming
+  `ALTER DEFAULT PRIVILEGES FOR ROLE <migration role> [IN SCHEMA <schema>]
+  REVOKE TRIGGER ON TABLES FROM <grantee>`, since a refusal after the
+  migrations would name tables its rollback removes. A single-role
+  deployment already holds the ledger and is refused none of these.
 - A split-role runtime role that no longer holds every grant apply issues it,
   as after `REASSIGN OWNED BY` takes a table back, is refused at startup with
   `RuntimeError::RuntimeGrantsMissing`, naming

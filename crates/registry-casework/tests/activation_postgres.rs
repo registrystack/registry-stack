@@ -1560,6 +1560,60 @@ async fn a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_sta
     fixture.drop_runtime_role().await;
 }
 
+/// A default privilege would hand the runtime role TRIGGER on every table a
+/// migration creates. Apply does not take it away: it refuses before any
+/// migration, naming the default privilege to revoke, since the tables a
+/// later refusal would name do not survive its rollback.
+#[tokio::test]
+async fn a_default_trigger_privilege_for_the_runtime_role_is_refused_before_any_migration() {
+    let fixture = Fixture::split("default_trigger").await;
+    let project = project();
+    let first = digest('a');
+    let runtime_user = fixture.runtime_user.clone();
+    let migration_role = fixture
+        .migration
+        .current_user()
+        .await
+        .expect("migration role");
+    let schema = fixture.schema.clone();
+    fixture
+        .client
+        .batch_execute(&format!(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT TRIGGER ON TABLES TO {runtime_user}"
+        ))
+        .await
+        .expect("grant the runtime role TRIGGER by default");
+    let fix = format!(
+        "ALTER DEFAULT PRIVILEGES FOR ROLE {migration_role} IN SCHEMA {schema} \
+         REVOKE TRIGGER ON TABLES FROM {runtime_user}"
+    );
+
+    let refused = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect_err("split-role apply refuses a default TRIGGER privilege");
+    assert_eq!(
+        refusal_codes(&refused),
+        ["casework.activation.role-mode-weakened"]
+    );
+    let message = refused.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(message.contains(REVOKE_NEXT), "{message}");
+    assert_eq!(fixture.relation_count().await, 0, "apply changed nothing");
+
+    fixture
+        .client
+        .batch_execute(&fix)
+        .await
+        .expect("revoke the default TRIGGER privilege");
+    let applied = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("apply after the revoke");
+    assert_eq!(applied.activation.role_mode, RoleMode::Split);
+    fixture.drop_runtime_role().await;
+}
+
 /// Writing the schema-migration ledger is authority over the activation
 /// ledger as much as writing it, so startup refuses the split activation,
 /// and apply takes the privilege back. A column-level INSERT or UPDATE, or
