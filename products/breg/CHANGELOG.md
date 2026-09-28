@@ -55,6 +55,12 @@
   characters, and the audit profile must be keyed: the ledger row records only
   its keyed hash, scoped to the activation id, never the text.
 
+- An activation records the instance claim when the database has never
+  recorded one, as a registry upgraded from a release before the claim, so an
+  in-place upgrade starts after `bregctl apply` without `bregctl
+  instance-claim adopt --acknowledge-original-retired`. A recorded claim is
+  kept, so a restored copy still refuses to serve until it is adopted.
+
 - `bregctl instance-claim adopt` also runs on a database the instance claim
   already names, as after a point-in-time recovery, a snapshot, or a base
   backup, which keep the claim matching and reopen every import authority
