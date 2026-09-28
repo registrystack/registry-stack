@@ -94,6 +94,10 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
     let report = json_stdout(&first);
     assert_eq!(report["profile"], "authoring");
     assert_eq!(report["baselineAssurance"], "integrity_only");
+    assert_eq!(
+        report["baselinePackageRevision"], baseline.digest,
+        "the baseline is named by its package digest"
+    );
     assert!(report["changes"]
         .as_array()
         .expect("changes array")
@@ -471,6 +475,7 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
 
 struct PublishedPackage {
     package: PathBuf,
+    digest: String,
 }
 
 #[test]
@@ -587,11 +592,14 @@ fn publish_package(parent: &Path, name: &str, classification: &str) -> Published
     .expect("package prepares");
     validate_fixture_journeys(FIXTURE_JOURNEYS, prepared.registry())
         .expect("diff fixture journeys resolve against the packaged registry");
+    let digest = prepared
+        .package_digest()
+        .expect("prepared package digest computes");
     let package = parent.join(name);
     prepared
         .publish_to_directory(&package)
         .expect("package publishes");
-    PublishedPackage { package }
+    PublishedPackage { package, digest }
 }
 
 fn write_project(parent: &Path, name: &str, classification: &str) -> PathBuf {
