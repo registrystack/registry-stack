@@ -525,7 +525,8 @@ then builds every image in that version's owned roster from the same local
 payload and pinned image recipes, transfers the layouts only through a pinned
 ephemeral local registry, and uploads the full OCI configs, daemon-backed Syft
 and Grype reports, exact exported root filesystem archives, and one ELF
-exposure report per image. The artifact is review input for a deliberate
+exposure report per image, plus one for each operator tool an image carries
+from v0.36.0. The artifact is review input for a deliberate
 baseline or live-pin update. It neither accepts an advisory nor supplies
 publication bytes, and the release candidate still rebuilds and checks its exact
 protected-main images under the normal release policy.
@@ -586,6 +587,16 @@ located `dlsym` or `dlvsym` use, with the constant symbol name when the report
 can prove one. It is not a gate and proves nothing about source reachability.
 Every entry marked `review_required` needs a reviewer's judgement, such as a
 wrapper that forwards a runtime name.
+
+From v0.36.0 the BReg, Casework, and Scheduling images also carry their
+operator tool at `/usr/local/bin/<name>ctl`, and
+`exposure/<name>.<name>ctl.json` records the same facts for it. The tool is not
+the Entrypoint, so an exception's whole-image fingerprint `files` do not name
+it, and renewal moves the application layer that holds it without reading
+any exposure report. Review both reports before renewing: an exception whose rationale
+describes only the runtime executable must be rewritten to cover the tool, and
+adding `/usr/local/bin/<name>ctl` to that exception's `files` is a deliberate
+baseline edit, never something renewal does.
 
 Independently review each image's OCI process configuration, ordered DiffIDs,
 component layer, every assertion file, and each exception's exposure claim

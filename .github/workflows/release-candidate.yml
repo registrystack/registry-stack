@@ -380,6 +380,14 @@ jobs:
             test "$(dist/image-bin/scheduling --version)" = \
               "scheduling ${{ needs.validate.outputs.version }}"
           fi
+          if (( release_major > 0 || release_minor >= 36 )); then
+            test "$("dist/bin/schedulingctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "schedulingctl ${{ needs.validate.outputs.version }}"
+            for operator_tool in bregctl caseworkctl schedulingctl; do
+              test "$("dist/image-bin/${operator_tool}" --version)" = \
+                "${operator_tool} ${{ needs.validate.outputs.version }}"
+            done
+          fi
 
       - name: Set up Docker Buildx
         id: buildx
@@ -539,6 +547,13 @@ jobs:
               -p registry-caseworkctl --bin caseworkctl \
               --target "${{ matrix.target }}"
           fi
+          include_schedulingctl=0
+          if (( release_major > 0 || release_minor >= 36 )); then
+            include_schedulingctl=1
+            cargo build --release --locked \
+              -p registry-schedulingctl --bin schedulingctl \
+              --target "${{ matrix.target }}"
+          fi
           mkdir -p platform
           asset="relayctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/relayctl" "platform/${asset}"
@@ -570,6 +585,13 @@ jobs:
               test "$("platform/${asset}" --version)" = \
                 "${casework_binary} ${{ needs.validate.outputs.version }}"
             done
+          fi
+          if [[ "${include_schedulingctl}" -eq 1 ]]; then
+            asset="schedulingctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/schedulingctl" "platform/${asset}"
+            chmod 0755 "platform/${asset}"
+            test "$("platform/${asset}" --version)" = \
+              "schedulingctl ${{ needs.validate.outputs.version }}"
           fi
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
@@ -603,7 +625,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [core, breg, bregctl, casework]
+        group: [core, breg, bregctl, casework, scheduling]
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1220,6 +1242,7 @@ jobs:
             --breg "inputs/${prefix}-breg-${suffix}" \
             --bregctl "inputs/${prefix}-bregctl-${suffix}" \
             --casework "inputs/${prefix}-casework-${suffix}" \
+            --scheduling "inputs/${prefix}-scheduling-${suffix}" \
             --output "inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Install pinned candidate inspection tools

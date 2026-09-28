@@ -262,6 +262,14 @@ jobs:
             test "$(dist/image-bin/scheduling --version)" = \
               "scheduling ${REHEARSAL_VERSION}"
           fi
+          if (( release_major > 0 || release_minor >= 36 )); then
+            test "$("dist/bin/schedulingctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+              "schedulingctl ${REHEARSAL_VERSION}"
+            for operator_tool in bregctl caseworkctl schedulingctl; do
+              test "$("dist/image-bin/${operator_tool}" --version)" = \
+                "${operator_tool} ${REHEARSAL_VERSION}"
+            done
+          fi
 
       - name: Set up Docker Buildx for advisory evidence
         if: ${{ inputs.advisory_evidence }}

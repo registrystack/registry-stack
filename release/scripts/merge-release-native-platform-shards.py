@@ -22,6 +22,9 @@ RUST_TOOLCHAIN = "1.95.0"
 PURPOSES = {"candidate_input", "review_only"}
 MINT_RETIREMENT_VERSION = (0, 31, 0)
 MACOS_FIPS_ARCHIVE_MINIMUM_VERSION = (0, 33, 0)
+# The Scheduling runtime ships only inside its image; its operator tool is a
+# release binary from this version.
+SCHEDULINGCTL_MINIMUM_VERSION = (0, 36, 0)
 
 
 class ShardError(ValueError):
@@ -54,16 +57,21 @@ def rosters(version: str) -> dict[str, list[str]]:
             f"casework-{tag}-{ASSET}",
             f"caseworkctl-{tag}-{ASSET}",
         ]
+    scheduling = []
+    if parsed >= SCHEDULINGCTL_MINIMUM_VERSION:
+        scheduling = [f"schedulingctl-{tag}-{ASSET}"]
     if parsed >= MACOS_FIPS_ARCHIVE_MINIMUM_VERSION:
         core = [f"{name}.tar.gz" for name in core]
         breg = [f"{name}.tar.gz" for name in breg]
         bregctl = [f"{name}.tar.gz" for name in bregctl]
         casework = [f"{name}.tar.gz" for name in casework]
+        scheduling = [f"{name}.tar.gz" for name in scheduling]
     return {
         "core": core,
         "breg": breg,
         "bregctl": bregctl,
         "casework": casework,
+        "scheduling": scheduling,
     }
 
 
@@ -176,6 +184,7 @@ def merge(
     bregctl: Path,
     casework: Path | None,
     output: Path,
+    scheduling: Path | None = None,
 ) -> None:
     shard_rosters = rosters(version)
     if SOURCE_SHA.fullmatch(source_sha) is None:
@@ -224,12 +233,32 @@ def merge(
             version=version,
             source_sha=source_sha,
         )
-    sources = inputs["core"] | inputs["breg"] | inputs["bregctl"] | inputs["casework"]
+    if scheduling is None:
+        if shard_rosters["scheduling"]:
+            raise ShardError("scheduling shard is required from version 0.36.0")
+        inputs["scheduling"] = {}
+    else:
+        inputs["scheduling"] = validate_shard(
+            "scheduling",
+            scheduling,
+            shard_rosters["scheduling"],
+            purpose=purpose,
+            version=version,
+            source_sha=source_sha,
+        )
+    sources = (
+        inputs["core"]
+        | inputs["breg"]
+        | inputs["bregctl"]
+        | inputs["casework"]
+        | inputs["scheduling"]
+    )
     final_roster = [
         *shard_rosters["core"],
         *shard_rosters["breg"],
         *shard_rosters["bregctl"],
         *shard_rosters["casework"],
+        *shard_rosters["scheduling"],
     ]
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -261,6 +290,7 @@ def main() -> int:
     parser.add_argument("--breg", required=True, type=Path)
     parser.add_argument("--bregctl", required=True, type=Path)
     parser.add_argument("--casework", type=Path)
+    parser.add_argument("--scheduling", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
@@ -272,6 +302,7 @@ def main() -> int:
             breg=args.breg,
             bregctl=args.bregctl,
             casework=args.casework,
+            scheduling=args.scheduling,
             output=args.output,
         )
     except (OSError, UnicodeError, ShardError) as error:
