@@ -22,7 +22,7 @@ use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::audit::{with_event_id, SchedulingAudit};
 use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::runtime::open_audit;
-use registry_scheduling::store::{PostgresStore, StoreError};
+use registry_scheduling::store::{ActivePackage, PostgresStore, StoreError};
 use registry_scheduling_core::{location_open_intervals, SchedulingFacts};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -50,7 +50,9 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .context("starting the Scheduling operator runtime")?;
     // Records land only on a database `schedulingctl apply` has activated,
     // only on the database this configuration's ledger names, and only while
-    // this configuration's package is the active one.
+    // this configuration's package is the active one. The swap checks the
+    // ledger again under its locks, so an apply that lands after this check
+    // refuses the swap rather than slipping under it.
     runtime
         .block_on(store.ready())
         .map_err(crate::activation::refusal_or_failure)
@@ -87,7 +89,15 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
             }),
         ))
         .context("writing the records.apply request audit entry; nothing was replaced")?;
-    match runtime.block_on(store.replace_facts(&policy.policy.scheduling.id, &facts)) {
+    let expected = ActivePackage {
+        database_id: config.database_id(),
+        package_digest: &policy.package_digest,
+    };
+    match runtime.block_on(store.replace_active_facts(
+        &policy.policy.scheduling.id,
+        &facts,
+        &expected,
+    )) {
         Ok(()) => {}
         Err(store_error) => {
             let answer = unanswered_swap(&store_error);

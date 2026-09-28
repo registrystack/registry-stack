@@ -620,7 +620,8 @@ invariants:
       pg_advisory_xact_lock on the migration key, and compares the ledger's
       recorded identity.databaseId with the configuration's before any
       statement changes the database; records apply makes the same identity
-      check before it replaces records.
+      and active-package check inside its swap, after it holds every supply
+      anchor and the meta row an apply takes before recording its row.
     refusal: >-
       Refuse an apply or records apply under another identity.databaseId,
       naming only the key and leaving the ledger, schema, and policy

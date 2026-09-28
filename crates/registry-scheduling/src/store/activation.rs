@@ -121,6 +121,14 @@ pub struct DeployedPolicy {
     pub policy_digest: String,
 }
 
+/// The activation a records swap answers to: the database identity and the
+/// package the operator's configuration names.
+#[derive(Clone, Copy, Debug)]
+pub struct ActivePackage<'a> {
+    pub database_id: &'a str,
+    pub package_digest: &'a str,
+}
+
 /// Everything one apply records.
 #[derive(Clone, Debug)]
 pub struct ActivationRequest<'a> {
@@ -928,6 +936,27 @@ async fn unreadable_ledger_in(client: &impl GenericClient) -> Result<Option<Stri
     Ok(row
         .filter(|row| !row.get::<_, bool>(1))
         .map(|row| row.get(0)))
+}
+
+/// Refuse unless the ledger's latest row names `expected`: a database never
+/// activated, another database identity, or another active package.
+pub(super) async fn check_active_package_in(
+    client: &impl GenericClient,
+    expected: &ActivePackage<'_>,
+) -> Result<(), StoreError> {
+    let active = active_activation_in(client)
+        .await?
+        .ok_or(StoreError::NotActivated)?;
+    if active.database_id != expected.database_id {
+        return Err(StoreError::DatabaseIdMismatch);
+    }
+    if active.package_digest != expected.package_digest {
+        return Err(StoreError::PackageNotActive {
+            active: active.package_digest,
+            candidate: expected.package_digest.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 async fn active_activation_in(

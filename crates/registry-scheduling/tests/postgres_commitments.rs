@@ -34,8 +34,8 @@ use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
-    ActivationRequest, CommitError, CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError,
-    SupplyContext,
+    ActivationRequest, ActivePackage, CommitError, CommitOutcome, Commitment, PostgresStore,
+    RoleMode, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
@@ -3260,6 +3260,111 @@ async fn an_activation_whose_acknowledgment_was_lost_is_read_back() {
         Some(second),
         "the unacknowledged activation took effect"
     );
+}
+
+#[tokio::test]
+async fn a_records_swap_checks_the_active_package_under_its_locks() {
+    let fx = fixture().await;
+    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let runtime_role: String = fx
+        .admin
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .expect("the test role")
+        .get(0);
+    let first = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    let second = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    fx.store
+        .activate(
+            &ActivationRequest {
+                activation_id: Uuid::new_v4(),
+                package_digest: first,
+                database_id: "records-ledger",
+                policy: &policy,
+                operator_reference_hash: None,
+                backup_references: &[],
+                role_mode: RoleMode::Single,
+                runtime_role: &runtime_role,
+            },
+            |_| async { Ok(()) },
+        )
+        .await
+        .expect("the first package activates");
+    let expected = |database_id, package_digest| ActivePackage {
+        database_id,
+        package_digest,
+    };
+
+    let refusal = fx
+        .store
+        .replace_active_facts(
+            SCHEDULING_ID,
+            &records_without(&[]),
+            &expected("another-database", first),
+        )
+        .await
+        .expect_err("a swap for another database is refused");
+    assert!(
+        matches!(refusal, StoreError::DatabaseIdMismatch),
+        "{refusal}"
+    );
+
+    // Stand in for an apply of the second package that holds the meta row
+    // while the swap for the first waits on it: the swap reads the ledger
+    // only once it holds the lock, so it sees the second package active.
+    let mut admin = fx.admin;
+    let apply = admin.transaction().await.expect("the stand-in apply opens");
+    apply
+        .execute(
+            "SELECT scheduling_id FROM scheduling_meta WHERE singleton FOR UPDATE",
+            &[],
+        )
+        .await
+        .expect("the stand-in holds the meta row");
+    apply
+        .execute(
+            "INSERT INTO scheduling_activations(activation_id, apply_order, package_digest, \
+             predecessor_package_digest, database_id, plan_kind, applied_at, role_mode, \
+             runtime_role) SELECT gen_random_uuid(), max(apply_order) + 1, $1, $2, \
+             'records-ledger', 'successor', now(), 'single', current_user \
+             FROM scheduling_activations",
+            &[&second, &first],
+        )
+        .await
+        .expect("the stand-in records the second package");
+    let store = fx.store.clone();
+    let swap = tokio::spawn(async move {
+        store
+            .replace_active_facts(
+                SCHEDULING_ID,
+                &records_without(&[]),
+                &ActivePackage {
+                    database_id: "records-ledger",
+                    package_digest: first,
+                },
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!swap.is_finished(), "the swap waits for the apply");
+    apply.commit().await.expect("the stand-in apply commits");
+    let refusal = swap
+        .await
+        .expect("the swap task runs to completion")
+        .expect_err("a swap for a package no longer active is refused");
+    assert!(
+        matches!(refusal, StoreError::PackageNotActive { .. }),
+        "{refusal}"
+    );
+
+    fx.store
+        .replace_active_facts(
+            SCHEDULING_ID,
+            &records_without(&[]),
+            &expected("records-ledger", second),
+        )
+        .await
+        .expect("a swap for the active package commits");
 }
 
 #[tokio::test]

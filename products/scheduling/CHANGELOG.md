@@ -80,7 +80,9 @@
   - The operator commands exit 0 on success, 1 on a refusal, 2 on a usage
     error, and 3 on an operational failure.
   - `schedulingctl records apply` refuses a database no `schedulingctl apply`
-    has activated, and one where another package is active.
+    has activated, and one where another package is active, checked again
+    under the swap's locks so a concurrent apply cannot slip between the
+    check and the swap.
   - Upgrade: add `identity.databaseId`, then run `schedulingctl apply` once
     after upgrading, before starting the upgraded runtime; a database an
     earlier release migrated is adopted by that first apply, which also

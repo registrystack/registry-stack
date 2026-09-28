@@ -61,10 +61,10 @@ use crate::config::{describe_secret_failure, DatabaseConfig};
 use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 mod activation;
-use activation::{apply_migrations_in, schema_state_in};
+use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use activation::{
     policy_pool_ids, Activation, ActivationOutcome, ActivationPlan, ActivationRequest,
-    DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
+    ActivePackage, DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
 };
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
@@ -1014,9 +1014,26 @@ impl PostgresStore {
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        replace_facts_in_transaction(&transaction, scheduling_id, facts).await?;
+        replace_facts_in_transaction(&transaction, scheduling_id, facts, None).await?;
         // The swap takes every supply anchor, so its commit is read back
         // like a capacity commit when its acknowledgment is lost.
+        self.commit_publication(transaction).await
+    }
+
+    /// Replace the environment records only while `expected` is the active
+    /// package on this database. The ledger is read once the swap holds the
+    /// supply anchors and the meta row, which an apply takes before it
+    /// records its row, so an apply cannot activate another package between
+    /// the check and the swap.
+    pub async fn replace_active_facts(
+        &self,
+        scheduling_id: &str,
+        facts: &SchedulingFacts,
+        expected: &ActivePackage<'_>,
+    ) -> Result<(), StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        replace_facts_in_transaction(&transaction, scheduling_id, facts, Some(expected)).await?;
         self.commit_publication(transaction).await
     }
 
@@ -3013,6 +3030,7 @@ pub(crate) async fn replace_facts_in_transaction(
     transaction: &deadpool_postgres::Transaction<'_>,
     scheduling_id: &str,
     facts: &SchedulingFacts,
+    expected: Option<&ActivePackage<'_>>,
 ) -> Result<(), StoreError> {
     // Take every supply anchor before reading a claim. A capacity
     // transaction holds its own anchor from its snapshot until it commits,
@@ -3034,6 +3052,9 @@ pub(crate) async fn replace_facts_in_transaction(
             &[],
         )
         .await?;
+    if let Some(expected) = expected {
+        check_active_package_in(&**transaction, expected).await?;
+    }
     if meta.get::<_, String>(0) != scheduling_id {
         return Err(StoreError::DeploymentIdentity);
     }
