@@ -698,9 +698,10 @@ pub async fn erase_field_encryption_history(
 
 /// Clear whole request snapshots when their frozen originating package
 /// predates a recorded erase-and-rebaseline flip and they mention its field.
-/// Package order comes from the migration ledger, not request revision timing:
-/// a draft can predate the flip while its frozen proposal and target snapshots
-/// are created afterward. This also reaches canceled and rejected creates
+/// Package order comes from the migration ledger, and for the revisions a
+/// pre-ledger database named, from the order adoption kept; it never comes
+/// from request revision timing: a draft can predate the flip while its frozen
+/// proposal and target snapshots are created afterward. This also reaches canceled and rejected creates
 /// whose target never produced a retained record revision.
 async fn scrub_plaintext_request_snapshots(
     client: &mut Client,
@@ -769,28 +770,14 @@ async fn scrub_plaintext_request_snapshots(
         lifecycle_progress_state(&transaction, &lifecycle_reference).await?;
     let unresolved_provenance: bool = transaction
         .query_one(
-            "WITH target_positions AS (
-                 SELECT target_package_revision AS package_revision, package_sequence
-                   FROM registry_internal.registry_migrations
-             ),
-             source_positions AS (
-                 SELECT source.source_package_revision AS package_revision,
-                        min(source.package_sequence - 1)::bigint AS package_sequence,
+            "WITH package_positions AS (
+                 SELECT activation_id::text AS package_revision,
+                        apply_order AS package_sequence,
                         1::bigint AS inferred_count
-                   FROM registry_internal.registry_migrations AS source
-                  WHERE source.source_package_revision IS NOT NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM target_positions AS target
-                         WHERE target.package_revision = source.source_package_revision
-                    )
-                  GROUP BY source.source_package_revision
-             ),
-             package_positions AS (
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM target_positions
+                   FROM registry_internal.registry_migrations
                  UNION ALL
-                 SELECT package_revision, package_sequence, inferred_count
-                   FROM source_positions
+                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
+                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              SELECT EXISTS (
                  SELECT 1
@@ -861,28 +848,14 @@ async fn scrub_plaintext_request_snapshots(
     // frozen originating package used to classify the snapshot as pre-flip.
     let scrubbed_request_target_count = transaction
         .execute(
-            "WITH target_positions AS (
-                 SELECT target_package_revision AS package_revision, package_sequence
-                   FROM registry_internal.registry_migrations
-             ),
-             source_positions AS (
-                 SELECT source.source_package_revision AS package_revision,
-                        min(source.package_sequence - 1)::bigint AS package_sequence,
+            "WITH package_positions AS (
+                 SELECT activation_id::text AS package_revision,
+                        apply_order AS package_sequence,
                         1::bigint AS inferred_count
-                   FROM registry_internal.registry_migrations AS source
-                  WHERE source.source_package_revision IS NOT NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM target_positions AS target
-                         WHERE target.package_revision = source.source_package_revision
-                    )
-                  GROUP BY source.source_package_revision
-             ),
-             package_positions AS (
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM target_positions
+                   FROM registry_internal.registry_migrations
                  UNION ALL
-                 SELECT package_revision, package_sequence, inferred_count
-                   FROM source_positions
+                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
+                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              UPDATE registry_internal.registry_request_targets AS target
                 SET base_snapshot = NULL,
@@ -918,28 +891,14 @@ async fn scrub_plaintext_request_snapshots(
 
     let scrubbed_request_proposal_count = transaction
         .execute(
-            "WITH target_positions AS (
-                 SELECT target_package_revision AS package_revision, package_sequence
-                   FROM registry_internal.registry_migrations
-             ),
-             source_positions AS (
-                 SELECT source.source_package_revision AS package_revision,
-                        min(source.package_sequence - 1)::bigint AS package_sequence,
+            "WITH package_positions AS (
+                 SELECT activation_id::text AS package_revision,
+                        apply_order AS package_sequence,
                         1::bigint AS inferred_count
-                   FROM registry_internal.registry_migrations AS source
-                  WHERE source.source_package_revision IS NOT NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM target_positions AS target
-                         WHERE target.package_revision = source.source_package_revision
-                    )
-                  GROUP BY source.source_package_revision
-             ),
-             package_positions AS (
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM target_positions
+                   FROM registry_internal.registry_migrations
                  UNION ALL
-                 SELECT package_revision, package_sequence, inferred_count
-                   FROM source_positions
+                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
+                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              UPDATE registry_internal.registry_request_proposals AS proposal
                 SET snapshot = NULL,
@@ -1356,7 +1315,7 @@ fn erase_history_entry(
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
+            "packageRevision": request.expected.activation_id,
             "lifecycleReference": lifecycle_reference,
             "operatorReference": operator_reference,
             "reasonReference": reason_reference,
@@ -1391,7 +1350,7 @@ fn lifecycle_request_entry(
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
+            "packageRevision": request.expected.activation_id,
             "lifecycleReference": lifecycle_reference,
             "operatorReference": operator_reference,
             "reasonReference": reason_reference,
@@ -1411,14 +1370,14 @@ fn lifecycle_operator_references(
     let operator_reference = key_hasher
         .audit_reference_hash(
             "breg-field-encryption-operator-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             request.operator_reference,
         )
         .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
     let reason_reference = key_hasher
         .audit_reference_hash(
             "breg-field-encryption-reason-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             request.reason,
         )
         .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;

@@ -581,9 +581,9 @@ fn run_example(args: RunArgs) -> Result<Value> {
     let binding = Binding {
         source: state.source_digest.clone(),
         package: state
-            .package_revision
+            .package_digest
             .clone()
-            .context("ready instance lacks package revision")?,
+            .context("ready instance lacks package digest")?,
         database: state.container_id()?.into(),
         clients: config::hash(&client_bytes),
         scenario: config::hash(&bytes),

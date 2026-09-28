@@ -3,9 +3,8 @@
 
 use std::path::Path;
 
-use registry_breg::postgres::BaselineAdvisory;
 use registry_breg::runtime_config::RuntimeConfigError;
-use registry_breg::startup::{check, StartupError};
+use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -25,11 +24,11 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
 ];
 
 /// Run the startup dependency check without binding a listener, keeping only
-/// the PostgreSQL baseline advisories it decided. It verifies the dependencies
+/// the PostgreSQL baseline advisories and the role mode it decided. It verifies the dependencies
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<Vec<BaselineAdvisory>, Diagnostic> {
+pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, Diagnostic> {
     if !runtime_config.is_absolute() {
         return Err(diagnostic(
             "startup.runtime_config.path_invalid",
@@ -88,6 +87,29 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
+    if let StartupError::InstanceIdChangedWithPendingDeliveries {
+        stored_source,
+        configured_instance_id,
+        pending_deliveries,
+    } = error
+    {
+        let noun = if pending_deliveries == 1 {
+            "delivery was"
+        } else {
+            "deliveries were"
+        };
+        return diagnostic(
+            "startup.instance_id.pending_deliveries",
+            "identity.instanceId",
+            &format!(
+                "{pending_deliveries} pending webhook {noun} captured under event source \
+                 `{stored_source}`, but identity.instanceId `{configured_instance_id}` derives \
+                 another source and the delivery worker would dead-letter them; restore the \
+                 previous identity.instanceId until those deliveries drain, then change it and \
+                 rerun doctor"
+            ),
+        );
+    }
     // The runtime configuration carries its own closed-vocabulary cause; name
     // it the way `bregctl verify` already names it instead of collapsing every
     // configuration mistake into one generic refusal.
@@ -123,7 +145,10 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
         }
-        StartupError::ReviewAuthorityMissing { .. } => unreachable!("handled above"),
+        StartupError::ReviewAuthorityMissing { .. }
+        | StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
+            unreachable!("handled above")
+        }
         StartupError::DatabaseConnection => (
             "startup.database.connection_refused",
             "database",
@@ -135,10 +160,45 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::DatabaseUninitialized => (
+            "startup.database.uninitialized",
+            "database",
+            "the database records no activated package: run bregctl apply --package DIR --initial to activate the first package",
+        ),
+        StartupError::PreLedgerDatabase => (
+            "startup.database.pre_ledger",
+            "database",
+            "the database predates the activation ledger: run bregctl apply --package DIR once to adopt this database into the ledger",
+        ),
+        StartupError::DatabaseIdentityMismatch => (
+            "startup.database.identity_mismatch",
+            "database",
+            "the database records a different database id than identity.databaseId: point database.runtimeUrlRef at the database it names or correct identity.databaseId",
+        ),
+        StartupError::ActivePackageMismatch => (
+            "startup.package.not_active",
+            "package",
+            "the database has not activated the package at package.root: run bregctl plan --package DIR then bregctl apply --package DIR",
+        ),
         StartupError::InstanceClaimMismatch => (
             "startup.instance_claim.mismatch",
             "database",
             "the database is not the instance the Registry's claim names, as a restored copy is: once the original is retired, run bregctl instance-claim adopt",
+        ),
+        StartupError::RuntimeWriteAuthority => (
+            "startup.runtime_role.can_write",
+            "database",
+            "the runtime role can write the activation ledger or the registry state: run bregctl apply --package DIR to name the object and the fix",
+        ),
+        StartupError::RuntimeGrantsMissing => (
+            "startup.runtime_role.grants_missing",
+            "database",
+            "the runtime role is missing grants the active package gives it: run bregctl apply --package DIR to reissue them",
+        ),
+        StartupError::RoleModeChanged => (
+            "startup.role_mode.changed",
+            "database",
+            "the database was activated for a separate runtime role but the runtime file names one role: run bregctl apply --package DIR to activate it for one role",
         ),
         StartupError::Audit => (
             "startup.audit.refused",
@@ -230,7 +290,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_breg::package::{PackageBindingField, PackageError};
+    use registry_breg::package::PackageError;
     use std::collections::HashSet;
 
     #[test]
@@ -263,7 +323,14 @@ mod tests {
             StartupError::PackageRefused(PackageError::Integrity),
             StartupError::DatabaseConnection,
             StartupError::DatabaseUnready,
+            StartupError::DatabaseUninitialized,
+            StartupError::PreLedgerDatabase,
             StartupError::InstanceClaimMismatch,
+            StartupError::RuntimeWriteAuthority,
+            StartupError::RuntimeGrantsMissing,
+            StartupError::RoleModeChanged,
+            StartupError::DatabaseIdentityMismatch,
+            StartupError::ActivePackageMismatch,
             StartupError::Audit,
             StartupError::Cursor,
             StartupError::Oidc,
@@ -351,6 +418,30 @@ mod tests {
     }
 
     #[test]
+    fn instance_id_change_with_pending_deliveries_names_both_identifiers_and_the_recovery() {
+        let diagnostic = startup_diagnostic(StartupError::InstanceIdChangedWithPendingDeliveries {
+            stored_source: "urn:registrystack:registry:licences:instance:previous".to_owned(),
+            configured_instance_id: "renamed".to_owned(),
+            pending_deliveries: 1,
+        });
+        assert_eq!(diagnostic.code, "startup.instance_id.pending_deliveries");
+        assert_eq!(diagnostic.path, "identity.instanceId");
+        for detail in [
+            "1 pending webhook delivery was",
+            "`urn:registrystack:registry:licences:instance:previous`",
+            "identity.instanceId `renamed`",
+            "dead-letter",
+            "restore the previous identity.instanceId until those deliveries drain",
+        ] {
+            assert!(
+                diagnostic.message.contains(detail),
+                "missing diagnostic detail {detail}: {}",
+                diagnostic.message
+            );
+        }
+    }
+
+    #[test]
     fn startup_value_disclosure_threat_is_enforced_by_a_closed_negative_class_mapping() {
         let cases = [
             (
@@ -369,8 +460,33 @@ mod tests {
                 "database",
             ),
             (
+                StartupError::DatabaseUninitialized,
+                "startup.database.uninitialized",
+                "database",
+            ),
+            (
+                StartupError::PreLedgerDatabase,
+                "startup.database.pre_ledger",
+                "database",
+            ),
+            (
                 StartupError::InstanceClaimMismatch,
                 "startup.instance_claim.mismatch",
+                "database",
+            ),
+            (
+                StartupError::RuntimeWriteAuthority,
+                "startup.runtime_role.can_write",
+                "database",
+            ),
+            (
+                StartupError::RuntimeGrantsMissing,
+                "startup.runtime_role.grants_missing",
+                "database",
+            ),
+            (
+                StartupError::RoleModeChanged,
+                "startup.role_mode.changed",
                 "database",
             ),
             (StartupError::Audit, "startup.audit.refused", "audit"),
@@ -446,15 +562,11 @@ mod tests {
             PackageError::Closure,
             PackageError::Integrity,
             PackageError::Binding,
-            PackageError::BindingMismatch(PackageBindingField::Environment),
-            PackageError::BindingMismatch(PackageBindingField::DatabaseId),
-            PackageError::AlreadyActive,
-            PackageError::OlderThanActive,
-            PackageError::Signature,
             PackageError::Derivation,
             PackageError::MigrationPlan,
             PackageError::Permissions,
-            PackageError::TrustAnchorNotCanonical,
+            PackageError::Envelope,
+            PackageError::LegacyFormat,
         ];
         let mut messages = HashSet::new();
         for cause in causes {
@@ -472,6 +584,20 @@ mod tests {
             );
         }
         assert_eq!(messages.len(), causes.len());
+    }
+
+    #[test]
+    fn a_database_that_runs_another_package_or_database_id_names_the_next_command() {
+        let database = startup_diagnostic(StartupError::DatabaseIdentityMismatch);
+        assert_eq!(database.code, "startup.database.identity_mismatch");
+        assert_eq!(database.path, "database");
+        assert!(database.message.contains("identity.databaseId"));
+
+        let package = startup_diagnostic(StartupError::ActivePackageMismatch);
+        assert_eq!(package.code, "startup.package.not_active");
+        assert_eq!(package.path, "package");
+        assert!(package.message.contains("bregctl plan --package DIR"));
+        assert!(package.message.contains("bregctl apply --package DIR"));
     }
 
     #[test]
@@ -506,7 +632,9 @@ mod tests {
                 "/",
             ),
             (
-                RuntimeConfigError::Document,
+                RuntimeConfigError::Document(
+                    "cursor is invalid: missing field `secretRef`".to_owned(),
+                ),
                 "startup.runtime_config.document",
                 "/",
             ),
@@ -576,16 +704,6 @@ mod tests {
                 "/package/root",
             ),
             (
-                RuntimeConfigError::TrustAnchorUnavailable,
-                "startup.runtime_config.trust_anchor_unavailable",
-                "/package/trustAnchorPath",
-            ),
-            (
-                RuntimeConfigError::UnsafeTrustAnchor,
-                "startup.runtime_config.unsafe_trust_anchor",
-                "/package/trustAnchorPath",
-            ),
-            (
                 RuntimeConfigError::InvalidOidc,
                 "startup.runtime_config.invalid_oidc",
                 "/authentication/oidc",
@@ -628,10 +746,11 @@ mod tests {
         ];
 
         for (cause, expected_code, expected_path) in cases {
+            let message = cause.to_string();
             let diagnostic = startup_diagnostic(StartupError::RuntimeConfig(cause));
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
-            assert_eq!(diagnostic.message, cause.to_string());
+            assert_eq!(diagnostic.message, message);
         }
     }
 

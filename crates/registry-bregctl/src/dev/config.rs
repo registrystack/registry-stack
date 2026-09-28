@@ -923,7 +923,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         .push(rcgen::DnType::CommonName, "BREG local PostgreSQL");
     server_params.use_authority_key_identifier_extension = true;
     server_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
-    let server = server_params.signed_by(&server_key, &ca, &ca_key)?;
+    let server = server_params.signed_by(
+        &server_key,
+        &rcgen::Issuer::from_params(&ca_params, &ca_key),
+    )?;
     private::create(
         &root.join("tls/ca.pem"),
         pem("CERTIFICATE", ca.der()).as_bytes(),
@@ -937,14 +940,7 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    private::create(&root.join("trust-anchor.json"), b"{}")?;
-    runtime(
-        root,
-        state,
-        clients,
-        &format!("sha256:{}", "1".repeat(64)),
-        true,
-    )?;
+    runtime(root, state, clients, true)?;
     Ok(())
 }
 
@@ -1289,13 +1285,7 @@ pub(super) fn assertion_issuers(
     Ok(authorities)
 }
 
-pub(super) fn runtime(
-    root: &Path,
-    state: &State,
-    clients: &Clients,
-    revision: &str,
-    test: bool,
-) -> Result<()> {
+pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
     let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
@@ -1328,6 +1318,15 @@ pub(super) fn runtime(
         .chain(clients.issuer.browser_clients.iter())
         .collect::<Vec<_>>();
     let assertion_issuers = assertion_issuers(state, clients)?;
+    // The local registry serves with the migration role, the one-role mode
+    // a small deployment runs in. The schema-test rehearsal stays split,
+    // because the package fingerprint is defined against a separate runtime
+    // role.
+    let (runtime_url, runtime_role) = if test {
+        ("test-runtime-database-url", RUNTIME_ROLE)
+    } else {
+        ("migration-database-url", MIGRATION_ROLE)
+    };
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -1339,8 +1338,8 @@ pub(super) fn runtime(
             "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
             "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
-            "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
-            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
+            "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
+            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
             "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
             "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({

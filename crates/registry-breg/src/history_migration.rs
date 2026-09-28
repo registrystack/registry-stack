@@ -183,7 +183,7 @@ pub(crate) async fn ensure_successor_history_ready(
 
     match load_history_head(transaction).await {
         Ok(_head) => {
-            let retained = load_descriptor(transaction, &current.package_revision)
+            let retained = load_descriptor(transaction, &current.activation_id)
                 .await
                 .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
             if predecessor_descriptor.is_some_and(|expected| expected != &retained) {
@@ -384,22 +384,27 @@ async fn establish_existing_history_baseline(
     predecessor_baseline: &CompiledRegistryMigrationBaseline,
     predecessor_descriptor: &HistorySchemaDescriptor,
 ) -> Result<()> {
-    if predecessor_baseline.package_revision != current.package_revision
-        || predecessor_descriptor.package_revision != current.package_revision
+    if predecessor_baseline.package_digest != current.package_digest
+        || predecessor_descriptor.package_revision != current.activation_id
     {
         return Err(HistoryMigrationError::RevisionUnavailable);
     }
     retain_verified_descriptor(transaction, predecessor_descriptor)
         .await
         .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    verify_revision_journal_uses_active_descriptor(transaction, predecessor_baseline).await?;
+    verify_revision_journal_uses_active_descriptor(
+        transaction,
+        predecessor_baseline,
+        &current.activation_id,
+    )
+    .await?;
     let members = verify_live_rows_match_journal_heads(
         transaction,
         &predecessor_baseline.entities,
-        Some(&predecessor_baseline.package_revision),
+        Some(&current.activation_id),
     )
     .await?;
-    insert_existing_history_baseline(transaction, &current.package_revision, &members).await
+    insert_existing_history_baseline(transaction, &current.activation_id, &members).await
 }
 
 /// Prove the retained journal head of every live row reproduces that row, and
@@ -592,6 +597,7 @@ fn verify_journal_head_reproduces_live_row(
 async fn verify_revision_journal_uses_active_descriptor(
     transaction: &Transaction<'_>,
     predecessor_baseline: &CompiledRegistryMigrationBaseline,
+    active_package_revision: &str,
 ) -> Result<()> {
     let rows = transaction
         .query(
@@ -612,7 +618,7 @@ async fn verify_revision_journal_uses_active_descriptor(
         if entity_id.is_empty()
             || package_revision.is_empty()
             || !predecessor_baseline.entities.contains_key(&entity_id)
-            || package_revision != predecessor_baseline.package_revision
+            || package_revision != active_package_revision
         {
             return Err(HistoryMigrationError::RevisionUnavailable);
         }

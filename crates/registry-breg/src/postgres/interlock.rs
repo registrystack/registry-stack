@@ -32,19 +32,22 @@ use crate::mutation::{install_mutation_schema, MutationError};
 use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
-    catalog::{install_registry_state_schema, verify_managed_catalog, ExpectedManagedCatalog},
+    catalog::{
+        install_registry_state_schema, live_schema_fingerprint, managed_schema_fingerprint,
+        registry_state_shape, verify_managed_catalog, ExpectedManagedCatalog, RegistryStateShape,
+    },
     config::ConnectionTls,
     migration_ledger::{
-        migration_phase_state, reconcile_migration_ledger_metadata_only_constraints,
+        carry_pre_ledger_package_positions, in_flight_activation, migration_phase_state,
         record_applied, record_chunk_progress, record_failed, record_postconditions_complete,
-        record_preconditions_complete, record_started, record_step_complete, statement_checksum,
-        step_progress, verify_resumable, MigrationLedgerEntry, MigrationLedgerStep,
-        MigrationLedgerStepKind,
+        record_preconditions_complete, record_reverted, record_started, record_step_complete,
+        statement_checksum, step_progress, verify_resumable, ActivationPlanKind,
+        MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
     },
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
         is_spatial_candidate_view_sql, map_pattern_database_error, pattern_field_for_constraint,
-        reconcile_compiled_runtime_acl,
+        reconcile_compiled_runtime_acl, retire_spatial_bbox_role, transfer_spatial_candidate_views,
     },
     verify_btree_gist, verify_migration_role, verify_postgis, ConnectionConfig,
     ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
@@ -88,7 +91,17 @@ pub(crate) struct MaintenanceTransition<'a> {
 pub(crate) struct MaintenanceSnapshot {
     pub identity: ExpectedRegistryIdentity,
     pub maintenance_status: String,
-    pub maintenance_target_revision: Option<String>,
+    pub maintenance_target_package_digest: Option<String>,
+}
+
+/// What a release before the activation ledger recorded about the package it
+/// serves, read under the exclusive apply lock before an adoption.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreLedgerState {
+    pub package_id: String,
+    pub database_id: String,
+    /// No activation was left in maintenance.
+    pub ready: bool,
 }
 
 /// How far a reviewed plan durably progressed for one pinned target.
@@ -1529,19 +1542,64 @@ impl DedicatedApplyConnection {
     ) -> Result<()> {
         validate_runtime_acl_reconciliation_request(self.locked)?;
         let transaction = self.client.transaction().await?;
-        install_mutation_schema(
+        reconcile_runtime_acl_in(
             &transaction,
+            registry,
             runtime_role,
             acknowledge_retired_audit_discard,
         )
-        .await
-        .map_err(|error| match error {
-            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
-            _ => PostgresKernelError::Connection,
-        })?;
-        reconcile_compiled_runtime_acl(&transaction, registry, runtime_role).await?;
+        .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Activates a re-apply that changes only the roles the registry serves
+    /// with. The move of each spatial candidate view to the serving bbox
+    /// role, the control-plane and runtime grants, the retirement of the
+    /// runtime role the activation stops serving with and of its bbox role,
+    /// and the activation commit in one transaction, so a refused activation
+    /// leaves the role the ledger still names with every view and grant it
+    /// serves with, and the role it would have served with holds nothing.
+    pub(crate) async fn activate_role_change(
+        &mut self,
+        registry: &CompiledRegistry,
+        current: Option<&ExpectedRegistryIdentity>,
+        target: &ExpectedRegistryIdentity,
+        transition: MaintenanceTransition<'_>,
+        retired_runtime_role: Option<&SqlIdentifier>,
+        acknowledge_retired_audit_discard: bool,
+    ) -> Result<Vec<Value>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        transition.ledger.validate()?;
+        let transaction = self.client.transaction().await?;
+        if let Some(retired) = retired_runtime_role {
+            transfer_spatial_candidate_views(
+                &transaction,
+                registry,
+                retired,
+                transition.runtime_role,
+            )
+            .await?;
+        }
+        install_registry_state_schema(&transaction, transition.runtime_role).await?;
+        install_history_schema_store(&transaction, transition.runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        reconcile_runtime_acl_in(
+            &transaction,
+            registry,
+            transition.runtime_role,
+            acknowledge_retired_audit_discard,
+        )
+        .await?;
+        if let Some(retired) = retired_runtime_role {
+            retire_runtime_role_in(&transaction, retired, transition.migration_role).await?;
+        }
+        let superseded =
+            activate_verified_package_in(&transaction, current, target, transition).await?;
+        transaction.commit().await?;
+        Ok(superseded)
     }
 
     /// Bootstraps only durable state and ledger structures, then records the
@@ -1555,43 +1613,345 @@ impl DedicatedApplyConnection {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         target.validate()?;
         ledger.validate()?;
-        if ledger.source_revision.is_some()
-            || ledger.target_revision != target.package_revision
-            || ledger.package_sequence != target.package_sequence
+        if ledger.plan_kind != ActivationPlanKind::Initial
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
         {
             return Err(PostgresKernelError::Configuration(
                 "initial package and migration ledger differ",
             ));
         }
         let transaction = self.client.transaction().await?;
-        install_registry_state_schema(&transaction, runtime_role).await?;
-        let changed = transaction
+        begin_initial_in(&transaction, target, ledger, runtime_role).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// Runs every check and write [`Self::begin_initial_package`] runs, in
+    /// one transaction it rolls back, so a plan reports what the begin would
+    /// refuse and leaves the database as it was.
+    pub(crate) async fn rehearse_initial_package(
+        &mut self,
+        target: &ExpectedRegistryIdentity,
+        ledger: &MigrationLedgerEntry,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        ledger.validate()?;
+        if ledger.plan_kind != ActivationPlanKind::Initial
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+        {
+            return Err(PostgresKernelError::Configuration(
+                "initial package and migration ledger differ",
+            ));
+        }
+        let transaction = self.client.transaction().await?;
+        let rehearsed = begin_initial_in(&transaction, target, ledger, runtime_role).await;
+        transaction.rollback().await?;
+        rehearsed
+    }
+
+    /// The kernel state shape this database holds.
+    pub(crate) async fn registry_state_shape(&mut self) -> Result<RegistryStateShape> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        Ok(registry_state_shape(&self.client).await?)
+    }
+
+    /// The first way the split-role runtime role could write the activation
+    /// ledger or the registry state, read under the apply lock.
+    pub(crate) async fn runtime_write_authority(
+        &mut self,
+        migration_role: &SqlIdentifier,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<Option<super::RuntimeWriteAuthority>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        super::find_runtime_write_authority(&self.client, migration_role, runtime_role).await
+    }
+
+    /// Whether the split-role runtime role lacks a grant the compiled catalog
+    /// gives it, read under the apply lock.
+    pub(crate) async fn runtime_grants_missing(
+        &mut self,
+        runtime_role: &SqlIdentifier,
+        expected_catalog: &ExpectedManagedCatalog,
+    ) -> Result<bool> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        super::runtime_grants_missing(&self.client, runtime_role, expected_catalog).await
+    }
+
+    /// The state a release before the activation ledger recorded, or `None`
+    /// when this database does not have the pre-ledger shape.
+    pub(crate) async fn pre_ledger_state(&mut self) -> Result<Option<PreLedgerState>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        if registry_state_shape(&self.client).await? != RegistryStateShape::PreLedger {
+            return Ok(None);
+        }
+        let row = self
+            .client
+            .query_opt(
+                "SELECT package_id, database_id,
+                        maintenance_status = 'ready' AND maintenance_target_revision IS NULL
+                   FROM registry_internal.registry_state
+                  WHERE singleton",
+                &[],
+            )
+            .await?
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        Ok(Some(PreLedgerState {
+            package_id: row.try_get(0)?,
+            database_id: row.try_get(1)?,
+            ready: row.try_get(2)?,
+        }))
+    }
+
+    /// Adopts a database a release before the activation ledger kept, as it
+    /// stands, in one transaction: the kernel tables take this release's
+    /// shapes, the live managed catalog must then be the package's catalog,
+    /// and the adoption becomes the first activation the ledger records.
+    ///
+    /// Threat: an adoption could bind a package whose catalog is not the one
+    /// the database runs, or leave the kernel half reshaped. Enforcement: the
+    /// reshape, the fingerprint comparison, the exact catalog verification,
+    /// and the state and ledger rows commit together or not at all, and no
+    /// model DDL runs. The old ledger history is dropped; the claim the
+    /// pre-ledger claim table holds is carried into the state row, every
+    /// ingestion run bound to the active revision is rebound to the adopted
+    /// package, and every open import authority is superseded. A plan runs the
+    /// same transaction to its last check and rolls it back.
+    pub(crate) async fn adopt_pre_ledger_database(
+        &mut self,
+        registry: &CompiledRegistry,
+        target: &ExpectedRegistryIdentity,
+        transition: MaintenanceTransition<'_>,
+        acknowledge_retired_audit_discard: bool,
+        end: TransactionEnd,
+    ) -> Result<Vec<Value>> {
+        let MaintenanceTransition {
+            ledger,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        } = transition;
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        ledger.validate()?;
+        if ledger.plan_kind != ActivationPlanKind::Adopted
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+        {
+            return Err(PostgresKernelError::Configuration(
+                "adopted package and migration ledger differ",
+            ));
+        }
+        let mut transaction = self.client.transaction().await?;
+        if registry_state_shape(&transaction).await? != RegistryStateShape::PreLedger {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let adopted = transaction
             .execute(
-                "INSERT INTO registry_internal.registry_state (
-                     singleton, package_id, environment, instance_id, database_id,
-                     active_package_revision, schema_fingerprint, package_sequence,
-                     maintenance_status, maintenance_target_revision
-                 ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'applying', $5)
-                 ON CONFLICT (singleton) DO NOTHING",
+                "SELECT 1 FROM registry_internal.registry_state
+                  WHERE singleton AND package_id = $1 AND database_id = $2
+                    AND maintenance_status = 'ready'
+                    AND maintenance_target_revision IS NULL
+                  FOR UPDATE",
+                &[&target.package_id, &target.database_id],
+            )
+            .await?;
+        if adopted != 1 {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let claim = if transaction
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_instance_claim') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .try_get::<_, bool>(0)?
+        {
+            transaction
+                .query_opt(
+                    "SELECT system_identifier, database_oid, epoch, claimed_at
+                       FROM registry_internal.registry_instance_claim
+                      WHERE singleton",
+                    &[],
+                )
+                .await?
+        } else {
+            None
+        };
+        // Import authorities name the activation they were opened under. The
+        // revision a pre-ledger authority names has no activation, so each
+        // takes the adoption's, which supersedes every open one below.
+        let authorities_name_a_revision = transaction
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid = to_regclass('registry_internal.registry_import_authorities')
+                        AND attname = 'activation_revision'
+                        AND NOT attisdropped
+                 )",
+                &[],
+            )
+            .await?
+            .try_get::<_, bool>(0)?;
+        if authorities_name_a_revision {
+            transaction
+                .batch_execute(&format!(
+                    "ALTER TABLE registry_internal.registry_import_authorities
+                         DROP CONSTRAINT IF EXISTS registry_import_authorities_activation_revision_check;
+                     ALTER TABLE registry_internal.registry_import_authorities
+                         RENAME COLUMN activation_revision TO activation_id;
+                     ALTER TABLE registry_internal.registry_import_authorities
+                         ALTER COLUMN activation_id TYPE uuid USING '{}'::uuid;",
+                    target.activation_uuid()?.hyphenated(),
+                ))
+                .await?;
+        }
+        // Ingestion runs name the revision and fingerprint they were opened
+        // under. Adoption re-identifies the active revision by the package
+        // digest, so a run bound to it is rebound to the adopted package.
+        let pre_ledger_binding = transaction
+            .query_one(
+                "SELECT active_package_revision, schema_fingerprint
+                   FROM registry_internal.registry_state
+                  WHERE singleton",
+                &[],
+            )
+            .await?;
+        let pre_ledger_revision: String = pre_ledger_binding.try_get(0)?;
+        let pre_ledger_fingerprint: String = pre_ledger_binding.try_get(1)?;
+        // Flips and request proposals recorded before adoption name the
+        // revisions the old ledger ordered; their order outlives that ledger.
+        if transaction
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_migrations') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .try_get::<_, bool>(0)?
+        {
+            carry_pre_ledger_package_positions(&transaction).await?;
+        }
+        transaction
+            .batch_execute(
+                "DROP TABLE IF EXISTS registry_internal.registry_migration_steps;
+                 DROP TABLE IF EXISTS registry_internal.registry_migrations;
+                 DROP TABLE IF EXISTS registry_internal.registry_instance_claim;
+                 DROP TABLE registry_internal.registry_state;",
+            )
+            .await?;
+        install_registry_state_schema(&transaction, runtime_role).await?;
+        install_mutation_schema(
+            &transaction,
+            runtime_role,
+            acknowledge_retired_audit_discard,
+        )
+        .await
+        .map_err(|error| match error {
+            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+            _ => PostgresKernelError::Connection,
+        })?;
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_ingestion_runs
+                    SET package_revision = $3, schema_fingerprint = $4
+                  WHERE package_revision = $1 AND schema_fingerprint = $2",
                 &[
-                    &target.package_id,
-                    &target.environment,
-                    &target.instance_id,
-                    &target.database_id,
-                    &target.package_revision,
+                    &pre_ledger_revision,
+                    &pre_ledger_fingerprint,
+                    &target.package_digest,
                     &target.schema_fingerprint,
-                    &target.package_sequence,
                 ],
             )
             .await?;
-        if changed == 1 {
-            record_started(&transaction, ledger).await?;
-        } else {
-            verify_initial_resumable_state(&transaction, target).await?;
-            verify_resumable(&transaction, ledger).await?;
+        install_history_schema_store(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        install_history_commit_schema(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        // The package's access rules are reconciled over the catalog as it
+        // stands; when that or the exact catalog check refuses, the refusal
+        // names the live fingerprint unless the catalog is the package's.
+        let catalog = transaction.savepoint("breg_adoption_catalog").await?;
+        let verified = match reconcile_compiled_runtime_acl(&catalog, registry, runtime_role).await
+        {
+            Ok(()) => managed_schema_fingerprint(&catalog, runtime_role, expected_catalog).await,
+            Err(error) => Err(error),
+        };
+        match verified {
+            Ok(live) if live == target.schema_fingerprint => catalog.commit().await?,
+            Ok(live) => return Err(PostgresKernelError::AdoptionFingerprintMismatch { live }),
+            Err(error) => {
+                catalog.rollback().await?;
+                let live = live_schema_fingerprint(&transaction, runtime_role).await?;
+                if live != target.schema_fingerprint {
+                    return Err(PostgresKernelError::AdoptionFingerprintMismatch { live });
+                }
+                return Err(error);
+            }
         }
-        transaction.commit().await?;
-        Ok(())
+        let (system_identifier, database_oid, epoch, claimed_at) = match &claim {
+            Some(row) => (
+                row.try_get::<_, Option<i64>>(0)?,
+                Some(row.try_get::<_, u32>(1)?),
+                row.try_get::<_, i64>(2)?,
+                Some(row.try_get::<_, std::time::SystemTime>(3)?),
+            ),
+            None => (None, None, 0, None),
+        };
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_state (
+                     singleton, package_id, database_id, active_package_digest,
+                     active_activation_id, schema_fingerprint, maintenance_status,
+                     system_identifier, database_oid, epoch, claimed_at
+                 ) VALUES (true, $1, $2, $3, $4, $5, 'ready', $6, $7, $8, $9)",
+                &[
+                    &target.package_id,
+                    &target.database_id,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                    &system_identifier,
+                    &database_oid,
+                    &epoch,
+                    &claimed_at,
+                ],
+            )
+            .await?;
+        record_started(&transaction, ledger).await?;
+        record_applied(&transaction, ledger).await?;
+        crate::instance_claim::record_if_unclaimed(&transaction).await?;
+        // The runtime reads the history descriptor of the active activation;
+        // the descriptors of earlier revisions stay as the history they
+        // describe.
+        retain_descriptor(&transaction, registry, &target.activation_id)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        let mut superseded = Vec::new();
+        crate::import_authority::supersede_every_open(
+            &transaction,
+            &mut superseded,
+            &target.activation_id,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        verify_managed_catalog(
+            &transaction,
+            target,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        )
+        .await?;
+        match end {
+            TransactionEnd::Commit => transaction.commit().await?,
+            TransactionEnd::RollBack => transaction.rollback().await?,
+        }
+        Ok(superseded)
     }
 
     /// Reconciles product-owned control tables before a successor enters
@@ -1605,12 +1965,15 @@ impl DedicatedApplyConnection {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         let transaction = self.client.transaction().await?;
         install_registry_state_schema(&transaction, runtime_role).await?;
+        install_history_schema_store(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
         transaction.commit().await?;
         Ok(())
     }
 
     /// Records or resumes a successor only when the durable source identity,
-    /// exact target, ordered checksums, and package sequence all agree.
+    /// exact target, ordered checksums, and activation all agree.
     pub(crate) async fn begin_successor_package(
         &mut self,
         current: &ExpectedRegistryIdentity,
@@ -1622,60 +1985,73 @@ impl DedicatedApplyConnection {
         current.validate()?;
         target.validate()?;
         ledger.validate()?;
-        if ledger.source_revision.as_deref() != Some(current.package_revision.as_str())
-            || ledger.target_revision != target.package_revision
-            || ledger.package_sequence != target.package_sequence
-            || target.package_sequence <= current.package_sequence
+        if ledger.plan_kind != ActivationPlanKind::Successor
+            || ledger.predecessor_package_digest.as_deref() != Some(current.package_digest.as_str())
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+            || target.activation_id == current.activation_id
         {
             return Err(PostgresKernelError::Configuration(
                 "successor package and migration ledger differ",
             ));
         }
         let transaction = self.client.transaction().await?;
-        // Refuse before maintenance or ledger state can start: otherwise a
-        // successor could add new flip rows while an erase lifecycle is using
-        // the current durable flip manifest for crash-resumable correlation.
-        verify_history_coverage_can_begin_successor(&transaction).await?;
-        verify_retained_webhook_delivery_bindings(
+        begin_successor_in(
             &transaction,
+            current,
+            target,
+            ledger,
             event_destination_compatibility_inventory,
         )
         .await?;
-        let changed = transaction
-            .execute(
-                "UPDATE registry_internal.registry_state
-                 SET maintenance_status = 'applying', maintenance_target_revision = $1,
-                     updated_at = transaction_timestamp()
-                 WHERE singleton
-                   AND maintenance_status = 'ready'
-                   AND package_id = $2
-                   AND environment = $3
-                   AND instance_id = $4
-                   AND database_id = $5
-                   AND active_package_revision = $6
-                   AND schema_fingerprint = $7
-                   AND package_sequence = $8",
-                &[
-                    &target.package_revision,
-                    &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
-                    &current.database_id,
-                    &current.package_revision,
-                    &current.schema_fingerprint,
-                    &current.package_sequence,
-                ],
-            )
-            .await?;
-        reconcile_migration_ledger_metadata_only_constraints(&transaction).await?;
-        if changed == 1 {
-            record_started(&transaction, ledger).await?;
-        } else {
-            verify_successor_resumable_state(&transaction, current, target).await?;
-            verify_resumable(&transaction, ledger).await?;
-        }
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Runs every check and write [`Self::reconcile_successor_control_plane`]
+    /// and [`Self::begin_successor_package`] run, in one transaction it rolls
+    /// back, so a plan reports what the begin would refuse and leaves the
+    /// database as it was.
+    pub(crate) async fn rehearse_successor_package(
+        &mut self,
+        current: &ExpectedRegistryIdentity,
+        target: &ExpectedRegistryIdentity,
+        ledger: &MigrationLedgerEntry,
+        event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        current.validate()?;
+        target.validate()?;
+        ledger.validate()?;
+        if ledger.plan_kind != ActivationPlanKind::Successor
+            || ledger.predecessor_package_digest.as_deref() != Some(current.package_digest.as_str())
+            || ledger.package_digest != target.package_digest
+            || ledger.activation_id != target.activation_uuid()?
+            || target.activation_id == current.activation_id
+        {
+            return Err(PostgresKernelError::Configuration(
+                "successor package and migration ledger differ",
+            ));
+        }
+        let transaction = self.client.transaction().await?;
+        let rehearsed = async {
+            install_registry_state_schema(&transaction, runtime_role).await?;
+            install_history_schema_store(&transaction, runtime_role)
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            begin_successor_in(
+                &transaction,
+                current,
+                target,
+                ledger,
+                event_destination_compatibility_inventory,
+            )
+            .await
+        }
+        .await;
+        transaction.rollback().await?;
+        rehearsed
     }
 
     /// Records maintenance in its own committed transaction while retaining
@@ -1684,38 +2060,34 @@ impl DedicatedApplyConnection {
     pub async fn mark_applying(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        target_revision: &str,
+        target_package_digest: &str,
     ) -> Result<()> {
         current.validate()?;
-        if target_revision.is_empty() || target_revision == current.package_revision {
+        if target_package_digest.is_empty() {
             return Err(PostgresKernelError::Configuration(
-                "apply target revision must be non-empty and different",
+                "apply target package digest must be non-empty",
             ));
         }
         let transaction = self.client.transaction().await?;
         let changed = transaction
             .execute(
                 "UPDATE registry_internal.registry_state
-                 SET maintenance_status = 'applying', maintenance_target_revision = $1,
+                 SET maintenance_status = 'applying', maintenance_target_package_digest = $1,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND maintenance_status = 'ready'
                    AND package_id = $2
-                   AND environment = $3
-                   AND instance_id = $4
-                   AND database_id = $5
-                   AND active_package_revision = $6
-                   AND schema_fingerprint = $7
-                   AND package_sequence = $8",
+                   AND database_id = $3
+                   AND active_package_digest = $4
+                   AND active_activation_id = $5
+                   AND schema_fingerprint = $6",
                 &[
-                    &target_revision,
+                    &target_package_digest,
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
                 ],
             )
             .await?;
@@ -1734,9 +2106,9 @@ impl DedicatedApplyConnection {
     pub(crate) async fn resume_failed(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        target_revision: &str,
+        target_package_digest: &str,
     ) -> Result<()> {
-        validate_failed_resume_request(self.locked, current, target_revision)?;
+        validate_failed_resume_request(self.locked, current, target_package_digest)?;
         let transaction = self.client.transaction().await?;
         let accepted = transaction
             .query_opt(
@@ -1744,24 +2116,20 @@ impl DedicatedApplyConnection {
                  FROM registry_internal.registry_state
                  WHERE singleton
                    AND maintenance_status = 'failed'
-                   AND maintenance_target_revision = $1
+                   AND maintenance_target_package_digest = $1
                    AND package_id = $2
-                   AND environment = $3
-                   AND instance_id = $4
-                   AND database_id = $5
-                   AND active_package_revision = $6
-                   AND schema_fingerprint = $7
-                   AND package_sequence = $8
+                   AND database_id = $3
+                   AND active_package_digest = $4
+                   AND active_activation_id = $5
+                   AND schema_fingerprint = $6
                  FOR UPDATE",
                 &[
-                    &target_revision,
+                    &target_package_digest,
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
                 ],
             )
             .await?;
@@ -1790,109 +2158,25 @@ impl DedicatedApplyConnection {
     }
 
     /// Atomically records the immutable applied-ledger outcome and makes the
-    /// exact signed package identity ready only after closed catalog, RLS, ACL,
-    /// ownership, and schema-fingerprint verification succeeds.
+    /// exact package digest and its activation ready only after closed
+    /// catalog, RLS, ACL, ownership, and schema-fingerprint verification
+    /// succeeds. Answers the supersession record of every import authority
+    /// the activation retired, which the caller appends to the audit once
+    /// the activation has committed.
     pub(crate) async fn activate_verified_package(
         &mut self,
         current: Option<&ExpectedRegistryIdentity>,
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
-    ) -> Result<()> {
-        let MaintenanceTransition {
-            ledger,
-            expected_catalog,
-            migration_role,
-            runtime_role,
-        } = transition;
+    ) -> Result<Vec<Value>> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         target.validate()?;
-        ledger.validate()?;
+        transition.ledger.validate()?;
         let transaction = self.client.transaction().await?;
-        verify_managed_catalog(
-            &transaction,
-            target,
-            expected_catalog,
-            migration_role,
-            runtime_role,
-        )
-        .await?;
-        // A field-encryption erase lifecycle marks coverage incomplete before
-        // releasing its first lock transaction. Refusing successor activation
-        // until rebaseline completes freezes the durable flip manifest used to
-        // correlate crash-resumable audit counts.
-        if current.is_some() {
-            verify_complete_history_coverage(&transaction).await?;
-        }
-        record_applied(&transaction, ledger).await?;
-        let changed = if let Some(current) = current {
-            current.validate()?;
-            transaction
-                .execute(
-                    "UPDATE registry_internal.registry_state
-                     SET active_package_revision = $1,
-                         schema_fingerprint = $2,
-                         package_sequence = $3,
-                         maintenance_status = 'ready',
-                         maintenance_target_revision = NULL,
-                         updated_at = transaction_timestamp()
-                     WHERE singleton
-                       AND package_id = $4
-                       AND environment = $5
-                       AND instance_id = $6
-                       AND database_id = $7
-                       AND active_package_revision = $8
-                       AND schema_fingerprint = $9
-                       AND package_sequence = $10
-                       AND maintenance_status IN ('applying', 'failed')
-                       AND maintenance_target_revision = $1",
-                    &[
-                        &target.package_revision,
-                        &target.schema_fingerprint,
-                        &target.package_sequence,
-                        &target.package_id,
-                        &target.environment,
-                        &target.instance_id,
-                        &target.database_id,
-                        &current.package_revision,
-                        &current.schema_fingerprint,
-                        &current.package_sequence,
-                    ],
-                )
-                .await?
-        } else {
-            transaction
-                .execute(
-                    "UPDATE registry_internal.registry_state
-                     SET maintenance_status = 'ready',
-                         maintenance_target_revision = NULL,
-                         updated_at = transaction_timestamp()
-                     WHERE singleton
-                       AND package_id = $1
-                       AND environment = $2
-                       AND instance_id = $3
-                       AND database_id = $4
-                       AND active_package_revision = $5
-                       AND schema_fingerprint = $6
-                       AND package_sequence = $7
-                       AND maintenance_status IN ('applying', 'failed')
-                       AND maintenance_target_revision = $5",
-                    &[
-                        &target.package_id,
-                        &target.environment,
-                        &target.instance_id,
-                        &target.database_id,
-                        &target.package_revision,
-                        &target.schema_fingerprint,
-                        &target.package_sequence,
-                    ],
-                )
-                .await?
-        };
-        if changed != 1 {
-            return Err(PostgresKernelError::RegistryUnavailable);
-        }
+        let superseded =
+            activate_verified_package_in(&transaction, current, target, transition).await?;
         transaction.commit().await?;
-        Ok(())
+        Ok(superseded)
     }
 
     /// Activates the target only after exact package-catalog verification in
@@ -1919,27 +2203,23 @@ impl DedicatedApplyConnection {
         let changed = transaction
             .execute(
                 "UPDATE registry_internal.registry_state
-                 SET active_package_revision = $1,
-                     schema_fingerprint = $2,
-                     package_sequence = $3,
+                 SET active_package_digest = $1,
+                     active_activation_id = $2,
+                     schema_fingerprint = $3,
                      maintenance_status = 'ready',
-                     maintenance_target_revision = NULL,
+                     maintenance_target_package_digest = NULL,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND package_id = $4
-                   AND environment = $5
-                   AND instance_id = $6
-                   AND database_id = $7
+                   AND database_id = $5
                    AND maintenance_status IN ('applying', 'failed')
-                   AND maintenance_target_revision = $1
-                   AND package_sequence < $3",
+                   AND maintenance_target_package_digest = $1
+                   AND active_activation_id <> $2",
                 &[
-                    &target.package_revision,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
                     &target.schema_fingerprint,
-                    &target.package_sequence,
                     &target.package_id,
-                    &target.environment,
-                    &target.instance_id,
                     &target.database_id,
                 ],
             )
@@ -1988,17 +2268,13 @@ impl DedicatedApplyConnection {
                  SET maintenance_status = 'failed', updated_at = transaction_timestamp()
                  WHERE singleton
                    AND package_id = $1
-                   AND environment = $2
-                   AND instance_id = $3
-                   AND database_id = $4
+                   AND database_id = $2
                    AND maintenance_status IN ('applying', 'failed')
-                   AND maintenance_target_revision = $5",
+                   AND maintenance_target_package_digest = $3",
                 &[
                     &target.package_id,
-                    &target.environment,
-                    &target.instance_id,
                     &target.database_id,
-                    &target.package_revision,
+                    &target.package_digest,
                 ],
             )
             .await?;
@@ -2010,6 +2286,58 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
+    /// The activation a retry of `package_digest` resumes: the open
+    /// activation the ledger records for it, if any. A database with no
+    /// ledger yet has none.
+    pub(crate) async fn in_flight_activation(
+        &mut self,
+        package_digest: &str,
+    ) -> Result<Option<super::migration_ledger::InFlightActivation>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let ledger_exists: bool = self
+            .client
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_migrations') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .try_get(0)?;
+        if !ledger_exists {
+            return Ok(None);
+        }
+        in_flight_activation(&self.client, package_digest).await
+    }
+
+    /// The role mode and runtime role the ledger records for the active
+    /// activation. A database whose active activation has no applied ledger
+    /// row answers none.
+    pub(crate) async fn active_activation_roles(&mut self) -> Result<Option<(String, String)>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let row = self
+            .client
+            .query_opt(
+                "SELECT migration.role_mode, migration.runtime_role
+                 FROM registry_internal.registry_state AS state
+                 JOIN registry_internal.registry_migrations AS migration
+                   ON migration.activation_id = state.active_activation_id
+                 WHERE state.singleton AND migration.outcome = 'applied'",
+                &[],
+            )
+            .await?;
+        Ok(row.map(|row| (row.get(0), row.get(1))))
+    }
+
+    /// Whether a role of this name exists. A runtime role the ledger records
+    /// can be dropped or renamed by an administrator after its activation.
+    pub(crate) async fn role_exists(&mut self, role: &SqlIdentifier) -> Result<bool> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        Ok(self
+            .client
+            .query_one("SELECT to_regrole($1) IS NOT NULL", &[&role.as_str()])
+            .await?
+            .try_get(0)?)
+    }
+
     /// Reads the durable maintenance state while this session holds the
     /// exclusive apply lock, so a reconciling operator can be told what the
     /// database actually records rather than inferring it from a failure.
@@ -2018,9 +2346,9 @@ impl DedicatedApplyConnection {
         let row = self
             .client
             .query_opt(
-                "SELECT package_id, environment, instance_id, database_id,
-                        active_package_revision, schema_fingerprint, package_sequence,
-                        maintenance_status, maintenance_target_revision
+                "SELECT package_id, database_id, active_package_digest,
+                        active_activation_id::text, schema_fingerprint,
+                        maintenance_status, maintenance_target_package_digest
                  FROM registry_internal.registry_state
                  WHERE singleton",
                 &[],
@@ -2042,15 +2370,13 @@ impl DedicatedApplyConnection {
         Ok(MaintenanceSnapshot {
             identity: ExpectedRegistryIdentity {
                 package_id: row.try_get(0)?,
-                environment: row.try_get(1)?,
-                instance_id: row.try_get(2)?,
-                database_id: row.try_get(3)?,
-                package_revision: row.try_get(4)?,
-                schema_fingerprint: row.try_get(5)?,
-                package_sequence: row.try_get(6)?,
+                database_id: row.try_get(1)?,
+                package_digest: row.try_get(2)?,
+                activation_id: row.try_get(3)?,
+                schema_fingerprint: row.try_get(4)?,
             },
-            maintenance_status: row.try_get(7)?,
-            maintenance_target_revision: row.try_get(8)?,
+            maintenance_status: row.try_get(5)?,
+            maintenance_target_package_digest: row.try_get(6)?,
         })
     }
 
@@ -2117,12 +2443,13 @@ impl DedicatedApplyConnection {
     /// Abandons a pinned maintenance target, after proving in the same
     /// transaction that the live managed catalog is still exactly the active
     /// package's. The active identity is left unchanged and the target's
-    /// ledger row stays durably failed, so an abandoned revision is never
-    /// activated later under the same identity.
+    /// ledger row is closed as reverted, so a later apply of the same package
+    /// is a separate activation with its own id and never resumes the
+    /// abandoned one.
     pub(crate) async fn revert_failed_package(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        target_revision: &str,
+        target_package_digest: &str,
         transition: MaintenanceTransition<'_>,
     ) -> Result<()> {
         let MaintenanceTransition {
@@ -2132,10 +2459,10 @@ impl DedicatedApplyConnection {
             runtime_role,
         } = transition;
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        validate_failed_resume_request(self.locked, current, target_revision)?;
+        validate_failed_resume_request(self.locked, current, target_package_digest)?;
         ledger.validate()?;
-        if ledger.target_revision != target_revision
-            || ledger.source_revision.as_deref() != Some(current.package_revision.as_str())
+        if ledger.package_digest != target_package_digest
+            || ledger.predecessor_package_digest.as_deref() != Some(current.package_digest.as_str())
         {
             return Err(PostgresKernelError::Configuration(
                 "abandoned target and migration ledger differ",
@@ -2154,34 +2481,30 @@ impl DedicatedApplyConnection {
             .execute(
                 "UPDATE registry_internal.registry_state
                  SET maintenance_status = 'ready',
-                     maintenance_target_revision = NULL,
+                     maintenance_target_package_digest = NULL,
                      updated_at = transaction_timestamp()
                  WHERE singleton
                    AND package_id = $1
-                   AND environment = $2
-                   AND instance_id = $3
-                   AND database_id = $4
-                   AND active_package_revision = $5
-                   AND schema_fingerprint = $6
-                   AND package_sequence = $7
+                   AND database_id = $2
+                   AND active_package_digest = $3
+                   AND active_activation_id = $4
+                   AND schema_fingerprint = $5
                    AND maintenance_status IN ('applying', 'failed')
-                   AND maintenance_target_revision = $8",
+                   AND maintenance_target_package_digest = $6",
                 &[
                     &current.package_id,
-                    &current.environment,
-                    &current.instance_id,
                     &current.database_id,
-                    &current.package_revision,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
                     &current.schema_fingerprint,
-                    &current.package_sequence,
-                    &target_revision,
+                    &target_package_digest,
                 ],
             )
             .await?;
         if changed != 1 {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
-        record_failed(&transaction, ledger).await?;
+        record_reverted(&transaction, ledger).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -2203,6 +2526,194 @@ impl DedicatedApplyConnection {
     }
 }
 
+/// The activation transaction's work: closed catalog verification, the
+/// applied ledger outcome, and the registry state transition. Answers the
+/// supersession record of every import authority the activation retired.
+async fn activate_verified_package_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    current: Option<&ExpectedRegistryIdentity>,
+    target: &ExpectedRegistryIdentity,
+    transition: MaintenanceTransition<'_>,
+) -> Result<Vec<Value>> {
+    let MaintenanceTransition {
+        ledger,
+        expected_catalog,
+        migration_role,
+        runtime_role,
+    } = transition;
+    verify_managed_catalog(
+        transaction,
+        target,
+        expected_catalog,
+        migration_role,
+        runtime_role,
+    )
+    .await?;
+    // A field-encryption erase lifecycle marks coverage incomplete before
+    // releasing its first lock transaction. Refusing successor activation
+    // until rebaseline completes freezes the durable flip manifest used to
+    // correlate crash-resumable audit counts.
+    if current.is_some() {
+        verify_complete_history_coverage(transaction).await?;
+    }
+    record_applied(transaction, ledger).await?;
+    // A registry that has never recorded a claim, as one upgraded from a
+    // release before the claim, is claimed by the activation that runs in
+    // it. A recorded claim is kept, so a restored copy stays a copy until
+    // an operator adopts it.
+    crate::instance_claim::record_if_unclaimed(transaction).await?;
+    let changed = if let Some(current) = current {
+        current.validate()?;
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_state
+                 SET active_package_digest = $1,
+                     active_activation_id = $2,
+                     schema_fingerprint = $3,
+                     maintenance_status = 'ready',
+                     maintenance_target_package_digest = NULL,
+                     updated_at = transaction_timestamp()
+                 WHERE singleton
+                   AND package_id = $4
+                   AND database_id = $5
+                   AND active_package_digest = $6
+                   AND active_activation_id = $7
+                   AND schema_fingerprint = $8
+                   AND maintenance_status IN ('applying', 'failed')
+                   AND maintenance_target_package_digest = $1",
+                &[
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                    &target.package_id,
+                    &target.database_id,
+                    &current.package_digest,
+                    &current.activation_uuid()?,
+                    &current.schema_fingerprint,
+                ],
+            )
+            .await?
+    } else {
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_state
+                 SET maintenance_status = 'ready',
+                     maintenance_target_package_digest = NULL,
+                     updated_at = transaction_timestamp()
+                 WHERE singleton
+                   AND package_id = $1
+                   AND database_id = $2
+                   AND active_package_digest = $3
+                   AND active_activation_id = $4
+                   AND schema_fingerprint = $5
+                   AND maintenance_status IN ('applying', 'failed')
+                   AND maintenance_target_package_digest = $3",
+                &[
+                    &target.package_id,
+                    &target.database_id,
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                ],
+            )
+            .await?
+    };
+    if changed != 1 {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    // A model change retires every grant an operator opened under the
+    // activation it replaces, so the transaction that makes the target
+    // active also supersedes every open import authority.
+    let mut superseded = Vec::new();
+    crate::import_authority::supersede_every_open(
+        transaction,
+        &mut superseded,
+        &target.activation_id,
+    )
+    .await
+    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    Ok(superseded)
+}
+
+/// Installs the mutation schema and the compiled runtime grants inside the
+/// caller's transaction.
+async fn reconcile_runtime_acl_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    registry: &CompiledRegistry,
+    runtime_role: &SqlIdentifier,
+    acknowledge_retired_audit_discard: bool,
+) -> Result<()> {
+    install_mutation_schema(transaction, runtime_role, acknowledge_retired_audit_discard)
+        .await
+        .map_err(|error| match error {
+            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+            _ => PostgresKernelError::Connection,
+        })?;
+    reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await
+}
+
+/// Retires the runtime role an activation stops serving with, so the role
+/// a registry stops serving with keeps no access it held as the runtime.
+/// A separate runtime role loses every privilege on the managed schemas
+/// and their tables, sequences, and functions; a role that no longer
+/// exists holds nothing to revoke. When the retired runtime role is the
+/// migration role, it keeps its ownership and loses only the column
+/// grants it held as the runtime, which the serving runtime role now holds.
+/// The spatial bbox role of the retired runtime role, which no longer owns a
+/// candidate view once the activation moved them, loses every privilege on
+/// the managed schemas either way.
+async fn retire_runtime_role_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    retired: &SqlIdentifier,
+    migration_role: &SqlIdentifier,
+) -> Result<()> {
+    if retired == migration_role {
+        let revokes = transaction
+            .query(
+                "SELECT DISTINCT format(
+                     'REVOKE ALL (%I) ON TABLE %I.%I FROM %I',
+                     attribute.attname, namespace.nspname, class.relname,
+                     pg_catalog.pg_get_userbyid(class.relowner)
+                 )
+                 FROM pg_catalog.pg_class AS class
+                 JOIN pg_catalog.pg_namespace AS namespace
+                   ON namespace.oid = class.relnamespace
+                 JOIN pg_catalog.pg_attribute AS attribute
+                   ON attribute.attrelid = class.oid
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+                 CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+                 WHERE namespace.nspname = ANY($1::text[])
+                   AND acl.grantee = class.relowner",
+                &[&super::catalog::MANAGED_SCHEMAS],
+            )
+            .await?;
+        for revoke in revokes {
+            let revoke: String = revoke.try_get(0)?;
+            transaction.batch_execute(&revoke).await?;
+        }
+    } else {
+        let exists: bool = transaction
+            .query_one("SELECT to_regrole($1) IS NOT NULL", &[&retired.as_str()])
+            .await?
+            .try_get(0)?;
+        if exists {
+            let schemas = super::catalog::MANAGED_SCHEMAS.join(", ");
+            let role = retired.quoted();
+            transaction
+                .batch_execute(&format!(
+                    "REVOKE ALL ON ALL TABLES IN SCHEMA {schemas} FROM {role};
+                     REVOKE ALL ON ALL SEQUENCES IN SCHEMA {schemas} FROM {role};
+                     REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schemas} FROM {role};
+                     REVOKE ALL ON SCHEMA {schemas} FROM {role};"
+                ))
+                .await?;
+        }
+    }
+    retire_spatial_bbox_role(transaction, retired, super::catalog::MANAGED_SCHEMAS).await?;
+    Ok(())
+}
+
 /// Refuse a successor unless history coverage is complete or narrowed only by
 /// a recorded standalone erasure. An absent commit head is refused here; only
 /// the begin check admits it.
@@ -2214,6 +2725,97 @@ async fn verify_complete_history_coverage(
         .unwrap_or(false)
     {
         return Err(PostgresKernelError::HistoryCoverageIncomplete);
+    }
+    Ok(())
+}
+
+/// How a transaction that carries an activation's checks ends: committed by
+/// an apply, or rolled back by a plan once every check has passed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransactionEnd {
+    Commit,
+    RollBack,
+}
+
+/// The begin of an initial activation, inside the caller's transaction.
+async fn begin_initial_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    install_registry_state_schema(transaction, runtime_role).await?;
+    let changed = transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_state (
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint,
+                 maintenance_status, maintenance_target_package_digest
+             ) VALUES (true, $1, $2, $3, $4, $5, 'applying', $3)
+             ON CONFLICT (singleton) DO NOTHING",
+            &[
+                &target.package_id,
+                &target.database_id,
+                &target.package_digest,
+                &target.activation_uuid()?,
+                &target.schema_fingerprint,
+            ],
+        )
+        .await?;
+    if changed == 1 {
+        crate::instance_claim::record_if_unclaimed(transaction).await?;
+        record_started(transaction, ledger).await?;
+    } else {
+        verify_initial_resumable_state(transaction, target).await?;
+        verify_resumable(transaction, ledger).await?;
+    }
+    Ok(())
+}
+
+/// The begin of a successor activation, inside the caller's transaction.
+async fn begin_successor_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    current: &ExpectedRegistryIdentity,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
+) -> Result<()> {
+    // Refuse before maintenance or ledger state can start: otherwise a
+    // successor could add new flip rows while an erase lifecycle is using
+    // the current durable flip manifest for crash-resumable correlation.
+    verify_history_coverage_can_begin_successor(transaction).await?;
+    verify_retained_webhook_delivery_bindings(
+        transaction,
+        event_destination_compatibility_inventory,
+    )
+    .await?;
+    let changed = transaction
+        .execute(
+            "UPDATE registry_internal.registry_state
+             SET maintenance_status = 'applying', maintenance_target_package_digest = $1,
+                 updated_at = transaction_timestamp()
+             WHERE singleton
+               AND maintenance_status = 'ready'
+               AND package_id = $2
+               AND database_id = $3
+               AND active_package_digest = $4
+               AND active_activation_id = $5
+               AND schema_fingerprint = $6",
+            &[
+                &target.package_digest,
+                &current.package_id,
+                &current.database_id,
+                &current.package_digest,
+                &current.activation_uuid()?,
+                &current.schema_fingerprint,
+            ],
+        )
+        .await?;
+    if changed == 1 {
+        record_started(transaction, ledger).await?;
+    } else {
+        verify_successor_resumable_state(transaction, current, target).await?;
+        verify_resumable(transaction, ledger).await?;
     }
     Ok(())
 }
@@ -3288,23 +3890,19 @@ async fn verify_initial_resumable_state(
              FROM registry_internal.registry_state
              WHERE singleton
                AND maintenance_status IN ('applying', 'failed')
-               AND maintenance_target_revision = $1
+               AND maintenance_target_package_digest = $1
                AND package_id = $2
-               AND environment = $3
-               AND instance_id = $4
-               AND database_id = $5
-               AND active_package_revision = $1
-               AND schema_fingerprint = $6
-               AND package_sequence = $7
+               AND database_id = $3
+               AND active_package_digest = $1
+               AND active_activation_id = $4
+               AND schema_fingerprint = $5
              FOR UPDATE",
             &[
-                &target.package_revision,
+                &target.package_digest,
                 &target.package_id,
-                &target.environment,
-                &target.instance_id,
                 &target.database_id,
+                &target.activation_uuid()?,
                 &target.schema_fingerprint,
-                &target.package_sequence,
             ],
         )
         .await?;
@@ -3325,24 +3923,20 @@ async fn verify_successor_resumable_state(
              FROM registry_internal.registry_state
              WHERE singleton
                AND maintenance_status IN ('applying', 'failed')
-               AND maintenance_target_revision = $1
+               AND maintenance_target_package_digest = $1
                AND package_id = $2
-               AND environment = $3
-               AND instance_id = $4
-               AND database_id = $5
-               AND active_package_revision = $6
-               AND schema_fingerprint = $7
-               AND package_sequence = $8
+               AND database_id = $3
+               AND active_package_digest = $4
+               AND active_activation_id = $5
+               AND schema_fingerprint = $6
              FOR UPDATE",
             &[
-                &target.package_revision,
+                &target.package_digest,
                 &current.package_id,
-                &current.environment,
-                &current.instance_id,
                 &current.database_id,
-                &current.package_revision,
+                &current.package_digest,
+                &current.activation_uuid()?,
                 &current.schema_fingerprint,
-                &current.package_sequence,
             ],
         )
         .await?;
@@ -3359,13 +3953,13 @@ fn validate_runtime_acl_reconciliation_request(lock_held: bool) -> Result<()> {
 fn validate_failed_resume_request(
     lock_held: bool,
     current: &ExpectedRegistryIdentity,
-    target_revision: &str,
+    target_package_digest: &str,
 ) -> Result<()> {
     ensure_apply_lock(lock_held)?;
     current.validate()?;
-    if target_revision.is_empty() || target_revision == current.package_revision {
+    if target_package_digest.is_empty() {
         return Err(PostgresKernelError::Configuration(
-            "resume target revision must be non-empty and different",
+            "resume target package digest must be non-empty",
         ));
     }
     Ok(())
@@ -3405,6 +3999,151 @@ impl Drop for DedicatedApplyConnection {
             self.connection_task.abort();
         }
     }
+}
+
+/// The activation state the database records, as `bregctl status` reports
+/// it: the singleton state row and every ledger entry in apply order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecordedActivationStatus {
+    pub snapshot: MaintenanceSnapshot,
+    pub ledger: Vec<RecordedLedgerEntry>,
+}
+
+/// One activation ledger entry, without its checksums, artifact bindings,
+/// backup references, or operator reference hash.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecordedLedgerEntry {
+    pub activation_id: String,
+    pub apply_order: i64,
+    pub package_digest: String,
+    pub predecessor_package_digest: Option<String>,
+    pub registry_revision: String,
+    pub plan_kind: String,
+    pub migration_kind: String,
+    pub outcome: String,
+    pub role_mode: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub applied_at: Option<String>,
+}
+
+/// The outcome of reading the activation state without the apply lock.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ActivationStatusRead {
+    /// No package was ever applied.
+    Uninitialized,
+    /// A release before the activation ledger installed the database.
+    PreLedger,
+    Recorded(RecordedActivationStatus),
+}
+
+/// Reads the activation state as the migration role in one read-only
+/// repeatable-read transaction. It takes no apply lock, so it answers while
+/// an apply holds that lock, and it writes nothing.
+pub(crate) async fn read_activation_status(
+    config: &ConnectionConfig,
+    migration_role: &SqlIdentifier,
+    statement_timeout: Duration,
+) -> Result<ActivationStatusRead> {
+    validate_timeout(
+        statement_timeout,
+        MAX_VERIFIED_DDL_STATEMENT_TIMEOUT,
+        "status statement timeout must be between 1 millisecond and 1 hour",
+    )?;
+    let (mut client, connection_task) = connect_dedicated(config).await?;
+    let result = async {
+        verify_migration_role(&client, migration_role).await?;
+        client
+            .execute(
+                "SELECT pg_catalog.set_config('search_path',
+                         'pg_catalog, registry_internal, registry_data, pg_temp', false)",
+                &[],
+            )
+            .await?;
+        set_session_timeout(&client, "statement_timeout", statement_timeout).await?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()
+            .await?;
+        let status = read_activation_status_in(&transaction).await?;
+        transaction.rollback().await?;
+        Ok(status)
+    }
+    .await;
+    connection_task.abort();
+    result
+}
+
+async fn read_activation_status_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<ActivationStatusRead> {
+    match registry_state_shape(transaction).await? {
+        RegistryStateShape::Absent => return Ok(ActivationStatusRead::Uninitialized),
+        RegistryStateShape::PreLedger => return Ok(ActivationStatusRead::PreLedger),
+        RegistryStateShape::Ledger => {}
+    }
+    let Some(row) = transaction
+        .query_opt(
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint,
+                    maintenance_status, maintenance_target_package_digest
+             FROM registry_internal.registry_state
+             WHERE singleton",
+            &[],
+        )
+        .await?
+    else {
+        return Ok(ActivationStatusRead::Uninitialized);
+    };
+    let snapshot = MaintenanceSnapshot {
+        identity: ExpectedRegistryIdentity {
+            package_id: row.try_get(0)?,
+            database_id: row.try_get(1)?,
+            package_digest: row.try_get(2)?,
+            activation_id: row.try_get(3)?,
+            schema_fingerprint: row.try_get(4)?,
+        },
+        maintenance_status: row.try_get(5)?,
+        maintenance_target_package_digest: row.try_get(6)?,
+    };
+    let rows = transaction
+        .query(
+            "SELECT activation_id::text, apply_order, package_digest,
+                    predecessor_package_digest, registry_revision, plan_kind,
+                    migration_kind, outcome, role_mode,
+                    to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+             FROM registry_internal.registry_migrations
+             ORDER BY apply_order",
+            &[],
+        )
+        .await?;
+    let ledger = rows
+        .iter()
+        .map(|row| {
+            Ok(RecordedLedgerEntry {
+                activation_id: row.try_get(0)?,
+                apply_order: row.try_get(1)?,
+                package_digest: row.try_get(2)?,
+                predecessor_package_digest: row.try_get(3)?,
+                registry_revision: row.try_get(4)?,
+                plan_kind: row.try_get(5)?,
+                migration_kind: row.try_get(6)?,
+                outcome: row.try_get(7)?,
+                role_mode: row.try_get(8)?,
+                started_at: row.try_get(9)?,
+                completed_at: row.try_get(10)?,
+                applied_at: row.try_get(11)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ActivationStatusRead::Recorded(RecordedActivationStatus {
+        snapshot,
+        ledger,
+    }))
 }
 
 async fn connect_dedicated(config: &ConnectionConfig) -> Result<(Client, JoinHandle<()>)> {
@@ -3646,14 +4385,12 @@ mod tests {
         let database = InterlockTestDatabase::create().await;
         let current = ExpectedRegistryIdentity {
             package_id: "package-under-test".to_owned(),
-            environment: "test".to_owned(),
-            instance_id: "instance-under-test".to_owned(),
             database_id: "database-under-test".to_owned(),
-            package_revision: "revision-current".to_owned(),
+            package_digest: format!("sha256:{}", "c".repeat(64)),
+            activation_id: "7b0c2b1e-4a1f-4c55-9f0e-2d5f1c1a9b01".to_owned(),
             schema_fingerprint: "fingerprint-current".to_owned(),
-            package_sequence: 7,
         };
-        let target_revision = "revision-target";
+        let target_revision = &format!("sha256:{}", "d".repeat(64));
         database
             .install_failed_state(&current, target_revision)
             .await;
@@ -3674,7 +4411,7 @@ mod tests {
             Err(PostgresKernelError::RegistryUnavailable)
         ));
         let mut wrong_current = current.clone();
-        wrong_current.package_sequence += 1;
+        wrong_current.activation_id = "7b0c2b1e-4a1f-4c55-9f0e-2d5f1c1a9b02".to_owned();
         assert!(matches!(
             apply.resume_failed(&wrong_current, target_revision).await,
             Err(PostgresKernelError::RegistryUnavailable)
@@ -3847,15 +4584,13 @@ mod tests {
                 .batch_execute(
                     "CREATE TABLE registry_internal.registry_state (
                          singleton boolean PRIMARY KEY CHECK (singleton),
-                         environment text NOT NULL,
                          package_id text NOT NULL,
-                         instance_id text NOT NULL,
                          database_id text NOT NULL,
-                         active_package_revision text NOT NULL,
+                         active_package_digest text NOT NULL,
+                         active_activation_id uuid NOT NULL,
                          schema_fingerprint text NOT NULL,
-                         package_sequence bigint NOT NULL,
                          maintenance_status text NOT NULL,
-                         maintenance_target_revision text,
+                         maintenance_target_package_digest text,
                          updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
                      );",
                 )
@@ -3864,18 +4599,18 @@ mod tests {
             migration
                 .execute(
                     "INSERT INTO registry_internal.registry_state (
-                         singleton, package_id, environment, instance_id, database_id,
-                         active_package_revision, schema_fingerprint, package_sequence,
-                         maintenance_status, maintenance_target_revision
-                     ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'failed', $8)",
+                         singleton, package_id, database_id, active_package_digest,
+                         active_activation_id, schema_fingerprint,
+                         maintenance_status, maintenance_target_package_digest
+                     ) VALUES (true, $1, $2, $3, $4, $5, 'failed', $6)",
                     &[
                         &current.package_id,
-                        &current.environment,
-                        &current.instance_id,
                         &current.database_id,
-                        &current.package_revision,
+                        &current.package_digest,
+                        &current
+                            .activation_uuid()
+                            .expect("the fixture activation id is a canonical UUID"),
                         &current.schema_fingerprint,
-                        &current.package_sequence,
                         &target_revision,
                     ],
                 )
@@ -3893,16 +4628,14 @@ mod tests {
             String,
             String,
             String,
-            i64,
-            String,
             Option<String>,
         ) {
             let row = self
                 .admin
                 .query_one(
-                    "SELECT package_id, environment, instance_id, database_id,
-                            active_package_revision, schema_fingerprint, package_sequence,
-                            maintenance_status, maintenance_target_revision
+                    "SELECT package_id, database_id, active_package_digest,
+                            active_activation_id::text, schema_fingerprint,
+                            maintenance_status, maintenance_target_package_digest
                      FROM registry_internal.registry_state
                      WHERE singleton",
                     &[],
@@ -3917,8 +4650,6 @@ mod tests {
                 row.get(4),
                 row.get(5),
                 row.get(6),
-                row.get(7),
-                row.get(8),
             )
         }
 

@@ -201,7 +201,7 @@ impl PreparedService {
                     .expect("subject binding succeeds"),
             })
             .collect();
-        let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+        let evidence_id = format!("urn:ulid:{}", ulid::Ulid::generate());
         let issued_at = Utc::now();
         let evidence = self
             .kernel

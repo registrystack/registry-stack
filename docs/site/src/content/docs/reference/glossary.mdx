@@ -258,10 +258,10 @@ Product names are always in English, including on future translated pages.
   <dd>One declared capability on a Registry Relay resource, and the unit an access profile is attached to. A resource declares at most one `list` and one `read`, plus any number of named `lookup` and `search` operations. Each operation compiles to its own route and its own entry in the deployment's generated OpenAPI description, and each carries its own stable operation identifier in audit records. An undeclared operation has no route: a resource is reachable only through what its contract names.</dd>
 
   <dt id="package">package</dt>
-  <dd>The compiled and verified form of one Base Registry Engine <a href="#registry-project">registry project</a>: `bregctl` builds it, `breg` serves it, and a production package carries detached signatures from keys the deployment's <a href="#trust-anchor">trust anchor</a> names. `breg` verifies the active package at startup and answers only the routes that package compiled. Registry Relay's counterpart is the <a href="#sealed-package">sealed package</a>, which `relayctl` builds and which is unsigned.</dd>
+  <dd>The compiled and verified form of one Base Registry Engine <a href="#registry-project">registry project</a>: `bregctl` builds it and `breg` serves it. `breg` verifies the active package at startup and answers only the routes that package compiled. Registry Relay's counterpart is the <a href="#sealed-package">sealed package</a>, which `relayctl` builds.</dd>
 
   <dt id="package-digest">package digest</dt>
-  <dd>The `sha256:` digest of a package's `SHA256SUMS` file, which lists the digest of every other file in the package. Every product that serves a package reports this value and accepts it as `package.expectedDigest`, so two operators can confirm they run the same reviewed bytes. It is an integrity digest, not an authenticity proof: Relay packages are unsigned, and the operator's own transport and storage are what bind a package to its author.</dd>
+  <dd>The `sha256:` digest of a package's `SHA256SUMS` file, which lists the digest of every other file in the package. Every product that serves a package reports this value and accepts it as `package.expectedDigest`, so two operators can confirm they run the same reviewed bytes. It is an integrity digest, not an authenticity proof: packages are unsigned, and the operator's own transport and storage are what bind a package to its author.</dd>
 
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
@@ -315,7 +315,7 @@ Product names are always in English, including on future translated pages.
   <dd>The four bindings every Registry Relay resource declares so a caller can tell one answer from another over time: the record identifier, the revision identifier, the lifecycle state with the codelist that constrains it, and the recorded-at instant. Record context is required, not optional metadata: a resource cannot be published without it, and it is what lets a consumer say which version of a record it acted on.</dd>
 
   <dt id="receipt">receipt</dt>
-  <dd>The JSON document a fully successful `bregctl test` run writes, recording the candidate package revision, the source closure, the deployment and database identity, the target schema fingerprint, and the <a href="#journey">journeys</a> that passed, so packaging can refuse a receipt taken for anything else.</dd>
+  <dd>The JSON document a fully successful `bregctl test` run writes, recording the candidate's registry revision, the source closure, the package it succeeds, the target schema fingerprint, and the <a href="#journey">journeys</a> that passed, so packaging can refuse a receipt taken for anything else.</dd>
 
   <dt id="registry-casework">Registry Casework</dt>
   <dd>The coordinated inbox and unified-review product in this monorepo: authorized human teams claim, draft, and decide <a href="#work-item">source work items</a> or <a href="#review-request">review requests</a> from admitted producers. It verifies bearer tokens and issues none, requires the issuer's human-identity assertion for human roles, and leaves source eligibility, visibility, and mutation with the source. Crates: `crates/registry-casework` (runtime, binary `casework`) and `crates/registry-caseworkctl` (adopter tooling, binary `caseworkctl`); client module `casework` in the unified clients. Short form on a page after first use: Casework. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
@@ -436,9 +436,6 @@ Product names are always in English, including on future translated pages.
 
   <dt id="transit-proxy">Transit proxy</dt>
   <dd>The workload-local Vault or OpenBao Transit proxy an Evidence Gateway deployment reaches over a Unix socket to sign assertions in production and evidence-grade mode. The operator runs it beside the service, so Evidence Gateway holds no signing key of its own in those modes. Local assurance may use an owner-only P-256 private JWK under the secret root instead.</dd>
-
-  <dt id="trust-anchor">trust anchor</dt>
-  <dd>The file a Base Registry Engine runtime configuration names, listing the public keys whose signatures a <a href="#package">package</a> may carry and how many of them must sign, bound to one environment, one deployment instance, and one database.</dd>
 
   <dt>trust domain</dt>
   <dd>The institutional boundary whose operators, runtime identities, policy, and deployment approval govern one authored deployment. A country can contain several trust domains, and a trust domain does not need to represent a country. One Registry Relay serving process serves exactly one sealed package, and one Evidence Gateway serving process serves exactly one operator-controlled trust domain.</dd>

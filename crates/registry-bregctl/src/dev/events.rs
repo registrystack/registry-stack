@@ -65,7 +65,11 @@ struct Delivery {
 }
 
 impl Delivery {
-    fn compile(registry: &CompiledRegistry, delivery: &CompiledEventDelivery) -> Result<Self> {
+    fn compile(
+        registry: &CompiledRegistry,
+        delivery: &CompiledEventDelivery,
+        instance_id: &str,
+    ) -> Result<Self> {
         let artifact = registry
             .artifacts()
             .get(&delivery.data_schema_artifact_path)
@@ -84,13 +88,11 @@ impl Delivery {
                 .clone()
                 .context("local event receiver serves url deliveries only")?,
             data_schema: delivery.data_schema.clone(),
+            // The engine names its source from the runtime
+            // `identity.instanceId`, which a package does not carry.
             source: format!(
-                "urn:registrystack:registry:{}:instance:{}",
+                "urn:registrystack:registry:{}:instance:{instance_id}",
                 registry.registry_id(),
-                registry
-                    .package()
-                    .context("local event source requires package identity")?
-                    .instance_id,
             ),
             schema,
         })
@@ -98,15 +100,9 @@ impl Delivery {
 }
 
 impl Receiver {
-    pub(super) fn start(root: &Path, port: u16) -> Result<Self> {
+    pub(super) fn start(root: &Path, port: u16, instance_id: &str) -> Result<Self> {
         let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
             .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
-        if compiled
-            .package()
-            .is_none_or(|identity| identity.environment != "local")
-        {
-            bail!("local webhook receiver requires package.environment: local");
-        }
         // The local receiver stands in for a remote destination, so it holds
         // the url deliveries only; a local handler runs inside the engine and
         // never reaches an HTTP receiver.
@@ -118,7 +114,7 @@ impl Receiver {
             .map(|delivery| {
                 Ok((
                     (delivery.event_id.clone(), delivery.entity_id.clone()),
-                    Delivery::compile(&compiled, delivery)?,
+                    Delivery::compile(&compiled, delivery, instance_id)?,
                 ))
             })
             .collect::<Result<_>>()?;
@@ -543,7 +539,7 @@ mod tests {
         let mut project = json!({
             "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
             "registry":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
-            "package":{"environment":"local", "instanceId":"local", "sequence":1, "sourceRevision":"test"},
+            "package":{"sourceRevision":"test"},
             "entities":[{
                 "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
                 "classification":"internal", "fields":[field],
@@ -581,8 +577,12 @@ mod tests {
         }
         let project = parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
         let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-        let mut delivery =
-            Delivery::compile(&compiled, &compiled.event_deliveries().deliveries[0]).unwrap();
+        let mut delivery = Delivery::compile(
+            &compiled,
+            &compiled.event_deliveries().deliveries[0],
+            "local",
+        )
+        .unwrap();
         // Wire helpers use a fixed synthetic identity; the validator itself is
         // always built from the compiler's actual generated event artifact.
         delivery.data_schema = format!(

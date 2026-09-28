@@ -23,7 +23,7 @@ use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
@@ -52,11 +52,8 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         &registry,
         RegistryStateTestIdentity {
             package_id: "batch-registry",
-            environment: "local",
-            instance_id: "batch-instance",
             database_id: "batch-database",
-            package_revision: "package-batch-1",
-            package_sequence: 1,
+            label: "package-batch-1",
         },
     )
     .await
@@ -299,7 +296,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     }
 
     let mut changed_identity = identity.clone();
-    changed_identity.package_revision = "package-batch-2".to_owned();
+    changed_identity.activation_id = test_activation_id("package-batch-2");
     let changed_package_app = mutation_router(
         pool.clone(),
         registry.clone(),
@@ -718,6 +715,7 @@ fn mutation_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "batch-instance",
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -730,7 +728,7 @@ fn mutation_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             records,

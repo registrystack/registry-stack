@@ -123,11 +123,8 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         &compiled,
         RegistryStateTestIdentity {
             package_id: "webhook-outbox-registry",
-            environment: "local",
-            instance_id: "webhook-outbox-instance",
             database_id: "webhook-outbox-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -163,6 +160,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-outbox-instance",
         audit_profile.clone(),
     );
     let before_missing = durable_counts(&database, table).await;
@@ -185,6 +183,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-outbox-instance",
         audit_profile.clone(),
         Some(Arc::clone(&destinations)),
     );
@@ -228,6 +227,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
             lock_key,
             Duration::from_secs(2),
             identity.clone(),
+            "webhook-outbox-instance",
             audit_profile.clone(),
             Some(Arc::clone(&destinations)),
         );
@@ -1074,7 +1074,7 @@ fn assert_capture_matches(
         compiled.destination_id.as_deref()
     );
     assert_eq!(actual.destination_binding_digest, binding_digest);
-    assert_eq!(actual.package_revision, identity.package_revision);
+    assert_eq!(actual.package_revision, identity.activation_id);
     assert_eq!(actual.schema_fingerprint, identity.schema_fingerprint);
     assert_eq!(actual.data_schema, compiled.data_schema);
     assert_eq!(actual.classification_ceiling, "restricted");
@@ -1374,7 +1374,6 @@ struct DestinationFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
 }
 
 impl DestinationFixture {
@@ -1395,8 +1394,6 @@ impl DestinationFixture {
         let package_root = root.join("package");
         fs::create_dir(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         let key_path = secret_root.join(SECRET_REF_CANARY);
         fs::write(&key_path, SECRET_KEY_CANARY).expect("destination key writes");
         #[cfg(unix)]
@@ -1409,7 +1406,6 @@ impl DestinationFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
         }
     }
 
@@ -1449,10 +1445,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -1502,8 +1494,6 @@ operationalTimeouts:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
-            PACKAGE_REVISION,
         );
         parse_runtime_config(&raw)
             .expect("strict destination configuration parses")

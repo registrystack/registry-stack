@@ -706,9 +706,9 @@
           "type": "string"
         },
         "instanceId": {
-          "maxLength": 256,
+          "maxLength": 64,
           "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
           "type": "string"
         }
       },
@@ -1226,23 +1226,6 @@
       "additionalProperties": false,
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
-        "activeRevision": {
-          "maxLength": 256,
-          "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
-          "type": "string"
-        },
-        "activeSequence": {
-          "format": "uint64",
-          "minimum": 1,
-          "type": "integer"
-        },
-        "compilerSourceRevision": {
-          "maxLength": 256,
-          "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
-          "type": "string"
-        },
         "expectedDigest": {
           "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage.",
           "pattern": "^sha256:[0-9a-f]{64}$",
@@ -1257,19 +1240,10 @@
           "minLength": 1,
           "pattern": "^/",
           "type": "string"
-        },
-        "trustAnchorPath": {
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string"
         }
       },
       "required": [
-        "root",
-        "trustAnchorPath",
-        "compilerSourceRevision",
-        "activeRevision",
-        "activeSequence"
+        "root"
       ],
       "type": "object"
     },

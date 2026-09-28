@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: access-review-example
-  sequence: 1
   sourceRevision: access-review-example-1
 manifestProjection:
   accessProfile: district-reader

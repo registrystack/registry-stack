@@ -58,6 +58,9 @@ const INSTANCE_ID: &str = "request-event-instance";
 const DATABASE_ID: &str = "request-event-database";
 const PACKAGE_REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// The activation the fixture registry state records for its package.
+static ACTIVATION_ID: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| registry_breg::postgres::test_activation_id(PACKAGE_REVISION));
 const SCHEMA_FINGERPRINT: &str =
     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const DESTINATION_ID: &str = "review-operations";
@@ -224,6 +227,10 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     );
     let payload = &envelope["data"];
     assert_eq!(payload["trigger"], "request_lifecycle");
+    assert_eq!(
+        payload["packageRevision"], PACKAGE_REVISION,
+        "event data names the active package by its digest"
+    );
     assert_eq!(payload["recordId"], request_id.to_string());
     assert_eq!(payload["revision"], 3);
     assert_eq!(payload["request"]["proposalVersion"], 1);
@@ -277,11 +284,8 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -353,10 +357,11 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         Arc::clone(&destinations),
         Arc::new(registry_breg::hook_handler::HookHandlerRegistry::new(
             &compiled,
-            &identity.package_revision,
+            &identity.activation_id,
         )),
         Arc::new(compiled.clone()),
         identity,
+        INSTANCE_ID,
         RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
         Duration::from_secs(2),
         registry_breg::audit::test_support::capturing(
@@ -446,11 +451,8 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
         &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -821,7 +823,8 @@ fn lifecycle_event<'a>(
         transition,
         reason: None,
         effect_digest: None,
-        package_revision: PACKAGE_REVISION,
+        package_revision: &ACTIVATION_ID,
+        package_digest: PACKAGE_REVISION,
         schema_fingerprint: SCHEMA_FINGERPRINT,
         request_values,
         payload_retention: Duration::from_secs(7 * 24 * 60 * 60),
@@ -886,6 +889,7 @@ fn event_authority_router(
         pool,
         registry.clone(),
         identity.clone(),
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -894,7 +898,7 @@ fn event_authority_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -1040,7 +1044,6 @@ struct DestinationFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
     receiver_port: u16,
 }
 
@@ -1061,8 +1064,6 @@ impl DestinationFixture {
         let package_root = root.join("package");
         fs::create_dir_all(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         write_secret(&secret_root.join(KEY_REF), HMAC_KEY);
         write_secret(
             &secret_root.join(CA_REF),
@@ -1072,7 +1073,6 @@ impl DestinationFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
             receiver_port: receiver.address.port(),
         }
     }
@@ -1113,10 +1113,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: {PACKAGE_REVISION}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -1172,7 +1168,6 @@ operationalTimeouts:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
             self.receiver_port,
         );
         parse_runtime_config(&raw)
@@ -1224,12 +1219,13 @@ struct HttpsReceiver {
 impl HttpsReceiver {
     async fn start() -> Self {
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(vec!["localhost".to_owned()])
                 .expect("loopback TLS certificate generates");
         let certificate_der = cert.der().clone();
         let certificate_pem = pem("CERTIFICATE", certificate_der.as_ref());
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate_der], private_key)

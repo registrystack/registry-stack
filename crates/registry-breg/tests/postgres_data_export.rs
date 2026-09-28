@@ -59,11 +59,8 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &registry,
         RegistryStateTestIdentity {
             package_id: "data-export-registry",
-            environment: "local",
-            instance_id: "data-export-instance",
             database_id: "data-export-database",
-            package_revision: PACKAGE,
-            package_sequence: 1,
+            label: PACKAGE,
         },
     )
     .await
@@ -110,7 +107,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let before_import = durable_counts(&database, &registry).await;
     let mut import_checkpoint = DataImportCheckpoint::start(
         &import_plan,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
     )
     .expect("seed checkpoint starts");
@@ -119,7 +116,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         execute_import_chunk(
             &import_plan,
             &mut import_checkpoint,
-            &identity.package_revision,
+            &identity.activation_id,
             &identity.schema_fingerprint,
             &import_id,
             |request| dispatch(&app, Some(&token), request),
@@ -144,7 +141,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         .expect("explicit authenticated export permission compiles");
     let (mut checkpoint, initial_resume_state) = DataExportCheckpoint::start(
         &export_plan,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
     )
     .expect("export checkpoint starts");
@@ -152,7 +149,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let first = execute_export_page(
         &export_plan,
         &mut checkpoint,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &initial_output_state,
         &initial_resume_state,
@@ -186,7 +183,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         let error = DataExportCheckpoint::from_json(
             &canonicalize_json(&forged).unwrap(),
             &export_plan,
-            &identity.package_revision,
+            &identity.activation_id,
             &identity.schema_fingerprint,
             &first_output,
             &first_resume_state,
@@ -198,7 +195,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let mut resumed = DataExportCheckpoint::from_json(
         &serialized,
         &export_plan,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &first_output,
         &first_resume_state,
@@ -207,7 +204,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let second = execute_export_page(
         &export_plan,
         &mut resumed,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &first_output_state,
         &first_resume_state,
@@ -228,7 +225,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     DataExportCheckpoint::from_json(
         &complete_json,
         &export_plan,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &output,
         &terminal_resume_state,
@@ -237,7 +234,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let complete_reuse = execute_export_page(
         &export_plan,
         &mut resumed,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &terminal_output_state,
         &terminal_resume_state,
@@ -279,7 +276,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
 
     let (mut refused_checkpoint, refused_resume_state) = DataExportCheckpoint::start(
         &export_plan,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
     )
     .unwrap();
@@ -287,7 +284,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let refused = execute_export_page(
         &export_plan,
         &mut refused_checkpoint,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &refused_output_state,
         &refused_resume_state,
@@ -301,7 +298,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
 
     let (mut widened_checkpoint, widened_resume_state) = DataExportCheckpoint::start(
         &export_plan,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
     )
     .unwrap();
@@ -318,7 +315,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let widened = execute_export_page(
         &export_plan,
         &mut widened_checkpoint,
-        &identity.package_revision,
+        &identity.activation_id,
         &identity.schema_fingerprint,
         &widened_output_state,
         &widened_resume_state,
@@ -420,6 +417,7 @@ fn authenticated_app(
         pool,
         registry.clone(),
         identity.clone(),
+        "data-export-instance",
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -428,7 +426,7 @@ fn authenticated_app(
         HttpService::new(
             registry.clone(),
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,

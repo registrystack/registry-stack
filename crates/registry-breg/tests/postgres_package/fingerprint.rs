@@ -4,10 +4,10 @@ use super::*;
 use registry_breg::postgres::legacy_schema_fingerprint_for_test;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes() {
+async fn legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes() {
     let database = TestDatabase::create(1).await;
     let (mut migration, task) = database.connect_migration().await;
-    let registry = compile_fixture_registry("production", 1, PlanChoice::Schema);
+    let registry = compile_fixture_registry(PlanChoice::Schema);
     let transaction = migration.transaction().await.unwrap();
     install_compiled_schema(&transaction, &registry, &database.runtime_role)
         .await
@@ -25,21 +25,9 @@ async fn signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package
     assert_ne!(legacy, named, "the algorithms have distinct hash domains");
     transaction.rollback().await.unwrap();
 
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).unwrap();
-    let baseline = PackageFixture::build(
-        "production",
-        1,
-        None,
-        legacy.clone(),
-        PlanChoice::Schema,
-        Some(&signing),
-    );
+    let baseline = PackageFixture::build(None, legacy.clone(), PlanChoice::Schema);
     let original_bytes = fs::read(baseline.root.path().join("package.json")).unwrap();
-    let package = load_package(
-        baseline.root.path(),
-        &baseline.context(PackageIntent::InitialActivation),
-    )
-    .unwrap();
+    let package = load_package(baseline.root.path(), &baseline.context()).unwrap();
     let active = apply_package(
         &database,
         &package,
@@ -56,7 +44,7 @@ async fn signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package
     // algorithm. Measurement uses a fresh isolated database, not live DDL.
     let rehearsal = TestDatabase::create(1).await;
     let (target_connection, target_task) = rehearsal.connect_migration().await;
-    let target = compile_fixture_registry("production", 2, PlanChoice::SecondTable);
+    let target = compile_fixture_registry(PlanChoice::SecondTable);
     install_compiled_schema(&target_connection, &target, &rehearsal.runtime_role)
         .await
         .unwrap();
@@ -70,21 +58,11 @@ async fn signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package
     target_task.abort();
     rehearsal.cleanup().await;
     let successor = PackageFixture::build(
-        "production",
-        2,
-        Some(&active.package_revision),
+        Some(&active.package_digest),
         target_fingerprint.clone(),
         PlanChoice::SecondTable,
-        Some(&signing),
     );
-    let successor_package = load_package(
-        successor.root.path(),
-        &successor.context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: 1,
-        }),
-    )
-    .unwrap();
+    let successor_package = load_package(successor.root.path(), &successor.context()).unwrap();
     let upgraded = apply_package(
         &database,
         &successor_package,
@@ -100,7 +78,22 @@ async fn signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package
         fs::read(baseline.root.path().join("package.json")).unwrap(),
         original_bytes
     );
-    assert_startup(&database, &baseline, &package, false).await;
+    let pool = database.runtime_config.build_pool().unwrap();
+    let mut runtime = pool.get_for_test().await.unwrap();
+    assert_eq!(
+        prepare_startup(
+            baseline.root.path(),
+            &baseline.context(),
+            DATABASE,
+            &mut runtime,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .err(),
+        Some(StartupError::ActivePackageMismatch),
+        "a superseded package does not start against its successor's database"
+    );
     task.abort();
     database.cleanup().await;
 }
@@ -110,7 +103,7 @@ async fn assert_startup_and_drift_refusal(
     fixture: &PackageFixture,
     package: &registry_breg::package::VerifiedPackage,
 ) {
-    assert_startup(database, fixture, package, true).await;
+    assert_startup(database, fixture, true).await;
     let entity = &package.registry().entities()["neutral-record"];
     let table = format!("registry_data.{}", quote_identifier(&entity.physical_table));
     let code = quote_identifier(&entity.fields["code"].physical_name);
@@ -156,28 +149,21 @@ async fn assert_startup_and_drift_refusal(
         ),
     ] {
         migration.batch_execute(&alter).await.unwrap();
-        assert_startup(database, fixture, package, false).await;
+        assert_startup(database, fixture, false).await;
         migration.batch_execute(&restore).await.unwrap();
-        assert_startup(database, fixture, package, true).await;
+        assert_startup(database, fixture, true).await;
     }
     task.abort();
 }
 
-async fn assert_startup(
-    database: &TestDatabase,
-    fixture: &PackageFixture,
-    package: &registry_breg::package::VerifiedPackage,
-    allowed: bool,
-) {
+async fn assert_startup(database: &TestDatabase, fixture: &PackageFixture, allowed: bool) {
     let pool = database.runtime_config.build_pool().unwrap();
     let mut runtime = pool.get_for_test().await.unwrap();
-    let context = fixture.context(PackageIntent::Startup {
-        active_revision: &package.manifest().package_revision,
-        active_sequence: package.manifest().sequence,
-    });
+    let context = fixture.context();
     let result = prepare_startup(
         fixture.root.path(),
         &context,
+        DATABASE,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,

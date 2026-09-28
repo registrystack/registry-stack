@@ -158,7 +158,7 @@ bregctl dev tutorial-work/project
 
 The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
 The command returns once the registry answers. Its report names the service URLs,
-package revision, and private credential file paths for each client.
+package digest, and private credential file paths for each client.
 
 `dev` started PostgreSQL and the maintained stock identity provider in containers, registered the
 clients from `dev-clients.yaml` under a fresh key each, built a package, replayed

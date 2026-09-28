@@ -19,7 +19,6 @@ use registry_breg::package::{
     compiled_registry_change_set, inspect_package_integrity, prepare_package,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest, PackageError,
     PackageFileRole, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-    SignaturePolicy,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
@@ -29,7 +28,6 @@ use registry_platform_config::package::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
@@ -52,8 +50,8 @@ const FINAL_FINGERPRINT: &str =
 
 #[test]
 fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::RequiredField, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
     let artifacts = backfill_artifacts("required-field", &previous, &candidate);
     let prepared =
         prepare_reviewed_package(Variant::RequiredField, previous, vec![artifacts.source()])
@@ -112,34 +110,48 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
         .expect("temporary package parent");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("reviewed package publishes");
     let inspected = inspect_package_integrity(&package).expect("reviewed package rederives");
-    assert_eq!(inspected.package_revision(), prepared.package_revision());
+    assert_eq!(
+        inspected.package_digest(),
+        prepared
+            .package_digest()
+            .expect("prepared package plans its digest")
+    );
 
-    let destructive_candidate = compile_variant(Variant::FieldRemoved, 2);
+    let destructive_candidate = compile_variant(Variant::FieldRemoved);
     let destructive = destructive_artifacts(
         "remove-field",
-        &compile_variant(Variant::Base, 1),
+        &compile_variant(Variant::Base),
         &destructive_candidate,
     );
     let destructive_package = prepare_reviewed_package(
         Variant::FieldRemoved,
-        compile_variant(Variant::Base, 1),
+        compile_variant(Variant::Base),
         vec![destructive.source()],
     )
-    .expect("destructive plan with exact backup binding prepares");
-    assert!(destructive_package
+    .expect("destructive plan naming its backup binding prepares");
+    let backup_path = "modules/core/migrations/remove-field/backup.json";
+    assert!(!destructive_package
         .manifest()
         .files
         .iter()
-        .any(|file| file.role == PackageFileRole::ExternalBackupBinding));
+        .any(|file| file.path == backup_path));
+    let destructive_plan = destructive_package
+        .reviewed_migration_plan()
+        .expect("destructive plan revalidates")
+        .expect("destructive package carries a reviewed plan");
+    assert_eq!(
+        registry_breg::migration::required_backup_binding_paths(&destructive_plan),
+        vec![backup_path]
+    );
 }
 
 #[test]
 fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_evidence() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::RequiredField, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
     let valid = backfill_artifacts("required-field", &previous, &candidate);
 
     assert_refused(
@@ -192,8 +204,8 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         "class-mismatched cover",
     );
 
-    let unsupported_previous = compile_variant(Variant::Base, 1);
-    let unsupported_candidate = compile_variant(Variant::DifferentRegistry, 2);
+    let unsupported_previous = compile_variant(Variant::Base);
+    let unsupported_candidate = compile_variant(Variant::DifferentRegistry);
     let mut unsupported = backfill_artifacts(
         "unsupported-identity",
         &unsupported_previous,
@@ -388,11 +400,10 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         "rehearsal evidence bound to wrong target",
     );
 
-    let destructive_candidate = compile_variant(Variant::FieldRemoved, 2);
+    let destructive_candidate = compile_variant(Variant::FieldRemoved);
     let destructive = destructive_artifacts("remove-field", &previous, &destructive_candidate);
     let mut no_backup = destructive.clone();
     no_backup.descriptor.backup_binding_path = None;
-    no_backup.backup = None;
     no_backup.rebind();
     assert_refused(
         Variant::FieldRemoved,
@@ -402,19 +413,30 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         "destructive plan without external backup binding",
     );
 
-    let mut wrong_backup = destructive;
-    wrong_backup
-        .backup
-        .as_mut()
-        .expect("destructive backup exists")
-        .database_id = "wrong-database-canary".to_owned();
-    wrong_backup.rebind();
+    let mut packaged_backup = destructive.source();
+    packaged_backup.files.push(ReviewedMigrationFile {
+        path: "modules/core/migrations/remove-field/backup.json".to_owned(),
+        bytes: canonical(&ExternalBackupBinding {
+            database_id: DATABASE.to_owned(),
+            prior_package_digest: PRIOR_REVISION.to_owned(),
+            prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
+            backup_file: "/var/backups/registry.dump".to_owned(),
+            sha256: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                .to_owned(),
+            byte_length: 4096,
+            created_at: "2026-08-30T00:00:00Z".to_owned(),
+            max_age_seconds: 86_400,
+        }),
+    });
+    packaged_backup
+        .files
+        .sort_by(|left, right| left.path.cmp(&right.path));
     assert_refused(
         Variant::FieldRemoved,
         previous.clone(),
-        vec![wrong_backup.source()],
-        ReviewedMigrationError::Evidence,
-        "external backup bound to a different database",
+        vec![packaged_backup],
+        ReviewedMigrationError::Closure,
+        "backup binding shipped inside the package",
     );
 
     let mut missing_fixture = valid.source();
@@ -472,7 +494,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         .expect("temporary package parent");
     let package = root.path().join("package");
     prepared
-        .publish_to_directory(&package, Vec::new())
+        .publish_to_directory(&package)
         .expect("valid reviewed package publishes");
     fs::write(
         package.join("modules/core/migrations/required-field/steps/backfill.sql"),
@@ -489,8 +511,8 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
 
 #[test]
 fn reviewed_encryption_flip_binds_envelope_blind_index_and_views() {
-    let previous = compile_variant(Variant::EncryptedBase, 1);
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
 
     // The flip is one backfill-classified change, never a physical rename.
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
@@ -556,8 +578,8 @@ fn reviewed_encryption_flip_binds_envelope_blind_index_and_views() {
 
 #[test]
 fn reviewed_encryption_flip_refuses_a_missing_history_choice() {
-    let previous = compile_variant(Variant::EncryptedBase, 1);
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
     // The choice is explicit or absent, never assumed: dropping it from an
     // otherwise complete flip plan refuses rather than defaulting.
@@ -574,8 +596,8 @@ fn reviewed_encryption_flip_refuses_a_missing_history_choice() {
 
 #[test]
 fn reviewed_encryption_flip_refuses_an_unknown_history_choice() {
-    let previous = compile_variant(Variant::EncryptedBase, 1);
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
     let mut source = artifacts.source();
     // The wire grammar is the two reviewed choices alone: a third word is
@@ -595,8 +617,8 @@ fn reviewed_encryption_flip_refuses_an_unknown_history_choice() {
 
 #[test]
 fn reviewed_plan_refuses_a_history_choice_without_an_encryption_flip() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::RequiredField, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
     let mut artifacts = backfill_artifacts("required-field", &previous, &candidate);
     // The choice says what happens to pre-flip plaintext history; a plan that
     // flips nothing has nothing to choose, so the word alone refuses.
@@ -613,8 +635,8 @@ fn reviewed_plan_refuses_a_history_choice_without_an_encryption_flip() {
 
 #[test]
 fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
-    let previous = compile_variant(Variant::EncryptedBase, 1);
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
     // One chunk journals one history commit, so its size is capped at the
     // history machinery's commit-member budget rather than the chunked-SQL cap.
@@ -636,8 +658,8 @@ fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
 
 #[test]
 fn reviewed_chunked_backfill_refuses_a_chunk_size_beyond_the_commit_budget() {
-    let previous = compile_variant(Variant::Base, 1);
-    let candidate = compile_variant(Variant::RequiredField, 2);
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
     let mut artifacts = backfill_artifacts("required-field", &previous, &candidate);
     // Every chunk journals the rows it changed as one history commit, so a
     // chunked backfill shares the commit-member budget too.
@@ -673,8 +695,8 @@ fn reviewed_chunked_backfill_refuses_a_chunk_size_beyond_the_commit_budget() {
 
 #[test]
 fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
-    let previous = compile_variant(Variant::EncryptedBase, 1);
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
     let mut second = artifacts.descriptor.steps[0].clone();
     let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { id, .. } = &mut second else {
@@ -702,8 +724,8 @@ fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
 
 #[test]
 fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
-    let previous = compile_variant(Variant::EncryptedBase, 1);
-    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
     let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
     let entity = &previous.entities()["asset"];
     let plaintext = &entity.fields["secret"];
@@ -756,7 +778,6 @@ struct ReviewedArtifacts {
     step_sql: Vec<u8>,
     pre_sql: Vec<u8>,
     post_sql: Vec<u8>,
-    backup: Option<ExternalBackupBinding>,
     fixture_bytes: Vec<u8>,
 }
 
@@ -827,12 +848,6 @@ impl ReviewedArtifacts {
             path: self.receipt.fixture_inventory[0].path.clone(),
             bytes: self.fixture_bytes.clone(),
         });
-        if let (Some(path), Some(binding)) = (&self.descriptor.backup_binding_path, &self.backup) {
-            files.push(ReviewedMigrationFile {
-                path: path.clone(),
-                bytes: canonical(binding),
-            });
-        }
         files.sort_by(|left, right| left.path.cmp(&right.path));
         ReviewedMigrationSource {
             module_id: "core".to_owned(),
@@ -960,7 +975,6 @@ fn backfill_artifacts(
         step_sql,
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
-        backup: None,
         fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
     };
     artifacts.rebind();
@@ -1031,16 +1045,6 @@ fn destructive_artifacts(
         .into_bytes(),
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
-        backup: Some(ExternalBackupBinding {
-            database_id: DATABASE.to_owned(),
-            prior_revision: PRIOR_REVISION.to_owned(),
-            prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
-            sha256: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-                .to_owned(),
-            byte_length: 4096,
-            created_at: "2026-08-30T00:00:00Z".to_owned(),
-            max_age_seconds: 86_400,
-        }),
         fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
     };
     artifacts.rebind();
@@ -1137,7 +1141,6 @@ fn encryption_flip_artifacts(
         step_sql: Vec::new(),
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
-        backup: None,
         fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
     };
     artifacts.rebind();
@@ -1150,7 +1153,7 @@ fn receipt(
     row_assertions: Vec<RehearsalRowAssertion>,
 ) -> MigrationRehearsalReceipt {
     MigrationRehearsalReceipt {
-        prior_revision: PRIOR_REVISION.to_owned(),
+        prior_package_digest: PRIOR_REVISION.to_owned(),
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
         plan_sha256: String::new(),
         sql_sha256: Vec::new(),
@@ -1192,19 +1195,11 @@ fn prepare_reviewed_package(
     previous: CompiledRegistry,
     migrations: Vec<ReviewedMigrationSource>,
 ) -> registry_breg::package::Result<registry_breg::package::PreparedPackage> {
-    let source = source_for_variant(candidate_variant, 2);
+    let source = source_for_variant(candidate_variant);
     prepare_package(PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE.to_owned(),
-        database_id: DATABASE.to_owned(),
-        sequence: 2,
-        prior_revision: Some(PRIOR_REVISION.to_owned()),
+        from_package_digest: Some(PRIOR_REVISION.to_owned()),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: source.project_bytes,
@@ -1242,15 +1237,15 @@ struct SourceFixture {
     module_bytes: Vec<u8>,
 }
 
-fn compile_variant(variant: Variant, sequence: u64) -> CompiledRegistry {
-    let source = source_for_variant(variant, sequence);
+fn compile_variant(variant: Variant) -> CompiledRegistry {
+    let source = source_for_variant(variant);
     let module = parse_module_yaml(&source.module_bytes).expect("fixture module parses");
     let project = parse_project_yaml(&source.project_bytes).expect("fixture project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture compiles in production")
 }
 
-fn source_for_variant(variant: Variant, sequence: u64) -> SourceFixture {
+fn source_for_variant(variant: Variant) -> SourceFixture {
     let module_bytes = module_bytes(variant);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses for digest");
     let module_digest = module_digest(&module);
@@ -1261,7 +1256,7 @@ fn source_for_variant(variant: Variant, sequence: u64) -> SourceFixture {
     };
     SourceFixture {
         project_bytes: format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
         )
         .into_bytes(),
         module_bytes,

@@ -70,11 +70,8 @@ async fn exercise_read_dependencies(case: &str, invalid_population: bool, active
         &ExpectedManagedCatalog::compiled(&registry),
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: "dependencies-instance",
             database_id: "dependencies-database",
-            package_revision: case,
-            package_sequence: 1,
+            label: case,
         },
     )
     .await
@@ -157,7 +154,7 @@ async fn exercise_read_dependencies(case: &str, invalid_population: bool, active
     let app = router(Arc::new(HttpService::new(
         registry,
         ReadRuntimeIdentity {
-            package_revision: identity.package_revision,
+            package_revision: identity.activation_id,
             schema_fingerprint: identity.schema_fingerprint,
         },
         Arc::new(service),

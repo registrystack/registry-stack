@@ -54,11 +54,8 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: "constraint-race-instance",
             database_id: "constraint-race-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -75,6 +72,7 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         RegistryLockKey::derive(PACKAGE_ID).expect("registry lock key is bounded"),
         Duration::from_secs(5),
         identity,
+        "constraint-race-instance",
         database.audit(audit_profile),
     );
     let parent_plan = MutationPlan::from_compiled(&registry, "records.parent.create")

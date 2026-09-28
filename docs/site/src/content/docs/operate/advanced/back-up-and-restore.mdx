@@ -29,7 +29,7 @@ up these alongside every database backup, on the same schedule:
 - The PostgreSQL database, with `pg_dump` before every activation, as
   [Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database)
   describes.
-- The signed package directory, its trust anchor, the runtime file, and the secret files it
+- The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.
 - The field-encryption key when the project encrypts a field: the Transit key, or the local
   data-key file. The database holds only a wrapped key or an identifier, so losing the custodian's
@@ -98,31 +98,27 @@ supersedes every import authority the copy held open, so open again the ones you
 ### After a physical restore
 
 A base backup, a point-in-time recovery, a volume snapshot, or a promoted replica keeps the
-original's identity, so it serves without an adopt and nothing refuses it. Two things are then your
-job before it serves. Keep the original stopped or fenced from clients. And close the import
-authorities that come back open: an authority you closed after the backup point is open again in
-the copy, and would admit an import you already ended. List them, then close each one that should
-not be open:
+original's identity, so nothing refuses it. Two things are then your job before it serves. Keep the
+original stopped or fenced from clients. And end the import authorities that come back open: an
+authority you closed after the backup point is open again in the copy, and would admit an import you
+already ended. Adopt the copy once, as for a logical restore:
 
 ```sh
-bregctl --format json import-authority list --runtime-config /etc/breg/runtime.yaml
-bregctl --format json import-authority close \
+bregctl --format json instance-claim adopt \
   --runtime-config /etc/breg/runtime.yaml \
-  --authority-id <authority-id> \
-  --operator-reference <change-record> \
-  --reason "closed after physical restore"
+  --acknowledge-original-retired
 ```
 
-There is no command that closes every open authority at once; that is tracked in
-[registry-stack issue #1635](https://github.com/registrystack/registry-stack/issues/1635).
+The claim already names the copy, so the adopt claims it again: it raises the claim's epoch and
+supersedes every open import authority in one transaction, and the audit entry records the event
+`reclaimed` with the authorities it superseded. Open again the ones you still need.
 
 {/* Evidence: crates/registry-breg/src/instance_claim.rs, module docs (physical copies are not
     detected), check(), adopt_in(); crates/registry-breg/src/startup.rs, verify_instance_claim()
     and the InstanceClaimMismatch message; crates/registry-bregctl/src/doctor.rs,
-    startup.instance_claim.mismatch; crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand,
-    ImportAuthorityCloseArgs, InstanceClaimAdoptArgs;
-    products/breg/SECURITY-REVIEW-NOTES.md, "Instance claim" (reopened authorities after a
-    physical restore are an accepted residual). */}
+    startup.instance_claim.mismatch; crates/registry-bregctl/src/lib.rs, InstanceClaimCommand and
+    InstanceClaimAdoptArgs; products/breg/SECURITY-REVIEW-NOTES.md, "Instance claim" (a physical
+    restore serves without the adopt that supersedes reopened authorities, an accepted residual). */}
 
 ### Repeat what the backup undid
 

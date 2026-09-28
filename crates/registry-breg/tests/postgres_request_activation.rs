@@ -22,12 +22,12 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, MigrationError,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageSourceFile, SignaturePolicy, VerifiedPackage,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
     managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
@@ -66,7 +66,7 @@ journeys:
 async fn unrelated_package_activation_preserves_pending_request_application() {
     load_postgres_env();
     let database = TestDatabase::create(8).await;
-    let base = Arc::new(compiled_registry(Variant::Base, 1));
+    let base = Arc::new(compiled_registry(Variant::Base));
     let initial = prepare_initial_package(&database, &base).await;
     let active = apply_package(
         &database,
@@ -75,7 +75,10 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     )
     .await
     .expect("initial package activates");
-    assert_eq!(active.package_sequence, 1);
+    assert_eq!(
+        ledger_apply_order(&database, &active.activation_id).await,
+        1
+    );
 
     let app = change_request_router(&database, base.clone(), active.clone());
     let steward = claims("steward", "unrelated-steward", None);
@@ -84,7 +87,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     let approved =
         create_approved_correction(&app, steward.clone(), submitter.clone(), "unrelated").await;
 
-    let unrelated = Arc::new(compiled_registry(Variant::UnrelatedOptionalField, 2));
+    let unrelated = Arc::new(compiled_registry(Variant::UnrelatedOptionalField));
     assert_eq!(
         request_contract_fingerprint(&base),
         request_contract_fingerprint(&unrelated),
@@ -98,7 +101,10 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     )
     .await
     .expect("unrelated additive successor activates with an approved request present");
-    assert_eq!(successor_active.package_sequence, 2);
+    assert_eq!(
+        ledger_apply_order(&database, &successor_active.activation_id).await,
+        2
+    );
 
     let successor_app =
         change_request_router(&database, unrelated.clone(), successor_active.clone());
@@ -156,8 +162,8 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         approved.new_site_id
     );
     assert_eq!(
-        active_package_revision(&database).await,
-        successor_active.package_revision
+        active_activation_id(&database).await,
+        successor_active.activation_id
     );
 
     let retention = RequestRetentionOperatorService::new_for_test(
@@ -244,13 +250,11 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         .build_pool()
         .expect("runtime pool builds");
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let startup_context = package_context(PackageIntent::Startup {
-        active_revision: &successor_active.package_revision,
-        active_sequence: 2,
-    });
+    let startup_context = package_context();
     prepare_startup(
         &successor.package_root,
         &startup_context,
+        DATABASE_ID,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -269,7 +273,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
 async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts() {
     load_postgres_env();
     let database = TestDatabase::create(8).await;
-    let base = Arc::new(compiled_registry(Variant::Base, 1));
+    let base = Arc::new(compiled_registry(Variant::Base));
     let initial = prepare_initial_package(&database, &base).await;
     let active = apply_package(
         &database,
@@ -284,14 +288,14 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
     let submitter = claims("submitter", "relevant-submitter", None);
     let approved = create_approved_correction(&app, steward, submitter.clone(), "relevant").await;
 
-    let relevant = Arc::new(compiled_registry(Variant::RelevantOptionalRequestSchema, 2));
+    let relevant = Arc::new(compiled_registry(Variant::RelevantOptionalRequestSchema));
     assert_ne!(
         request_contract_fingerprint(&base),
         request_contract_fingerprint(&relevant),
         "the relevant successor changes the request mapping/schema fingerprint"
     );
     let successor = prepare_successor_package(&database, &base, &active, &relevant).await;
-    let before_refusal = active_package_revision(&database).await;
+    let before_refusal = active_activation_id(&database).await;
     let refused = apply_package(
         &database,
         &successor.package,
@@ -304,7 +308,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         "approved proposals must block activation of a package that changes the relevant request contract"
     );
     assert_eq!(
-        active_package_revision(&database).await,
+        active_activation_id(&database).await,
         before_refusal,
         "the retention guard must run before installed package identity changes"
     );
@@ -345,8 +349,8 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
     .await
     .expect("explicit cancellation permits the exact relevant successor activation");
     assert_eq!(
-        active_package_revision(&database).await,
-        successor_active.package_revision
+        active_activation_id(&database).await,
+        successor_active.activation_id
     );
     assert!(
         column_exists(
@@ -363,13 +367,11 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         .build_pool()
         .expect("runtime pool builds");
     let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let startup_context = package_context(PackageIntent::Startup {
-        active_revision: &successor_active.package_revision,
-        active_sequence: 2,
-    });
+    let startup_context = package_context();
     let startup = prepare_startup(
         &successor.package_root,
         &startup_context,
+        DATABASE_ID,
         &mut runtime,
         &database.migration_role,
         &database.runtime_role,
@@ -377,8 +379,8 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
     .await
     .expect("successor activation preserves catalog identity and startup readiness");
     assert_eq!(
-        startup.expected_identity().package_revision,
-        successor_active.package_revision
+        startup.expected_identity().activation_id,
+        successor_active.activation_id
     );
     drop(runtime);
     drop(successor);
@@ -494,12 +496,11 @@ async fn prepare_initial_package(
     publish_and_load(
         build_request(
             registry,
-            1,
             None,
             &fingerprint,
             PackageMigrationPlanInput::InitialCompiledDdl,
         ),
-        package_context(PackageIntent::InitialActivation),
+        package_context(),
     )
 }
 
@@ -512,34 +513,26 @@ async fn prepare_successor_package(
     let provisional = publish_and_load(
         build_request(
             candidate,
-            active.package_sequence as u64 + 1,
-            Some(active.package_revision.as_str()),
+            Some(active.package_digest.as_str()),
             &active.schema_fingerprint,
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new((**prior).clone()),
             },
         ),
-        package_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: active.package_sequence as u64,
-        }),
+        package_context(),
     );
     let target_fingerprint = successor_schema_fingerprint(database, &provisional.package).await;
     drop(provisional);
     publish_and_load(
         build_request(
             candidate,
-            active.package_sequence as u64 + 1,
-            Some(active.package_revision.as_str()),
+            Some(active.package_digest.as_str()),
             &target_fingerprint,
             PackageMigrationPlanInput::Successor {
                 prior_registry: Box::new((**prior).clone()),
             },
         ),
-        package_context(PackageIntent::Activation {
-            active_revision: &active.package_revision,
-            active_sequence: active.package_sequence as u64,
-        }),
+        package_context(),
     )
 }
 
@@ -558,7 +551,7 @@ fn publish_and_load(
         .expect("package tempdir creates");
     let package_root = root.path().join("package");
     prepared
-        .publish_to_directory(&package_root, Vec::new())
+        .publish_to_directory(&package_root)
         .expect("package publishes");
     let package = load_package(&package_root, &context).expect("published package loads");
     PublishedPackage {
@@ -570,26 +563,17 @@ fn publish_and_load(
 
 fn build_request(
     registry: &registry_breg::CompiledRegistry,
-    sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
     PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: INSTANCE_ID.to_owned(),
-        database_id: DATABASE_ID.to_owned(),
-        sequence,
-        prior_revision: prior_revision.map(str::to_owned),
+        from_package_digest: prior_revision.map(str::to_owned),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: Vec::new(),
-        },
         project: PackageSourceFile {
             path: "source/registry.json".to_owned(),
-            bytes: project_bytes(sequence, registry),
+            bytes: project_bytes(registry),
         },
         modules: Vec::new(),
         fixture_journeys: PackageSourceFile {
@@ -676,23 +660,19 @@ async fn apply_package(
     apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
         package,
+        ActivationDeployment::new("local", INSTANCE_ID, DATABASE_ID),
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
+        database.activation_audit(),
     ))
     .await
 }
 
-fn package_context(intent: PackageIntent<'_>) -> PackageLoadContext<'_> {
+fn package_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
-        environment: "local",
-        instance_id: INSTANCE_ID,
-        database_id: DATABASE_ID,
         database_initialization_environment: "local",
-        compiler_source_revision: SOURCE_REVISION,
-        trust_anchor: None,
-        intent,
     }
 }
 
@@ -733,6 +713,7 @@ fn change_request_router(
         pool,
         registry.clone(),
         identity.clone(),
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -741,7 +722,7 @@ fn change_request_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -935,15 +916,28 @@ fn claims(profile: &str, principal: &str, purpose: Option<&str>) -> VerifiedRequ
     .unwrap_or_else(|_| panic!("{profile} claims are verified"))
 }
 
-async fn active_package_revision(database: &TestDatabase) -> String {
+async fn active_activation_id(database: &TestDatabase) -> String {
     database
         .admin
         .query_one(
-            "SELECT active_package_revision FROM registry_internal.registry_state WHERE singleton",
+            "SELECT active_activation_id::text FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
         .await
         .expect("registry state reads")
+        .get(0)
+}
+
+async fn ledger_apply_order(database: &TestDatabase, activation_id: &str) -> i64 {
+    database
+        .admin
+        .query_one(
+            "SELECT apply_order FROM registry_internal.registry_migrations
+             WHERE activation_id = $1::text::uuid",
+            &[&activation_id],
+        )
+        .await
+        .expect("the activation has one ledger row")
         .get(0)
 }
 
@@ -984,13 +978,13 @@ fn request_contract_fingerprint(registry: &registry_breg::CompiledRegistry) -> S
         .clone()
 }
 
-fn compiled_registry(variant: Variant, sequence: u64) -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(&project_bytes_for_variant(variant, sequence))
-        .expect("activation fixture parses");
+fn compiled_registry(variant: Variant) -> registry_breg::CompiledRegistry {
+    let project =
+        parse_project_json(&project_bytes_for_variant(variant)).expect("activation fixture parses");
     compile_project(&project, &[], CompileProfile::Production).expect("activation fixture compiles")
 }
 
-fn project_bytes(sequence: u64, registry: &registry_breg::CompiledRegistry) -> Vec<u8> {
+fn project_bytes(registry: &registry_breg::CompiledRegistry) -> Vec<u8> {
     let variant = if registry.entities()["correction-request"]
         .fields
         .contains_key("note")
@@ -1004,10 +998,10 @@ fn project_bytes(sequence: u64, registry: &registry_breg::CompiledRegistry) -> V
     } else {
         Variant::Base
     };
-    project_bytes_for_variant(variant, sequence)
+    project_bytes_for_variant(variant)
 }
 
-fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
+fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
     let site_extra_field = if matches!(variant, Variant::UnrelatedOptionalField) {
         r#",{"id":"display-code","type":"string","maxLength":32,"classification":"internal"}"#
     } else {
@@ -1024,7 +1018,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "package":{{"environment":"local","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},
+          "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[
             {{
               "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",

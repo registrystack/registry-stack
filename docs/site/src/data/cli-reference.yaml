@@ -8,5 +8,5 @@ schema_version: registry.cli-reference-review/v3
 status: current
 last_reviewed: 2026-09-28
 reviewed_source_version: "0.35.0"
-reviewed_catalog_sha256: 424389bcf7a1d0dd0e052bf44292908567229b9abed2cf4dbc59d50232cf5b8d
-reviewed_content_sha256: e15682ca485991941e6011a0aedfd69050594cb7d7175044b9b0f36a689a417b
+reviewed_catalog_sha256: a89b65516f7404924374e66c330f8cf6c8240495409bc04c3a7305ded6dd6d7f
+reviewed_content_sha256: d2a4161a0e187c25e0b04e27f3fdd68939c6b0e9fd9218509231e31eb83c5fcf

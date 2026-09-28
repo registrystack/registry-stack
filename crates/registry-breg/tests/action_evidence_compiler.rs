@@ -160,22 +160,14 @@ fn v2_allows_no_capability_and_contract_paths_are_confined() {
 fn imported_contract_is_sealed_and_rederived() {
     use registry_breg::package::{
         inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
-        PackageMigrationPlanInput, PackageSourceFile, SignaturePolicy,
+        PackageMigrationPlanInput, PackageSourceFile,
     };
     let mut source = configured();
-    source["package"] = json!({"environment":"local","instanceId":"instance-under-test","sequence":1,"sourceRevision":"compiler-source-revision"});
+    source["package"] = json!({"sourceRevision":"compiler-source-revision"});
     let request = PackageBuildRequest {
-        environment: "local".into(),
-        instance_id: "instance-under-test".into(),
-        database_id: "database-under-test".into(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: "compiler-source-revision".into(),
         schema_fingerprint: format!("sha256:{}", "2".repeat(64)),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: vec![],
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".into(),
             bytes: serde_json::to_vec(&source).unwrap(),
@@ -202,7 +194,7 @@ fn imported_contract_is_sealed_and_rederived() {
     assert!(prepare_package_with_project_assets(request, vec![assets[0].clone()]).is_err());
     let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let published = temp.path().join("package");
-    package.publish_to_directory(&published, vec![]).unwrap();
+    package.publish_to_directory(&published).unwrap();
     inspect_package_integrity(&published).unwrap();
     std::fs::write(
         published.join("source/project/evidence/contracts.json"),

@@ -31,14 +31,13 @@ use crate::metrics::{self, Metrics};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{
-    load_package_with_verified_envelope, PackageError, PackageIntent, PackageLoadContext,
-    VerifiedPackage,
+    load_package_with_verified_envelope, PackageError, PackageLoadContext, VerifiedPackage,
 };
 use crate::postgres::{
     inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity, BaselineAdvisory,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
     PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
-    RegistryLockKey, RuntimePool, SqlIdentifier,
+    RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookWorker};
@@ -60,10 +59,57 @@ pub enum StartupError {
     DatabaseConnection,
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// The database holds no registry state: no package was ever applied.
+    #[error(
+        "the Registry database records no activated package; run `bregctl apply --package DIR \
+         --initial` to activate the first package"
+    )]
+    DatabaseUninitialized,
+    /// A release before the activation ledger applied this database.
+    #[error(
+        "the Registry database predates the activation ledger; run `bregctl apply --package DIR` \
+         once to adopt this database into the ledger"
+    )]
+    PreLedgerDatabase,
+    /// The database records a database id other than the runtime file's
+    /// `identity.databaseId`.
+    #[error(
+        "the Registry database records a different database id than identity.databaseId; point \
+         the runtime file at the database it names or correct identity.databaseId"
+    )]
+    DatabaseIdentityMismatch,
+    /// The database records another package as active than the one at
+    /// `package.root`.
+    #[error(
+        "the Registry database has not activated the package at package.root; run `bregctl plan \
+         --package DIR` then `bregctl apply --package DIR`"
+    )]
+    ActivePackageMismatch,
     /// The database is not the physical instance the Registry's instance
     /// claim names, as a restored copy is until an operator adopts it.
     #[error("the Registry database is not the instance its claim names")]
     InstanceClaimMismatch,
+    /// A separate runtime role can write the activation ledger or the
+    /// registry state. The apply names the object and the exact fix, so the
+    /// serving log carries no catalog detail.
+    #[error(
+        "the Registry runtime role can write the activation ledger or the registry state; run \
+         `bregctl apply --package DIR` to name the fix"
+    )]
+    RuntimeWriteAuthority,
+    /// A separate runtime role lacks a grant the active package gives it.
+    #[error(
+        "the Registry runtime role is missing grants the active package gives it; run `bregctl \
+         apply --package DIR` to reissue them"
+    )]
+    RuntimeGrantsMissing,
+    /// The runtime file names one role for a database the ledger records as
+    /// activated for a separate runtime role.
+    #[error(
+        "the Registry database was activated for a separate runtime role but the runtime file \
+         names one role; run `bregctl apply --package DIR` to activate it for one role"
+    )]
+    RoleModeChanged,
     /// Authored field address only, never the expression or database diagnostic.
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
@@ -81,6 +127,20 @@ pub enum StartupError {
     Authentication,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
+    /// Pending or leased webhook deliveries were captured under an event
+    /// source other than the one `identity.instanceId` derives. The worker
+    /// would refuse each stored envelope and dead-letter it, so startup
+    /// refuses first. Both values are deployment identifiers, not secrets.
+    #[error(
+        "{pending_deliveries} pending webhook deliveries were captured under event source \
+         {stored_source}, but identity.instanceId {configured_instance_id} derives another; \
+         restore the previous identity.instanceId until those deliveries drain, then change it"
+    )]
+    InstanceIdChangedWithPendingDeliveries {
+        stored_source: String,
+        configured_instance_id: String,
+        pending_deliveries: u64,
+    },
     #[error("the Registry retained review bindings were refused")]
     ReviewBindings,
     #[error(
@@ -209,6 +269,8 @@ pub enum OperationalEvent {
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
     PostgresBaselineAdvisory(BaselineAdvisory),
+    /// The role mode the runtime file selects, logged once at startup.
+    RoleMode(RoleMode),
 }
 
 impl OperationalEvent {
@@ -242,6 +304,23 @@ impl OperationalEvent {
                 message: "Base Registry Engine stopped",
                 error: Some(error.operational_message()),
                 code: None,
+            },
+            Self::RoleMode(RoleMode::Single) => OperationalLogRecord {
+                level: OperationalLogLevel::Info,
+                target: "registry_breg::startup",
+                message: "Base Registry Engine serves with the migration role (roleMode single); \
+                          the activation ledger check catches mistakes but not someone holding \
+                          that credential",
+                error: None,
+                code: Some("startup.role_mode.single"),
+            },
+            Self::RoleMode(RoleMode::Split) => OperationalLogRecord {
+                level: OperationalLogLevel::Info,
+                target: "registry_breg::startup",
+                message:
+                    "Base Registry Engine serves with a separate runtime role (roleMode split)",
+                error: None,
+                code: Some("startup.role_mode.split"),
             },
             Self::WebhookWorkerIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -291,6 +370,10 @@ impl OperationalEvent {
         match self {
             Self::StartupBegan | Self::Listening => {
                 tracing::info!(target: "registry_breg::startup", message = record.message);
+            }
+            Self::RoleMode(_) => {
+                let code = record.code.expect("role mode records have a code");
+                tracing::info!(target: "registry_breg::startup", code, message = record.message);
             }
             Self::Stopped => {
                 tracing::error!(target: "registry_breg::startup", message = record.message);
@@ -352,8 +435,29 @@ impl StartupError {
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::DatabaseUninitialized => {
+                "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
+            }
+            Self::PreLedgerDatabase => {
+                "the Registry database predates the activation ledger; run `bregctl apply --package DIR` once to adopt this database into the ledger"
+            }
+            Self::DatabaseIdentityMismatch => {
+                "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
+            }
+            Self::ActivePackageMismatch => {
+                "the Registry database has not activated the package at package.root; run `bregctl plan --package DIR` then `bregctl apply --package DIR`"
+            }
             Self::InstanceClaimMismatch => {
                 "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
+            }
+            Self::RuntimeWriteAuthority => {
+                "the Registry runtime role can write the activation ledger or the registry state; run `bregctl apply --package DIR` to name the fix"
+            }
+            Self::RuntimeGrantsMissing => {
+                "the Registry runtime role is missing grants the active package gives it; run `bregctl apply --package DIR` to reissue them"
+            }
+            Self::RoleModeChanged => {
+                "the Registry database was activated for a separate runtime role but the runtime file names one role; run `bregctl apply --package DIR` to activate it for one role"
             }
             Self::FieldPatternSyntax { .. } => {
                 "a persisted field pattern has invalid PostgreSQL syntax"
@@ -367,6 +471,9 @@ impl StartupError {
                 "the Registry attachment storage or verification binding was refused"
             }
             Self::EventDestinations => "the Registry event destination bindings were refused",
+            Self::InstanceIdChangedWithPendingDeliveries { .. } => {
+                "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+            }
             Self::FieldEncryption => "the Registry field-encryption key state was refused",
             Self::FieldEncryptionCustody => {
                 "the Registry field-encryption data-key custody was refused"
@@ -425,6 +532,7 @@ pub struct PreparedServer {
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
     postgres_advisories: Vec<BaselineAdvisory>,
+    role_mode: RoleMode,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
 }
@@ -451,6 +559,12 @@ impl PreparedServer {
     #[must_use]
     pub fn postgres_advisories(&self) -> &[BaselineAdvisory] {
         &self.postgres_advisories
+    }
+
+    /// The role mode the runtime file selects and startup verified.
+    #[must_use]
+    pub fn role_mode(&self) -> RoleMode {
+        self.role_mode
     }
 
     /// The runtime pool the verified startup path built, so a test can check
@@ -486,6 +600,7 @@ impl PreparedServer {
             review_worker: None,
             metrics: None,
             postgres_advisories: Vec::new(),
+            role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
             #[cfg(feature = "tooling")]
@@ -511,6 +626,7 @@ impl PreparedServer {
             review_worker: None,
             metrics: None,
             postgres_advisories: Vec::new(),
+            role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
             #[cfg(feature = "tooling")]
@@ -546,7 +662,7 @@ pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
 /// run beside a serving process that holds the destination. The discarded
 /// state is built over a writer that refuses every entry, so nothing it holds
 /// can append.
-pub async fn check(config_path: &Path) -> Result<Vec<BaselineAdvisory>> {
+pub async fn check(config_path: &Path) -> Result<CheckedStartup> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
     let shared = config
         .verify_package_envelope()
@@ -562,7 +678,18 @@ pub async fn check(config_path: &Path) -> Result<Vec<BaselineAdvisory>> {
         .map_err(map_runtime_config_error)?;
     prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
         .await
-        .map(|prepared| prepared.postgres_advisories().to_vec())
+        .map(|prepared| CheckedStartup {
+            postgres_advisories: prepared.postgres_advisories().to_vec(),
+            role_mode: prepared.role_mode(),
+        })
+}
+
+/// What a startup check that passed decided without refusing: the
+/// PostgreSQL baseline advisories and the role mode it verified.
+#[derive(Debug, Clone)]
+pub struct CheckedStartup {
+    pub postgres_advisories: Vec<BaselineAdvisory>,
+    pub role_mode: RoleMode,
 }
 
 /// Prepare the clean database capability consumed by the production pre-sign
@@ -573,7 +700,7 @@ pub async fn prepare_schema_test_database(
     config: &RuntimeConfig,
     candidate: &crate::package::PreparedPackage,
 ) -> Result<crate::postgres::PreparedSchemaTestDatabase> {
-    validate_schema_test_candidate_binding(config, candidate)?;
+    validate_schema_test_candidate_binding(candidate)?;
     let migration = config
         .migration_database_connection_config()
         .map_err(map_runtime_config_error)?;
@@ -593,7 +720,7 @@ pub async fn rehearse_schema_fingerprint(
     config: &RuntimeConfig,
     registry: &CompiledRegistry,
 ) -> Result<String> {
-    validate_rehearsal_registry_binding(config, registry)?;
+    validate_rehearsal_registry_binding(registry)?;
     let migration = config
         .migration_database_connection_config()
         .map_err(map_runtime_config_error)?;
@@ -615,7 +742,7 @@ pub async fn rehearse_successor_migration(
         crate::postgres::MigrationRehearsalError,
     >,
 > {
-    validate_schema_test_candidate_binding(config, rehearsal.candidate)?;
+    validate_schema_test_candidate_binding(rehearsal.candidate)?;
     let migration = config
         .migration_database_connection_config()
         .map_err(map_runtime_config_error)?;
@@ -635,7 +762,7 @@ pub async fn rehearse_schema_fingerprint_with_connection_config_for_test(
     registry: &CompiledRegistry,
     migration: &crate::postgres::ConnectionConfig,
 ) -> Result<String> {
-    validate_rehearsal_registry_binding(config, registry)?;
+    validate_rehearsal_registry_binding(registry)?;
     rehearse_schema_fingerprint_with_connection_config(config, registry, migration).await
 }
 
@@ -663,7 +790,7 @@ pub async fn prepare_schema_test_database_with_connection_configs_for_test(
     migration: &crate::postgres::ConnectionConfig,
     runtime: &crate::postgres::ConnectionConfig,
 ) -> Result<crate::postgres::PreparedSchemaTestDatabase> {
-    validate_schema_test_candidate_binding(config, candidate)?;
+    validate_schema_test_candidate_binding(candidate)?;
     prepare_schema_test_database_with_connection_configs(config, candidate, migration, runtime)
         .await
 }
@@ -675,7 +802,12 @@ async fn prepare_schema_test_database_with_connection_configs(
     migration: &crate::postgres::ConnectionConfig,
     runtime: &crate::postgres::ConnectionConfig,
 ) -> Result<crate::postgres::PreparedSchemaTestDatabase> {
-    let manifest = candidate.manifest();
+    // The scratch database records the candidate's package digest as its
+    // active package, so the schema test executes only the package it was
+    // prepared for.
+    let package_digest = candidate
+        .package_digest()
+        .map_err(StartupError::PackageRefused)?;
     crate::postgres::prepare_schema_test_database_with_connections(
         migration,
         runtime,
@@ -683,11 +815,8 @@ async fn prepare_schema_test_database_with_connection_configs(
         config.database().roles().runtime(),
         candidate.registry(),
         crate::postgres::SchemaTestDatabaseIdentity {
-            environment: &manifest.environment,
-            instance_id: &manifest.instance_id,
-            database_id: &manifest.database_id,
-            active_package_revision: &manifest.package_revision,
-            active_sequence: manifest.sequence,
+            database_id: config.identity().database_id(),
+            package_digest: &package_digest,
         },
     )
     .await
@@ -710,36 +839,22 @@ fn schema_preparation_error(error: crate::postgres::PostgresKernelError) -> Star
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 fn validate_schema_test_candidate_binding(
-    config: &RuntimeConfig,
     candidate: &crate::package::PreparedPackage,
 ) -> Result<()> {
-    let manifest = candidate.manifest();
-    if config.identity().environment() != manifest.environment
-        || config.identity().instance_id() != manifest.instance_id
-        || config.identity().database_id() != manifest.database_id
-        || config.package().compiler_source_revision() != manifest.compiler.source_revision
-        || candidate.registry().registry_id() != manifest.package_id
-    {
+    if candidate.registry().registry_id() != candidate.manifest().package_id {
         return Err(StartupError::PackageRefused(PackageError::Binding));
     }
     Ok(())
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
-fn validate_rehearsal_registry_binding(
-    config: &RuntimeConfig,
-    registry: &CompiledRegistry,
-) -> Result<()> {
-    let package = registry
+/// A rehearsal measures a production-compiled Registry, which always names
+/// its package source.
+fn validate_rehearsal_registry_binding(registry: &CompiledRegistry) -> Result<()> {
+    registry
         .package()
-        .ok_or(StartupError::PackageRefused(PackageError::Binding))?;
-    if config.identity().environment() != package.environment
-        || config.identity().instance_id() != package.instance_id
-        || config.package().compiler_source_revision() != package.source_revision
-    {
-        return Err(StartupError::PackageRefused(PackageError::Binding));
-    }
-    Ok(())
+        .map(|_| ())
+        .ok_or(StartupError::PackageRefused(PackageError::Binding))
 }
 
 #[cfg(feature = "postgres-test")]
@@ -819,6 +934,7 @@ async fn prepare_verified_package_with_connection(
     let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
         &connection,
+        config.identity().database_id(),
         config.database().roles().migration(),
         config.database().roles().runtime(),
     )
@@ -854,6 +970,7 @@ async fn prepare_verified_package_with_key_source(
     let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
         &connection,
+        config.identity().database_id(),
         config.database().roles().migration(),
         config.database().roles().runtime(),
     )
@@ -947,6 +1064,7 @@ const _: () = {
 async fn prepare_database_startup(
     package: VerifiedPackage,
     connection: &crate::postgres::ConnectionConfig,
+    database_id: &str,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<(RuntimePool, VerifiedStartup, Vec<BaselineAdvisory>)> {
@@ -961,12 +1079,15 @@ async fn prepare_database_startup(
         .get()
         .await
         .map_err(|_| StartupError::DatabaseConnection)?;
-    let startup = verify_opened_startup(package, &mut client, migration_role, runtime_role).await?;
-    // Only the serving runtime checks the claim. Operator tooling opens the
-    // same verified startup and must keep working on a copy, so the copy can
-    // be inspected, verified, and adopted.
-    let pg_client: &Client = &client;
-    verify_instance_claim(pg_client).await?;
+    let startup = verify_opened_startup(
+        package,
+        database_id,
+        &mut client,
+        migration_role,
+        runtime_role,
+        StartupPurpose::Serve,
+    )
+    .await?;
     let advisories = inspect_baseline(&client, pool.status().max_size).await;
     drop(client);
     Ok((pool, startup, advisories))
@@ -1109,7 +1230,7 @@ async fn finish_prepared_server(
         None => records,
     });
     let read_identity = ReadRuntimeIdentity {
-        package_revision: expected.package_revision.clone(),
+        package_revision: expected.activation_id.clone(),
         schema_fingerprint: expected.schema_fingerprint.clone(),
     };
     let revisions = PostgresRevisionReadService::new(
@@ -1139,7 +1260,7 @@ async fn finish_prepared_server(
     });
     let hook_handlers = Arc::new(crate::hook_handler::HookHandlerRegistry::new(
         &registry,
-        &expected.package_revision,
+        &expected.activation_id,
     ));
     let webhook_delivery = WebhookDeliveryService::new_with_field_encryption(
         pool.clone(),
@@ -1147,11 +1268,14 @@ async fn finish_prepared_server(
         hook_handlers,
         Arc::clone(&registry),
         expected.clone(),
+        config.identity().instance_id(),
         lock_key,
         config.operational_timeouts().record_lock,
         audit.clone(),
         field_encryption.clone(),
     );
+    verify_pending_delivery_source(&pool, &expected.package_id, config.identity().instance_id())
+        .await?;
     webhook_delivery
         .verify_retained_bindings()
         .await
@@ -1218,6 +1342,7 @@ async fn finish_prepared_server(
         pool,
         Arc::clone(&registry),
         expected,
+        config.identity().instance_id(),
         lock_key,
         config.operational_timeouts().record_lock,
         audit,
@@ -1281,6 +1406,10 @@ async fn finish_prepared_server(
         review_worker,
         metrics,
         postgres_advisories,
+        role_mode: RoleMode::from_roles(
+            config.database().roles().migration(),
+            config.database().roles().runtime(),
+        ),
         #[cfg(feature = "wasm")]
         wasm_runtime: Some(wasm_runtime),
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
@@ -1322,17 +1451,15 @@ async fn verify_attachment_storage(
     let ready: bool = tx
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
-         AND package_id=$1 AND environment=$2 AND instance_id=$3 AND database_id=$4
-         AND active_package_revision=$5 AND schema_fingerprint=$6 AND package_sequence=$7
+         AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
+         AND active_activation_id::text=$4 AND schema_fingerprint=$5
          AND maintenance_status='ready')",
             &[
                 &expected.package_id,
-                &expected.environment,
-                &expected.instance_id,
                 &expected.database_id,
-                &expected.package_revision,
+                &expected.package_digest,
+                &expected.activation_id,
                 &expected.schema_fingerprint,
-                &expected.package_sequence,
             ],
         )
         .await
@@ -1344,7 +1471,7 @@ async fn verify_attachment_storage(
     tx.execute(
         "SELECT set_config('registry.active_package_revision', $1, true),
                        set_config('registry.principal', 'breg:startup:attachment-binding', true)",
-        &[&expected.package_revision],
+        &[&expected.activation_id],
     )
     .await
     .map_err(|_| StartupError::AttachmentStorage)?;
@@ -1640,53 +1767,74 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter> {
     }
 }
 
-/// Verify the complete local package first, then require the exact active
-/// package, schema fingerprint, sequence, ready maintenance state, ownership,
-/// RLS, and ACL catalog before returning a listener gate.
+/// Verify the complete local package first, then require the configured
+/// database id, the package digest as the active package, the schema
+/// fingerprint, ready maintenance state, ownership, RLS, and ACL catalog
+/// before returning a listener gate.
 pub async fn prepare_startup(
     package_root: &Path,
     context: &PackageLoadContext<'_>,
+    database_id: &str,
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<VerifiedStartup> {
-    if !matches!(context.intent, PackageIntent::Startup { .. }) {
-        return Err(StartupError::PackageRefused(PackageError::Binding));
-    }
     let shared = registry_platform_config::package::verify_package(
         package_root,
         &crate::package::shared_package_limits(),
         "bregctl package",
     )
     .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    // Ordering is security-relevant: no database call precedes package closure,
-    // signature, binding, and compiler-derivation verification.
+    // Ordering is security-relevant: no database call precedes package closure
+    // and compiler-derivation verification.
     let package = load_package_with_verified_envelope(package_root, context, &shared)
         .map_err(StartupError::PackageRefused)?;
-    prepare_loaded_startup(package, client, migration_role, runtime_role).await
+    prepare_loaded_startup(package, database_id, client, migration_role, runtime_role).await
 }
 
 /// Verify database readiness for a package already loaded through the runtime
 /// configuration's retained shared envelope.
 pub(crate) async fn prepare_loaded_startup(
     package: VerifiedPackage,
+    database_id: &str,
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<VerifiedStartup> {
-    verify_opened_startup(package, client, migration_role, runtime_role).await
+    verify_opened_startup(
+        package,
+        database_id,
+        client,
+        migration_role,
+        runtime_role,
+        StartupPurpose::Inspect,
+    )
+    .await
+}
+
+/// Who opens the verified startup, which decides whether the instance claim
+/// is checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupPurpose {
+    /// The serving runtime, which refuses a database its claim does not name.
+    Serve,
+    /// Operator tooling, which must keep working on a copy so the copy can be
+    /// inspected, verified, and adopted.
+    Inspect,
 }
 
 async fn verify_opened_startup(
     package: VerifiedPackage,
+    database_id: &str,
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
+    purpose: StartupPurpose,
 ) -> Result<VerifiedStartup> {
-    let expected = expected_identity(&package)?;
-    let expected_catalog = ExpectedManagedCatalog::compiled(package.registry());
+    let manifest = package.manifest();
     let lock_key =
-        RegistryLockKey::derive(&expected.package_id).map_err(|_| StartupError::DatabaseUnready)?;
+        RegistryLockKey::derive(&manifest.package_id).map_err(|_| StartupError::DatabaseUnready)?;
+    let expected_catalog = ExpectedManagedCatalog::compiled(package.registry());
     let transaction = client
         .transaction()
         .await
@@ -1705,28 +1853,44 @@ async fn verify_opened_startup(
         )
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
-    verify_configured_runtime_role(&transaction, migration_role, runtime_role)
+    // A database no package was applied to, or one a release before the
+    // activation ledger applied, is named before any check that reads the
+    // state it lacks.
+    match crate::postgres::registry_state_shape(&transaction)
         .await
-        .map_err(|_| StartupError::DatabaseUnready)?;
+        .map_err(|_| StartupError::DatabaseUnready)?
+    {
+        crate::postgres::RegistryStateShape::Absent => {
+            return Err(StartupError::DatabaseUninitialized)
+        }
+        crate::postgres::RegistryStateShape::PreLedger => {
+            return Err(StartupError::PreLedgerDatabase)
+        }
+        crate::postgres::RegistryStateShape::Ledger => {}
+    }
+    verify_configured_runtime_role(&transaction, migration_role, runtime_role).await?;
+    // A separate runtime role missing its grants may not even read the state
+    // the checks below read, so the grants are checked first.
+    verify_runtime_grants(
+        &transaction,
+        &expected_catalog,
+        migration_role,
+        runtime_role,
+    )
+    .await?;
     if package.registry().ddl().requires_postgis {
         crate::postgres::verify_postgis(&transaction, migration_role, runtime_role)
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
     }
-    let maintenance = transaction
-        .query_opt(
-            "SELECT maintenance_status
-             FROM registry_internal.registry_state
-             WHERE singleton",
-            &[],
-        )
-        .await
-        .map_err(|_| StartupError::DatabaseUnready)?
-        .ok_or(StartupError::DatabaseUnready)?
-        .get::<_, String>(0);
-    if maintenance != "ready" {
-        return Err(StartupError::DatabaseUnready);
+    // The physical claim is checked before the recorded identity, so a
+    // restored copy is named as a copy whatever package or database id it
+    // records.
+    if purpose == StartupPurpose::Serve {
+        verify_instance_claim(&transaction).await?;
     }
+    let expected = recorded_startup_identity(&transaction, &package, database_id).await?;
+    verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
     verify_catalog_identity_for_catalog(
         &transaction,
         &expected,
@@ -1748,17 +1912,51 @@ async fn verify_opened_startup(
     })
 }
 
-fn expected_identity(package: &VerifiedPackage) -> Result<ExpectedRegistryIdentity> {
+/// Read the registry state the database records and bind it to this
+/// deployment and package.
+///
+/// Threat: a runtime pointed at another database, or at a package the
+/// database never activated, would serve one registry's rows under another
+/// package's contract. Enforcement: the recorded database id must equal the
+/// runtime file's `identity.databaseId`, and the recorded active package must
+/// be this package's digest; each mismatch has its own refusal. The recorded
+/// activation is the database's own and is carried unchanged into the
+/// expected identity every later check compares.
+async fn recorded_startup_identity(
+    client: &impl GenericClient,
+    package: &VerifiedPackage,
+    database_id: &str,
+) -> Result<ExpectedRegistryIdentity> {
+    let row = client
+        .query_opt(
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, maintenance_status
+             FROM registry_internal.registry_state
+             WHERE singleton",
+            &[],
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+        .ok_or(StartupError::DatabaseUnready)?;
     let manifest = package.manifest();
-    let sequence = i64::try_from(manifest.sequence).map_err(|_| StartupError::DatabaseUnready)?;
+    if row.get::<_, String>(0) != manifest.package_id {
+        return Err(StartupError::DatabaseUnready);
+    }
+    if row.get::<_, String>(1) != database_id {
+        return Err(StartupError::DatabaseIdentityMismatch);
+    }
+    if row.get::<_, String>(2) != package.package_digest() {
+        return Err(StartupError::ActivePackageMismatch);
+    }
+    if row.get::<_, String>(4) != "ready" {
+        return Err(StartupError::DatabaseUnready);
+    }
     Ok(ExpectedRegistryIdentity {
         package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
+        database_id: database_id.to_owned(),
+        package_digest: package.package_digest().to_owned(),
+        activation_id: row.get(3),
         schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: sequence,
     })
 }
 
@@ -1852,6 +2050,60 @@ impl DynamicRuntimeReadiness {
     }
 }
 
+/// Bind retained webhook work to the event source this deployment stamps.
+///
+/// Threat: the delivery worker accepts a stored envelope only when its
+/// `source` equals the source `identity.instanceId` derives, so renaming the
+/// instance while deliveries are pending would dead-letter each of them
+/// silently, one attempt at a time. Enforcement: startup refuses while any
+/// pending or leased delivery with an unexpired payload names another source,
+/// naming the stored source, the configured instance id, and how many wait.
+/// Delivered, dead-lettered, and expired work never reaches the worker again,
+/// so it does not hold the rename back.
+async fn verify_pending_delivery_source(
+    pool: &RuntimePool,
+    package_id: &str,
+    instance_id: &str,
+) -> Result<()> {
+    let expected_source = crate::webhook::delivery_source(package_id, instance_id);
+    let client = pool
+        .get()
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?;
+    let row = client
+        .query_opt(
+            "SELECT left(captured.source, 512), count(*)
+               FROM (
+                   SELECT convert_from(outbox.payload, 'UTF8')::jsonb ->> 'source' AS source
+                     FROM registry_internal.registry_webhook_delivery_state AS state
+                     JOIN registry_internal.registry_outbox AS outbox
+                       ON outbox.event_id = state.event_id
+                    WHERE state.state IN ('pending', 'leased')
+                      AND outbox.payload IS NOT NULL
+                      AND outbox.payload_expires_at > transaction_timestamp()
+               ) AS captured
+              WHERE captured.source IS NOT NULL
+                AND captured.source <> $1
+              GROUP BY captured.source
+              ORDER BY count(*) DESC, captured.source
+              LIMIT 1",
+            &[&expected_source],
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let stored_source: String = row.try_get(0).map_err(|_| StartupError::DatabaseUnready)?;
+    let pending_deliveries: i64 = row.try_get(1).map_err(|_| StartupError::DatabaseUnready)?;
+    Err(StartupError::InstanceIdChangedWithPendingDeliveries {
+        stored_source,
+        configured_instance_id: instance_id.to_owned(),
+        pending_deliveries: u64::try_from(pending_deliveries)
+            .map_err(|_| StartupError::DatabaseUnready)?,
+    })
+}
+
 /// Refuse a database the instance claim does not name, by name.
 async fn verify_instance_claim(client: &impl GenericClient) -> Result<()> {
     match crate::instance_claim::check(client).await {
@@ -1865,6 +2117,64 @@ impl ReadinessProbe for DynamicRuntimeReadiness {
     fn is_ready(&self) -> ServiceFuture<'_, bool> {
         Box::pin(async move { self.check().await.is_ok() })
     }
+}
+
+/// Bind a separate runtime role to the grants the active package gives it.
+///
+/// Threat: a separate runtime role serving without the grants the package
+/// issues, as after a one-role activation or a reassignment, would fail
+/// request by request instead of refusing. Enforcement: the role must hold
+/// every runtime grant the compiled package issues; the refusal names the
+/// apply that reissues them. The separate runtime role cannot read the
+/// activation ledger, so its grants are what bind it to the activation.
+async fn verify_runtime_grants(
+    client: &impl GenericClient,
+    expected_catalog: &ExpectedManagedCatalog,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if migration_role == runtime_role {
+        return Ok(());
+    }
+    if crate::postgres::runtime_grants_missing(client, runtime_role, expected_catalog)
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+    {
+        return Err(StartupError::RuntimeGrantsMissing);
+    }
+    Ok(())
+}
+
+/// Bind a one-role runtime file to an activation recorded for one role.
+///
+/// Threat: one role serving a database the ledger records as guarded by a
+/// separate runtime role would drop that separation without an activation
+/// recording it. Enforcement: the active activation must record the single
+/// role mode; the refusal names the apply that activates it for one role.
+async fn verify_single_role_activation(
+    client: &impl GenericClient,
+    expected: &ExpectedRegistryIdentity,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if migration_role != runtime_role {
+        return Ok(());
+    }
+    let recorded: String = client
+        .query_opt(
+            "SELECT role_mode
+               FROM registry_internal.registry_migrations
+              WHERE activation_id = $1::text::uuid",
+            &[&expected.activation_id],
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+        .ok_or(StartupError::DatabaseUnready)?
+        .get(0);
+    if recorded != RoleMode::Single.as_str() {
+        return Err(StartupError::RoleModeChanged);
+    }
+    Ok(())
 }
 
 async fn verify_configured_runtime_role(
@@ -1910,7 +2220,26 @@ async fn verify_configured_runtime_role(
     if actual_role != runtime_role.as_str() {
         return Err(StartupError::DatabaseUnready);
     }
-    if (1..=13).any(|index| row.get::<_, bool>(index)) {
+    // A separate runtime role that can write the activation ledger or the
+    // registry state is named, so the operator runs the apply that names the
+    // object and the fix.
+    if migration_role != runtime_role
+        && crate::postgres::find_runtime_write_authority(client, migration_role, runtime_role)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?
+            .is_some()
+    {
+        return Err(StartupError::RuntimeWriteAuthority);
+    }
+    // Superuser, row-security bypass, role and database creation are refused in
+    // either role mode. In single-role mode the runtime role is the migration
+    // role, so it owns the managed schemas and their objects by design.
+    let refused: &[usize] = if migration_role == runtime_role {
+        &[1, 2, 3, 4, 7]
+    } else {
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    };
+    if refused.iter().any(|index| row.get::<_, bool>(*index)) {
         return Err(StartupError::DatabaseUnready);
     }
     Ok(())

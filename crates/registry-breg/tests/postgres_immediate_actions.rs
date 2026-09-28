@@ -203,11 +203,8 @@ async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-action-1",
-            package_sequence: 1,
+            label: "package-action-1",
         },
     )
     .await
@@ -1692,11 +1689,8 @@ async fn install_action_registry(
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: "package-action-1",
-            package_sequence: 1,
+            label: "package-action-1",
         },
     )
     .await
@@ -2172,13 +2166,14 @@ fn action_router_with_fault_and_timeout(
         cursors.clone(),
     ));
     let read_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let mutations = PostgresRecordMutationService::new(
         pool,
         registry.clone(),
         identity,
+        INSTANCE_ID,
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -2247,7 +2242,7 @@ async fn seed_household(
             ),
             &[
                 &Uuid::parse_str(household_id).expect("seed UUID"),
-                &identity.package_revision,
+                &identity.activation_id,
                 &household_code,
                 &jurisdiction,
             ],

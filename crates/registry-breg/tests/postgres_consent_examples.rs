@@ -27,10 +27,9 @@ use registry_breg::fixtures::{
     ValidatedFixtureJourneys,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, PreparedPackage, SignaturePolicy, TrustAnchorKey, VerifiedPackage,
-    FIXTURE_JOURNEYS_PATH, TRUST_ANCHOR_API_VERSION,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, PreparedPackage,
+    VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -39,9 +38,8 @@ use registry_breg::postgres::{
 use registry_breg::startup::{prepare_with_connection_config_for_test, PreparedServer};
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk, MockIdp};
-use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use tempfile::TempDir;
@@ -49,6 +47,9 @@ use time::OffsetDateTime;
 use tower::Service as _;
 
 const AUDIENCE: &str = "urn:breg:consent-examples";
+const ENVIRONMENT: &str = "local";
+const INSTANCE_ID: &str = "consent-example";
+
 // The journey sources write every timestamp that must be in force at run time
 // on this date. The harness rebases it to the day before the run, because the
 // runtime evaluates consent validity against the database clock and the
@@ -254,15 +255,12 @@ impl RunningFixture {
             &registry,
             RegistryStateTestIdentity {
                 package_id: &package.package.manifest().package_id,
-                environment: &package.package.manifest().environment,
-                instance_id: &package.package.manifest().instance_id,
-                database_id: &package.package.manifest().database_id,
-                package_revision: &package.package.manifest().package_revision,
-                package_sequence: 1,
+                database_id: &package.database_id,
+                label: package.package.package_digest(),
             },
         )
         .await
-        .expect("database initializes from the exact signed consent example identity");
+        .expect("database initializes from the exact consent example identity");
         drop(migration);
         migration_task.abort();
 
@@ -500,8 +498,7 @@ struct TestPackage {
     _root: TempDir,
     directory: PathBuf,
     package_root: PathBuf,
-    anchor: PathBuf,
-    revision: String,
+    database_id: String,
     prepared: PreparedPackage,
     package: VerifiedPackage,
     migration_plan: Vec<u8>,
@@ -515,21 +512,10 @@ impl TestPackage {
             .as_ref()
             .expect("consent example declares package identity");
         let database_id = format!("{}-database", sources.project.registry.id);
-        let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-            .expect("consent example package signing key generates");
-        let key_id = signing.public().kid.expect("generated signing key has kid");
         let prepared = prepare_package(PackageBuildRequest {
-            environment: identity.environment.clone(),
-            instance_id: identity.instance_id.clone(),
-            database_id: database_id.clone(),
-            sequence: identity.sequence,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: identity.source_revision.clone(),
             schema_fingerprint: schema_fingerprint.to_owned(),
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.clone()],
-            },
             project: PackageSourceFile {
                 path: "registry.yaml".to_owned(),
                 bytes: sources.project_bytes.clone(),
@@ -562,44 +548,13 @@ impl TestPackage {
             .canonicalize()
             .expect("temporary package root canonicalizes");
         let package_root = directory.join("package");
-        let revision = prepared.package_revision().to_owned();
-        let signature =
-            sign(prepared.canonical_signed_bytes(), &signing).expect("package bytes sign");
         prepared
-            .publish_to_directory(
-                &package_root,
-                vec![PackageSignature {
-                    key_id: key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
-            .expect("signed consent example package publishes");
-        let anchor = directory.join("trust-anchor.json");
-        write_json(
-            &anchor,
-            &PackageTrustAnchor {
-                api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-                environment: identity.environment.clone(),
-                instance_id: identity.instance_id.clone(),
-                database_id: database_id.clone(),
-                threshold: 1,
-                keys: vec![TrustAnchorKey {
-                    key_id,
-                    jwk: serde_json::to_value(signing.public())
-                        .expect("public signing JWK serializes"),
-                }],
-            },
-        );
+            .publish_to_directory(&package_root)
+            .expect("consent example package publishes");
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                environment: &identity.environment,
-                instance_id: &identity.instance_id,
-                database_id: &database_id,
-                database_initialization_environment: &identity.environment,
-                compiler_source_revision: &identity.source_revision,
-                trust_anchor: Some(&anchor),
-                intent: PackageIntent::InitialActivation,
+                database_initialization_environment: ENVIRONMENT,
             },
         )
         .expect("published consent example package rederives and verifies");
@@ -608,8 +563,7 @@ impl TestPackage {
             _root: root,
             directory,
             package_root,
-            anchor,
-            revision,
+            database_id,
             prepared,
             package,
             migration_plan,
@@ -635,7 +589,6 @@ impl TestPackage {
             ))
             .expect("static JWKS serializes"),
         );
-        let identity = self.package.manifest();
         let allowed_clients = serde_json::to_string(allowed_clients).expect("clients serialize");
         let path = self.directory.join("runtime.yaml");
         let audit_path = secrets
@@ -671,10 +624,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {}
-  activeRevision: {}
-  activeSequence: {}
 authentication:
   oidc:
     issuer: {}
@@ -712,18 +661,14 @@ operationalTimeouts:
   migrationLockMilliseconds: 2000
   migrationStatementMilliseconds: 5000
 "#,
-                identity.environment,
-                identity.instance_id,
-                identity.database_id,
-                identity.environment,
+                ENVIRONMENT,
+                INSTANCE_ID,
+                self.database_id,
+                ENVIRONMENT,
                 secrets.display(),
                 database.migration_role.as_str(),
                 database.runtime_role.as_str(),
                 self.package_root.display(),
-                self.anchor.display(),
-                identity.compiler.source_revision,
-                self.revision,
-                identity.sequence,
                 idp.issuer(),
             ),
         )
@@ -866,12 +811,6 @@ fn without_trace(mut body: Value) -> Value {
         object.remove("instance");
     }
     body
-}
-
-fn write_json(path: &Path, value: &impl Serialize) {
-    let bytes = canonicalize_json(&serde_json::to_value(value).expect("value serializes"))
-        .expect("value canonicalizes");
-    write_private(path, &bytes);
 }
 
 fn write_private(path: &Path, bytes: &[u8]) {

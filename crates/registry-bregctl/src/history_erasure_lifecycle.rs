@@ -19,12 +19,13 @@ use registry_breg::history_erasure::{
     HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
 use registry_breg::package::PackageError;
-use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
+use registry_breg::postgres::RegistryLockKey;
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::active_registry::{recorded_active_identity, ActiveRegistryError};
 use crate::safe_path::SafeEntry;
 
 const MAX_ERASURE_REQUEST_BYTES: u64 = 16 * 1024;
@@ -38,6 +39,7 @@ pub(crate) enum HistoryErasureLifecycleError {
     RequestDocument,
     RuntimeConfig(RuntimeConfigError),
     Package(PackageError),
+    ActiveRegistry(ActiveRegistryError),
     DatabaseConfiguration,
     TimeoutConfiguration,
     Target,
@@ -82,25 +84,13 @@ pub(crate) fn run(
     let package = config
         .load_active_package()
         .map_err(HistoryErasureLifecycleError::Package)?;
-    let manifest = package.manifest();
-    let package_sequence = i64::try_from(manifest.sequence)
-        .map_err(|_| HistoryErasureLifecycleError::Package(PackageError::Binding))?;
-    let expected = ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence,
-    };
     let migration_connection = config
         .migration_database_connection_config()
         .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?;
     config
         .audit_profile()
         .map_err(HistoryErasureLifecycleError::RuntimeConfig)?;
-    let lock_key = RegistryLockKey::derive(&expected.package_id)
+    let lock_key = RegistryLockKey::derive(&package.manifest().package_id)
         .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?;
     let timeouts = HistoryErasureTimeouts::new(
         bounded_timeout(config.operational_timeouts().migration_lock)?,
@@ -111,6 +101,8 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| HistoryErasureLifecycleError::Runtime)?;
+    let expected = recorded_active_identity(&runtime, &config, &migration_connection, &package)
+        .map_err(HistoryErasureLifecycleError::ActiveRegistry)?;
     let audit = runtime
         .block_on(RegistryAudit::open_companion(&config))
         .map_err(|_| HistoryErasureLifecycleError::Audit)?;
@@ -133,7 +125,7 @@ pub(crate) fn run(
             },
         ))
         .map_err(HistoryErasureLifecycleError::Erasure)?;
-    Ok(outcome_report(expected.package_revision, outcome))
+    Ok(outcome_report(expected.package_digest, outcome))
 }
 
 fn outcome_report(

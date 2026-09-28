@@ -36,7 +36,6 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const PACKAGE_ID: &str = "revision-http-registry";
-const INSTANCE_ID: &str = "revision-http-instance";
 const DATABASE_ID: &str = "revision-http-database";
 const PACKAGE_REVISION: &str = "package-revision-http-1";
 const PRINCIPAL_CANARY: &str = "principal-raw-must-not-enter-revision-audit";
@@ -70,11 +69,8 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -343,11 +339,8 @@ async fn real_postgres_revision_http_lists_internal_migration_revisions() {
         &catalog,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -449,7 +442,7 @@ fn revision_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             records,

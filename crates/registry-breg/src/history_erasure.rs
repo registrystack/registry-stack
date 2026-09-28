@@ -469,7 +469,7 @@ async fn delete_unreferenced_history_descriptors(
                       FROM registry_internal.registry_revisions AS revision
                      WHERE revision.package_revision = descriptor.package_revision
                 )",
-            &[&expected.package_revision],
+            &[&expected.activation_id],
         )
         .await
         .map_err(|_| HistoryErasureError::Unavailable)
@@ -611,7 +611,7 @@ fn lifecycle_target_record_reference(
         .key_hasher()
         .audit_reference_hash(
             "breg-history-erasure-target-record-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             &format!("{}:{}", request.target.entity_id, request.target.record_id),
         )
         .map_err(|_| HistoryErasureError::InvalidInput)
@@ -635,14 +635,14 @@ fn erasure_references(
     let operator = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-operator-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             request.operator_reference,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
     let target = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-target-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             &format!(
                 "{}:{}:{}",
                 request.target.entity_id,
@@ -654,7 +654,7 @@ fn erasure_references(
     let reason = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-reason-v1",
-            &request.expected.package_revision,
+            &request.expected.activation_id,
             request.reason,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
@@ -679,7 +679,7 @@ fn history_erasure_request_entry(
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
+            "packageRevision": request.expected.activation_id,
             "operatorReference": references.operator,
             "targetReference": references.target,
             "reasonReference": references.reason,
@@ -703,7 +703,7 @@ fn history_erasure_entry(
         "phase": "terminal",
         "outcome": "committed",
         "operationId": AUDIT_OPERATION_ID,
-        "packageRevision": request.expected.package_revision,
+        "packageRevision": request.expected.activation_id,
         "operatorReference": operator_reference,
         "targetReference": target_reference,
         "reasonReference": reason_reference,

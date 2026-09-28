@@ -390,6 +390,8 @@ pub(crate) fn run(destination: &Path, id: &str) -> Result<SuccessReport, Failure
         command: "init",
         profile: ProfileArg::Authoring,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: files
             .iter()

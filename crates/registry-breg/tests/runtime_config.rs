@@ -15,11 +15,10 @@ use base64::Engine as _;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
-use registry_breg::package::PackageError;
 use registry_breg::runtime_config::{
     load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
-    parse_runtime_config_with_env, PredecessorEnvelopeError, RuntimeConfigError,
-    RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
+    RUNTIME_CONFIG_KIND,
 };
 use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_crypto::PrivateJwk;
@@ -35,6 +34,19 @@ const MIGRATION_DATABASE_URL_CANARY: &str =
 const AUDIT_KEY_CANARY: &str = "audit-key-canary-012345678901234567890123456789";
 const EXPANDED_CANARY: &str = "runtime-expanded-canary";
 const STATIC_JWKS_ENV: &str = "BREG_RUNTIME_CONFIG_STATIC_JWKS";
+
+/// The document refusal with its message set aside, so a table can name it
+/// beside the refusals that carry none.
+const DOCUMENT: RuntimeConfigError = RuntimeConfigError::Document(String::new());
+
+/// `error` with a document refusal's message set aside, for comparison with
+/// [`DOCUMENT`]. The message itself is pinned by the tests that read it.
+fn refusal(error: RuntimeConfigError) -> RuntimeConfigError {
+    match error {
+        RuntimeConfigError::Document(_) => DOCUMENT,
+        other => other,
+    }
+}
 
 #[test]
 fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
@@ -84,7 +96,7 @@ fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
     }
 }
 
-fn valid_runtime(secret_root: &Path, package_root: &Path, trust_anchor: &Path) -> String {
+fn valid_runtime(secret_root: &Path, package_root: &Path) -> String {
     let audit_path = secret_root
         .with_file_name("audit")
         .join("audit.jsonl")
@@ -118,10 +130,6 @@ database:
     runtime: registry_runtime
 package:
   root: {package_root}
-  trustAnchorPath: {trust_anchor}
-  compilerSourceRevision: source-revision-1
-  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -162,17 +170,11 @@ operationalTimeouts:
         kind = RUNTIME_CONFIG_KIND,
         secret_root = secret_root.display(),
         package_root = package_root.display(),
-        trust_anchor = trust_anchor.display()
     )
 }
 
 fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> String {
-    valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "eventDestinations: {}\n",
         &format!("eventDestinations:\n{bindings}"),
     )
@@ -190,12 +192,7 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
         "bregctl package",
     )
     .expect("shared package envelope writes");
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         &format!("  root: {}\n", fixture.package_root.display()),
         &format!(
             "  root: {}\n  expectedDigest: {}\n",
@@ -251,57 +248,6 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
              deploy the pinned package or update package.expectedDigest",
             written.digest()
         )
-    );
-}
-
-#[test]
-fn predecessor_without_shared_envelope_is_accepted_only_without_a_digest_pin() {
-    let fixture = RuntimeFixture::new();
-    fs::write(
-        fixture.package_root.join("package.json"),
-        b"governed-package\n",
-    )
-    .expect("governed package placeholder writes");
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
-    let unpinned = parse_runtime_config(&raw).expect("runtime without a pin parses");
-    assert!(unpinned
-        .verify_predecessor_package_envelope()
-        .expect("an unpinned predecessor without SHA256SUMS is left to its signed manifest")
-        .is_none());
-    assert!(
-        unpinned.verify_package_envelope().is_err(),
-        "startup still requires SHA256SUMS"
-    );
-
-    let pinned = parse_runtime_config(&raw.replace(
-        &format!("  root: {}\n", fixture.package_root.display()),
-        &format!(
-            "  root: {}\n  expectedDigest: sha256:{}\n",
-            fixture.package_root.display(),
-            "0".repeat(64)
-        ),
-    ))
-    .expect("runtime with a pin parses");
-    let refusal = pinned
-        .verify_predecessor_package_envelope()
-        .expect_err("a pinned predecessor without SHA256SUMS is refused");
-    assert_eq!(
-        refusal,
-        PredecessorEnvelopeError::Package(PackageError::DigestPinUnverifiable)
-    );
-    let message = refusal.to_string();
-    assert!(message.contains("package.expectedDigest"), "{message}");
-    assert!(message.contains("SHA256SUMS"), "{message}");
-    assert_eq!(
-        pinned
-            .load_active_predecessor_package()
-            .err()
-            .expect("apply's predecessor load refuses the pinned package"),
-        PackageError::DigestPinUnverifiable
     );
 }
 
@@ -400,11 +346,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     let config_path = fixture.path("runtime.yaml");
     fs::write(
         &config_path,
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
     )
     .expect("runtime config writes");
     std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
@@ -422,20 +364,17 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         config.database().roles().migration().as_str(),
         "registry_migration"
     );
-    assert_eq!(config.package().active_sequence(), 1);
     assert_eq!(
         config.event_delivery().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
+    assert_eq!(config.identity().database_id(), "registry-db");
     assert_eq!(
-        config.package().compiler_source_revision(),
-        "source-revision-1"
+        config
+            .package_load_context()
+            .database_initialization_environment,
+        "production"
     );
-
-    let package = config.package_load_context();
-    assert_eq!(package.environment, "production");
-    assert_eq!(package.database_id, "registry-db");
-    assert!(package.trust_anchor.is_some());
 
     let verifier = config.authentication().oidc().token_verifier_config();
     assert_eq!(verifier.issuer, "https://issuer.example");
@@ -476,11 +415,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
 #[test]
 fn runtime_document_identity_is_required_and_exact() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
 
     assert_eq!(
         parse_runtime_config_with_env(
@@ -527,11 +462,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
     };
 
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let audit_path = fixture
         .secret_root
         .with_file_name("audit")
@@ -603,12 +534,14 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
         );
     }
     assert_eq!(
-        parse_runtime_config_with_env(
-            &base.replace(&path_line, "  destination: syslog\n"),
-            env_lookup
-        )
-        .expect_err("the destination set is closed"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(
+                &base.replace(&path_line, "  destination: syslog\n"),
+                env_lookup
+            )
+            .expect_err("the destination set is closed")
+        ),
+        DOCUMENT
     );
     for retired in [
         "minimumRetentionDays: 400",
@@ -616,12 +549,14 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
         "failClosed: true",
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(
-                &base.replace(&path_line, &format!("{path_line}  {retired}\n")),
-                env_lookup
-            )
-            .expect_err("the audit block beside the flattened key is closed"),
-            RuntimeConfigError::Document,
+            refusal(
+                parse_runtime_config_with_env(
+                    &base.replace(&path_line, &format!("{path_line}  {retired}\n")),
+                    env_lookup
+                )
+                .expect_err("the audit block beside the flattened key is closed")
+            ),
+            DOCUMENT,
             "{retired}"
         );
     }
@@ -630,11 +565,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
 #[test]
 fn operational_defaults_materialize_without_defaulting_authority() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let raw = base
         .clone()
     .replace(
@@ -740,35 +671,28 @@ fn operational_defaults_materialize_without_defaulting_authority() {
     );
 
     for required_authority in [
-        ("identity:\n", RuntimeConfigError::Document),
-        ("secretProviders:\n", RuntimeConfigError::Document),
-        ("database:\n", RuntimeConfigError::Document),
-        ("package:\n", RuntimeConfigError::Document),
-        ("authentication:\n", RuntimeConfigError::Document),
-        ("audit:\n", RuntimeConfigError::Document),
-        ("cursor:\n", RuntimeConfigError::Document),
+        ("identity:\n", DOCUMENT),
+        ("secretProviders:\n", DOCUMENT),
+        ("database:\n", DOCUMENT),
+        ("package:\n", DOCUMENT),
+        ("authentication:\n", DOCUMENT),
+        ("audit:\n", DOCUMENT),
+        ("cursor:\n", DOCUMENT),
         (
             "  runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n",
-            RuntimeConfigError::Document,
+            DOCUMENT,
         ),
-        ("  roles:\n", RuntimeConfigError::Document),
-        (
-            "    issuer: https://issuer.example\n",
-            RuntimeConfigError::Document,
-        ),
-        (
-            "  hashKeyRef: secret:file/audit-key\n",
-            RuntimeConfigError::Document,
-        ),
-        (
-            "  secretRef: secret:file/cursor-key\n",
-            RuntimeConfigError::Document,
-        ),
+        ("  roles:\n", DOCUMENT),
+        ("    issuer: https://issuer.example\n", DOCUMENT),
+        ("  hashKeyRef: secret:file/audit-key\n", DOCUMENT),
+        ("  secretRef: secret:file/cursor-key\n", DOCUMENT),
     ] {
         let (line, expected) = required_authority;
         assert_eq!(
-            parse_runtime_config_with_env(&raw.replace(line, ""), env_lookup)
-                .expect_err("authority-bearing runtime member is never defaulted"),
+            refusal(
+                parse_runtime_config_with_env(&raw.replace(line, ""), env_lookup)
+                    .expect_err("authority-bearing runtime member is never defaulted")
+            ),
             expected,
             "removing {line:?}"
         );
@@ -815,16 +739,6 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
             "/package/root",
         ),
         (
-            RuntimeConfigError::TrustAnchorUnavailable,
-            "runtime_config.trust_anchor_unavailable",
-            "/package/trustAnchorPath",
-        ),
-        (
-            RuntimeConfigError::UnsafeTrustAnchor,
-            "runtime_config.unsafe_trust_anchor",
-            "/package/trustAnchorPath",
-        ),
-        (
             RuntimeConfigError::SecretProviderRootUnavailable,
             "runtime_config.secret_provider_root_unavailable",
             "/secretProviders/file/root",
@@ -864,11 +778,7 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
 #[test]
 fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for days in [1_u8, 30_u8] {
         let config = parse_runtime_config(&format!(
             "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
@@ -893,11 +803,7 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
 #[test]
 fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let config =
         parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
     // The default module ceiling is the authored admission default, so a
@@ -933,11 +839,7 @@ fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
 #[test]
 fn wasm_execution_budgets_refuse_out_of_range_values() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for (module_bytes, memory_bytes) in [
         (0_u64, 32 * 1024 * 1024_u64),
         (1023, 32 * 1024 * 1024),
@@ -961,11 +863,7 @@ fn wasm_execution_budgets_refuse_out_of_range_values() {
 fn wasm_execution_backend_defaults_to_pulley_and_accepts_native() {
     use registry_breg::wasm_handler::WasmExecutionBackend;
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let config =
         parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
     assert_eq!(
@@ -983,11 +881,7 @@ fn wasm_execution_backend_defaults_to_pulley_and_accepts_native() {
 #[test]
 fn wasm_execution_backend_refuses_unknown_values() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for backend in ["warp", "Pulley", "\"\""] {
         let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
         let metadata = parse_runtime_config(&configured)
@@ -1001,45 +895,221 @@ fn wasm_execution_backend_refuses_unknown_values() {
 #[test]
 fn wasm_execution_section_refuses_unknown_members() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let configured = format!("{base}wasmExecution:\n  maxModuleBytes: 2097152\n  engine: native\n");
     assert_eq!(
-        parse_runtime_config(&configured).expect_err("unknown WASM execution member is refused"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config(&configured)
+                .expect_err("unknown WASM execution member is refused")
+        ),
+        DOCUMENT
     );
 }
 
 #[test]
-fn local_runtime_does_not_require_or_supply_package_trust_authority() {
+fn retired_package_keys_are_refused_before_parse_with_their_replacement() {
     let fixture = RuntimeFixture::new();
-    let missing_anchor = fixture.path("unused-local-trust-anchor.json");
-    let config_path = fixture.path("runtime-local.yaml");
-    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root, &missing_anchor)
-        .replace("environment: production", "environment: local")
-        .replace(
-            "databaseInitializationEnvironment: production",
-            "databaseInitializationEnvironment: local",
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (line, expected, replacement) in [
+        (
+            "  trustAnchorPath: /etc/breg/trust-anchor.json\n",
+            RuntimeConfigError::PackageTrustAnchorRemoved,
+            "bregctl apply",
+        ),
+        (
+            "  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            RuntimeConfigError::PackageActiveRevisionRemoved,
+            "bregctl status",
+        ),
+        (
+            "  activeSequence: 1\n",
+            RuntimeConfigError::PackageActiveSequenceRemoved,
+            "bregctl status",
+        ),
+        (
+            "  compilerSourceRevision: source-revision-1\n",
+            RuntimeConfigError::PackageCompilerSourceRevisionRemoved,
+            "package manifest",
+        ),
+    ] {
+        let raw = base.replace(
+            &format!("  root: {}\n", fixture.package_root.display()),
+            &format!("  root: {}\n{line}", fixture.package_root.display()),
         );
-    fs::write(&config_path, raw).expect("local runtime config writes");
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("a retired package key is refused");
+        assert_eq!(error, expected);
+        assert_eq!(error.code(), "runtime_config.package_key_removed");
+        let key = line.trim().split(':').next().expect("line names a key");
+        assert_eq!(error.path(), format!("/package/{key}"));
+        let message = error.to_string();
+        assert!(message.contains(&format!("package.{key}")), "{message}");
+        assert!(message.contains("remove it"), "{message}");
+        assert!(message.contains(replacement), "{message}");
+        let value = line.split_once(": ").expect("line holds a value").1.trim();
+        assert!(!message.contains(value), "{message}");
+    }
+}
 
-    let config = load_runtime_config(&config_path)
-        .expect("local runtime does not require a production trust anchor file");
-    assert!(config.package_trust_anchor().is_none());
-    assert!(config.package_load_context().trust_anchor.is_none());
+#[test]
+fn a_retired_package_key_is_refused_before_its_value_is_substituted() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        &format!("  root: {}\n", fixture.package_root.display()),
+        &format!(
+            "  root: {}\n  trustAnchorPath: ${{BREG_RUNTIME_CONFIG_UNSET_ANCHOR}}\n",
+            fixture.package_root.display()
+        ),
+    );
+    assert_eq!(
+        parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("a retired key is refused before its expression is substituted"),
+        RuntimeConfigError::PackageTrustAnchorRemoved
+    );
+}
+
+/// Every document refusal keeps the `runtime_config.document` code and says
+/// which field it is about, and none repeats the value it refused, not even
+/// one substituted from the environment.
+#[test]
+fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let lookup = |name: &str| match name {
+        "BREG_RUNTIME_CONFIG_CANARY" => Some(EXPANDED_CANARY.to_owned()),
+        other => env_lookup(other),
+    };
+    let audit_path = format!(
+        "  path: {}\n",
+        fixture.path("audit").join("audit.jsonl").display()
+    );
+    for (from, to, field, value) in [
+        (
+            "    maxSize: 4\n".to_owned(),
+            "    maxSize: .nan\n".to_owned(),
+            "database.pool.maxSize",
+            ".nan",
+        ),
+        (
+            "  bind: 127.0.0.1:8080\n".to_owned(),
+            "  bind: !canary runtime-tagged-canary\n".to_owned(),
+            "listener.bind",
+            "runtime-tagged-canary",
+        ),
+        (
+            audit_path.clone(),
+            format!("{audit_path}  destination: ${{BREG_RUNTIME_CONFIG_CANARY}}\n"),
+            "audit.destination",
+            EXPANDED_CANARY,
+        ),
+        (
+            audit_path.clone(),
+            format!("{audit_path}  rotateBytes: 18446744073709551615\n"),
+            "canonical JSON",
+            "18446744073709551615",
+        ),
+        (
+            "  maxAgeSeconds: 300\n".to_owned(),
+            "  maxAgeSeconds: 300\n  runtimeMemberCanary: runtime-value-canary\n".to_owned(),
+            "cursor",
+            "runtime-value-canary",
+        ),
+    ] {
+        assert!(base.contains(&from), "fixture holds {from}");
+        let raw = base.replace(&from, &to);
+        let error = parse_runtime_config_with_env(&raw, lookup)
+            .expect_err("a document the runtime cannot read is refused");
+        assert!(
+            matches!(error, RuntimeConfigError::Document(_)),
+            "{field}: {error:?}"
+        );
+        assert_eq!(error.code(), "runtime_config.document");
+        let message = error.to_string();
+        assert!(message.contains(field), "{field}: {message}");
+        assert!(!message.contains(value), "{field}: {message}");
+    }
+}
+
+#[test]
+fn a_runtime_file_that_is_not_utf8_is_refused_as_a_document_naming_the_encoding() {
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    let mut bytes = valid_runtime(&fixture.secret_root, &fixture.package_root).into_bytes();
+    bytes.extend_from_slice(b"# \xff\xfe\n");
+    fs::write(&config_path, bytes).expect("runtime config writes");
+    let error = load_runtime_config_with_env(&config_path, env_lookup)
+        .expect_err("a runtime file that is not UTF-8 is refused");
+    assert!(
+        matches!(error, RuntimeConfigError::Document(_)),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), "runtime_config.document");
+    assert!(error.to_string().contains("UTF-8"), "{error}");
+}
+
+#[test]
+fn an_instance_id_outside_the_event_source_grammar_is_refused_naming_the_key() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for instance_id in [
+        "Registry-Primary",
+        "1-registry",
+        "registry primary",
+        &"r".repeat(65),
+    ] {
+        let raw = base.replace(
+            "instanceId: registry-primary",
+            &format!("instanceId: \"{instance_id}\""),
+        );
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("an instance id outside the grammar is refused");
+        assert_eq!(
+            error,
+            RuntimeConfigError::InvalidInstanceId,
+            "{instance_id}"
+        );
+        assert_eq!(error.code(), "runtime_config.invalid_instance_id");
+        assert_eq!(error.path(), "/identity/instanceId");
+        assert!(!error.to_string().contains(instance_id));
+        assert!(error.to_string().contains("set identity.instanceId"));
+    }
+    let longest = "r".repeat(64);
+    let config = parse_runtime_config_with_env(
+        &base.replace(
+            "instanceId: registry-primary",
+            &format!("instanceId: {longest}"),
+        ),
+        env_lookup,
+    )
+    .expect("an instance id at the grammar bound is accepted");
+    assert_eq!(config.identity().instance_id(), longest);
+}
+
+#[test]
+fn disagreeing_environment_identity_keys_are_refused_naming_both_keys() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let raw = base.replace(
+        "databaseInitializationEnvironment: production",
+        "databaseInitializationEnvironment: local",
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup)
+        .expect_err("disagreeing environment keys are refused");
+    assert_eq!(error, RuntimeConfigError::EnvironmentIdentityConflict);
+    assert_eq!(error.code(), "runtime_config.environment_identity_conflict");
+    assert_eq!(error.path(), "/identity/databaseInitializationEnvironment");
+    let message = error.to_string();
+    assert!(message.contains("identity.environment"), "{message}");
+    assert!(
+        message.contains("identity.databaseInitializationEnvironment"),
+        "{message}"
+    );
 }
 
 #[test]
 fn governed_unknown_keys_are_refused_before_they_become_runtime() {
     let fixture = RuntimeFixture::new();
-    let mut raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let mut raw = valid_runtime(&fixture.secret_root, &fixture.package_root);
     raw.push_str("entities: []\n");
     assert_eq!(
         parse_runtime_config_with_env(&raw, env_lookup).expect_err("governed key refused"),
@@ -1050,11 +1120,7 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
 #[test]
 fn review_executors_are_strict_ordinary_self_http_bindings() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let valid = format!(
         "{base}reviewExecutors:\n  registry-automatic:\n    endpoint: https://registry.example/registry-a/\n    tokenRef: secret:file/automatic-executor-token\n    registryId: registry-a\n    accessProfile: automatic-applier\n"
     );
@@ -1078,19 +1144,21 @@ fn review_executors_are_strict_ordinary_self_http_bindings() {
         ),
         (
             valid.replace("    accessProfile: automatic-applier\n", ""),
-            RuntimeConfigError::Document,
+            DOCUMENT,
         ),
         (
             valid.replace(
                 "    accessProfile: automatic-applier\n",
                 "    accessProfile: automatic-applier\n    authority: internal\n",
             ),
-            RuntimeConfigError::Document,
+            DOCUMENT,
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&invalid, env_lookup)
-                .expect_err("unsafe executor binding refused"),
+            refusal(
+                parse_runtime_config_with_env(&invalid, env_lookup)
+                    .expect_err("unsafe executor binding refused")
+            ),
             expected
         );
     }
@@ -1099,11 +1167,7 @@ fn review_executors_are_strict_ordinary_self_http_bindings() {
 #[test]
 fn review_authorities_accept_one_refreshing_or_static_credential() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let refreshing = format!(
         "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/review-producer-client-id\n      clientAssertionKeyRef: secret:file/review-producer-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:casework:primary\n      scopes: [casework:reviews:request]\n"
     );
@@ -1117,12 +1181,14 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
         .expect("an explicitly supplied opaque token remains supported");
 
     assert_eq!(
-        parse_runtime_config_with_env(
-            &refreshing.replace("    profile: producer\n", ""),
-            env_lookup,
-        )
-        .expect_err("a missing Casework profile is refused"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(
+                &refreshing.replace("    profile: producer\n", ""),
+                env_lookup,
+            )
+            .expect_err("a missing Casework profile is refused")
+        ),
+        DOCUMENT
     );
     for invalid in [
         refreshing.replace("    profile: producer\n", "    profile: ''\n"),
@@ -1167,11 +1233,7 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
 #[test]
 fn review_authority_recovery_days_match_the_casework_bound() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let authority = |recovery_days| {
         format!(
             "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: {recovery_days}\n    tokenRef: secret:file/opaque-review-token\n"
@@ -1194,11 +1256,7 @@ fn review_authority_recovery_days_match_the_casework_bound() {
 #[test]
 fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let recipient = "x".repeat(256);
     let valid = format!(
         "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    tokenRef: secret:file/opaque-review-token\n    completionTokenRef: secret:file/review-completion-token\n    completionRecipient: {recipient}\n"
@@ -1224,11 +1282,7 @@ fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
 #[test]
 fn metrics_listener_is_absent_by_default_and_optional() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let config = parse_runtime_config_with_env(&base, env_lookup).expect("baseline runtime parses");
     assert!(
         config.metrics_listener().is_none(),
@@ -1249,11 +1303,7 @@ fn metrics_listener_is_absent_by_default_and_optional() {
 #[test]
 fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for bind in [
         "0.0.0.0:9100",
         "8.8.8.8:9100",
@@ -1281,11 +1331,7 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
 #[test]
 fn metrics_listener_refuses_shared_registry_binding() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     // Same address as the Registry listener itself, and the dual-stack
     // wildcard equivalent of it.
     for bind in ["127.0.0.1:8080", "\"[::]:8080\""] {
@@ -1310,16 +1356,14 @@ fn metrics_listener_refuses_shared_registry_binding() {
 #[test]
 fn metrics_listener_refuses_unknown_members() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let configured = format!("{base}metricsListener:\n  bind: 127.0.0.1:9100\n  labels: none\n");
     assert_eq!(
-        parse_runtime_config_with_env(&configured, env_lookup)
-            .expect_err("unknown metrics member is refused"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(&configured, env_lookup)
+                .expect_err("unknown metrics member is refused")
+        ),
+        DOCUMENT
     );
 }
 
@@ -1335,7 +1379,7 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
         "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  plaintext: true\n  pool:".to_owned(),
         "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  password: inline-secret\n  pool:".to_owned(),
     ] {
-        let raw = valid_runtime(&fixture.secret_root, &fixture.package_root, &fixture.trust_anchor)
+        let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
             .replace(
                 "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
                 &replacement,
@@ -1351,16 +1395,18 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
 #[test]
 fn old_single_database_url_ref_is_refused_by_strict_schema() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root, &fixture.trust_anchor)
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
         .replace(
             "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n",
             "urlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n",
         );
 
     assert_eq!(
-        parse_runtime_config_with_env(&raw, env_lookup)
-            .expect_err("legacy single database URL ref is refused"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(&raw, env_lookup)
+                .expect_err("legacy single database URL ref is refused")
+        ),
+        DOCUMENT
     );
 }
 
@@ -1369,11 +1415,7 @@ fn database_role_specific_resolvers_refuse_wrong_role_without_leaking_values() {
     let _guard = environment_lock();
     let fixture = RuntimeFixture::new();
     let config = parse_runtime_config_with_env(
-        &valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
         env_lookup,
     )
     .expect("runtime parses");
@@ -1410,11 +1452,7 @@ fn migration_database_resolver_uses_only_the_migration_reference() {
     let _guard = environment_lock();
     let fixture = RuntimeFixture::new();
     let config = parse_runtime_config_with_env(
-        &valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
         env_lookup,
     )
     .expect("runtime parses");
@@ -1434,23 +1472,38 @@ fn migration_database_resolver_uses_only_the_migration_reference() {
 }
 
 #[test]
-fn database_references_must_be_structurally_distinct() {
+fn split_roles_need_structurally_distinct_database_references() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
         "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
     );
 
     let error = parse_runtime_config_with_env(&raw, env_lookup)
-        .expect_err("same database reference is refused");
+        .expect_err("one database reference for two roles is refused");
     assert_eq!(error, RuntimeConfigError::InvalidDatabase);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("BREG_RUNTIME_CONFIG_DATABASE_URL"));
+}
+
+#[test]
+fn one_role_may_serve_as_runtime_and_migration_role() {
+    let fixture = RuntimeFixture::new();
+    let single_role = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("runtime: registry_runtime", "runtime: registry_migration");
+    let config = parse_runtime_config_with_env(&single_role, env_lookup)
+        .expect("one role with two database references parses");
+    assert_eq!(
+        config.database().roles().runtime(),
+        config.database().roles().migration()
+    );
+
+    let single_reference = single_role.replace(
+        "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
+    );
+    parse_runtime_config_with_env(&single_reference, env_lookup)
+        .expect("one role with one database reference parses");
 }
 
 #[test]
@@ -1458,59 +1511,35 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
     let fixture = RuntimeFixture::new();
     for (raw, expected) in [
         (
-            valid_runtime(
-                &fixture.secret_root,
-                &fixture.package_root,
-                &fixture.trust_anchor,
-            )
-            .replace("maxSize: 4", "maxSize: 129"),
+            valid_runtime(&fixture.secret_root, &fixture.package_root)
+                .replace("maxSize: 4", "maxSize: 129"),
             RuntimeConfigError::InvalidBounds,
         ),
         (
-            valid_runtime(
-                &fixture.secret_root,
-                &fixture.package_root,
-                &fixture.trust_anchor,
-            )
-            .replace(
+            valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
                 "migration: registry_migration",
                 "migration: RegistryMigration",
             ),
             RuntimeConfigError::InvalidDatabase,
         ),
         (
-            valid_runtime(
-                &fixture.secret_root,
-                &fixture.package_root,
-                &fixture.trust_anchor,
-            )
-            .replace("runtime: registry_runtime", "runtime: registry_migration"),
-            RuntimeConfigError::InvalidDatabase,
-        ),
-        (
-            valid_runtime(
-                &fixture.secret_root,
-                &fixture.package_root,
-                &fixture.trust_anchor,
-            )
-            .replace(
+            valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
                 &fixture.package_root.display().to_string(),
                 "relative/package",
             ),
             RuntimeConfigError::InvalidPackage,
         ),
         (
-            valid_runtime(
-                &fixture.secret_root,
-                &fixture.package_root,
-                &fixture.trust_anchor,
-            )
-            .replace("principal: registry_principal", "principal: client_id"),
+            valid_runtime(&fixture.secret_root, &fixture.package_root)
+                .replace("principal: registry_principal", "principal: client_id"),
             RuntimeConfigError::InvalidOidc,
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup).expect_err("invalid runtime refused"),
+            refusal(
+                parse_runtime_config_with_env(&raw, env_lookup)
+                    .expect_err("invalid runtime refused")
+            ),
             expected
         );
     }
@@ -1519,12 +1548,7 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
 #[test]
 fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "deniedKids: [denied-kid]",
         concat!(
             "deniedKids: [denied-kid]\n",
@@ -1554,11 +1578,7 @@ fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() 
 #[test]
 fn invalid_assertion_issuer_shapes_are_refused() {
     let fixture = RuntimeFixture::new();
-    let baseline = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let insert = |block: &str| {
         baseline.replace(
             "deniedKids: [denied-kid]",
@@ -1591,7 +1611,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "      registry-client:\n",
                 "        - https://issuer-b.example\n",
             )),
-            RuntimeConfigError::Document,
+            DOCUMENT,
         ),
         (
             "duplicate issuer inside one client's list",
@@ -1649,7 +1669,10 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup).expect_err("invalid runtime refused"),
+            refusal(
+                parse_runtime_config_with_env(&raw, env_lookup)
+                    .expect_err("invalid runtime refused")
+            ),
             expected,
             "{name}"
         );
@@ -1659,11 +1682,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
 #[test]
 fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted() {
     let fixture = RuntimeFixture::new();
-    let baseline = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for seconds in [1, 300, 3600, 5400, 7200] {
         let raw = baseline
             .replace("principal: registry_principal", "principal: sub")
@@ -1705,29 +1724,22 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
 #[test]
 fn authored_jwks_uri_override_is_refused() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "    audience: urn:breg:test\n",
         "    audience: urn:breg:test\n    jwksUri: https://attacker.example/jwks.json\n",
     );
     assert_eq!(
-        parse_runtime_config_with_env(&raw, env_lookup).expect_err("JWKS override refused"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(&raw, env_lookup).expect_err("JWKS override refused")
+        ),
+        DOCUMENT
     );
 }
 
 #[test]
 fn jwks_source_is_a_strict_tagged_oidc_member() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root);
     parse_runtime_config_with_env(&raw, env_lookup).expect("omitted source keeps discovery");
     parse_runtime_config_with_env(&runtime_with_discovery_source(&fixture), env_lookup)
         .expect("explicit discovery source parses");
@@ -2039,12 +2051,8 @@ async fn static_jwks_resolves_once_and_rotates_only_on_reconstruction() {
 #[test]
 fn debug_and_errors_do_not_render_secret_or_expanded_canaries() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace("production", "${ENVIRONMENT_CANARY}");
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("production", "${ENVIRONMENT_CANARY}");
     let config = parse_runtime_config_with_env(&raw, |name| match name {
         "ENVIRONMENT_CANARY" => Some(EXPANDED_CANARY.to_owned()),
         _ => env_lookup(name),
@@ -2078,12 +2086,8 @@ fn debug_and_errors_do_not_render_secret_or_expanded_canaries() {
 #[test]
 fn a_substituted_value_cannot_inject_document_structure() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace("https://issuer.example", "https://${OIDC_HOST}");
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("https://issuer.example", "https://${OIDC_HOST}");
     let error = parse_runtime_config_with_env(&raw, |name| match name {
         "OIDC_HOST" => Some("issuer.example\nentities: []".to_owned()),
         _ => env_lookup(name),
@@ -2098,12 +2102,7 @@ fn a_substituted_value_cannot_inject_document_structure() {
 #[test]
 fn substituted_runtime_document_stays_within_the_size_bound() {
     let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "instanceId: registry-primary",
         "instanceId: ${OVERSIZED_RUNTIME_VALUE}",
     );
@@ -2121,11 +2120,7 @@ fn substituted_runtime_document_stays_within_the_size_bound() {
 #[test]
 fn a_substitution_inside_a_secret_reference_is_refused() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let lookup = |name: &str| match name {
         "AUDIT_KEY_REF" => Some("secret:file/audit-key".to_owned()),
         "SECRET_ROOT" => Some(fixture.secret_root.display().to_string()),
@@ -2156,38 +2151,35 @@ fn a_substitution_inside_a_secret_reference_is_refused() {
 #[test]
 fn substituted_values_stay_strings() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let lookup = |name: &str| match name {
-        "INSTANCE_ID" => Some("12345".to_owned()),
+        "DATABASE_ID" => Some("12345".to_owned()),
         "POOL_SIZE" => Some("4".to_owned()),
         _ => env_lookup(name),
     };
     let config = parse_runtime_config_with_env(
-        &base.replace("instanceId: registry-primary", "instanceId: ${INSTANCE_ID}"),
+        &base.replace("databaseId: registry-db", "databaseId: ${DATABASE_ID}"),
         lookup,
     )
     .expect("a numeric-looking substitution is the string it was written as");
-    assert_eq!(config.package_load_context().instance_id, "12345");
+    assert_eq!(config.identity().database_id(), "12345");
 
     assert_eq!(
-        parse_runtime_config_with_env(&base.replace("maxSize: 4", "maxSize: ${POOL_SIZE}"), lookup)
-            .expect_err("a substitution never becomes a number"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(
+                &base.replace("maxSize: 4", "maxSize: ${POOL_SIZE}"),
+                lookup
+            )
+            .expect_err("a substitution never becomes a number")
+        ),
+        DOCUMENT
     );
 }
 
 #[test]
 fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     parse_runtime_config_with_env(
         &base.replace("https://issuer.example", "http://127.0.0.1:8095"),
         env_lookup,
@@ -2221,12 +2213,7 @@ fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
 fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
     let fixture = RuntimeFixture::new();
     let with_uri = |uri: &str| {
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        )
-        .replace(
+        valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
             "    jwksCache:\n",
             &format!("    jwksSource:\n      kind: uri\n      uri: {uri}\n    jwksCache:\n"),
         )
@@ -2262,11 +2249,7 @@ fn runtime_config_file_must_not_be_a_symlink() {
     let target = fixture.path("runtime-target.yaml");
     fs::write(
         &target,
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
     )
     .expect("runtime config target writes");
     let link = fixture.path("runtime-link.yaml");
@@ -2289,11 +2272,7 @@ fn runtime_config_path_components_must_not_be_symlinks() {
     let config_path = real_dir.join("runtime.yaml");
     fs::write(
         &config_path,
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
     )
     .expect("runtime config writes");
     let linked_dir = fixture.path("linked-config-dir");
@@ -2315,7 +2294,7 @@ fn loaded_paths_must_not_be_symlinks() {
     let fixture = RuntimeFixture::new();
     let linked_root = fixture.path("linked-package");
     symlink(&fixture.package_root, &linked_root).expect("package symlink creates");
-    let raw = valid_runtime(&fixture.secret_root, &linked_root, &fixture.trust_anchor);
+    let raw = valid_runtime(&fixture.secret_root, &linked_root);
     let config_path = fixture.path("runtime-symlink.yaml");
     fs::write(&config_path, raw).expect("runtime config writes");
 
@@ -2324,24 +2303,9 @@ fn loaded_paths_must_not_be_symlinks() {
         RuntimeConfigError::UnsafePackageRoot
     );
 
-    let linked_anchor = fixture.path("linked-trust-anchor.json");
-    symlink(&fixture.trust_anchor, &linked_anchor).expect("trust anchor symlink creates");
-    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root, &linked_anchor);
-    let anchor_config_path = fixture.path("runtime-anchor-symlink.yaml");
-    fs::write(&anchor_config_path, raw).expect("runtime config writes");
-
-    assert_eq!(
-        load_runtime_config(&anchor_config_path).expect_err("symlinked trust anchor refused"),
-        RuntimeConfigError::UnsafeTrustAnchor
-    );
-
     let linked_secret_root = fixture.path("linked-secrets");
     symlink(&fixture.secret_root, &linked_secret_root).expect("secret root symlink creates");
-    let raw = valid_runtime(
-        &linked_secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let raw = valid_runtime(&linked_secret_root, &fixture.package_root);
     let secret_config_path = fixture.path("runtime-secret-symlink.yaml");
     fs::write(&secret_config_path, raw).expect("runtime config writes");
 
@@ -2385,11 +2349,7 @@ fn an_unreadable_runtime_config_directory_is_unavailable_rather_than_unsafe() {
     let config_path = closed.join("runtime.yaml");
     fs::write(
         &config_path,
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
     )
     .expect("runtime config writes");
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o000))
@@ -2410,62 +2370,32 @@ fn an_unreadable_runtime_config_directory_is_unavailable_rather_than_unsafe() {
     );
 }
 
-/// The package root and the package trust anchor are two separate files, so a
-/// missing one must not be reported as the other.
+/// The package root and the file secret provider root are two separate
+/// directories, so a missing one must not be reported as the other.
 #[test]
-fn missing_package_root_and_trust_anchor_are_reported_at_their_own_paths() {
+fn missing_package_root_and_secret_root_are_reported_at_their_own_paths() {
     let fixture = RuntimeFixture::new();
     let missing_root_path = fixture.path("runtime-missing-package-root.yaml");
     fs::write(
         &missing_root_path,
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.path("absent-package"),
-            &fixture.trust_anchor,
-        ),
-    )
-    .expect("runtime config writes");
-    let missing_anchor_path = fixture.path("runtime-missing-trust-anchor.yaml");
-    fs::write(
-        &missing_anchor_path,
-        valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.path("absent-trust-anchor.json"),
-        ),
+        valid_runtime(&fixture.secret_root, &fixture.path("absent-package")),
     )
     .expect("runtime config writes");
     let missing_secret_root_path = fixture.path("runtime-missing-secret-root.yaml");
     fs::write(
         &missing_secret_root_path,
-        valid_runtime(
-            &fixture.path("absent-secrets"),
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        valid_runtime(&fixture.path("absent-secrets"), &fixture.package_root),
     )
     .expect("runtime config writes");
 
     let root_error =
         load_runtime_config(&missing_root_path).expect_err("a missing package root is refused");
-    let anchor_error = load_runtime_config(&missing_anchor_path)
-        .expect_err("a missing package trust anchor is refused");
     let secret_error = load_runtime_config(&missing_secret_root_path)
         .expect_err("a missing file secret provider root is refused");
 
     assert_eq!(root_error, RuntimeConfigError::PackageRootUnavailable);
     assert_eq!(root_error.path(), "/package/root");
     assert_eq!(root_error.code(), "runtime_config.package_root_unavailable");
-    assert_eq!(anchor_error, RuntimeConfigError::TrustAnchorUnavailable);
-    assert_eq!(anchor_error.path(), "/package/trustAnchorPath");
-    assert_eq!(
-        anchor_error.code(),
-        "runtime_config.trust_anchor_unavailable"
-    );
-    assert!(
-        anchor_error.to_string().contains("trust anchor"),
-        "the trust anchor refusal names the file it read: {anchor_error}"
-    );
     assert_eq!(
         secret_error,
         RuntimeConfigError::SecretProviderRootUnavailable
@@ -2478,11 +2408,7 @@ fn missing_package_root_and_trust_anchor_are_reported_at_their_own_paths() {
 #[test]
 fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for accepted in [0_u64, 1_000, 60_000, 300_000] {
         let config = parse_runtime_config_with_env(
             &base.replace(
@@ -2528,21 +2454,19 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
 #[test]
 fn listener_trusted_proxy_is_refused_as_an_unknown_field() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace("  trustedProxy: direct\n", "");
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("  trustedProxy: direct\n", "");
     let with_trusted_proxy = base.replace(
         "listener:\n  bind: 127.0.0.1:8080\n",
         "listener:\n  bind: 127.0.0.1:8080\n  trustedProxy: direct\n",
     );
 
     assert_eq!(
-        parse_runtime_config_with_env(&with_trusted_proxy, env_lookup)
-            .expect_err("listener.trustedProxy is refused as an unknown field"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(&with_trusted_proxy, env_lookup)
+                .expect_err("listener.trustedProxy is refused as an unknown field")
+        ),
+        DOCUMENT
     );
 }
 
@@ -2580,9 +2504,9 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup)
-                .expect_err("unknown event destination key refused"),
-            RuntimeConfigError::Document
+            refusal(parse_runtime_config_with_env(&raw, env_lookup)
+                .expect_err("unknown event destination key refused")),
+            DOCUMENT
         );
     }
 
@@ -2598,11 +2522,7 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
 #[test]
 fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_closed() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let bindings = r#"evidenceProviders:
   hooks:
     baseUrl: https://evidence-endpoint-canary.example
@@ -2635,7 +2555,7 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
     ] {
         let error = parse_runtime_config_with_env(&raw, env_lookup)
             .expect_err("malformed or undeployed provider binding member is refused");
-        assert_eq!(error, RuntimeConfigError::Document);
+        assert_eq!(refusal(error.clone()), DOCUMENT);
         assert!(!format!("{error:?}: {error}").contains("canary"));
     }
     for member in ["hooks", "entities"] {
@@ -2713,9 +2633,11 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
         valid.replace("dualStackStrict", "resolverDefault"),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup)
-                .expect_err("non-closed event profile refused"),
-            RuntimeConfigError::Document
+            refusal(
+                parse_runtime_config_with_env(&raw, env_lookup)
+                    .expect_err("non-closed event profile refused")
+            ),
+            DOCUMENT
         );
     }
 }
@@ -2738,9 +2660,11 @@ fn pinned_loopback_https_event_profile_is_absent_without_postgres_test() {
     );
 
     assert_eq!(
-        parse_runtime_config_with_env(&raw, env_lookup)
-            .expect_err("test-only network profile is absent from production parsing"),
-        RuntimeConfigError::Document
+        refusal(
+            parse_runtime_config_with_env(&raw, env_lookup)
+                .expect_err("test-only network profile is absent from production parsing")
+        ),
+        DOCUMENT
     );
 }
 
@@ -2904,11 +2828,7 @@ fn activation_requires_exact_compiled_and_runtime_destination_sets() {
     let compiled = compiled_webhooks(&[("case-operations", 5_000, 5)]);
 
     let missing = parse_runtime_config_with_env(
-        &valid_runtime(
-            &fixture.secret_root,
-            &fixture.package_root,
-            &fixture.trust_anchor,
-        ),
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
         env_lookup,
     )
     .expect("empty runtime parses");
@@ -3268,23 +3188,14 @@ fn env_lookup(name: &str) -> Option<String> {
 }
 
 fn runtime_with_discovery_source(fixture: &RuntimeFixture) -> String {
-    valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
-    .replace(
+    valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "    jwksCache:\n",
         "    jwksSource:\n      kind: discovery\n    jwksCache:\n",
     )
 }
 
 fn runtime_with_static_jwks_ref(fixture: &RuntimeFixture, document_ref: &str) -> String {
-    valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    )
+    valid_runtime(&fixture.secret_root, &fixture.package_root)
     .replace(
         "    jwksCache:\n",
         &format!("    jwksSource:\n      kind: static\n      documentRef: {document_ref}\n    jwksCache:\n"),
@@ -3359,7 +3270,6 @@ struct RuntimeFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
 }
 
 impl RuntimeFixture {
@@ -3382,8 +3292,6 @@ impl RuntimeFixture {
         let package_root = root.join("package");
         fs::create_dir(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         fs::write(secret_root.join("audit-key"), AUDIT_KEY_CANARY).expect("audit secret writes");
         fs::write(secret_root.join("cursor-key"), [0x52_u8; 32]).expect("cursor secret writes");
         #[cfg(unix)]
@@ -3404,7 +3312,6 @@ impl RuntimeFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
         }
     }
 
@@ -3434,11 +3341,7 @@ impl Drop for RuntimeFixture {
 async fn attachment_storage_defaults_to_database_and_validates_operator_binding() {
     use registry_breg::attachment_storage::AttachmentStorage;
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let default = parse_runtime_config(&base).unwrap();
     assert!(matches!(
         default
@@ -3470,11 +3373,7 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
 fn attachment_verification_defaults_off_and_validates_operator_binding() {
     use registry_breg::attachment_verification::AttachmentVerification;
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     assert!(matches!(
         parse_runtime_config(&base)
             .unwrap()
@@ -3513,11 +3412,7 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
 fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     use registry_breg::field_encryption::FieldEncryptionProvider;
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let default = parse_runtime_config(&base).unwrap();
     assert!(
         default.field_encryption().provider().is_none(),
@@ -3563,19 +3458,15 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     // refused before field-encryption validation runs.
     let unknown_kind = format!("{base}\nfieldEncryption:\n  provider:\n    kind: kms\n");
     assert_eq!(
-        parse_runtime_config(&unknown_kind).unwrap_err(),
-        RuntimeConfigError::Document
+        refusal(parse_runtime_config(&unknown_kind).unwrap_err()),
+        DOCUMENT
     );
 }
 
 #[test]
 fn an_audit_key_that_is_not_a_secret_reference_is_an_invalid_audit_binding() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(
-        &fixture.secret_root,
-        &fixture.package_root,
-        &fixture.trust_anchor,
-    );
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for reference in ["audit-key", "secret:vault/audit-key", "\"\""] {
         let configured = base.replace(
             "  hashKeyRef: secret:file/audit-key\n",

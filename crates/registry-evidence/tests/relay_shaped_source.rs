@@ -265,9 +265,9 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     // issues one fresh bearer token.
     let token_server = MockServer::start().await;
     let records_server = MockServer::start().await;
-    let client_id = format!("client-id-{}", ulid::Ulid::new());
-    let client_secret = format!("client-secret-{}", ulid::Ulid::new());
-    let access_token = format!("access-token-{}", ulid::Ulid::new());
+    let client_id = format!("client-id-{}", ulid::Ulid::generate());
+    let client_secret = format!("client-secret-{}", ulid::Ulid::generate());
+    let access_token = format!("access-token-{}", ulid::Ulid::generate());
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(body_string_contains("grant_type=client_credentials"))

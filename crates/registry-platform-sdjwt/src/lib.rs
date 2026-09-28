@@ -174,7 +174,7 @@ impl SdJwtIssuer {
 
 #[must_use]
 pub fn new_credential_id() -> String {
-    format!("urn:ulid:{}", Ulid::new())
+    format!("urn:ulid:{}", Ulid::generate())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

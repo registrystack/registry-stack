@@ -1,7 +1,7 @@
 apiVersion: registry.registrystack.org/product-contract/v1
 product: breg
 traceability:
-  - {id: BREG-SEC-01, state: enforced, negativeId: BREG-NEG-01, negativeTest: {path: crates/registry-breg/tests/postgres_package.rs, name: package_binding_refuses_wrong_environment_instance_database_sequence_and_prior}}
+  - {id: BREG-SEC-01, state: enforced, negativeId: BREG-NEG-01, negativeTest: {path: crates/registry-breg/tests/compiler_contract.rs, name: retired_package_identity_keys_are_refused_with_their_replacement}}
   - {id: BREG-SEC-02, state: enforced, negativeId: BREG-NEG-02, negativeTest: {path: crates/registry-breg/tests/postgres_package.rs, name: real_postgres_package_startup_apply_failure_and_old_process_are_closed}}
   - {id: BREG-SEC-03, state: enforced, negativeId: BREG-NEG-03, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
   - {id: BREG-SEC-04, state: enforced, negativeId: BREG-NEG-04, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
@@ -117,4 +117,9 @@ traceability:
   - {id: BREG-SEC-114, state: enforced, negativeId: BREG-NEG-114, negativeTest: {path: crates/registry-breg/tests/postgres_startup.rs, name: a_restored_copy_refuses_to_serve_until_adopted}}
   - {id: BREG-SEC-115, state: enforced, negativeId: BREG-NEG-115, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: the_runtime_role_cannot_rewrite_or_remove_the_instance_claim}}
   - {id: BREG-SEC-116, state: enforced, negativeId: BREG-NEG-116, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: adopting_a_restored_copy_supersedes_every_open_authority}}
-  - {id: BREG-SEC-117, state: enforced, negativeId: BREG-NEG-117, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: installing_the_claim_beside_committed_history_leaves_the_database_to_adopt}}
+  - {id: BREG-SEC-117, state: enforced, negativeId: BREG-NEG-117, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_activation_keeps_a_claim_that_names_another_database}}
+  - {id: BREG-SEC-118, state: enforced, negativeId: BREG-NEG-118, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_split_apply_names_the_fix_for_every_runtime_write_authority}}
+  - {id: BREG-SEC-119, state: enforced, negativeId: BREG-NEG-119, negativeTest: {path: crates/registry-breg/tests/postgres_startup.rs, name: split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing}}
+  - {id: BREG-SEC-120, state: enforced, negativeId: BREG-NEG-120, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_a_refused_activation_request_entry_changes_nothing}}
+  - {id: BREG-SEC-121, state: enforced, negativeId: BREG-NEG-121, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash}}
+  - {id: BREG-SEC-122, state: enforced, negativeId: BREG-NEG-122, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_adoption_refuses_a_package_whose_fingerprint_differs_and_changes_nothing}}

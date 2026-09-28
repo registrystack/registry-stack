@@ -96,7 +96,7 @@ cargo run --locked -p registry-bregctl -- \
 The existing [action authoring and schema-test workflow](immediate-actions.md)
 explains package preparation, activation and bearer-token bindings. The
 fixture's journey declares its principals, scopes, purposes and direct claims.
-Use the same package/sign/apply boundary as other BREG projects; checking source
+Use the same package/apply boundary as other BREG projects; checking source
 alone does not activate a registry.
 
 ## Invoke and recover
@@ -179,7 +179,7 @@ webhook or claim to prove external execution. The existing webhook suites own
 transport verification.
 
 The second test executes the authored journey through the existing schema-test
-runner, verified startup and an exact signed package. It validates the resulting
+runner, verified startup and an exact package. It validates the resulting
 receipt against that package. This covers the scalar and string-set fixture
 claims and the complete registration/transfer sequence; it does not start the
 external webhook worker.

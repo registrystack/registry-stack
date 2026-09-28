@@ -26,13 +26,14 @@ pub use baseline::{
 pub use catalog::{
     initialize_compiled_registry_state_for_test, initialize_kernel_registry_state_for_test,
     initialize_registry_state_for_catalog_test, legacy_schema_fingerprint_for_test,
-    RegistryStateTestIdentity,
+    test_activation_id, test_package_digest, RegistryStateTestIdentity,
 };
 pub use catalog::{
     install_kernel_schema, kernel_schema_fingerprint, managed_schema_fingerprint,
     verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
+pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
 pub(crate) use config::MAX_POOL_TIMEOUT;
 pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::{
@@ -54,16 +55,18 @@ pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
     covered_field_encryption_fields, field_plaintext_string, prepare_unique_blind_index_preflight,
-    prior_plaintext_projection, record_unique_blind_index_page, recursive_member_path,
-    set_force_row_security, DedicatedApplyConnection as VerifiedPackageApplyConnection,
-    FieldEncryptionCoveredField, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
-    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
-    ReviewedPackageExecutionRequest,
+    prior_plaintext_projection, read_activation_status, record_unique_blind_index_page,
+    recursive_member_path, set_force_row_security, ActivationStatusRead,
+    DedicatedApplyConnection as VerifiedPackageApplyConnection, FieldEncryptionCoveredField,
+    MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement, ReviewedExecutionOutcome,
+    ReviewedFieldEncryptionContext, ReviewedMigrationProgress, ReviewedPackageExecutionRequest,
+    TransactionEnd,
 };
 pub(crate) use migration_ledger::{
-    statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
-    MigrationLedgerStepKind, MigrationPlanKind,
+    statement_checksum, BackupReference, MigrationArtifactBinding, MigrationKind,
+    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
 };
+pub use migration_ledger::{ActivationPlanKind, RoleMode};
 pub use mutation::{
     IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
     IngestionServiceError, PostgresRecordMutationService,
@@ -79,10 +82,13 @@ pub use rehearsal::{
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
+pub(crate) use roles::find_runtime_write_authority;
+#[doc(hidden)]
+pub use roles::RuntimeRevoke;
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
-    verify_runtime_role, SqlIdentifier,
+    verify_runtime_role, RuntimeWriteAuthority, SqlIdentifier,
 };
 pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;
@@ -225,6 +231,10 @@ pub enum PostgresKernelError {
     /// caller has not acknowledged discarding.
     #[error("a retired audit table still carries unacknowledged rows")]
     RetiredAuditRowsPresent,
+    /// The live managed catalog of an adopted database is not the catalog
+    /// the adopting package declares. Only the live fingerprint is retained.
+    #[error("the live managed schema fingerprint differs from the adopting package")]
+    AdoptionFingerprintMismatch { live: String },
     /// PostgreSQL refused a migration statement. Only the SQLSTATE and the
     /// object names the server reported are retained.
     #[error("PostgreSQL refused a migration statement: {0}")]

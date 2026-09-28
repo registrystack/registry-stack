@@ -169,11 +169,7 @@ mod tests {
                 }
             },
             "package": {
-                "root": "/var/lib/breg/package",
-                "trustAnchorPath": "/etc/breg/package-trust-anchor.json",
-                "compilerSourceRevision": "source-revision",
-                "activeRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "activeSequence": 1
+                "root": "/var/lib/breg/package"
             },
             "authentication": {
                 "oidc": {
@@ -738,9 +734,17 @@ mod tests {
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
-            "package active sequence must be positive",
+            "retired package trust anchor",
             |instance| {
-                instance["package"]["activeSequence"] = Value::from(0_u64);
+                instance["package"]["trustAnchorPath"] =
+                    Value::from("/etc/breg/package-trust-anchor.json");
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "instance id outside the event source grammar",
+            |instance| {
+                instance["identity"]["instanceId"] = Value::from("Registry Primary");
             },
         );
         assert_schema_rejects_parser_refused_runtime(

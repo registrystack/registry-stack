@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 24))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 118))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 123))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -71,13 +71,10 @@ PACKAGE_LAYOUT_ENTRIES = {
     ("source/modules/<module-id>/<relative-sql-path>", "source-module-asset", False),
     ("source/project/<relative-json-path>", "source-project-evidence-contract", False),
     ("tests/journeys.yaml", "fixture-journeys", True),
-    ("signatures", "package-signatures", False),
 }
 FORBIDDEN_EMBEDDED_ROLES = {
-    "deployment-trust-anchor",
     "runtime-secret",
     "migration-credential",
-    "signing-key",
 }
 POSTGRES_ENTRYPOINT = PRODUCT_ROOT / "scripts/test-postgres.sh"
 POSTGRES_TEST_COMMANDS = (
@@ -680,18 +677,13 @@ def validate_fixture(errors: list[str]) -> None:
     package = as_mapping(document.get("package"), "asset fixture.package", errors)
     exact_keys(
         package,
-        {"environment", "instanceId", "sequence", "sourceRevision"},
+        {"sourceRevision"},
         "asset fixture.package",
         errors,
     )
     expected_package = {
-        "environment": "acceptance",
-        "instanceId": "asset-site-placement-acceptance",
-        "sequence": 1,
         "sourceRevision": "asset-site-placement-acceptance-0.1.0",
     }
-    if type(package.get("sequence")) is not int:
-        errors.append("asset fixture.package.sequence: expected integer")
     if package != expected_package:
         errors.append("asset fixture.package: must equal the committed acceptance package identity")
     entities = as_list(document.get("entities"), "asset fixture.entities", errors)

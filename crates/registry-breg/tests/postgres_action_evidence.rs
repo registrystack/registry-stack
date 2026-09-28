@@ -123,11 +123,8 @@ async fn setup_with_contracts(
         &ExpectedManagedCatalog::compiled(&registry),
         RegistryStateTestIdentity {
             package_id: PACKAGE,
-            environment: "local",
-            instance_id: "evidence-test",
             database_id: "evidence-test",
-            package_revision: "evidence-1",
-            package_sequence: 1,
+            label: "evidence-1",
         },
     )
     .await
@@ -178,13 +175,14 @@ fn app_with_client(
         cursors.clone(),
     ));
     let read_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let mutations = PostgresRecordMutationService::new(
         pool.clone(),
         registry.clone(),
         identity,
+        "evidence-test",
         lock,
         Duration::from_secs(5),
         audit,

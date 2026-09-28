@@ -463,7 +463,7 @@ impl PostgresSnapshotReadService {
             .map(|principal| {
                 key_hasher.audit_reference_hash(
                     "breg-principal-v1",
-                    &self.expected.package_revision,
+                    &self.expected.activation_id,
                     principal,
                 )
             })
@@ -471,7 +471,7 @@ impl PostgresSnapshotReadService {
             .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
         let field_set_reference = field_set_reference(
             self.audit.profile(),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &request.selected_fields,
         )?;
         let entry = read_terminal_entry(
@@ -484,7 +484,7 @@ impl PostgresSnapshotReadService {
                     operation_id: request.operation_id.clone(),
                     entity_id: Some(plan.entity.id.clone()),
                     action_id: None,
-                    package_revision: self.expected.package_revision.clone(),
+                    package_revision: self.expected.activation_id.clone(),
                     selected_access_profile: claims.access_profile().to_owned(),
                     purpose_present: claims.purpose().is_some(),
                     principal_reference,
@@ -610,7 +610,7 @@ impl SnapshotReadPlan {
             || request.plan.page_size == 0
             || request.plan.page_size > operation.max_page_size
             || request.plan.include_count && !operation.allow_count
-            || request.plan.cursor_binding.package_revision != expected.package_revision
+            || request.plan.cursor_binding.package_revision != expected.activation_id
             || request.plan.cursor_binding.schema_fingerprint != expected.schema_fingerprint
             || request.plan.cursor_binding.registry_revision != registry.revision()
             || request.plan.cursor_binding.route_id != request.plan.route_id
@@ -1788,7 +1788,7 @@ fn cursor_binding(
     let references = cursor_binding_references(cursors, request, &plan.query_operation, scope)
         .map_err(|_| ReadServiceError::Unavailable)?;
     Ok(CursorBinding {
-        package_revision: expected.package_revision.clone(),
+        package_revision: expected.activation_id.clone(),
         schema_fingerprint: expected.schema_fingerprint.clone(),
         registry_revision: registry.revision().to_owned(),
         route_id: request.plan.route_id.clone(),

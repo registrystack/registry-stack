@@ -37,7 +37,7 @@ impl RelayAudit {
 
     #[must_use]
     pub fn operation_id() -> String {
-        Ulid::new().to_string()
+        Ulid::generate().to_string()
     }
 
     pub async fn attempt(&self, context: &AuditContext) -> Result<AuditRequest, AuditUnavailable> {

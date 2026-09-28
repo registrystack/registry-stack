@@ -248,7 +248,7 @@ fn reviewed_successor_adds_action_policies_for_existing_entity() {
     assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::ActionAdded));
     assert!(
         change_set_to_applicable_migration_plan(&CompiledRegistryChangeSet {
-            from_revision: "prior-package".to_owned(),
+            from_package_digest: format!("sha256:{}", "a".repeat(64)),
             changes: plan.changes.clone(),
             migration_plan: None,
         })

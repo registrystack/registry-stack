@@ -189,50 +189,6 @@ PY
   rm -f -- "$output.der"
 }
 
-write_trust_anchor() {
-  local public_jwk=$1
-  local output=$2
-  python3 - "$public_jwk" "$output" <<'PY'
-import json
-import sys
-jwk = json.load(open(sys.argv[1], encoding="utf-8"))
-anchor = {
-    "apiVersion": "registry.registrystack.org/package-trust/v1",
-    "databaseId": "household-history-adopter-db",
-    "environment": "acceptance",
-    "instanceId": "household-history-acceptance",
-    "keys": [{"jwk": jwk, "keyId": jwk["kid"]}],
-    "threshold": 1,
-}
-open(sys.argv[2], "w", encoding="utf-8").write(json.dumps(anchor, sort_keys=True, separators=(",", ":")))
-PY
-}
-
-sign_file_hex() {
-  local private_key=$1
-  local input=$2
-  local output=$3
-  openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$input" -out "$output.bin"
-  python3 - "$output.bin" "$output" <<'PY'
-import sys
-from pathlib import Path
-Path(sys.argv[2]).write_text(Path(sys.argv[1]).read_bytes().hex(), encoding="utf-8")
-PY
-  rm -f -- "$output.bin"
-}
-
-write_signature_document() {
-  local key_id=$1
-  local signature_hex=$2
-  local output=$3
-  python3 - "$key_id" "$signature_hex" "$output" <<'PY'
-import json
-import sys
-document = {"signatures": [{"keyId": sys.argv[1], "signatureHex": open(sys.argv[2], encoding="utf-8").read()}]}
-open(sys.argv[3], "w", encoding="utf-8").write(json.dumps(document, sort_keys=True, separators=(",", ":")))
-PY
-}
-
 write_jwks() {
   local public_jwk=$1
   local output=$2
@@ -297,12 +253,9 @@ PY
 render_runtime_config() {
   local output=$1
   local package_root=$2
-  local active_revision=$3
-  local active_sequence=$4
-  local runtime_ref=$5
-  local migration_ref=$6
-  local listener=$7
-  local compiler_source_revision=$8
+  local runtime_ref=$3
+  local migration_ref=$4
+  local listener=$5
   cat >"$output" <<EOF
 apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -329,10 +282,6 @@ database:
     runtime: $history_runtime_role
 package:
   root: $package_root
-  trustAnchorPath: $temporary_root/package-trust-anchor.json
-  compilerSourceRevision: $compiler_source_revision
-  activeRevision: $active_revision
-  activeSequence: $active_sequence
 authentication:
   oidc:
     issuer: https://issuer.example/history
@@ -634,7 +583,7 @@ package_project() {
   local runtime_test_config=$2
   local output_dir=$3
   local report_prefix=$4
-  local baseline_config=${5:-}
+  local baseline_package=${5:-}
 
   run_json "$temporary_root/$report_prefix-check.json" check "$project" --production
   assert_json_ok "$temporary_root/$report_prefix-check.json" check
@@ -653,13 +602,10 @@ package_project() {
     test "$project"
     --runtime-config "$runtime_test_config"
     --credentials "$temporary_root/schema-test-credentials.yaml"
-    --database-id household-history-adopter-db
-    --signature-threshold 1
-    --signature-key-id history-package-key
     --output "$temporary_root/$report_prefix-schema-test-receipt.json"
   )
-  if [[ -n "$baseline_config" ]]; then
-    test_args+=(--baseline-runtime-config "$baseline_config")
+  if [[ -n "$baseline_package" ]]; then
+    test_args+=(--baseline-package "$baseline_package")
   fi
   run_json "$temporary_root/$report_prefix-schema-test.json" "${test_args[@]}"
   assert_json_ok "$temporary_root/$report_prefix-schema-test.json" test
@@ -668,24 +614,16 @@ package_project() {
 
   local package_args=(
     package "$project"
-    --database-id household-history-adopter-db
     --schema-fingerprint "$schema_fingerprint"
     --test-receipt "$temporary_root/$report_prefix-schema-test-receipt.json"
-    --signature-threshold 1
-    --signature-key-id history-package-key
     --output "$output_dir"
   )
-  if [[ -n "$baseline_config" ]]; then
-    package_args+=(--baseline-runtime-config "$baseline_config")
+  if [[ -n "$baseline_package" ]]; then
+    package_args+=(--baseline-package "$baseline_package")
   fi
-  run_json "$temporary_root/$report_prefix-package-awaiting.json" "${package_args[@]}"
-  assert_json_ok "$temporary_root/$report_prefix-package-awaiting.json" package
-  sign_file_hex "$temporary_root/package-signer.pem" "$output_dir/signing-input.json" "$temporary_root/$report_prefix.sighex"
-  write_signature_document "history-package-key" "$temporary_root/$report_prefix.sighex" "$temporary_root/$report_prefix-signatures.json"
-  package_args+=(--signatures "$temporary_root/$report_prefix-signatures.json")
-  run_json "$temporary_root/$report_prefix-package-published.json" "${package_args[@]}"
-  assert_json_ok "$temporary_root/$report_prefix-package-published.json" package
-  PACKAGE_REVISION_RESULT=$(json_field "$temporary_root/$report_prefix-package-published.json" packageRevision)
+  run_json "$temporary_root/$report_prefix-package.json" "${package_args[@]}"
+  assert_json_ok "$temporary_root/$report_prefix-package.json" package
+  PACKAGE_DIGEST_RESULT=$(json_field "$temporary_root/$report_prefix-package.json" packageDigest)
 }
 
 stop_server() {
@@ -748,7 +686,7 @@ import sys
 first = json.load(open(sys.argv[1], encoding="utf-8"))
 second = json.load(open(sys.argv[2], encoding="utf-8"))
 ledger_path = sys.argv[3]
-package_revision = sys.argv[4]
+package_digest = sys.argv[4]
 def decision(document, decision_id):
     item = document["items"][0]
     return {
@@ -758,7 +696,7 @@ def decision(document, decision_id):
         "inputRevision": item["revisionIdentifier"],
         "snapshot": document["snapshot"],
         "effectiveDate": document["validAt"],
-        "rulePackageRevision": package_revision,
+        "rulePackageDigest": package_digest,
     }
 original = decision(first, "decision-before-correction")
 reconsidered = decision(second, "decision-after-correction")
@@ -813,12 +751,9 @@ write_database_url_secrets "$history_schema_test_v1_database" schema-test-v1-run
 write_database_url_secrets "$history_schema_test_v2_database" schema-test-v2-runtime-url schema-test-v2-migration-url
 write_database_url_secrets "$history_schema_test_v3_database" schema-test-v3-runtime-url schema-test-v3-migration-url
 
-openssl genpkey -algorithm ED25519 -out "$temporary_root/package-signer.pem" >/dev/null 2>&1
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
-chmod 600 "$temporary_root/package-signer.pem" "$temporary_root/oidc-signer.pem"
-write_public_jwk "$temporary_root/package-signer.pem" "history-package-key" "$temporary_root/package-signer.public.jwk"
+chmod 600 "$temporary_root/oidc-signer.pem"
 write_public_jwk "$temporary_root/oidc-signer.pem" "history-oidc-key" "$temporary_root/oidc-signer.public.jwk"
-write_trust_anchor "$temporary_root/package-signer.public.jwk" "$temporary_root/package-trust-anchor.json"
 write_jwks "$temporary_root/oidc-signer.public.jwk" "$temporary_root/secrets/oidc-jwks"
 
 write_jwt "$temporary_root/oidc-signer.pem" "history-oidc-key" "synthetic-history-operator" "history-maintenance" \
@@ -839,18 +774,16 @@ bindings:
 EOF
 
 render_runtime_config "$temporary_root/runtime-test-v1.yaml" "$temporary_root/empty-package-root" \
-  "sha256:1111111111111111111111111111111111111111111111111111111111111111" 1 \
   "secret:file/schema-test-v1-runtime-url" "secret:file/schema-test-v1-migration-url" \
-  "127.0.0.1:0" "household-history-acceptance-0.1.0"
+  "127.0.0.1:0"
 
-checkpoint "building and schema-testing signed v1 package"
-PACKAGE_REVISION_RESULT=""
+checkpoint "building and schema-testing v1 package"
+PACKAGE_DIGEST_RESULT=""
 package_project "$fixture" "$temporary_root/runtime-test-v1.yaml" "$temporary_root/build-v1" v1
-package_revision_v1=$PACKAGE_REVISION_RESULT
+package_digest_v1=$PACKAGE_DIGEST_RESULT
 render_runtime_config "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "household-history-acceptance-0.1.0"
+  "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "127.0.0.1:0"
 checkpoint "applying v1 package"
 run_json "$temporary_root/apply-v1.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v1/package" --initial
 assert_json_ok "$temporary_root/apply-v1.json" apply
@@ -861,9 +794,8 @@ server_hash_before=$(sha256_file "$breg")
 listener=$(select_free_listener)
 server_url="http://$listener/"
 render_runtime_config "$temporary_root/runtime-server-v1.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "$listener" \
-  "household-history-acceptance-0.1.0"
+  "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "$listener"
 checkpoint "starting v1 HTTP runtime"
 start_server "$temporary_root/runtime-server-v1.yaml" "$server_url" "$temporary_root/server-v1.log"
 
@@ -949,7 +881,7 @@ http_json GET "$server_url" "$temporary_root/secrets/consumer-token" \
 assert_status "$temporary_root/consumer-second-snapshot.json" 200
 assert_snapshot_answer "$temporary_root/consumer-second-snapshot.json" household-001 A 2026-01-01 2026-06-15
 assert_consumer_decisions "$temporary_root/consumer-first-snapshot.json" "$temporary_root/consumer-second-snapshot.json" \
-  "$temporary_root/consumer-decision-ledger.json" "$package_revision_v1"
+  "$temporary_root/consumer-decision-ledger.json" "$package_digest_v1"
 checkpoint "v1 correction journey retained consumer decision and reconsideration inputs"
 
 cat >"$temporary_root/create-second-a.json" <<'EOF'
@@ -1001,7 +933,6 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-source = source.replace("  sequence: 1\n", "  sequence: 2\n", 1)
 needle = "      - {id: source-reference, type: string, required: false, maxLength: 120, classification: internal}\n"
 replacement = needle + "      - {id: review-note, type: string, required: false, maxLength: 120, classification: internal}\n"
 if needle not in source:
@@ -1009,29 +940,20 @@ if needle not in source:
 path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v2.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 "secret:file/schema-test-v2-runtime-url" \
-  "secret:file/schema-test-v2-migration-url" "127.0.0.1:0" \
-  "household-history-acceptance-0.1.0"
-checkpoint "building and schema-testing signed v2 additive package"
-PACKAGE_REVISION_RESULT=""
-package_project "$temporary_root/project-v2" "$temporary_root/runtime-test-v2.yaml" "$temporary_root/build-v2" v2 "$temporary_root/runtime-operator-v1.yaml"
-package_revision_v2=$PACKAGE_REVISION_RESULT
+  "secret:file/schema-test-v2-runtime-url" \
+  "secret:file/schema-test-v2-migration-url" "127.0.0.1:0"
+checkpoint "building and schema-testing v2 additive package"
+package_project "$temporary_root/project-v2" "$temporary_root/runtime-test-v2.yaml" "$temporary_root/build-v2" v2 "$temporary_root/build-v1/package"
 render_runtime_config "$temporary_root/runtime-operator-v2.yaml" "$temporary_root/build-v1/package" \
-  "$package_revision_v1" 1 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "household-history-acceptance-0.1.0"
+  "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "127.0.0.1:0"
 checkpoint "applying v2 additive package"
 run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v2.yaml" --package "$temporary_root/build-v2/package"
 assert_json_ok "$temporary_root/apply-v2.json" apply
-render_runtime_config "$temporary_root/runtime-operator-v2-active.yaml" "$temporary_root/build-v2/package" \
-  "$package_revision_v2" 2 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "household-history-acceptance-0.1.0"
 stop_server
 render_runtime_config "$temporary_root/runtime-server-v2.yaml" "$temporary_root/build-v2/package" \
-  "$package_revision_v2" 2 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "$listener" \
-  "household-history-acceptance-0.1.0"
+  "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "$listener"
 checkpoint "starting v2 HTTP runtime and checking old bookmark"
 start_server "$temporary_root/runtime-server-v2.yaml" "$server_url" "$temporary_root/server-v2.log"
 http_json GET "$server_url" "$temporary_root/secrets/consumer-token" \
@@ -1064,32 +986,26 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-source = source.replace("  sequence: 2\n", "  sequence: 3\n", 1)
 old = "operations: [list, snapshot]"
 if old not in source:
     raise SystemExit("consumer snapshot grant was not found")
 path.write_text(source.replace(old, "operations: [list]", 1), encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v2/package" \
-  "$package_revision_v2" 2 "secret:file/schema-test-v3-runtime-url" \
-  "secret:file/schema-test-v3-migration-url" "127.0.0.1:0" \
-  "household-history-acceptance-0.1.0"
-checkpoint "building and schema-testing signed v3 snapshot-revocation package"
-PACKAGE_REVISION_RESULT=""
-package_project "$temporary_root/project-v3" "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v3" v3 "$temporary_root/runtime-operator-v2-active.yaml"
-package_revision_v3=$PACKAGE_REVISION_RESULT
+  "secret:file/schema-test-v3-runtime-url" \
+  "secret:file/schema-test-v3-migration-url" "127.0.0.1:0"
+checkpoint "building and schema-testing v3 snapshot-revocation package"
+package_project "$temporary_root/project-v3" "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v3" v3 "$temporary_root/build-v2/package"
 render_runtime_config "$temporary_root/runtime-operator-v3.yaml" "$temporary_root/build-v2/package" \
-  "$package_revision_v2" 2 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "127.0.0.1:0" \
-  "household-history-acceptance-0.1.0"
+  "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "127.0.0.1:0"
 checkpoint "applying v3 snapshot-revocation package"
 run_json "$temporary_root/apply-v3.json" apply --runtime-config "$temporary_root/runtime-operator-v3.yaml" --package "$temporary_root/build-v3/package"
 assert_json_ok "$temporary_root/apply-v3.json" apply
 stop_server
 render_runtime_config "$temporary_root/runtime-server-v3.yaml" "$temporary_root/build-v3/package" \
-  "$package_revision_v3" 3 "secret:file/production-runtime-url" \
-  "secret:file/production-migration-url" "$listener" \
-  "household-history-acceptance-0.1.0"
+  "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "$listener"
 checkpoint "starting v3 HTTP runtime and checking revoked snapshot bookmark"
 start_server "$temporary_root/runtime-server-v3.yaml" "$server_url" "$temporary_root/server-v3.log"
 http_json GET "$server_url" "$temporary_root/secrets/consumer-token" \

@@ -29,7 +29,7 @@ use registry_breg::import_authority::{
     ImportAuthority, ImportAuthorityCloseRequest, ImportAuthorityError, ImportAuthorityOpenRequest,
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
-use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+use registry_breg::instance_claim::InstanceClaimService;
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
@@ -129,11 +129,8 @@ impl Harness {
             &registry,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: "import-authority-instance",
                 database_id: "import-authority-database",
-                package_revision: PACKAGE_REVISION,
-                package_sequence: 1,
+                label: PACKAGE_REVISION,
             },
         )
         .await
@@ -196,7 +193,7 @@ impl Harness {
         self.database
             .admin
             .execute(
-                "UPDATE registry_internal.registry_instance_claim
+                "UPDATE registry_internal.registry_state
                     SET database_oid = 1
                   WHERE singleton",
                 &[],
@@ -238,8 +235,8 @@ impl Harness {
     /// would, and answer the HTTP surface a restarted process serves under it.
     async fn activate_successor(&self) -> (axum::Router, ExpectedRegistryIdentity) {
         let successor = ExpectedRegistryIdentity {
-            package_revision: SUCCESSOR_REVISION.to_owned(),
-            package_sequence: 2,
+            package_digest: registry_breg::postgres::test_package_digest(SUCCESSOR_REVISION),
+            activation_id: registry_breg::postgres::test_activation_id(SUCCESSOR_REVISION),
             ..self.identity.clone()
         };
         let changed = self
@@ -247,9 +244,9 @@ impl Harness {
             .admin
             .execute(
                 "UPDATE registry_internal.registry_state
-                    SET active_package_revision = $1, package_sequence = $2
+                    SET active_package_digest = $1, active_activation_id = $2::text::uuid
                   WHERE singleton",
-                &[&successor.package_revision, &successor.package_sequence],
+                &[&successor.package_digest, &successor.activation_id],
             )
             .await
             .expect("successor revision activates");
@@ -354,7 +351,7 @@ impl Harness {
             json!({
                 "operation": "create",
                 "profileId": profile_id,
-                "packageRevision": package_revision,
+                "packageRevision": registry_breg::postgres::test_package_digest(package_revision),
                 "schemaFingerprint": self.identity.schema_fingerprint,
                 "inputDigest": plan.input_digest,
                 "inputLength": plan.input_length,
@@ -518,6 +515,7 @@ fn build_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "import-authority-instance",
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -526,7 +524,7 @@ fn build_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             records,
@@ -676,7 +674,10 @@ async fn an_open_authority_admits_a_run_that_names_it() {
     let harness = Harness::create().await;
     let authority = harness.open("widget", "loader", 10, &[]).await;
     assert_eq!(authority.status, ImportAuthorityStatus::Open);
-    assert_eq!(authority.activation_revision, PACKAGE_REVISION);
+    assert_eq!(
+        authority.activation_id.to_string(),
+        registry_breg::postgres::test_activation_id(PACKAGE_REVISION)
+    );
     let run_id = harness
         .created_run("widgets", "loader", &plan("admitted", 4))
         .await;
@@ -825,7 +826,10 @@ async fn a_successor_package_supersedes_an_open_authority() {
     let records = harness.authority_records(authority.authority_id).await;
     assert_eq!(records.len(), 2, "{records:?}");
     assert_eq!(records[1]["transition"], "superseded");
-    assert_eq!(records[1]["packageRevision"], SUCCESSOR_REVISION);
+    assert_eq!(
+        records[1]["packageRevision"],
+        registry_breg::postgres::test_activation_id(SUCCESSOR_REVISION)
+    );
 
     // The operator re-opens deliberately under the successor.
     let reopened = harness
@@ -833,7 +837,10 @@ async fn a_successor_package_supersedes_an_open_authority() {
         .open(open_request("widget", "loader", 10, &[]))
         .await
         .expect("a new authority opens under the successor");
-    assert_eq!(reopened.activation_revision, SUCCESSOR_REVISION);
+    assert_eq!(
+        reopened.activation_id.to_string(),
+        registry_breg::postgres::test_activation_id(SUCCESSOR_REVISION)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -936,7 +943,7 @@ async fn listing_takes_no_registry_lock_and_records_nothing() {
         .batch_execute(
             "UPDATE registry_internal.registry_state
                 SET maintenance_status = 'failed',
-                    maintenance_target_revision = 'successor'
+                    maintenance_target_package_digest = 'successor'
               WHERE singleton;
              BEGIN",
         )
@@ -958,7 +965,7 @@ async fn listing_takes_no_registry_lock_and_records_nothing() {
             "COMMIT;
              UPDATE registry_internal.registry_state
                 SET maintenance_status = 'ready',
-                    maintenance_target_revision = NULL
+                    maintenance_target_package_digest = NULL
               WHERE singleton",
         )
         .await
@@ -994,8 +1001,8 @@ async fn the_runtime_role_cannot_open_close_or_reopen_an_authority() {
         .execute(
             "INSERT INTO registry_internal.registry_import_authorities
                  (authority_id, entity_id, profile_id, operation, max_items,
-                  activation_revision, expires_at, operator_reference, reason_reference)
-             VALUES ($1, 'gadget', 'loader', 'create', 5, 'package-import-1',
+                  activation_id, expires_at, operator_reference, reason_reference)
+             VALUES ($1, 'gadget', 'loader', 'create', 5, gen_random_uuid(),
                      now() + interval '1 day', 'r', 'r')",
             &[&Uuid::new_v4()],
         )
@@ -1288,13 +1295,88 @@ async fn adopting_a_restored_copy_supersedes_every_open_authority() {
         .await;
 }
 
+/// A physical restore (point-in-time recovery, a snapshot, a base backup)
+/// keeps the system identifier and the database oid, so the claim still
+/// names the restored database and an authority closed after the backup
+/// point is open again. Adopting the database the claim already names is the
+/// post-restore step: it raises the epoch and supersedes every open
+/// authority, audited as a re-claim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reclaiming_after_a_physical_restore_supersedes_every_reopened_authority() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    harness.close(widget.authority_id).await;
+    // The restore brings back the row as it stood at the backup point.
+    harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_import_authorities
+                SET status = 'open', closed_at = NULL
+              WHERE authority_id = $1",
+            &[&widget.authority_id],
+        )
+        .await
+        .expect("test simulates a physical restore");
+    let claims = harness.claims();
+    let restored = claims.status().await.expect("the claim reads");
+    assert!(restored.matches, "a physical restore keeps the claim");
+
+    let reclaim = claims
+        .adopt()
+        .await
+        .expect("the operator re-claims the restored database");
+    assert_eq!(reclaim.previous.map(|claim| claim.epoch), Some(1));
+    assert_eq!(reclaim.current.epoch, 2);
+    assert_eq!(reclaim.current.identity, restored.live);
+    assert_eq!(reclaim.superseded_import_authorities, [widget.authority_id]);
+    assert_eq!(harness.authority(widget.authority_id).await.0, "superseded");
+    let transitions: Vec<Value> = harness
+        .authority_records(widget.authority_id)
+        .await
+        .iter()
+        .map(|record| record["transition"].clone())
+        .collect();
+    assert_eq!(
+        transitions,
+        [json!("opened"), json!("closed"), json!("superseded")]
+    );
+    let responses: Vec<Value> = harness
+        .database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == "breg-instance-claim-audit/v1" && entry["phase"] == "response"
+        })
+        .map(|entry| entry["record"].clone())
+        .collect();
+    assert_eq!(responses.len(), 1, "one re-claim answers its request once");
+    assert_eq!(responses[0]["outcome"], "committed");
+    assert_eq!(responses[0]["event"], "reclaimed");
+    assert_eq!(responses[0]["previous"]["epoch"], 1);
+    assert_eq!(responses[0]["current"]["epoch"], 2);
+    assert_eq!(
+        responses[0]["supersededImportAuthorities"],
+        json!([widget.authority_id.to_string()])
+    );
+    harness
+        .refused_run("widgets", "loader", &plan("after-physical-restore", 1))
+        .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
     let harness = Harness::create().await;
     harness
         .database
         .admin
-        .execute("DELETE FROM registry_internal.registry_instance_claim", &[])
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET system_identifier = NULL, database_oid = NULL,
+                    claimed_at = NULL, epoch = 0
+              WHERE singleton",
+            &[],
+        )
         .await
         .expect("the owning role can remove the claim");
     let claims = harness.claims();
@@ -1314,11 +1396,6 @@ async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
     assert_eq!(adoption.current.epoch, 1);
     assert_eq!(adoption.current.identity, missing.live);
     assert!(claims.status().await.expect("the claim reads").matches);
-    assert_eq!(
-        claims.adopt().await.err(),
-        Some(InstanceClaimError::AlreadyCurrent),
-        "the database the claim names has nothing to adopt"
-    );
     let adoptions: Vec<(Value, Value)> = harness
         .database
         .audit_entries()
@@ -1331,19 +1408,16 @@ async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
         [
             (json!("request"), Value::Null),
             (json!("response"), json!("committed")),
-            (json!("request"), Value::Null),
-            (json!("response"), json!("refused")),
         ],
-        "each adoption answers its request once"
+        "the adoption answers its request once"
     );
 }
 
-/// A database that already holds committed history is either a Registry
-/// installed before the claim existed or a copy restored from a backup taken
-/// before it. Installing the claim there records none, so the database waits
-/// for an operator to adopt it instead of claiming itself.
+/// A state row that carries no claim beside committed history waits for an
+/// operator to adopt the database: reinstalling the schema there records no
+/// claim, so the database never claims itself outside an activation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn installing_the_claim_beside_committed_history_leaves_the_database_to_adopt() {
+async fn reinstalling_the_schema_beside_committed_history_leaves_an_unclaimed_database_to_adopt() {
     let harness = Harness::create().await;
     harness.open("widget", "loader", 2, &[]).await;
     let load = plan("history", 2);
@@ -1351,9 +1425,15 @@ async fn installing_the_claim_beside_committed_history_leaves_the_database_to_ad
     harness.committed_chunk(&run_id, &load, 0).await;
     let (migration, migration_task) = harness.database.connect_migration().await;
     migration
-        .batch_execute("DROP TABLE registry_internal.registry_instance_claim")
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET system_identifier = NULL, database_oid = NULL,
+                    claimed_at = NULL, epoch = 0
+              WHERE singleton",
+            &[],
+        )
         .await
-        .expect("the owning role can drop the claim table");
+        .expect("the owning role can remove the claim");
     install_mutation_schema(&migration, &harness.database.runtime_role, false)
         .await
         .expect("the mutation schema installs again");
@@ -1399,7 +1479,7 @@ async fn the_runtime_role_cannot_rewrite_or_remove_the_instance_claim() {
         .expect("the session takes the runtime role");
     let claimed: i64 = runtime
         .query_one(
-            "SELECT epoch FROM registry_internal.registry_instance_claim WHERE singleton",
+            "SELECT epoch FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
         .await
@@ -1407,13 +1487,12 @@ async fn the_runtime_role_cannot_rewrite_or_remove_the_instance_claim() {
         .get(0);
     assert_eq!(claimed, 1);
     for statement in [
-        "UPDATE registry_internal.registry_instance_claim
+        "UPDATE registry_internal.registry_state
             SET database_oid = (SELECT oid FROM pg_database WHERE datname = current_database())",
-        "UPDATE registry_internal.registry_instance_claim SET epoch = epoch + 1",
-        "DELETE FROM registry_internal.registry_instance_claim",
-        "INSERT INTO registry_internal.registry_instance_claim
-             (singleton, system_identifier, database_oid)
-         VALUES (true, 1, 1)",
+        "UPDATE registry_internal.registry_state SET epoch = epoch + 1",
+        "UPDATE registry_internal.registry_state
+            SET system_identifier = NULL, database_oid = NULL, claimed_at = NULL, epoch = 0",
+        "DELETE FROM registry_internal.registry_state",
     ] {
         assert!(
             runtime.execute(statement, &[]).await.is_err(),

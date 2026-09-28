@@ -39,7 +39,6 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const PACKAGE_ID: &str = "history-registry";
-const INSTANCE_ID: &str = "history-instance";
 const DATABASE_ID: &str = "history-database";
 const PACKAGE_REVISION: &str = "package-history-1";
 const PRINCIPAL_CANARY: &str = "history-principal-must-not-leak";
@@ -831,11 +830,8 @@ async fn prepared_database() -> PreparedHistoryDatabase {
         &ExpectedManagedCatalog::compiled(&compiled),
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -876,11 +872,8 @@ async fn prepared_timestamp_database() -> PreparedHistoryDatabase {
         &ExpectedManagedCatalog::compiled(&compiled),
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: INSTANCE_ID,
             database_id: DATABASE_ID,
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -918,7 +911,7 @@ fn snapshot_router(
     fault: Option<registry_breg::postgres::SnapshotReadFaultPoint>,
 ) -> axum::Router {
     let http_identity = ReadRuntimeIdentity {
-        package_revision: identity.package_revision.clone(),
+        package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     };
     let records = PostgresRecordReadService::new(

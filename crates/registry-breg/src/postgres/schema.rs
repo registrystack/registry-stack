@@ -20,7 +20,7 @@ use crate::mutation::{install_mutation_schema, MutationError};
 use super::config::ConnectionTls;
 use super::{
     catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist, verify_postgis,
-    PostgresKernelError, Result, SqlIdentifier,
+    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::{
@@ -117,11 +117,13 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         .as_ref()
         .map(|role| format!(", {}", role.quoted()))
         .unwrap_or_default();
+    let revoke_grantees = RuntimeRevoke::detect(client, runtime_role)
+        .await?
+        .with_public();
     client
         .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {}{bbox_revoke};
+            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM {revoke_grantees}{bbox_revoke};
              GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
-            runtime_role.quoted(),
             runtime_role.quoted(),
         ))
         .await?;
@@ -138,8 +140,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let table_name = quote_compiled_identifier(&table.physical_name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{table_name} FROM PUBLIC, {}{bbox_revoke};",
-                runtime_role.quoted(),
+                "REVOKE ALL ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke};",
             ))
             .await?;
         if !table.runtime_privileges.is_empty() {
@@ -217,8 +218,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         }
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE {schema}.{view_name} FROM PUBLIC, {}{bbox_revoke};",
-                runtime_role.quoted(),
+                "REVOKE ALL ON TABLE {schema}.{view_name} FROM {revoke_grantees}{bbox_revoke};",
             ))
             .await?;
         if !view.runtime_privileges.is_empty() {
@@ -241,9 +241,8 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let name = quote_compiled_identifier(&function.name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM PUBLIC, {}{bbox_revoke};",
+                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM {revoke_grantees}{bbox_revoke};",
                 function.arguments,
-                runtime_role.quoted(),
             ))
             .await?;
         if function.runtime_execute {
@@ -486,6 +485,71 @@ async fn execute_spatial_candidate_view_as_bbox(
     Ok(())
 }
 
+/// Moves each spatial candidate view the compiled registry declares from the
+/// bbox role of the runtime role an activation retires to the bbox role of
+/// the runtime role it serves with.
+///
+/// Threat: a candidate view left owned by the retired bbox role keeps
+/// answering with that role's row-security policies and grants, and blocks
+/// the serving bbox role from reconciling its ACL.
+/// Enforcement: the migration role holds each bbox role with SET but not
+/// INHERIT, so it cannot hand a view from one bbox role to another; the view
+/// is dropped as the retired bbox role and created again from its compiled
+/// statement for the serving one, inside the role-change activation's
+/// transaction, before that transaction reconciles the runtime ACL.
+pub(crate) async fn transfer_spatial_candidate_views(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    retired_runtime_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    let retired_bbox_role = spatial_bbox_role(retired_runtime_role);
+    if retired_bbox_role == spatial_bbox_role(runtime_role) {
+        return Ok(());
+    }
+    for statement in &registry.ddl().statements {
+        if !is_spatial_candidate_view_create_sql(&statement.sql) {
+            continue;
+        }
+        let view = spatial_candidate_view_qualified_name(&statement.sql)?;
+        client
+            .batch_execute(&format!(
+                "SET LOCAL ROLE {};
+                 DROP VIEW IF EXISTS {view};
+                 RESET ROLE;",
+                retired_bbox_role.quoted(),
+            ))
+            .await?;
+        execute_spatial_candidate_view_create(client, &statement.sql, runtime_role).await?;
+    }
+    Ok(())
+}
+
+/// Revokes every privilege the bbox role of a retired runtime role holds on
+/// the managed schemas and their tables, sequences, and functions. A bbox
+/// role that does not exist holds nothing to revoke.
+pub(crate) async fn retire_spatial_bbox_role(
+    client: &impl GenericClient,
+    retired_runtime_role: &SqlIdentifier,
+    managed_schemas: &[&str],
+) -> Result<()> {
+    let retired_bbox_role = spatial_bbox_role(retired_runtime_role);
+    if !role_exists(client, &retired_bbox_role).await? {
+        return Ok(());
+    }
+    let schemas = managed_schemas.join(", ");
+    let role = retired_bbox_role.quoted();
+    client
+        .batch_execute(&format!(
+            "REVOKE ALL ON ALL TABLES IN SCHEMA {schemas} FROM {role};
+             REVOKE ALL ON ALL SEQUENCES IN SCHEMA {schemas} FROM {role};
+             REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schemas} FROM {role};
+             REVOKE ALL ON SCHEMA {schemas} FROM {role};"
+        ))
+        .await?;
+    Ok(())
+}
+
 async fn reconcile_spatial_candidate_view_acl(
     client: &impl GenericClient,
     view: &str,
@@ -597,11 +661,8 @@ async fn current_role_identifier(client: &impl GenericClient) -> Result<SqlIdent
 /// Candidate identity installed into a clean schema-test database.
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub struct SchemaTestDatabaseIdentity<'a> {
-    pub environment: &'a str,
-    pub instance_id: &'a str,
     pub database_id: &'a str,
-    pub active_package_revision: &'a str,
-    pub active_sequence: u64,
+    pub package_digest: &'a str,
 }
 
 /// Opaque capability for the production pre-sign schema-test executor.
@@ -701,49 +762,41 @@ pub async fn prepare_schema_test_database_with_connections(
 ) -> Result<PreparedSchemaTestDatabase> {
     let (mut migration, migration_task) = connect_schema_test(migration_connection).await?;
     verify_migration_role(&migration, migration_role).await?;
+    // The scratch database is its own activation of the candidate, so its
+    // scope values never collide with a deployed activation's.
+    let activation_id = uuid::Uuid::new_v4().hyphenated().to_string();
     let transaction = migration.transaction().await?;
     refuse_existing_managed_objects(&transaction).await?;
     install_compiled_schema(&transaction, registry, runtime_role).await?;
-    retain_descriptor(&transaction, registry, identity.active_package_revision)
+    retain_descriptor(&transaction, registry, &activation_id)
         .await
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-    install_empty_history_baseline_for_compiled_registry(
-        &transaction,
-        registry,
-        identity.active_package_revision,
-    )
-    .await?;
+    install_empty_history_baseline_for_compiled_registry(&transaction, registry, &activation_id)
+        .await?;
 
     let expected_catalog = ExpectedManagedCatalog::compiled(registry);
     let schema_fingerprint =
         managed_schema_fingerprint(&transaction, runtime_role, &expected_catalog).await?;
-    let package_sequence = i64::try_from(identity.active_sequence).map_err(|_| {
-        PostgresKernelError::Configuration("schema-test package sequence is out of range")
-    })?;
     let expected = ExpectedRegistryIdentity {
         package_id: registry.registry_id().to_owned(),
-        environment: identity.environment.to_owned(),
-        instance_id: identity.instance_id.to_owned(),
         database_id: identity.database_id.to_owned(),
-        package_revision: identity.active_package_revision.to_owned(),
+        package_digest: identity.package_digest.to_owned(),
+        activation_id,
         schema_fingerprint,
-        package_sequence,
     };
+    expected.validate()?;
     let inserted = transaction
         .execute(
             "INSERT INTO registry_internal.registry_state (
-                 singleton, package_id, environment, instance_id, database_id,
-                 active_package_revision, schema_fingerprint, package_sequence,
-                 maintenance_status
-             ) VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')",
+                 singleton, package_id, database_id, active_package_digest,
+                 active_activation_id, schema_fingerprint, maintenance_status
+             ) VALUES (true, $1, $2, $3, $4, $5, 'ready')",
             &[
                 &expected.package_id,
-                &expected.environment,
-                &expected.instance_id,
                 &expected.database_id,
-                &expected.package_revision,
+                &expected.package_digest,
+                &expected.activation_uuid()?,
                 &expected.schema_fingerprint,
-                &expected.package_sequence,
             ],
         )
         .await?;

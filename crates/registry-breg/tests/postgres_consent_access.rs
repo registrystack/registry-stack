@@ -84,11 +84,8 @@ impl Harness {
             &registry,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: "consent-instance",
                 database_id: "consent-database",
-                package_revision: "consent-package-1",
-                package_sequence: 1,
+                label: "consent-package-1",
             },
         )
         .await
@@ -133,6 +130,7 @@ impl Harness {
             pool.clone(),
             registry.clone(),
             identity.clone(),
+            "consent-instance",
             lock_key,
             Duration::from_secs(2),
             audit,
@@ -141,7 +139,7 @@ impl Harness {
             HttpService::new(
                 registry.clone(),
                 ReadRuntimeIdentity {
-                    package_revision: identity.package_revision.clone(),
+                    package_revision: identity.activation_id.clone(),
                     schema_fingerprint: identity.schema_fingerprint.clone(),
                 },
                 records,

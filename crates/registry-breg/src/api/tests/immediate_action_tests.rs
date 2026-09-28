@@ -719,13 +719,12 @@ fn service_for(registry: Arc<CompiledRegistry>, mutations: bool) -> HttpService 
         registry,
         ExpectedRegistryIdentity {
             package_id: "test".to_owned(),
-            environment: "test".to_owned(),
-            instance_id: "test".to_owned(),
             database_id: "test".to_owned(),
-            package_revision: "package-revision".to_owned(),
+            package_digest: "package-digest".to_owned(),
+            activation_id: "3f2a7c1e-9b4d-4e8a-a1c6-5d0e7f9b2c41".to_owned(),
             schema_fingerprint: "schema-fingerprint".to_owned(),
-            package_sequence: 1,
         },
+        "test",
         RegistryLockKey::derive("action-admission").unwrap(),
         duration,
         crate::audit::test_support::capturing(

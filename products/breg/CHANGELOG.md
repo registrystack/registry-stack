@@ -2,6 +2,332 @@
 
 ## Unreleased
 
+- BREAKING: package signing is removed. Upgrade to v0.35.0 before this
+  release: a deployment on v0.34.0 or earlier must pass through v0.35.0,
+  because this release no longer reads a predecessor package that has no
+  `SHA256SUMS` envelope.
+  - A package is unsigned and named by its package digest, the SHA-256 of
+    its `SHA256SUMS`. `bregctl package` seals and publishes it in one step
+    into `<output>/package`, with no signing input, signature document, or
+    `awaiting_signatures` state, and refuses an output directory that
+    already holds a published package.
+  - `bregctl test` and `package` refuse `--signature-threshold`,
+    `--signature-key-id`, and `--database-id`, `package` refuses
+    `--signatures`, and both take the active package directory as
+    `--baseline-package` instead of `--baseline-runtime-config`. Each
+    refusal says what to do instead.
+  - The runtime `package` block holds `root` and an optional
+    `expectedDigest`. `trustAnchorPath`, `activeRevision`, and
+    `activeSequence` are refused, and the trust anchor file is gone.
+  - The project `package` block holds only `sourceRevision`.
+    `environment`, `instanceId`, and `sequence` are refused as
+    `package.environment.removed`, `package.instance_id.removed`, and
+    `package.sequence.removed`; the environment and instance belong in the
+    runtime file's `identity`.
+  - The legacy-predecessor fallback v0.35.0 added is gone: `diff`, `test`,
+    `package`, `apply`, and the field-encryption preflight no longer read a
+    predecessor without `SHA256SUMS` through its BReg signature, and
+    `package.digest_pin_unverifiable` is gone. The migration rehearsal still
+    reports `migration.rehearsal.baseline_fingerprint_drift` as a finding.
+  - With no signature to check, the database decides what follows what.
+    `bregctl apply` refuses a package whose package id differs from the
+    active one or whose `migrationPlan.fromPackageDigest` is not the active
+    package digest as `apply.package.refused`, which covers the previous or
+    an older package; the active package itself as
+    `apply.package.already_active`, naming `bregctl status`; and a runtime
+    file whose `identity.databaseId` is not the one the database recorded as
+    `apply.database.identity_mismatch`. `bregctl plan` reports the same
+    refusals without changing anything.
+  - Rebuild every package an earlier release built with this release's
+    `bregctl package`: its `package/v1` manifest is refused and its schema
+    fingerprint has changed. For the upgrade, rebuild the deployed project
+    unchanged, then build each successor from that package.
+  - The first `bregctl apply --package DIR` on a database an earlier release
+    installed, without `--initial`, adopts it into the activation ledger;
+    `bregctl plan` reports that activation as `adopted`. The ledger history
+    that release kept is dropped, and the adoption becomes ledger row 1.
+    Every ingestion run the earlier release opened against the running
+    package is rebound to the adopted package and stays writable; a run
+    bound to any other package stays retired. Adoption records its own
+    activation id on every import authority a pre-ledger release had already
+    closed, because the revision each was opened under has no activation in
+    the ledger, so those authorities' activation id names the adoption rather
+    than the activation they were opened under.
+  - An apply that resumes an unfinished activation must use the database
+    roles that activation started with. A runtime file whose
+    `database.roles` now name other roles, such as one edited for one role
+    while the upgrade's first apply was unfinished, is refused as
+    `apply.resume.roles_differ`, naming the role mode and runtime role the
+    activation started with, and nothing changes. Rerun the apply with those
+    roles, or, for a new package, assess the activation with
+    `bregctl migration reconcile`. A role change is not assessed by
+    reconciliation: fix the cause of its failure and rerun the same apply,
+    which resumes it.
+  - A successor package activates with the database roles the active
+    activation serves with. A runtime file whose `database.roles` name other
+    roles is refused as `apply.successor.roles_differ` before maintenance,
+    naming the role mode and runtime role the active activation records, and
+    nothing changes. Apply the active package under the new roles first,
+    which records a `role_change` activation, then apply the successor.
+  - A Casework deployment repins each BReg source whose project declares a
+    `package` block: that project's `registryRevision` changes (see below),
+    so Casework treats the source's records as moved until the source
+    description pins the upgraded value. Repeat `caseworkctl source add
+    --apply` against the upgraded registry and follow the recovery its
+    refusal prints.
+  - An Evidence deployment re-imports each BReg source once: the export names
+    `provenance.registryRevision` instead of `provenance.packageRevision`, so
+    `evidencectl` reports changed provenance on the first import after the
+    upgrade.
+  - With separate migration and runtime roles, a trigger an operator added to
+    a registry table, such as a local audit trigger, blocks startup:
+    `breg` refuses as `startup.runtime_role.can_write` and `bregctl apply`
+    and `bregctl plan` as `apply.runtime_role.can_write`, naming the exact
+    `DROP TRIGGER` to run. Drop it, then rerun the refused command.
+  - An import authority's `activationRevision` is `activationId` in its audit
+    record and in the `bregctl import-authority` report.
+
+- BREAKING: the database records every activation, the initial one included,
+  as one row of `registry_internal.registry_migrations`, keyed by a UUID
+  activation id and ordered by `apply_order`. Each row names the package
+  digest, its predecessor digest, the `registryRevision`, the plan and
+  migration kinds, the role mode, and the runtime role.
+  - `registry_internal.registry_state` records the active package digest
+    and the active activation id instead of a package revision, an
+    environment, an instance id, and a package sequence, and holds the
+    instance claim. The `registry_internal.registry_instance_claim` table is
+    gone.
+  - Records, the revision journal, captured outbox and delivery rows, audit
+    entries, and import authorities name the activation that wrote them by
+    its activation id wherever they named a package revision. Webhook event
+    data and ingestion runs keep naming the active package by its digest as
+    `packageRevision`, since a client knows the package it holds, not the
+    activation the database recorded for it.
+  - `bregctl apply` reports `activationId` instead of `packageSequence`.
+  - A destructive activation records each backup it was bound to in the
+    row's `backup_references`: the binding path, the backup file, its SHA-256
+    digest, its byte length, and when it was taken. The ledger keeps the
+    reference, never the backup.
+  - An import authority records the activation it was opened under as the
+    UUID `activation_id` instead of the text `activation_revision`. Its
+    `breg-import-authority-audit/v1` record and the `bregctl
+    import-authority` JSON report name it as `activationId` instead of
+    `activationRevision`. A successful activation supersedes every open
+    import authority in the transaction that makes it active and records
+    each supersession once that transaction commits; a failed activation
+    supersedes none. Open a new authority after the activation.
+  - Reconciliation audits under `breg-migration-reconcile-audit/v3`, naming
+    `packageDigest`, `targetPackageDigest`, and `activationId` instead of
+    `packageRevision`, `targetPackageRevision`, and `packageSequence`.
+  - `bregctl migration reconcile` reports `maintenanceTargetPackageDigest`,
+    `activePackageDigest`, and `targetPackageDigest` instead of
+    `maintenanceTargetRevision`, `activePackageRevision`, and
+    `targetPackageRevision`.
+  - Webhook events take their `source` from the runtime `identity.instanceId`.
+    Startup refuses a changed `identity.instanceId` while pending or leased
+    deliveries were captured under the previous one, naming the stored source
+    and the configured instance id, because the delivery worker would
+    dead-letter each of them. Keep the previous `identity.instanceId` until
+    they drain, then change it. Delivered and dead-lettered work does not
+    hold the change back.
+  - `breg` refuses to start on a database that records no activated package,
+    naming `bregctl apply --package DIR --initial`, and on a database that
+    predates the activation ledger, naming `bregctl apply --package DIR`. It
+    checks the package pin and the physical instance claim before it reads the
+    recorded identity, and `bregctl instance-claim` refuses a package root the
+    runtime `package.expectedDigest` does not pin before it connects.
+
+- BREAKING: a database a release before the activation ledger installed is
+  adopted into the ledger once, by `bregctl apply --package DIR` without
+  `--initial`, where DIR and `package.root` both name the deployed project
+  packaged with this release's `bregctl package`. Under the apply lock and in
+  one transaction the kernel tables take this release's shapes, the live
+  managed schema fingerprint must equal the package's `schemaFingerprint`,
+  and the adoption becomes ledger row 1 with plan kind `adopted`; no model
+  DDL runs, and `bregctl apply` reports the activation `adopted`. The ledger
+  history of the release that installed the database is dropped. The
+  instance claim that release recorded is kept, and every open import
+  authority is superseded. A fingerprint mismatch is refused as
+  `apply.adoption.fingerprint_mismatch`, naming both fingerprints, and a
+  database that release left in maintenance as `apply.adoption.not_ready`;
+  either refusal changes nothing. Any other apply of a pre-ledger database is
+  refused as `apply.database.pre_ledger`, naming `bregctl apply --package
+  DIR`.
+
+- `bregctl plan --runtime-config FILE --package DIR` makes the checks
+  `bregctl apply` makes before it changes anything, under the same apply lock
+  and in transactions it rolls back, and changes nothing. It reports whether
+  an activation is pending and its kind (`initial`, `successor`,
+  `role_change`, `adopted`, or `none`), the package and active package
+  digests, the `registryRevision`, the role mode, the activation a retry
+  would resume, and the backup bindings apply requires. It refuses what apply
+  would refuse, with the same `apply.*` codes, and runs no migration
+  statement; `bregctl test` rehearsed those. With `--backup
+  BINDING_PATH=BINDING_FILE` it checks each binding as apply would.
+
+- `bregctl status --runtime-config FILE` reads the activation ledger under the
+  migration credential and reports the package id, the database id, the
+  active package digest and activation id, the `registryRevision`, the role
+  mode, the schema fingerprint, the maintenance status and target, and every
+  ledger row with its package and predecessor digests, plan and migration
+  kinds, outcome, and times.
+
+- `bregctl apply` of the active package under other configured database
+  roles, such as a separate runtime role in place of one role for both, is its
+  own activation: it records a ledger row with the same package digest and the
+  role mode and runtime role it serves with, grants the runtime role, revokes
+  what the retired runtime role held as the runtime, and reports the
+  activation `role_change`. Under the roles the database already serves with,
+  it is refused as `apply.package.already_active`, naming `bregctl status`.
+
+- BREAKING: the role mode is `single` when `database.roles.migration` and
+  `database.roles.runtime` name one role and `split` otherwise, and each mode's
+  privileges are asserted. In split mode `breg` and `bregctl apply` refuse a
+  runtime role that can write the activation ledger or the registry state: a
+  superuser, a member of the migration role, an owner of any registry schema,
+  table, sequence, view, or function or a member of its owner, a holder of
+  CREATE on a registry schema, of TRIGGER on a registry table or view, or of a
+  write privilege on the ledger or state tables, directly or through PUBLIC,
+  and a table carrying a trigger the migrations never created. `bregctl
+  apply` refuses as `apply.runtime_role.can_write`, naming the object and the
+  fix: `REASSIGN OWNED BY` then `bregctl apply --package DIR`, or the exact
+  `REVOKE` or `DROP TRIGGER` then rerunning the refused command. `breg`
+  refuses as `startup.runtime_role.can_write`, naming `bregctl apply
+  --package DIR`, and refuses a runtime role missing the grants the active
+  package gives it as `startup.runtime_role.grants_missing`; the apply of the
+  active package reissues them. A one-role runtime file over a database
+  activated for a separate runtime role is refused as
+  `startup.role_mode.changed` until `bregctl apply --package DIR` activates it
+  for one role. `breg` logs the role mode at startup, and `bregctl doctor`
+  reports it as `roleMode`; in single mode both say the activation ledger
+  check catches mistakes but not someone holding that credential.
+
+- `bregctl dev` and the quickstart serve the local registry with one database
+  role, the migration role; the schema-test rehearsal keeps a separate runtime
+  role. A local session retained from an earlier release keeps its split
+  runtime file, which `bregctl dev stop --remove` does not replace; remove the
+  project's `.breg/dev` directory to start one that serves with one role.
+
+- `bregctl apply --operator-reference TEXT` binds an operator's change
+  reference to the activation. The text must be 1 to 512 bytes without control
+  characters, and the audit profile must be keyed: the ledger row records only
+  its keyed hash, scoped to the activation id, never the text.
+
+- Every activation, adoption included, is audited as
+  `breg-activation-audit/v1`, correlated by its activation id. The request
+  entry is written before the activation changes any state and names the
+  activation and prior activation ids, the package and predecessor digests,
+  the `registryRevision`, the plan kind, the database id, environment,
+  instance id, role mode, and the operator reference's keyed hash. The
+  response follows the commit as `applied`, or durable state that shows the
+  target did not become active as `failed`; an attempt whose end that state
+  cannot show is answered `unfinished`. An audit destination that refuses
+  the request entry refuses the apply as `apply.audit.unavailable`, and
+  nothing changes.
+
+- An activation records the instance claim when the database has never
+  recorded one, as a registry upgraded from a release before the claim, so an
+  in-place upgrade starts after `bregctl apply` without `bregctl
+  instance-claim adopt --acknowledge-original-retired`. A recorded claim is
+  kept, so a restored copy still refuses to serve until it is adopted.
+
+- `bregctl instance-claim adopt` also runs on a database the instance claim
+  already names, as after a point-in-time recovery, a snapshot, or a base
+  backup, which keep the claim matching and reopen every import authority
+  closed after the backup point. It claims the database again with a raised
+  epoch and supersedes every open import authority in one transaction,
+  audited under `breg-instance-claim-audit/v1` with the event `reclaimed`.
+  Run it once after any restore, before the database serves. The
+  `instance_claim.already_current` refusal is gone.
+
+- A runtime file refused as `runtime_config.document` says which field is
+  wrong and why, such as an unknown `audit.destination` and the destinations
+  it accepts, without repeating the refused value, in `bregctl doctor`,
+  `bregctl verify`, and every other command that reports it. A
+  removed package key is refused before any environment expression in its
+  value is substituted, and the runtime file is read through the shared
+  runtime configuration loader.
+
+- BREAKING: an Evidence source export names the compiled model it came from
+  as `provenance.registryRevision` instead of `provenance.packageRevision`,
+  so `evidencectl` reports changed provenance for every BReg source on its
+  next import.
+
+- A runtime file may name one role as both `database.roles.migration` and
+  `database.roles.runtime`, and then one reference as both
+  `database.runtimeUrlRef` and `database.migrationUrlRef`. Two distinct roles
+  still need two distinct references. With one role, `bregctl apply` grants
+  that role nothing beyond the ownership it already holds and revokes only
+  from `PUBLIC`, and `breg` serves as the owner of the registry schema.
+
+- BREAKING: the schema fingerprint no longer measures the runtime role's
+  grants, so one package fits a database served with one role or with two.
+  Every package's schema fingerprint changes; rebuild each package with this
+  `bregctl package`.
+
+- BREAKING: `registryRevision` is a function of the compiled model only. The
+  project's `package` block no longer appears in
+  `compiled/effective-model.json`, so a project that declares a package
+  identity compiles to a different `registryRevision` than it did before, and
+  two projects that differ only in their package identity compile to the same
+  one.
+
+- BREAKING: a package is environment neutral and unsigned. One package built
+  by `bregctl package` is the unit an operator promotes through every
+  environment, and its identity is its package digest, the SHA-256 of its
+  `SHA256SUMS`.
+  - A project's `package.environment`, `package.instanceId`, and
+    `package.sequence` are refused with `package.environment.removed`,
+    `package.instance_id.removed`, and `package.sequence.removed`. Move the
+    environment and the instance id to the runtime file's `identity`, and
+    delete the sequence: a package names its predecessor through
+    `migrationPlan.fromPackageDigest`. `package.sourceRevision` stays.
+  - The manifest is `package/v2`. It no longer carries `packageRevision`,
+    `environment`, `instanceId`, `databaseId`, `sequence`, `priorRevision`,
+    `signaturePolicy`, or signatures, and `migrationPlan.fromRevision` is
+    `fromPackageDigest`. A `package/v1` package is refused; rebuild it with
+    `bregctl package`.
+  - Trust anchors, package signatures, and the signing input are gone. A
+    runtime file's `package.trustAnchorPath`, `package.activeRevision`,
+    `package.activeSequence`, and `package.compilerSourceRevision` are refused
+    with `runtime_config.package_key_removed`, naming what to do instead.
+    `package.root` and `package.expectedDigest` stay.
+  - A runtime file's `identity.instanceId` follows the grammar the project's
+    `package.instanceId` had, a lowercase letter then at most 63 lowercase
+    letters, digits, `-`, or `_`, and is refused otherwise with
+    `runtime_config.invalid_instance_id`. `identity.environment` must equal
+    `identity.databaseInitializationEnvironment`, or the file is refused with
+    `runtime_config.environment_identity_conflict`.
+  - A package without `SHA256SUMS`, built by an earlier `bregctl`, is no
+    longer read as a predecessor through its signature. Rebuild it with this
+    `bregctl`.
+  - `bregctl package` and `bregctl test` drop `--database-id`,
+    `--signature-threshold`, `--signature-key-id`, and `--signatures`, and
+    `--baseline-runtime-config` is `--baseline-package DIR`, the predecessor
+    package directory. Each retired flag exits 2 and names its replacement.
+    `bregctl package` writes the package with its sum file and prints the
+    package digest.
+  - The schema-test receipt is `breg-schema-test-receipt/v2`. It drops the
+    environment, instance id, database id, sequence, candidate revision, and
+    signing input digest, and names the predecessor by `priorPackageDigest`.
+    Its source closure also binds each reviewed migration file by path and
+    digest, so a changed descriptor, statement, or rehearsal file makes the
+    receipt stale. `bregctl test` no longer compares the runtime identity
+    with the candidate.
+  - A reviewed migration file outside the package layout, such as a backup
+    binding, is refused when the package is built. The backup binding is an
+    apply input only (`bregctl apply --backup`).
+  - Reports name packages by `packageDigest` instead of a package revision,
+    including `bregctl dev status`. `bregctl dev` keeps no package sequence,
+    writes no trust anchor or active-package keys, and takes its event source
+    from the runtime `identity.instanceId`.
+  - The database records the active package digest. An initial apply accepts
+    a package that names a predecessor. Applying a package that does not
+    follow the active one is refused as `apply.package.refused`, which also
+    covers a package older than the active one. An empty migration plan is
+    refused before database authority, and `migration reconcile` refuses the
+    active package as its target before database authority.
+
 ## v0.35.0 - 2026-09-28
 
 - Upgrade a registry whose active package the previous `bregctl` release

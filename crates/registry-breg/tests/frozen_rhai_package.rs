@@ -12,10 +12,8 @@
 //! candidate-package inspection, still accepts it for predecessor inspection,
 //! and still runs its Rhai action handler.
 //!
-//! The frozen directory predates the shared package envelope and carries no
-//! `SHA256SUMS`. The loading tests publish an envelope over a temporary copy
-//! first, the step an operator takes for such a package; whether an
-//! envelope-less signed predecessor should load as is stays open in #1633.
+//! The loading tests read a temporary copy, so a run never touches the frozen
+//! bytes.
 //!
 //! To deliberately re-freeze the fixture after an approved package-format
 //! change, delete the directory and run the ignored writer test:
@@ -34,18 +32,15 @@ use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
 use registry_breg::package::{
     inspect_package_integrity, load_predecessor_package, prepare_package_with_project_assets,
-    PackageBuildRequest, PackageMigrationPlanInput, PackageSourceFile, PredecessorPackageContext,
-    SignaturePolicy,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::package::{write_sum_file, PackageLimits as SharedPackageLimits};
+use registry_platform_config::package::SUM_FILE;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 const ENVIRONMENT: &str = "local";
-const INSTANCE_ID: &str = "person-registration-rhai-acceptance";
-const DATABASE_ID: &str = "person-registration-rhai";
 const SOURCE_REVISION: &str = "person-registration-rhai-acceptance-0.1.0";
 const HANDLER_SCRIPTS: [&str; 2] = [
     "scripts/register-person.rhai",
@@ -61,9 +56,8 @@ fn frozen_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/person-registration-rhai-package")
 }
 
-/// A temporary copy of the frozen package with the shared envelope published
-/// over it, leaving the frozen bytes untouched.
-fn enveloped_frozen_copy() -> tempfile::TempDir {
+/// A temporary copy of the frozen package, leaving the frozen bytes untouched.
+fn frozen_copy() -> tempfile::TempDir {
     let copy = tempfile::Builder::new()
         .prefix("registry-frozen-package-")
         .tempdir_in(
@@ -73,13 +67,6 @@ fn enveloped_frozen_copy() -> tempfile::TempDir {
         )
         .expect("temporary package directory");
     copy_tree(&frozen_root(), copy.path());
-    write_sum_file(
-        copy.path(),
-        None,
-        &SharedPackageLimits::default(),
-        "bregctl package",
-    )
-    .expect("the shared envelope publishes over the frozen package copy");
     copy
 }
 
@@ -100,8 +87,7 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 
-/// The acceptance project bound to the unsigned local deployment identity the
-/// frozen package carries.
+/// The acceptance project with the source revision the frozen package carries.
 fn local_project() -> registry_breg::contract::RegistryProject {
     let mut project = parse_project_yaml(
         &fs::read(acceptance_root().join("registry.yaml"))
@@ -112,9 +98,6 @@ fn local_project() -> registry_breg::contract::RegistryProject {
         .package
         .as_mut()
         .expect("the acceptance project declares a package identity");
-    identity.environment = ENVIRONMENT.to_owned();
-    identity.instance_id = INSTANCE_ID.to_owned();
-    identity.sequence = 1;
     identity.source_revision = SOURCE_REVISION.to_owned();
     project
 }
@@ -162,17 +145,9 @@ fn prepare_frozen_package() -> registry_breg::package::PreparedPackage {
     )
     .expect("the person-registration-rhai acceptance project compiles");
     let request = PackageBuildRequest {
-        environment: ENVIRONMENT.to_owned(),
-        instance_id: INSTANCE_ID.to_owned(),
-        database_id: DATABASE_ID.to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: SOURCE_REVISION.to_owned(),
         schema_fingerprint: digest(compiled.ddl().script().as_bytes()),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: vec![],
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: serde_json::to_vec(&local_project()).unwrap(),
@@ -250,15 +225,23 @@ fn frozen_package_bytes_match_the_current_compiler() {
         root.display()
     );
 
-    let envelope = package
-        .envelope(vec![])
-        .expect("the unsigned envelope is valid");
+    let envelope = package.envelope();
     let manifest_bytes = canonicalize_json(&serde_json::to_value(&envelope).unwrap())
         .expect("the envelope renders as canonical JSON");
     assert_eq!(
         committed.remove("package.json").as_deref(),
         Some(manifest_bytes.as_slice()),
         "the frozen package manifest must match the current compiler byte-for-byte"
+    );
+
+    assert_eq!(
+        committed.remove(SUM_FILE).map(|sums| digest(&sums)),
+        Some(
+            package
+                .package_digest()
+                .expect("the frozen package digest derives")
+        ),
+        "the frozen package digest must match the current compiler"
     );
 
     let rebuilt = package.file_bytes().clone();
@@ -278,7 +261,7 @@ fn frozen_package_bytes_match_the_current_compiler() {
 
 #[test]
 fn frozen_package_loads_and_runs_its_rhai_handler() {
-    let package = enveloped_frozen_copy();
+    let package = frozen_copy();
     let inspected =
         inspect_package_integrity(package.path()).expect("the frozen package still verifies");
     let action = register_person(inspected.registry());
@@ -328,23 +311,17 @@ fn frozen_package_loads_and_runs_its_rhai_handler() {
 
 #[test]
 fn frozen_package_remains_a_readable_predecessor() {
-    let package = enveloped_frozen_copy();
+    let package = frozen_copy();
     let inspected = inspect_package_integrity(package.path())
         .expect("the frozen package revision is derived before predecessor binding");
-    let package_revision = inspected.package_revision().to_owned();
-    let context = PredecessorPackageContext {
-        environment: ENVIRONMENT,
-        instance_id: INSTANCE_ID,
-        database_id: DATABASE_ID,
+    let package_revision = inspected.package_digest().to_owned();
+    let context = PackageLoadContext {
         database_initialization_environment: ENVIRONMENT,
-        trust_anchor: None,
-        expected_package_revision: &package_revision,
-        expected_sequence: 1,
     };
     let predecessor = load_predecessor_package(package.path(), &context)
         .expect("the frozen package is still accepted for predecessor inspection");
     let baseline = predecessor.migration_baseline();
-    assert_eq!(baseline.package_revision, package_revision);
+    assert_eq!(baseline.package_digest, package_revision);
     assert_eq!(baseline.registry_id, "person-registration-rhai");
     assert!(
         baseline
@@ -365,7 +342,7 @@ fn write_frozen_fixture() {
         "remove the existing fixture first; the writer never overwrites a frozen package"
     );
     prepare_frozen_package()
-        .publish_to_directory(&destination, vec![])
+        .publish_to_directory(&destination)
         .expect("the frozen fixture is written");
     inspect_package_integrity(&destination).expect("the written fixture verifies");
 }

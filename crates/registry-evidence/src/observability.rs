@@ -79,7 +79,7 @@ pub(crate) struct OperationId {
 impl OperationId {
     fn new(trace: TraceContext) -> Self {
         Self {
-            value: Ulid::new().to_string().into(),
+            value: Ulid::generate().to_string().into(),
             trace,
         }
     }

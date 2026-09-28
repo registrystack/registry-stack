@@ -1037,6 +1037,12 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-adopter-workflow.sh
 
+      - name: Base Registry Engine staging-to-production promotion
+        if: matrix.lane == 'contracts'
+        env:
+          BREG_SKIP_BUILD: "1"
+        run: products/breg/scripts/test-promotion.sh
+
       - name: Install cosign
         if: matrix.lane == 'contracts' && needs.changes.outputs.breg_integration == 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -1044,13 +1050,20 @@ jobs:
           cosign-release: v3.0.6
 
       # The previous release packages and applies the first registry; the
-      # binaries built above test, package, and apply its successor.
-      - name: Base Registry Engine adopter workflow from the previous release
+      # binaries built above rebuild its package, adopt the database into the
+      # activation ledger, serve the same records, and apply a successor.
+      - name: Base Registry Engine upgrade from the previous release
         if: matrix.lane == 'contracts' && needs.changes.outputs.breg_integration == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          BREG_SKIP_BUILD: "1"
-        run: products/breg/scripts/test-adopter-workflow.sh --from-release
+        run: >-
+          uv run --no-project --with PyYAML==6.0.2
+          python3 release/scripts/rehearse-upgrade.py
+          --product breg
+          --platform linux-amd64
+          --to-bin-dir target/debug
+          --work-dir "$RUNNER_TEMP/breg-upgrade-rehearsal"
+          --container-name breg-upgrade-rehearsal-postgres
 
       - name: Base Registry Engine immediate-action adopter examples
         if: matrix.lane == 'contracts'

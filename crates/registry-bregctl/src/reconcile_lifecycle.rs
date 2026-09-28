@@ -15,9 +15,10 @@ use registry_breg::migration_reconcile::{
     reconcile_failed_migration, ReconcileError, ReconcileReport, ReconcileRequest,
     ReconcileTimeouts,
 };
-use registry_breg::package::{load_package, PackageError, PackageIntent, PackageLoadContext};
-use registry_breg::postgres::ExpectedRegistryIdentity;
+use registry_breg::package::{load_package, PackageError};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+
+use crate::active_registry::{recorded_active_identity, ActiveRegistryError};
 use serde::Serialize;
 
 /// The recorded operator reference is a keyed hash in the audit journal, so
@@ -33,6 +34,7 @@ pub(crate) enum ReconcileLifecycleError {
     OperatorReference,
     RuntimeConfig(RuntimeConfigError),
     ActivePackage(PackageError),
+    ActiveRegistry(ActiveRegistryError),
     TargetPackage(PackageError),
     DatabaseConfiguration,
     TimeoutConfiguration,
@@ -53,9 +55,9 @@ pub(crate) struct ReconcileLifecycleOutcome {
     pub outcome: &'static str,
     pub executed: bool,
     pub maintenance_status: Option<String>,
-    pub maintenance_target_revision: Option<String>,
-    pub active_package_revision: Option<String>,
-    pub target_package_revision: String,
+    pub maintenance_target_package_digest: Option<String>,
+    pub active_package_digest: Option<String>,
+    pub target_package_digest: String,
     pub target_catalog_finding: Option<&'static str>,
     pub active_catalog_finding: Option<&'static str>,
     pub unresolvable_reason: Option<&'static str>,
@@ -84,26 +86,15 @@ pub(crate) fn run(
     let active = config
         .load_active_package()
         .map_err(ReconcileLifecycleError::ActivePackage)?;
-    let current = active_identity(&active)?;
-    let target = load_package(
-        request.package,
-        &PackageLoadContext {
-            environment: config.identity().environment(),
-            instance_id: config.identity().instance_id(),
-            database_id: config.identity().database_id(),
-            database_initialization_environment: config
-                .identity()
-                .database_initialization_environment(),
-            compiler_source_revision: config.package().compiler_source_revision(),
-            trust_anchor: config.package_trust_anchor(),
-            intent: PackageIntent::Activation {
-                active_revision: &current.package_revision,
-                active_sequence: u64::try_from(current.package_sequence)
-                    .map_err(|_| ReconcileLifecycleError::TargetPackage(PackageError::Binding))?,
-            },
-        },
-    )
-    .map_err(ReconcileLifecycleError::TargetPackage)?;
+    let target = load_package(request.package, &config.package_load_context())
+        .map_err(ReconcileLifecycleError::TargetPackage)?;
+    // The active package is never its own successor, so naming it as the
+    // target is refused before any database secret is resolved.
+    if target.package_digest() == active.package_digest() {
+        return Err(ReconcileLifecycleError::TargetPackage(
+            PackageError::Binding,
+        ));
+    }
 
     let connection = config
         .migration_database_connection_config()
@@ -120,6 +111,8 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| ReconcileLifecycleError::Runtime)?;
+    let current = recorded_active_identity(&runtime, &config, &connection, &active)
+        .map_err(ReconcileLifecycleError::ActiveRegistry)?;
     let audit = runtime
         .block_on(RegistryAudit::open_companion(&config))
         .map_err(|_| ReconcileLifecycleError::Audit)?;
@@ -145,9 +138,9 @@ fn outcome_report(report: ReconcileReport) -> ReconcileLifecycleOutcome {
         outcome: report.outcome.as_str(),
         executed: report.executed,
         maintenance_status: report.maintenance_status,
-        maintenance_target_revision: report.maintenance_target_revision,
-        active_package_revision: report.active_package_revision,
-        target_package_revision: report.target_package_revision,
+        maintenance_target_package_digest: report.maintenance_target_package_digest,
+        active_package_digest: report.active_package_digest,
+        target_package_digest: report.target_package_digest,
         target_catalog_finding: report.target_catalog_finding,
         active_catalog_finding: report.active_catalog_finding,
         unresolvable_reason: report.unresolvable_reason,
@@ -156,22 +149,6 @@ fn outcome_report(report: ReconcileReport) -> ReconcileLifecycleOutcome {
         reviewed_plan_closed: report.reviewed_plan_closed,
         durable_step_progress: report.durable_step_progress,
     }
-}
-
-fn active_identity(
-    package: &registry_breg::package::VerifiedPackage,
-) -> Result<ExpectedRegistryIdentity, ReconcileLifecycleError> {
-    let manifest = package.manifest();
-    Ok(ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: i64::try_from(manifest.sequence)
-            .map_err(|_| ReconcileLifecycleError::ActivePackage(PackageError::Binding))?,
-    })
 }
 
 fn validate_operator_reference(reference: &str) -> Result<(), ReconcileLifecycleError> {
@@ -187,6 +164,41 @@ fn validate_operator_reference(reference: &str) -> Result<(), ReconcileLifecycle
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_breg::migration_reconcile::ReconcileOutcome;
+
+    #[test]
+    fn the_report_names_package_digests_as_digests() {
+        let digest = |n: u8| format!("sha256:{}", format!("{n:x}").repeat(64));
+        let rendered = serde_json::to_value(outcome_report(ReconcileReport {
+            outcome: ReconcileOutcome::Unresolvable,
+            maintenance_status: Some("failed".to_owned()),
+            maintenance_target_package_digest: Some(digest(2)),
+            active_package_digest: Some(digest(1)),
+            target_package_digest: digest(2),
+            target_catalog_finding: None,
+            active_catalog_finding: None,
+            unresolvable_reason: None,
+            plan_kind: "compiled_additive",
+            migration_step_count: 0,
+            reviewed_plan_closed: None,
+            durable_step_progress: None,
+            executed: false,
+        }))
+        .expect("the report serializes");
+        assert_eq!(rendered["maintenanceTargetPackageDigest"], digest(2));
+        assert_eq!(rendered["activePackageDigest"], digest(1));
+        assert_eq!(rendered["targetPackageDigest"], digest(2));
+        for revision in [
+            "maintenanceTargetRevision",
+            "activePackageRevision",
+            "targetPackageRevision",
+        ] {
+            assert!(
+                rendered.get(revision).is_none(),
+                "{revision} is not reported"
+            );
+        }
+    }
 
     #[test]
     fn the_operator_reference_is_present_bounded_and_free_of_control_characters() {

@@ -25,8 +25,7 @@ entries:
   - {path: source/modules/<module-id>/<relative-sql-path>, role: source-module-asset, required: false}
   - {path: source/project/<relative-json-path>, role: source-project-evidence-contract, required: false}
   - {path: tests/journeys.yaml, role: fixture-journeys, required: true}
-  - {path: signatures, role: package-signatures, required: false}
 
-# A deployment supplies its trust anchor and runtime bindings separately. They
-# must not be embedded in a Registry package or runtime image.
-forbiddenEmbeddedRoles: [deployment-trust-anchor, runtime-secret, migration-credential, signing-key]
+# A deployment supplies its runtime bindings separately. They must not be
+# embedded in a Registry package or runtime image.
+forbiddenEmbeddedRoles: [runtime-secret, migration-credential]

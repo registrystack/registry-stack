@@ -4,7 +4,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt, fs,
-    io::Read,
     net::{IpAddr, SocketAddr},
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -16,8 +15,8 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RuntimeConfigErrorKind, RuntimeConfigLoader,
+    redact_refused_values, AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
+    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader,
     RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
@@ -47,8 +46,7 @@ use crate::{
     model::CompiledRegistry,
     package::{
         load_package_with_verified_envelope, load_predecessor_package_with_verified_envelope,
-        PackageError, PackageIntent, PackageLoadContext, PredecessorPackageContext,
-        VerifiedPackage, VerifiedPredecessorPackage,
+        PackageError, PackageLoadContext, VerifiedPackage, VerifiedPredecessorPackage,
     },
     postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
 };
@@ -117,6 +115,8 @@ const VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN: &str =
 #[cfg(feature = "schema")]
 const SCOPE_SEPARATOR_SCHEMA_PATTERN: &str = "^[^A-Za-z0-9\\x00-\\x1F\\x7F]$";
 #[cfg(feature = "schema")]
+const INSTANCE_ID_SCHEMA_PATTERN: &str = "^[a-z][a-z0-9_-]{0,63}$";
+#[cfg(feature = "schema")]
 const EVENT_DESTINATION_ID_SCHEMA_PATTERN: &str = "^[a-z][a-z0-9_-]{0,63}$";
 #[cfg(feature = "schema")]
 const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
@@ -125,18 +125,7 @@ const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/breg-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "BRegRuntimeConfig";
 
-/// Why the database-active predecessor's shared envelope was refused.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
-pub enum PredecessorEnvelopeError {
-    /// The shared envelope is present and refused.
-    #[error(transparent)]
-    Shared(registry_platform_config::package::PackageError),
-    /// The package has no shared envelope and cannot be accepted without it.
-    #[error(transparent)]
-    Package(PackageError),
-}
-
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 pub enum RuntimeConfigError {
     #[error("the runtime configuration file is unavailable")]
     Unavailable,
@@ -148,8 +137,10 @@ pub enum RuntimeConfigError {
     EnvExpansion,
     #[error("runtime configuration substitutes into a secret reference or secret provider")]
     SubstitutionInReference,
-    #[error("the runtime configuration document is invalid")]
-    Document,
+    /// The document is not YAML this runtime reads, or a member does not fit
+    /// its typed shape. The message names the field and never the value.
+    #[error("the runtime configuration document is invalid: {0}")]
+    Document(String),
     #[error("runtime configuration uses an unsupported apiVersion")]
     InvalidApiVersion,
     #[error("runtime configuration uses an unsupported kind")]
@@ -158,6 +149,14 @@ pub enum RuntimeConfigError {
     GovernedMember,
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
+    #[error(
+        "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
+    )]
+    InvalidInstanceId,
+    #[error(
+        "runtime configuration identity.environment and identity.databaseInitializationEnvironment must be identical; set both to the environment the database was initialized in"
+    )]
+    EnvironmentIdentityConflict,
     #[error("runtime configuration contains an invalid listener binding")]
     InvalidListener,
     #[error("runtime configuration contains an invalid metrics listener binding")]
@@ -176,10 +175,26 @@ pub enum RuntimeConfigError {
     PackageRootUnavailable,
     #[error("the configured package root path contains a symbolic link")]
     UnsafePackageRoot,
-    #[error("the configured package trust anchor file is missing or is not a readable file")]
-    TrustAnchorUnavailable,
-    #[error("the configured package trust anchor path contains a symbolic link")]
-    UnsafeTrustAnchor,
+    #[error(
+        "package.trustAnchorPath was removed; remove it: `bregctl apply` with the migration \
+         credential authorizes an activation and records it in the database ledger"
+    )]
+    PackageTrustAnchorRemoved,
+    #[error(
+        "package.activeRevision was removed; remove it: the database ledger records the active \
+         package, see `bregctl status`"
+    )]
+    PackageActiveRevisionRemoved,
+    #[error(
+        "package.activeSequence was removed; remove it: the database ledger records the active \
+         package, see `bregctl status`"
+    )]
+    PackageActiveSequenceRemoved,
+    #[error(
+        "package.compilerSourceRevision was removed; remove it: the package manifest records \
+         its compiler identity"
+    )]
+    PackageCompilerSourceRevisionRemoved,
     #[error("runtime configuration contains an invalid OIDC binding")]
     InvalidOidc,
     #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
@@ -224,7 +239,7 @@ impl RuntimeConfigErrorMetadata {
 
 impl RuntimeConfigError {
     #[must_use]
-    pub const fn metadata(self) -> RuntimeConfigErrorMetadata {
+    pub const fn metadata(&self) -> RuntimeConfigErrorMetadata {
         RuntimeConfigErrorMetadata {
             code: self.code(),
             path: self.path(),
@@ -232,18 +247,20 @@ impl RuntimeConfigError {
     }
 
     #[must_use]
-    pub const fn code(self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::Unavailable => "runtime_config.unavailable",
             Self::UnsafeFile => "runtime_config.unsafe_file",
             Self::Bounds => "runtime_config.bounds",
             Self::EnvExpansion => "runtime_config.env_expansion",
             Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
-            Self::Document => "runtime_config.document",
+            Self::Document(_) => "runtime_config.document",
             Self::InvalidApiVersion => "runtime_config.invalid_api_version",
             Self::InvalidKind => "runtime_config.invalid_kind",
             Self::GovernedMember => "runtime_config.governed_member",
             Self::InvalidBinding => "runtime_config.invalid_binding",
+            Self::InvalidInstanceId => "runtime_config.invalid_instance_id",
+            Self::EnvironmentIdentityConflict => "runtime_config.environment_identity_conflict",
             Self::InvalidListener => "runtime_config.invalid_listener",
             Self::InvalidMetricsListener => "runtime_config.invalid_metrics_listener",
             Self::InvalidSecretProvider => "runtime_config.invalid_secret_provider",
@@ -255,8 +272,10 @@ impl RuntimeConfigError {
             Self::InvalidPackage => "runtime_config.invalid_package",
             Self::PackageRootUnavailable => "runtime_config.package_root_unavailable",
             Self::UnsafePackageRoot => "runtime_config.unsafe_package_root",
-            Self::TrustAnchorUnavailable => "runtime_config.trust_anchor_unavailable",
-            Self::UnsafeTrustAnchor => "runtime_config.unsafe_trust_anchor",
+            Self::PackageTrustAnchorRemoved
+            | Self::PackageActiveRevisionRemoved
+            | Self::PackageActiveSequenceRemoved
+            | Self::PackageCompilerSourceRevisionRemoved => "runtime_config.package_key_removed",
             Self::InvalidOidc => "runtime_config.invalid_oidc",
             Self::InvalidOidcLeeway => "runtime_config.invalid_oidc_leeway",
             Self::InvalidAudit => "runtime_config.invalid_audit",
@@ -272,18 +291,20 @@ impl RuntimeConfigError {
     }
 
     #[must_use]
-    pub const fn path(self) -> &'static str {
+    pub const fn path(&self) -> &'static str {
         match self {
             Self::Unavailable
             | Self::UnsafeFile
             | Self::Bounds
             | Self::EnvExpansion
             | Self::SubstitutionInReference
-            | Self::Document
+            | Self::Document(_)
             | Self::GovernedMember
             | Self::InvalidBinding
             | Self::Secret => "/",
             Self::InvalidApiVersion => "/apiVersion",
+            Self::InvalidInstanceId => "/identity/instanceId",
+            Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
             Self::InvalidKind => "/kind",
             Self::InvalidListener => "/listener",
             Self::InvalidMetricsListener => "/metricsListener",
@@ -294,7 +315,10 @@ impl RuntimeConfigError {
             Self::InvalidDatabase => "/database",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
-            Self::TrustAnchorUnavailable | Self::UnsafeTrustAnchor => "/package/trustAnchorPath",
+            Self::PackageTrustAnchorRemoved => "/package/trustAnchorPath",
+            Self::PackageActiveRevisionRemoved => "/package/activeRevision",
+            Self::PackageActiveSequenceRemoved => "/package/activeSequence",
+            Self::PackageCompilerSourceRevisionRemoved => "/package/compilerSourceRevision",
             Self::InvalidOidc => "/authentication/oidc",
             Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
             Self::InvalidAudit => "/audit",
@@ -326,14 +350,11 @@ pub fn load_runtime_config_with_env(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
     validate_absolute_lexical_path(path, RuntimeConfigError::UnsafeFile)?;
-    reject_symlink_components(
-        path,
-        RuntimeConfigError::UnsafeFile,
-        RuntimeConfigError::Unavailable,
-    )?;
-    let bytes = read_bounded_runtime_config(path, MAX_RUNTIME_CONFIG_BYTES)?;
-    let raw = std::str::from_utf8(&bytes).map_err(|_| RuntimeConfigError::Document)?;
-    parse_runtime_config_with_env(raw, lookup).and_then(|config| {
+    let substituted = runtime_config_loader()
+        .load_with::<Value>(path, lookup)
+        .map_err(|error| runtime_config_error_from_loader(&error))?
+        .config;
+    runtime_config_from_substituted(substituted).and_then(|config| {
         config.validate_loaded_paths()?;
         Ok(config)
     })
@@ -351,18 +372,71 @@ pub fn parse_runtime_config_with_env(
     {
         return Err(RuntimeConfigError::Bounds);
     }
-    let substituted = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let substituted = runtime_config_loader()
+        .parse_str::<Value>(raw, lookup)
+        .map_err(|error| runtime_config_error_from_loader(&error))?
+        .config;
+    runtime_config_from_substituted(substituted)
+}
+
+/// Package keys this runtime no longer reads, each with what replaces it. The
+/// shared loader refuses them before it substitutes any value.
+const REMOVED_KEYS: [RemovedKey; 4] = [
+    RemovedKey {
+        path: "package.trustAnchorPath",
+        replacement: "remove it: `bregctl apply` with the migration credential authorizes an \
+                      activation and records it in the database ledger",
+    },
+    RemovedKey {
+        path: "package.activeRevision",
+        replacement: "remove it: the database ledger records the active package, see \
+                      `bregctl status`",
+    },
+    RemovedKey {
+        path: "package.activeSequence",
+        replacement: "remove it: the database ledger records the active package, see \
+                      `bregctl status`",
+    },
+    RemovedKey {
+        path: "package.compilerSourceRevision",
+        replacement: "remove it: the package manifest records its compiler identity",
+    },
+];
+
+/// The refusal that names a removed key the shared loader found.
+fn removed_key_error(field: &str) -> Option<RuntimeConfigError> {
+    match field {
+        "package.trustAnchorPath" => Some(RuntimeConfigError::PackageTrustAnchorRemoved),
+        "package.activeRevision" => Some(RuntimeConfigError::PackageActiveRevisionRemoved),
+        "package.activeSequence" => Some(RuntimeConfigError::PackageActiveSequenceRemoved),
+        "package.compilerSourceRevision" => {
+            Some(RuntimeConfigError::PackageCompilerSourceRevisionRemoved)
+        }
+        _ => None,
+    }
+}
+
+/// The shared runtime configuration loader under BReg's envelope, bound, and
+/// removed keys. BReg reads the file through it: the loader holds the path,
+/// symbolic link, regular file, and bounded read checks.
+const fn runtime_config_loader() -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: RUNTIME_CONFIG_API_VERSION,
         kind: RUNTIME_CONFIG_KIND,
     })
     .max_bytes(MAX_RUNTIME_CONFIG_BYTES)
-    .parse_str::<Value>(raw, lookup)
-    .map_err(|error| runtime_config_error_from_loader(&error))?
-    .config;
+    .removed_keys(&REMOVED_KEYS)
+}
+
+fn runtime_config_from_substituted(substituted: Value) -> Result<RuntimeConfig> {
     // A substituted value may be longer than the expression it replaced, so
     // the substituted document is held to the same bound as the file.
     let substituted_len = serde_json::to_string(&substituted)
-        .map_err(|_| RuntimeConfigError::Document)?
+        .map_err(|_| {
+            RuntimeConfigError::Document(
+                "the runtime configuration could not be measured after substitution".to_owned(),
+            )
+        })?
         .len();
     if substituted_len > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
         return Err(RuntimeConfigError::Bounds);
@@ -371,8 +445,12 @@ pub fn parse_runtime_config_with_env(
         return Err(RuntimeConfigError::GovernedMember);
     }
     reject_invalid_binding_text(&substituted)?;
-    let raw: RawRuntimeConfig =
-        serde_json::from_value(substituted).map_err(|_| RuntimeConfigError::Document)?;
+    let raw: RawRuntimeConfig = serde_path_to_error::deserialize(substituted).map_err(|error| {
+        let field = error.path().to_string();
+        let field = if field == "." { "/".to_owned() } else { field };
+        let reason = redact_refused_values(&error.into_inner().to_string());
+        RuntimeConfigError::Document(format!("{field} is invalid: {reason}"))
+    })?;
     RuntimeConfig::from_raw(raw)
 }
 
@@ -396,7 +474,15 @@ fn runtime_config_error_from_loader(
             RuntimeConfigError::UnsafeFile
         }
         RuntimeConfigErrorKind::Unavailable => RuntimeConfigError::Unavailable,
-        _ => RuntimeConfigError::Document,
+        RuntimeConfigErrorKind::RemovedKey => removed_key_error(error.field())
+            .unwrap_or_else(|| RuntimeConfigError::Document(error.message().to_owned())),
+        RuntimeConfigErrorKind::Syntax
+        | RuntimeConfigErrorKind::Encoding
+        | RuntimeConfigErrorKind::InvalidValue
+        | RuntimeConfigErrorKind::AuthoredExpression
+        | RuntimeConfigErrorKind::AuthoredSyntax => {
+            RuntimeConfigError::Document(error.message().to_owned())
+        }
     }
 }
 
@@ -890,7 +976,7 @@ impl RuntimeConfig {
     }
 
     /// Verify the shared package envelope and optional package digest pin
-    /// before any product-specific signature or deployment-binding work.
+    /// before any product-specific closure or derivation work.
     pub fn verify_package_envelope(
         &self,
     ) -> std::result::Result<
@@ -903,41 +989,8 @@ impl RuntimeConfig {
             .map_err(|error| error.naming_root_as("package.root"))
     }
 
-    /// Verify the shared envelope of the database-active predecessor and the
-    /// optional package digest pin. A predecessor written before the shared
-    /// package format returns `None` and is verified from its signed manifest
-    /// alone (see [`verify_predecessor_shared_package`]); a configured pin
-    /// names a `SHA256SUMS` digest, so it refuses such a package.
-    ///
-    /// [`verify_predecessor_shared_package`]: crate::package::verify_predecessor_shared_package
-    pub fn verify_predecessor_package_envelope(
-        &self,
-    ) -> std::result::Result<
-        Option<registry_platform_config::package::VerifiedPackage>,
-        PredecessorEnvelopeError,
-    > {
-        match self.verify_package_envelope() {
-            Ok(shared) => Ok(Some(shared)),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    registry_platform_config::package::PackageErrorKind::SumFileMissing
-                ) =>
-            {
-                if self.package.shared.expected_digest.is_some() {
-                    Err(PredecessorEnvelopeError::Package(
-                        PackageError::DigestPinUnverifiable,
-                    ))
-                } else {
-                    Ok(None)
-                }
-            }
-            Err(error) => Err(PredecessorEnvelopeError::Shared(error)),
-        }
-    }
-
     /// Verify the configured package pin and consume that same shared
-    /// envelope through BReg's signature, binding, and derivation checks.
+    /// envelope through BReg's closure and derivation checks.
     pub fn load_active_package(&self) -> std::result::Result<VerifiedPackage, PackageError> {
         let shared = self
             .verify_package_envelope()
@@ -955,25 +1008,12 @@ impl RuntimeConfig {
         &self,
     ) -> std::result::Result<VerifiedPredecessorPackage, PackageError> {
         let shared = self
-            .verify_predecessor_package_envelope()
-            .map_err(|error| match error {
-                PredecessorEnvelopeError::Shared(_) => PackageError::Envelope,
-                PredecessorEnvelopeError::Package(error) => error,
-            })?;
+            .verify_package_envelope()
+            .map_err(|_| PackageError::Envelope)?;
         load_predecessor_package_with_verified_envelope(
             self.package().root(),
-            &PredecessorPackageContext {
-                environment: self.identity().environment(),
-                instance_id: self.identity().instance_id(),
-                database_id: self.identity().database_id(),
-                database_initialization_environment: self
-                    .identity()
-                    .database_initialization_environment(),
-                trust_anchor: self.package_trust_anchor(),
-                expected_package_revision: self.package().active_revision(),
-                expected_sequence: self.package().active_sequence(),
-            },
-            shared.as_ref(),
+            &self.package_load_context(),
+            &shared,
         )
     }
 
@@ -1090,29 +1130,15 @@ impl RuntimeConfig {
         .map_err(|_| RuntimeConfigError::InvalidCursor)
     }
 
+    /// How strictly this deployment loads a package: file-mode strictness
+    /// follows the database initialization environment.
     pub fn package_load_context(&self) -> PackageLoadContext<'_> {
         PackageLoadContext {
-            environment: self.identity.environment.as_str(),
-            instance_id: self.identity.instance_id.as_str(),
-            database_id: self.identity.database_id.as_str(),
             database_initialization_environment: self
                 .identity
                 .database_initialization_environment
                 .as_str(),
-            compiler_source_revision: self.package.compiler_source_revision.as_str(),
-            trust_anchor: self.package_trust_anchor(),
-            intent: PackageIntent::Startup {
-                active_revision: self.package.active_revision.as_str(),
-                active_sequence: self.package.active_sequence,
-            },
         }
-    }
-
-    /// Production package verification is anchored. Local unsigned packages
-    /// must not carry trust authority into the package verifier.
-    pub fn package_trust_anchor(&self) -> Option<&Path> {
-        (self.identity.database_initialization_environment != "local")
-            .then_some(self.package.trust_anchor_path.as_path())
     }
 
     fn validate_loaded_paths(&self) -> Result<()> {
@@ -1121,13 +1147,6 @@ impl RuntimeConfig {
             RuntimeConfigError::UnsafePackageRoot,
             RuntimeConfigError::PackageRootUnavailable,
         )?;
-        if let Some(trust_anchor) = self.package_trust_anchor() {
-            validate_existing_file(
-                trust_anchor,
-                RuntimeConfigError::UnsafeTrustAnchor,
-                RuntimeConfigError::TrustAnchorUnavailable,
-            )?;
-        }
         if let Some(root) = self.secret_providers.file_root() {
             validate_existing_directory(
                 root,
@@ -1364,8 +1383,19 @@ impl DeploymentIdentity {
     fn from_raw(raw: RawDeploymentIdentity) -> Result<Self> {
         validate_deployment_value(&raw.environment)?;
         validate_deployment_value(&raw.instance_id)?;
+        // The instance id is the event source URN's instance term, whose
+        // envelope budget holds only inside this closed grammar.
+        if !crate::package::valid_build_id(&raw.instance_id) {
+            return Err(RuntimeConfigError::InvalidInstanceId);
+        }
         validate_deployment_value(&raw.database_id)?;
         validate_deployment_value(&raw.database_initialization_environment)?;
+        // Package loading keys its permission strictness on the
+        // initialization environment, so a deployment that names another
+        // environment would load its package under the wrong strictness.
+        if raw.environment != raw.database_initialization_environment {
+            return Err(RuntimeConfigError::EnvironmentIdentityConflict);
+        }
         Ok(Self {
             environment: raw.environment,
             instance_id: raw.instance_id,
@@ -1456,7 +1486,10 @@ impl DatabaseConfig {
             parse_secret_reference(raw.runtime_url_ref, RuntimeConfigError::InvalidDatabase)?;
         let migration_url_ref =
             parse_secret_reference(raw.migration_url_ref, RuntimeConfigError::InvalidDatabase)?;
-        if runtime_url_ref == migration_url_ref {
+        let roles = SqlRoles::from_raw(raw.roles)?;
+        // One database reference logs in as one role, so two references are
+        // required only when the runtime and migration roles differ.
+        if runtime_url_ref == migration_url_ref && roles.migration != roles.runtime {
             return Err(RuntimeConfigError::InvalidDatabase);
         }
         let pool_bounds = PoolBounds::new(
@@ -1470,7 +1503,7 @@ impl DatabaseConfig {
             runtime_url_ref,
             migration_url_ref,
             pool_bounds,
-            roles: SqlRoles::from_raw(raw.roles)?,
+            roles,
         })
     }
 
@@ -1493,10 +1526,6 @@ impl fmt::Debug for DatabaseConfig {
 #[derive(Clone)]
 pub struct PackageConfig {
     shared: SharedPackageConfig,
-    trust_anchor_path: PathBuf,
-    compiler_source_revision: String,
-    active_revision: String,
-    active_sequence: u64,
 }
 
 impl PackageConfig {
@@ -1504,19 +1533,7 @@ impl PackageConfig {
         raw.shared
             .check()
             .map_err(|_| RuntimeConfigError::InvalidPackage)?;
-        validate_absolute_lexical_path(&raw.trust_anchor_path, RuntimeConfigError::InvalidPackage)?;
-        validate_deployment_value(&raw.compiler_source_revision)?;
-        validate_deployment_value(&raw.active_revision)?;
-        if raw.active_sequence == 0 {
-            return Err(RuntimeConfigError::InvalidPackage);
-        }
-        Ok(Self {
-            shared: raw.shared,
-            trust_anchor_path: raw.trust_anchor_path,
-            compiler_source_revision: raw.compiler_source_revision,
-            active_revision: raw.active_revision,
-            active_sequence: raw.active_sequence,
-        })
+        Ok(Self { shared: raw.shared })
     }
 
     pub fn root(&self) -> &Path {
@@ -1526,22 +1543,6 @@ impl PackageConfig {
     pub fn shared(&self) -> &SharedPackageConfig {
         &self.shared
     }
-
-    pub fn trust_anchor_path(&self) -> &Path {
-        &self.trust_anchor_path
-    }
-
-    pub fn compiler_source_revision(&self) -> &str {
-        &self.compiler_source_revision
-    }
-
-    pub fn active_revision(&self) -> &str {
-        &self.active_revision
-    }
-
-    pub fn active_sequence(&self) -> u64 {
-        self.active_sequence
-    }
 }
 
 impl fmt::Debug for PackageConfig {
@@ -1549,10 +1550,6 @@ impl fmt::Debug for PackageConfig {
         formatter
             .debug_struct("PackageConfig")
             .field("shared", &"<redacted>")
-            .field("trust_anchor_path", &"<redacted>")
-            .field("compiler_source_revision", &"<redacted>")
-            .field("active_revision", &"<redacted>")
-            .field("active_sequence", &self.active_sequence)
             .finish()
     }
 }
@@ -2328,9 +2325,6 @@ pub struct SqlRoles {
 
 impl SqlRoles {
     fn from_raw(raw: RawSqlRoles) -> Result<Self> {
-        if raw.migration == raw.runtime {
-            return Err(RuntimeConfigError::InvalidDatabase);
-        }
         Ok(Self {
             migration: SqlIdentifier::parse(&raw.migration)
                 .map_err(|_| RuntimeConfigError::InvalidDatabase)?,
@@ -2706,10 +2700,6 @@ struct RawSqlRoles {
 struct RawPackageConfig {
     #[serde(flatten)]
     shared: SharedPackageConfig,
-    trust_anchor_path: PathBuf,
-    compiler_source_revision: String,
-    active_revision: String,
-    active_sequence: u64,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -3158,11 +3148,6 @@ fn install_schema_constraints(schema: &mut Value) {
             60_000,
         ),
         (
-            "/$defs/RawPackageConfig/properties/activeSequence",
-            1,
-            u64::MAX,
-        ),
-        (
             "/$defs/RawOidcVerifierConfig/properties/maxTokenLifetimeSeconds",
             1,
             7_200,
@@ -3273,8 +3258,8 @@ fn install_schema_constraints(schema: &mut Value) {
         (
             "/$defs/RawDeploymentIdentity/properties/instanceId",
             1,
-            MAX_DEPLOYMENT_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+            crate::compiler::MAX_BUILD_ID_BYTES as usize,
+            INSTANCE_ID_SCHEMA_PATTERN,
         ),
         (
             "/$defs/RawDeploymentIdentity/properties/databaseId",
@@ -3317,24 +3302,6 @@ fn install_schema_constraints(schema: &mut Value) {
             1,
             MAX_PATH_BYTES,
             "",
-        ),
-        (
-            "/$defs/RawPackageConfig/properties/trustAnchorPath",
-            1,
-            MAX_PATH_BYTES,
-            "",
-        ),
-        (
-            "/$defs/RawPackageConfig/properties/compilerSourceRevision",
-            1,
-            MAX_DEPLOYMENT_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawPackageConfig/properties/activeRevision",
-            1,
-            MAX_DEPLOYMENT_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
             "/$defs/RawOidcVerifierConfig/properties/issuer",
@@ -3635,125 +3602,17 @@ fn remove_schema_default(schema: &mut Value, pointer: &str) {
     }
 }
 
-fn read_bounded_runtime_config(path: &Path, maximum: u64) -> Result<Vec<u8>> {
-    let scanned = fs::symlink_metadata(path).map_err(|_| RuntimeConfigError::Unavailable)?;
-    if scanned.file_type().is_symlink() || !scanned.is_file() {
-        return Err(RuntimeConfigError::UnsafeFile);
-    }
-    if scanned.len() == 0 || scanned.len() > maximum {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    let file = open_runtime_config_file(path)?;
-    let opened = file
-        .metadata()
-        .map_err(|_| RuntimeConfigError::Unavailable)?;
-    let current = fs::symlink_metadata(path).map_err(|_| RuntimeConfigError::Unavailable)?;
-    if current.file_type().is_symlink()
-        || !opened.is_file()
-        || !same_file(&scanned, &opened)
-        || !same_file(&opened, &current)
-    {
-        return Err(RuntimeConfigError::UnsafeFile);
-    }
-    if opened.len() == 0 || opened.len() > maximum {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    let capacity = usize::try_from(opened.len()).map_err(|_| RuntimeConfigError::Bounds)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve(capacity)
-        .map_err(|_| RuntimeConfigError::Bounds)?;
-    let mut reader = file.take(maximum + 1);
-    reader
-        .read_to_end(&mut bytes)
-        .map_err(|_| RuntimeConfigError::Unavailable)?;
-    let after = reader
-        .get_ref()
-        .metadata()
-        .map_err(|_| RuntimeConfigError::Unavailable)?;
-    if bytes.is_empty() || bytes.len() as u64 > maximum {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    if !same_file(&opened, &after) || bytes.len() as u64 != after.len() {
-        return Err(RuntimeConfigError::UnsafeFile);
-    }
-    Ok(bytes)
-}
-
-fn open_runtime_config_file(path: &Path) -> Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        options.custom_flags(runtime_config_no_follow_flag());
-    }
-    options.open(path).map_err(|_| {
-        fs::symlink_metadata(path).map_or(RuntimeConfigError::Unavailable, |metadata| {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                RuntimeConfigError::UnsafeFile
-            } else {
-                RuntimeConfigError::Unavailable
-            }
-        })
-    })
-}
-
-#[cfg(unix)]
-fn runtime_config_no_follow_flag() -> i32 {
-    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32
-}
-
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.permissions().mode() == right.permissions().mode()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-#[cfg(not(unix))]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len()
-        && left.permissions().readonly() == right.permissions().readonly()
-        && left.modified().ok() == right.modified().ok()
-        && left.created().ok() == right.created().ok()
-}
-
 fn validate_existing_directory(
     path: &Path,
     unsafe_error: RuntimeConfigError,
     unavailable_error: RuntimeConfigError,
 ) -> Result<()> {
-    reject_symlink_components(path, unsafe_error, unavailable_error)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error)?;
+    reject_symlink_components(path, unsafe_error.clone(), unavailable_error.clone())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error.clone())?;
     if metadata.file_type().is_symlink() {
         return Err(unsafe_error);
     }
     if !metadata.is_dir() {
-        return Err(unavailable_error);
-    }
-    Ok(())
-}
-
-fn validate_existing_file(
-    path: &Path,
-    unsafe_error: RuntimeConfigError,
-    unavailable_error: RuntimeConfigError,
-) -> Result<()> {
-    reject_symlink_components(path, unsafe_error, unavailable_error)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error)?;
-    if metadata.file_type().is_symlink() {
-        return Err(unsafe_error);
-    }
-    if !metadata.is_file() {
         return Err(unavailable_error);
     }
     Ok(())

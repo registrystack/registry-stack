@@ -12,7 +12,7 @@ page.
 | `business` | Legal entities, filings, and officer appointments | Registration identifiers, public and protected projections, create-only filings, and effective time |
 | `facility` | Environmental facilities, permits, installations, and discharge reports | Coordinates, quantities and units, administrative row boundaries, and resumable imports |
 | `inspection` | Public authorities, facility inspections, observations, and permit records | Protected structured metadata, bounded finding grades, create-only records, and corrections retaining the original effective period |
-| `asset-site-placement` | Equipment assigned to sites | Non-overlapping placements and an additive signed upgrade with unchanged server bytes |
+| `asset-site-placement` | Equipment assigned to sites | Non-overlapping placements and an additive upgrade with unchanged server bytes |
 
 All five pass the Production compiler and the same real-PostgreSQL pilot test,
 `postgres_pilot_acceptance.rs`, which the postgres lane of `scripts/test-postgres.sh`
@@ -40,10 +40,10 @@ incorporation, inspection case management, or permit approval workflows.
 
 The asset project also passes the public-binary adopter workflow.
 That workflow builds the two executables once, tests a candidate in an isolated
-database, packages it for external signing, proves that an author without the
+database, packages it, proves that an author without the
 migration secret cannot initialize production state, applies it with the
 operator role, and performs authenticated data access through a static JWKS.
-It then adds one optional restricted field by configuration, tests and signs
+It then adds one optional restricted field by configuration, tests and packages
 the successor in a second isolated database, records a deliberately blocked
 migration as durable failed maintenance, applies the exact fix-forward package,
 and restarts the byte-identical server binary. The original data survives and

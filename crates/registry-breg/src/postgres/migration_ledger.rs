@@ -4,20 +4,22 @@ use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::{PostgresKernelError, Result, SqlIdentifier};
+use super::{PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier};
 
 const MAX_MIGRATION_STATEMENTS: usize = 1024;
 const MAX_MIGRATION_ARTIFACTS: usize = 1024;
 const MAX_MIGRATION_STEPS: usize = 1024;
+const MAX_LEDGER_TEXT_BYTES: usize = 512;
 
+/// What one activation changes in the managed catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MigrationPlanKind {
+pub(crate) enum MigrationKind {
     CompiledAdditive,
     MetadataOnly,
     Reviewed,
 }
 
-impl MigrationPlanKind {
+impl MigrationKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::CompiledAdditive => "compiled_additive",
@@ -27,10 +29,70 @@ impl MigrationPlanKind {
     }
 }
 
+/// How one activation relates to the package the database ran before it: the
+/// first package of an empty database, the successor of the active package,
+/// or a database recorded before this ledger existed, adopted as it stands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActivationPlanKind {
+    Initial,
+    Successor,
+    Adopted,
+}
+
+impl ActivationPlanKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::Successor => "successor",
+            Self::Adopted => "adopted",
+        }
+    }
+}
+
+/// Whether the runtime serves with the role that migrates (`single`) or with
+/// a separate least-privilege role (`split`). The mode comes from the
+/// configured role names; the privileges each mode needs are then asserted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoleMode {
+    Single,
+    Split,
+}
+
+impl RoleMode {
+    #[must_use]
+    pub fn from_roles(migration: &SqlIdentifier, runtime: &SqlIdentifier) -> Self {
+        if migration == runtime {
+            Self::Single
+        } else {
+            Self::Split
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Split => "split",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MigrationArtifactBinding {
     pub path: String,
     pub checksum: String,
+}
+
+/// One backup a destructive activation was bound to, as the operator's
+/// binding described it. The ledger keeps the reference, never the backup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BackupReference {
+    pub binding_path: String,
+    pub backup_file: String,
+    pub sha256: String,
+    pub byte_length: u64,
+    pub created_at: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,43 +129,90 @@ pub(crate) struct MigrationLedgerStep {
     pub checksum: String,
 }
 
-/// Exact immutable identity of one package migration. Statement and artifact
-/// digests are ordered because changing order changes the reviewed plan.
+/// Exact immutable identity of one activation. Statement and artifact digests
+/// are ordered because changing order changes the reviewed plan. The
+/// activation id is resolved under the apply lock: a retry of the same failed
+/// target reuses the id its first attempt recorded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MigrationLedgerEntry {
-    pub source_revision: Option<String>,
-    pub target_revision: String,
-    pub package_sequence: i64,
-    pub plan_kind: MigrationPlanKind,
+    pub activation_id: Uuid,
+    pub package_digest: String,
+    pub predecessor_package_digest: Option<String>,
+    pub registry_revision: String,
+    pub plan_kind: ActivationPlanKind,
+    pub migration_kind: MigrationKind,
+    pub role_mode: RoleMode,
+    pub runtime_role: String,
+    pub operator_reference_hash: Option<String>,
     pub statement_checksums: Vec<String>,
     pub artifact_bindings: Vec<MigrationArtifactBinding>,
+    pub backup_references: Vec<BackupReference>,
     pub steps: Vec<MigrationLedgerStep>,
 }
 
 impl MigrationLedgerEntry {
+    /// Validates the entry as the ledger records it: a resolved, non-nil
+    /// activation id and a well-formed plan.
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.target_revision.is_empty()
-            || self.package_sequence <= 0
+        if self.activation_id.is_nil() {
+            return invalid_identity();
+        }
+        self.validate_plan()
+    }
+
+    /// Validates everything but the activation id, which is resolved only
+    /// under the apply lock, so a malformed plan is refused before the lock.
+    pub(crate) fn validate_plan(&self) -> Result<()> {
+        if !valid_sha256(&self.package_digest)
             || self
-                .source_revision
+                .predecessor_package_digest
                 .as_deref()
-                .is_some_and(|source| source.is_empty() || source == self.target_revision)
+                .is_some_and(|digest| !valid_sha256(digest))
+            || !valid_ledger_text(&self.registry_revision)
+            || !valid_ledger_text(&self.runtime_role)
+            || self
+                .operator_reference_hash
+                .as_deref()
+                .is_some_and(|hash| !valid_ledger_text(hash))
             || self.statement_checksums.len() > MAX_MIGRATION_STATEMENTS
             || self
                 .statement_checksums
                 .iter()
                 .any(|checksum| !valid_sha256(checksum))
             || self.artifact_bindings.len() > MAX_MIGRATION_ARTIFACTS
+            || self.backup_references.len() > MAX_MIGRATION_ARTIFACTS
+            || self.backup_references.iter().any(|backup| {
+                !valid_ledger_path(&backup.binding_path)
+                    || !valid_ledger_path(&backup.backup_file)
+                    || !valid_sha256(&backup.sha256)
+                    || !valid_ledger_text(&backup.created_at)
+            })
             || self.steps.len() > MAX_MIGRATION_STEPS
         {
             return invalid_identity();
         }
-        if self.artifact_bindings.iter().any(|binding| {
-            binding.path.is_empty() || binding.path.len() > 1024 || !valid_sha256(&binding.checksum)
-        }) || self
+        match self.plan_kind {
+            ActivationPlanKind::Initial | ActivationPlanKind::Adopted
+                if self.predecessor_package_digest.is_some() =>
+            {
+                return invalid_identity();
+            }
+            ActivationPlanKind::Successor if self.predecessor_package_digest.is_none() => {
+                return invalid_identity();
+            }
+            ActivationPlanKind::Adopted if self.migration_kind != MigrationKind::MetadataOnly => {
+                return invalid_identity();
+            }
+            _ => {}
+        }
+        if self
             .artifact_bindings
-            .windows(2)
-            .any(|pair| pair[0].path >= pair[1].path)
+            .iter()
+            .any(|binding| !valid_ledger_path(&binding.path) || !valid_sha256(&binding.checksum))
+            || self
+                .artifact_bindings
+                .windows(2)
+                .any(|pair| pair[0].path >= pair[1].path)
         {
             return invalid_identity();
         }
@@ -119,22 +228,22 @@ impl MigrationLedgerEntry {
         }) {
             return invalid_identity();
         }
-        match self.plan_kind {
-            MigrationPlanKind::CompiledAdditive
+        match self.migration_kind {
+            MigrationKind::CompiledAdditive
                 if self.statement_checksums.is_empty()
                     || !self.artifact_bindings.is_empty()
                     || !self.steps.is_empty() =>
             {
                 return invalid_identity();
             }
-            MigrationPlanKind::MetadataOnly
+            MigrationKind::MetadataOnly
                 if !self.statement_checksums.is_empty()
                     || !self.artifact_bindings.is_empty()
                     || !self.steps.is_empty() =>
             {
                 return invalid_identity();
             }
-            MigrationPlanKind::Reviewed if self.artifact_bindings.is_empty() => {
+            MigrationKind::Reviewed if self.artifact_bindings.is_empty() => {
                 return invalid_identity();
             }
             _ => {}
@@ -155,6 +264,24 @@ impl MigrationLedgerEntry {
             .map(|binding| binding.checksum.clone())
             .collect()
     }
+
+    fn backup_references_json(&self) -> String {
+        serde_json::Value::Array(
+            self.backup_references
+                .iter()
+                .map(|backup| {
+                    serde_json::json!({
+                        "bindingPath": backup.binding_path,
+                        "backupFile": backup.backup_file,
+                        "sha256": backup.sha256,
+                        "byteLength": backup.byte_length,
+                        "createdAt": backup.created_at,
+                    })
+                })
+                .collect(),
+        )
+        .to_string()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,8 +297,13 @@ pub(crate) struct MigrationStepProgress {
     pub affected_rows: u64,
 }
 
-/// Installs only the product-owned durable migration ledger. This is part of
+/// Installs only the product-owned durable activation ledger. This is part of
 /// the initial control plane and intentionally contains no entity DDL.
+///
+/// Each row is one activation, keyed by its activation id and numbered by
+/// `apply_order`. At most one activation of a package digest is open at a
+/// time, so a retry of a failed target resumes the row its first attempt
+/// recorded; a reverted target frees its digest for a later activation.
 pub(crate) async fn install_migration_ledger(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
@@ -179,16 +311,26 @@ pub(crate) async fn install_migration_ledger(
     migration
         .batch_execute(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_migrations (
-                 target_package_revision text PRIMARY KEY
-                     CONSTRAINT registry_migrations_target_nonempty
-                     CHECK (target_package_revision <> ''),
-                 source_package_revision text,
-                 package_sequence bigint NOT NULL
-                     CONSTRAINT registry_migrations_sequence_positive
-                     CHECK (package_sequence > 0),
+                 activation_id uuid PRIMARY KEY,
+                 apply_order bigint NOT NULL
+                     CONSTRAINT registry_migrations_apply_order_unique UNIQUE
+                     CONSTRAINT registry_migrations_apply_order_positive
+                     CHECK (apply_order > 0),
+                 package_digest text NOT NULL
+                     CONSTRAINT registry_migrations_package_digest_sha256
+                     CHECK (package_digest ~ '^sha256:[0-9a-f]{64}$'),
+                 predecessor_package_digest text
+                     CONSTRAINT registry_migrations_predecessor_digest_sha256
+                     CHECK (predecessor_package_digest ~ '^sha256:[0-9a-f]{64}$'),
+                 registry_revision text NOT NULL
+                     CONSTRAINT registry_migrations_registry_revision_nonempty
+                     CHECK (registry_revision <> ''),
                  plan_kind text NOT NULL
                      CONSTRAINT registry_migrations_plan_kind_closed
-                     CHECK (plan_kind IN ('compiled_additive', 'metadata_only', 'reviewed')),
+                     CHECK (plan_kind IN ('initial', 'successor', 'adopted')),
+                 migration_kind text NOT NULL
+                     CONSTRAINT registry_migrations_migration_kind_closed
+                     CHECK (migration_kind IN ('compiled_additive', 'metadata_only', 'reviewed')),
                  statement_checksums text[] NOT NULL
                      CONSTRAINT registry_migrations_checksums_nonempty
                      CHECK (
@@ -196,9 +338,9 @@ pub(crate) async fn install_migration_ledger(
                          AND cardinality(statement_checksums) BETWEEN 0 AND 1024
                          AND array_position(statement_checksums, '') IS NULL
                          AND (
-                             (plan_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
-                             OR (plan_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                             OR (plan_kind IN ('compiled_additive', 'reviewed')
+                             (migration_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
+                             OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+                             OR (migration_kind IN ('compiled_additive', 'reviewed')
                                  AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
                          )
                      ),
@@ -208,12 +350,25 @@ pub(crate) async fn install_migration_ledger(
                  postconditions_complete boolean NOT NULL DEFAULT false,
                  outcome text NOT NULL
                      CONSTRAINT registry_migrations_outcome_closed
-                     CHECK (outcome IN ('applying', 'failed', 'applied')),
+                     CHECK (outcome IN ('applying', 'failed', 'applied', 'reverted')),
                  started_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  completed_at timestamptz,
-                 CONSTRAINT registry_migrations_source_target_distinct CHECK (
-                     source_package_revision IS NULL
-                     OR source_package_revision <> target_package_revision
+                 applied_at timestamptz,
+                 operator_reference_hash text
+                     CONSTRAINT registry_migrations_operator_reference_nonempty
+                     CHECK (operator_reference_hash <> ''),
+                 backup_references jsonb NOT NULL DEFAULT '[]'::jsonb
+                     CONSTRAINT registry_migrations_backup_references_array
+                     CHECK (jsonb_typeof(backup_references) = 'array'),
+                 role_mode text NOT NULL
+                     CONSTRAINT registry_migrations_role_mode_closed
+                     CHECK (role_mode IN ('single', 'split')),
+                 runtime_role text NOT NULL
+                     CONSTRAINT registry_migrations_runtime_role_nonempty
+                     CHECK (runtime_role <> ''),
+                 CONSTRAINT registry_migrations_predecessor_consistent CHECK (
+                     (plan_kind IN ('initial', 'adopted') AND predecessor_package_digest IS NULL)
+                     OR (plan_kind = 'successor' AND predecessor_package_digest IS NOT NULL)
                  ),
                  CONSTRAINT registry_migrations_artifacts_consistent CHECK (
                      COALESCE(array_ndims(artifact_paths), 1) = 1
@@ -223,54 +378,28 @@ pub(crate) async fn install_migration_ledger(
                      AND array_position(artifact_paths, '') IS NULL
                      AND array_position(artifact_checksums, '') IS NULL
                      AND (
-                         (plan_kind IN ('compiled_additive', 'metadata_only') AND cardinality(artifact_paths) = 0)
-                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
+                         (migration_kind IN ('compiled_additive', 'metadata_only')
+                             AND cardinality(artifact_paths) = 0)
+                         OR (migration_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
                      )
                  ),
                  CONSTRAINT registry_migrations_phases_consistent CHECK (
-                     plan_kind = 'reviewed'
+                     migration_kind = 'reviewed'
                      OR (NOT preconditions_complete AND NOT postconditions_complete)
                  ),
                  CONSTRAINT registry_migrations_completion_consistent CHECK (
                      (outcome = 'applying' AND completed_at IS NULL)
-                     OR (outcome IN ('failed', 'applied') AND completed_at IS NOT NULL)
+                     OR (outcome IN ('failed', 'applied', 'reverted') AND completed_at IS NOT NULL)
+                 ),
+                 CONSTRAINT registry_migrations_applied_at_consistent CHECK (
+                     (outcome = 'applied') = (applied_at IS NOT NULL)
                  )
              );
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_plan_kind_closed,
-                 ADD CONSTRAINT registry_migrations_plan_kind_closed
-                     CHECK (plan_kind IN ('compiled_additive', 'metadata_only', 'reviewed'));
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_checksums_nonempty,
-                 ADD CONSTRAINT registry_migrations_checksums_nonempty
-                     CHECK (
-                         COALESCE(array_ndims(statement_checksums), 1) = 1
-                         AND cardinality(statement_checksums) BETWEEN 0 AND 1024
-                         AND array_position(statement_checksums, '') IS NULL
-                         AND (
-                             (plan_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
-                             OR (plan_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                             OR (plan_kind IN ('compiled_additive', 'reviewed')
-                                 AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
-                         )
-                     );
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_artifacts_consistent,
-                 ADD CONSTRAINT registry_migrations_artifacts_consistent CHECK (
-                     COALESCE(array_ndims(artifact_paths), 1) = 1
-                     AND COALESCE(array_ndims(artifact_checksums), 1) = 1
-                     AND cardinality(artifact_paths) = cardinality(artifact_checksums)
-                     AND cardinality(artifact_paths) BETWEEN 0 AND 1024
-                     AND array_position(artifact_paths, '') IS NULL
-                     AND array_position(artifact_checksums, '') IS NULL
-                     AND (
-                         (plan_kind IN ('compiled_additive', 'metadata_only')
-                             AND cardinality(artifact_paths) = 0)
-                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
-                     )
-                 );
+             CREATE UNIQUE INDEX IF NOT EXISTS registry_migrations_one_open_activation_per_digest
+                 ON registry_internal.registry_migrations (package_digest)
+                 WHERE outcome IN ('applying', 'failed');
              CREATE TABLE IF NOT EXISTS registry_internal.registry_migration_steps (
-                 target_package_revision text NOT NULL,
+                 activation_id uuid NOT NULL,
                  migration_ordinal integer NOT NULL CHECK (migration_ordinal >= 0),
                  step_ordinal integer NOT NULL CHECK (step_ordinal >= 0),
                  step_id text NOT NULL CHECK (step_id <> ''),
@@ -283,7 +412,7 @@ pub(crate) async fn install_migration_ledger(
                  checkpoint_record_id uuid,
                  affected_rows bigint NOT NULL DEFAULT 0 CHECK (affected_rows >= 0),
                  completed_at timestamptz,
-                 PRIMARY KEY (target_package_revision, migration_ordinal, step_ordinal),
+                 PRIMARY KEY (activation_id, migration_ordinal, step_ordinal),
                  CONSTRAINT registry_migration_steps_state_consistent CHECK (
                      (outcome = 'pending' AND checkpoint_record_id IS NULL
                          AND affected_rows = 0 AND completed_at IS NULL)
@@ -299,74 +428,119 @@ pub(crate) async fn install_migration_ledger(
              REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;",
         )
         .await?;
+    install_pre_ledger_package_positions(migration).await?;
+    let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
-            "REVOKE ALL ON TABLE registry_internal.registry_migrations FROM {};
-             REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM {};",
-            runtime_role.quoted(),
-            runtime_role.quoted(),
+            "{}
+             {}
+             {}",
+            revoke.revoke_all_on("TABLE registry_internal.registry_migrations"),
+            revoke.revoke_all_on("TABLE registry_internal.registry_migration_steps"),
+            revoke.revoke_all_on("TABLE registry_internal.registry_pre_ledger_package_positions"),
         ))
         .await?;
     Ok(())
 }
 
-pub(crate) async fn reconcile_migration_ledger_metadata_only_constraints(
-    migration: &impl GenericClient,
-) -> Result<()> {
+/// Installs the order of the package revisions a pre-ledger database's
+/// ledger named. Field-encryption flips and request proposals recorded before
+/// adoption name those revisions, and erasure orders them against each other
+/// here; every position precedes the first activation, so a revision the
+/// ledger records always follows them. The table stays empty on a database
+/// the ledger recorded from its first activation.
+async fn install_pre_ledger_package_positions(migration: &impl GenericClient) -> Result<()> {
     migration
         .batch_execute(
-            "ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_plan_kind_closed,
-                 ADD CONSTRAINT registry_migrations_plan_kind_closed
-                     CHECK (plan_kind IN ('compiled_additive', 'metadata_only', 'reviewed'));
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_checksums_nonempty,
-                 ADD CONSTRAINT registry_migrations_checksums_nonempty
-                     CHECK (
-                         COALESCE(array_ndims(statement_checksums), 1) = 1
-                         AND cardinality(statement_checksums) BETWEEN 0 AND 1024
-                         AND array_position(statement_checksums, '') IS NULL
-                         AND (
-                             (plan_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
-                             OR (plan_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                             OR (plan_kind IN ('compiled_additive', 'reviewed')
-                                 AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
-                         )
-                     );
-             ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT IF EXISTS registry_migrations_artifacts_consistent,
-                 ADD CONSTRAINT registry_migrations_artifacts_consistent CHECK (
-                     COALESCE(array_ndims(artifact_paths), 1) = 1
-                     AND COALESCE(array_ndims(artifact_checksums), 1) = 1
-                     AND cardinality(artifact_paths) = cardinality(artifact_checksums)
-                     AND cardinality(artifact_paths) BETWEEN 0 AND 1024
-                     AND array_position(artifact_paths, '') IS NULL
-                     AND array_position(artifact_checksums, '') IS NULL
-                     AND (
-                         (plan_kind IN ('compiled_additive', 'metadata_only')
-                             AND cardinality(artifact_paths) = 0)
-                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
-                     )
-                 );
-             ALTER TABLE registry_internal.registry_migration_steps
-                 DROP CONSTRAINT IF EXISTS registry_migration_steps_step_kind_closed,
-                 ADD CONSTRAINT registry_migration_steps_step_kind_closed
-                     CHECK (step_kind IN ('compiler_ddl', 'transactional_sql', 'chunked_backfill', 'field_encryption_backfill'));
-             ALTER TABLE registry_internal.registry_migration_steps
-                 DROP CONSTRAINT IF EXISTS registry_migration_steps_state_consistent,
-                 ADD CONSTRAINT registry_migration_steps_state_consistent CHECK (
-                     (outcome = 'pending' AND checkpoint_record_id IS NULL
-                         AND affected_rows = 0 AND completed_at IS NULL)
-                     OR (outcome = 'applying'
-                         AND step_kind IN ('chunked_backfill', 'field_encryption_backfill')
-                         AND checkpoint_record_id IS NOT NULL AND completed_at IS NULL)
-                     OR (outcome = 'completed' AND completed_at IS NOT NULL
-                         AND (step_kind IN ('chunked_backfill', 'field_encryption_backfill')
-                             OR checkpoint_record_id IS NULL))
-                 );",
+            "CREATE TABLE IF NOT EXISTS registry_internal.registry_pre_ledger_package_positions (
+                 package_revision text PRIMARY KEY
+                     CONSTRAINT registry_pre_ledger_package_positions_revision_nonempty
+                     CHECK (package_revision <> ''),
+                 package_sequence bigint NOT NULL
+                     CONSTRAINT registry_pre_ledger_package_positions_precede_the_ledger
+                     CHECK (package_sequence < 1)
+             );
+             REVOKE ALL ON TABLE registry_internal.registry_pre_ledger_package_positions
+                 FROM PUBLIC;",
         )
         .await?;
     Ok(())
+}
+
+/// Keeps the order a pre-ledger ledger gave its package revisions, before
+/// adoption drops that ledger. A revision is ordered as the ledger ordered
+/// it: a target at its sequence, and a source the ledger never targeted just
+/// before the first target it preceded. The positions are shifted so the
+/// last of them is 0 and the adoption, at apply order 1, follows them all.
+pub(crate) async fn carry_pre_ledger_package_positions(
+    migration: &impl GenericClient,
+) -> Result<()> {
+    install_pre_ledger_package_positions(migration).await?;
+    migration
+        .execute(
+            "WITH target_positions AS (
+                 SELECT target_package_revision AS package_revision, package_sequence
+                   FROM registry_internal.registry_migrations
+             ),
+             source_positions AS (
+                 SELECT source.source_package_revision AS package_revision,
+                        min(source.package_sequence - 1)::bigint AS package_sequence
+                   FROM registry_internal.registry_migrations AS source
+                  WHERE source.source_package_revision IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM target_positions AS target
+                         WHERE target.package_revision = source.source_package_revision
+                    )
+                  GROUP BY source.source_package_revision
+             ),
+             positions AS (
+                 SELECT package_revision, package_sequence FROM target_positions
+                 UNION ALL
+                 SELECT package_revision, package_sequence FROM source_positions
+             )
+             INSERT INTO registry_internal.registry_pre_ledger_package_positions
+                 (package_revision, package_sequence)
+             SELECT package_revision, package_sequence - max(package_sequence) OVER ()
+               FROM positions",
+            &[],
+        )
+        .await?;
+    Ok(())
+}
+
+/// The one open (applying or failed) activation of a package digest, with
+/// the roles it was started with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InFlightActivation {
+    pub activation_id: Uuid,
+    pub role_mode: String,
+    pub runtime_role: String,
+}
+
+/// The one open (applying or failed) activation of a package digest, if any.
+/// Read under the apply lock, so a retry of the same target resumes the
+/// activation its first attempt recorded.
+pub(crate) async fn in_flight_activation(
+    client: &impl GenericClient,
+    package_digest: &str,
+) -> Result<Option<InFlightActivation>> {
+    let row = client
+        .query_opt(
+            "SELECT activation_id, role_mode, runtime_role
+             FROM registry_internal.registry_migrations
+             WHERE package_digest = $1
+               AND outcome IN ('applying', 'failed')",
+            &[&package_digest],
+        )
+        .await?;
+    row.map(|row| {
+        Ok(InFlightActivation {
+            activation_id: row.try_get(0)?,
+            role_mode: row.try_get(1)?,
+            runtime_role: row.try_get(2)?,
+        })
+    })
+    .transpose()
 }
 
 pub(crate) async fn record_started(
@@ -379,18 +553,31 @@ pub(crate) async fn record_started(
     let changed = client
         .execute(
             "INSERT INTO registry_internal.registry_migrations (
-                 target_package_revision, source_package_revision, package_sequence,
-                 plan_kind, statement_checksums, artifact_paths, artifact_checksums, outcome
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'applying')
-             ON CONFLICT (target_package_revision) DO NOTHING",
+                 activation_id, apply_order, package_digest, predecessor_package_digest,
+                 registry_revision, plan_kind, migration_kind, statement_checksums,
+                 artifact_paths, artifact_checksums, outcome, operator_reference_hash,
+                 role_mode, runtime_role, backup_references
+             ) VALUES (
+                 $1,
+                 (SELECT COALESCE(max(apply_order), 0) + 1
+                  FROM registry_internal.registry_migrations),
+                 $2, $3, $4, $5, $6, $7, $8, $9, 'applying', $10, $11, $12, $13::text::jsonb
+             )
+             ON CONFLICT DO NOTHING",
             &[
-                &entry.target_revision,
-                &entry.source_revision,
-                &entry.package_sequence,
+                &entry.activation_id,
+                &entry.package_digest,
+                &entry.predecessor_package_digest,
+                &entry.registry_revision,
                 &entry.plan_kind.as_str(),
+                &entry.migration_kind.as_str(),
                 &entry.statement_checksums,
                 &artifact_paths,
                 &artifact_checksums,
+                &entry.operator_reference_hash,
+                &entry.role_mode.as_str(),
+                &entry.runtime_role,
+                &entry.backup_references_json(),
             ],
         )
         .await?;
@@ -401,11 +588,11 @@ pub(crate) async fn record_started(
         let changed = client
             .execute(
                 "INSERT INTO registry_internal.registry_migration_steps (
-                     target_package_revision, migration_ordinal, step_ordinal,
+                     activation_id, migration_ordinal, step_ordinal,
                      step_id, step_kind, statement_checksum
                  ) VALUES ($1, $2, $3, $4, $5, $6)",
                 &[
-                    &entry.target_revision,
+                    &entry.activation_id,
                     &step.migration_ordinal,
                     &step.step_ordinal,
                     &step.step_id,
@@ -421,8 +608,12 @@ pub(crate) async fn record_started(
     Ok(())
 }
 
-/// Accepts only the exact interrupted or failed target. An applied row is
-/// immutable through this library and therefore cannot be resumed or cleared.
+/// Accepts only the exact interrupted or failed activation, started with the
+/// same roles. An applied or reverted row is immutable through this library
+/// and therefore cannot be resumed or cleared. The resumed attempt's operator
+/// reference and backup references replace the ones the row recorded, so the
+/// ledger names the reference of the attempt that the audit records applying
+/// it and the backup that attempt was verified against.
 pub(crate) async fn verify_resumable(
     client: &impl GenericClient,
     entry: &MigrationLedgerEntry,
@@ -434,23 +625,29 @@ pub(crate) async fn verify_resumable(
         .query_opt(
             "SELECT 1
              FROM registry_internal.registry_migrations
-             WHERE target_package_revision = $1
-               AND source_package_revision IS NOT DISTINCT FROM $2
-               AND package_sequence = $3
+             WHERE activation_id = $1
+               AND package_digest = $2
+               AND predecessor_package_digest IS NOT DISTINCT FROM $3
                AND plan_kind = $4
-               AND statement_checksums = $5
-               AND artifact_paths = $6
-               AND artifact_checksums = $7
+               AND migration_kind = $5
+               AND statement_checksums = $6
+               AND artifact_paths = $7
+               AND artifact_checksums = $8
+               AND role_mode = $9
+               AND runtime_role = $10
                AND outcome IN ('applying', 'failed')
              FOR UPDATE",
             &[
-                &entry.target_revision,
-                &entry.source_revision,
-                &entry.package_sequence,
+                &entry.activation_id,
+                &entry.package_digest,
+                &entry.predecessor_package_digest,
                 &entry.plan_kind.as_str(),
+                &entry.migration_kind.as_str(),
                 &entry.statement_checksums,
                 &artifact_paths,
                 &artifact_checksums,
+                &entry.role_mode.as_str(),
+                &entry.runtime_role,
             ],
         )
         .await?;
@@ -461,9 +658,9 @@ pub(crate) async fn verify_resumable(
         .query(
             "SELECT migration_ordinal, step_ordinal, step_id, step_kind, statement_checksum
              FROM registry_internal.registry_migration_steps
-             WHERE target_package_revision = $1
+             WHERE activation_id = $1
              ORDER BY migration_ordinal, step_ordinal",
-            &[&entry.target_revision],
+            &[&entry.activation_id],
         )
         .await?;
     let exact = rows.len() == entry.steps.len()
@@ -475,6 +672,23 @@ pub(crate) async fn verify_resumable(
                 && row.get::<_, String>(4) == step.checksum
         });
     if !exact {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    let changed = client
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+             SET operator_reference_hash = $2,
+                 backup_references = $3::text::jsonb
+             WHERE activation_id = $1
+               AND outcome IN ('applying', 'failed')",
+            &[
+                &entry.activation_id,
+                &entry.operator_reference_hash,
+                &entry.backup_references_json(),
+            ],
+        )
+        .await?;
+    if changed != 1 {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())
@@ -489,17 +703,12 @@ pub(crate) async fn migration_phase_state(
         .query_opt(
             "SELECT preconditions_complete, postconditions_complete
              FROM registry_internal.registry_migrations
-             WHERE target_package_revision = $1
-               AND source_package_revision IS NOT DISTINCT FROM $2
-               AND package_sequence = $3
-               AND plan_kind = 'reviewed'
+             WHERE activation_id = $1
+               AND package_digest = $2
+               AND migration_kind = 'reviewed'
                AND outcome IN ('applying', 'failed')
              FOR UPDATE",
-            &[
-                &entry.target_revision,
-                &entry.source_revision,
-                &entry.package_sequence,
-            ],
+            &[&entry.activation_id, &entry.package_digest],
         )
         .await?;
     let row = row.ok_or(PostgresKernelError::RegistryUnavailable)?;
@@ -536,7 +745,7 @@ async fn update_phase(
              AND NOT EXISTS (
                  SELECT 1
                  FROM registry_internal.registry_migration_steps s
-                 WHERE s.target_package_revision = registry_migrations.target_package_revision
+                 WHERE s.activation_id = registry_migrations.activation_id
                    AND s.outcome <> 'completed'
              )",
         )
@@ -546,23 +755,15 @@ async fn update_phase(
     let sql = format!(
         "UPDATE registry_internal.registry_migrations
          SET {column} = true
-         WHERE target_package_revision = $1
-           AND source_package_revision IS NOT DISTINCT FROM $2
-           AND package_sequence = $3
-           AND plan_kind = 'reviewed'
+         WHERE activation_id = $1
+           AND package_digest = $2
+           AND migration_kind = 'reviewed'
            AND outcome IN ('applying', 'failed')
            AND NOT {column}
            {prerequisite}"
     );
     let changed = client
-        .execute(
-            &sql,
-            &[
-                &entry.target_revision,
-                &entry.source_revision,
-                &entry.package_sequence,
-            ],
-        )
+        .execute(&sql, &[&entry.activation_id, &entry.package_digest])
         .await?;
     if changed != 1 {
         return Err(PostgresKernelError::RegistryUnavailable);
@@ -580,7 +781,7 @@ pub(crate) async fn step_progress(
         .query_opt(
             "SELECT outcome, checkpoint_record_id, affected_rows
              FROM registry_internal.registry_migration_steps
-             WHERE target_package_revision = $1
+             WHERE activation_id = $1
                AND migration_ordinal = $2
                AND step_ordinal = $3
                AND step_id = $4
@@ -588,7 +789,7 @@ pub(crate) async fn step_progress(
                AND statement_checksum = $6
              FOR UPDATE",
             &[
-                &entry.target_revision,
+                &entry.activation_id,
                 &step.migration_ordinal,
                 &step.step_ordinal,
                 &step.step_id,
@@ -620,7 +821,7 @@ pub(crate) async fn record_step_complete(
             "UPDATE registry_internal.registry_migration_steps
              SET outcome = 'completed', affected_rows = $1,
                  completed_at = transaction_timestamp()
-             WHERE target_package_revision = $2
+             WHERE activation_id = $2
                AND migration_ordinal = $3
                AND step_ordinal = $4
                AND step_id = $5
@@ -629,7 +830,7 @@ pub(crate) async fn record_step_complete(
                AND outcome IN ('pending', 'applying')",
             &[
                 &affected_rows,
-                &entry.target_revision,
+                &entry.activation_id,
                 &step.migration_ordinal,
                 &step.step_ordinal,
                 &step.step_id,
@@ -660,7 +861,7 @@ pub(crate) async fn record_chunk_progress(
         .execute(
             "UPDATE registry_internal.registry_migration_steps
              SET outcome = 'applying', checkpoint_record_id = $1, affected_rows = $2
-             WHERE target_package_revision = $3
+             WHERE activation_id = $3
                AND migration_ordinal = $4
                AND step_ordinal = $5
                AND step_id = $6
@@ -670,7 +871,7 @@ pub(crate) async fn record_chunk_progress(
             &[
                 &checkpoint_record_id,
                 &affected_rows,
-                &entry.target_revision,
+                &entry.activation_id,
                 &step.migration_ordinal,
                 &step.step_ordinal,
                 &step.step_id,
@@ -691,29 +892,42 @@ pub(crate) async fn record_failed(
     update_outcome(client, entry, "failed").await
 }
 
+/// Closes an abandoned activation. A reverted row frees its package digest,
+/// so a later apply of the same package records a separate activation.
+pub(crate) async fn record_reverted(
+    client: &impl GenericClient,
+    entry: &MigrationLedgerEntry,
+) -> Result<()> {
+    update_outcome(client, entry, "reverted").await
+}
+
 pub(crate) async fn record_applied(
     client: &impl GenericClient,
     entry: &MigrationLedgerEntry,
 ) -> Result<()> {
     entry.validate()?;
-    let closure = match entry.plan_kind {
-        MigrationPlanKind::CompiledAdditive | MigrationPlanKind::MetadataOnly => "",
-        MigrationPlanKind::Reviewed => {
+    let closure = match entry.migration_kind {
+        MigrationKind::CompiledAdditive | MigrationKind::MetadataOnly => "",
+        MigrationKind::Reviewed => {
             "AND preconditions_complete
              AND postconditions_complete
              AND NOT EXISTS (
                  SELECT 1 FROM registry_internal.registry_migration_steps s
-                 WHERE s.target_package_revision = registry_migrations.target_package_revision
+                 WHERE s.activation_id = registry_migrations.activation_id
                    AND s.outcome <> 'completed'
              )"
         }
     };
     let sql = format!(
         "UPDATE registry_internal.registry_migrations
-         SET outcome = 'applied', completed_at = transaction_timestamp()
-         WHERE target_package_revision = $1
-           AND source_package_revision IS NOT DISTINCT FROM $2
-           AND package_sequence = $3
+         SET outcome = 'applied',
+             completed_at = transaction_timestamp(),
+             applied_at = transaction_timestamp()
+         WHERE activation_id = $1
+           AND package_digest = $2
+           AND predecessor_package_digest IS NOT DISTINCT FROM $3
+           AND role_mode = $4
+           AND runtime_role = $5
            AND outcome IN ('applying', 'failed')
            {closure}"
     );
@@ -721,9 +935,11 @@ pub(crate) async fn record_applied(
         .execute(
             &sql,
             &[
-                &entry.target_revision,
-                &entry.source_revision,
-                &entry.package_sequence,
+                &entry.activation_id,
+                &entry.package_digest,
+                &entry.predecessor_package_digest,
+                &entry.role_mode.as_str(),
+                &entry.runtime_role,
             ],
         )
         .await?;
@@ -743,15 +959,15 @@ async fn update_outcome(
         .execute(
             "UPDATE registry_internal.registry_migrations
              SET outcome = $1, completed_at = transaction_timestamp()
-             WHERE target_package_revision = $2
-               AND source_package_revision IS NOT DISTINCT FROM $3
-               AND package_sequence = $4
+             WHERE activation_id = $2
+               AND package_digest = $3
+               AND predecessor_package_digest IS NOT DISTINCT FROM $4
                AND outcome IN ('applying', 'failed')",
             &[
                 &outcome,
-                &entry.target_revision,
-                &entry.source_revision,
-                &entry.package_sequence,
+                &entry.activation_id,
+                &entry.package_digest,
+                &entry.predecessor_package_digest,
             ],
         )
         .await?;
@@ -763,7 +979,7 @@ async fn update_outcome(
 
 fn require_reviewed(entry: &MigrationLedgerEntry) -> Result<()> {
     entry.validate()?;
-    if entry.plan_kind != MigrationPlanKind::Reviewed {
+    if entry.migration_kind != MigrationKind::Reviewed {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())
@@ -775,10 +991,22 @@ fn invalid_identity() -> Result<()> {
     ))
 }
 
+fn valid_ledger_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_LEDGER_TEXT_BYTES
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_ledger_path(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
-        && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(crate) fn statement_checksum(sql: &str) -> String {
@@ -796,24 +1024,34 @@ pub(crate) fn statement_checksum(sql: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn migration_ledger_refuses_unbound_statement_checksums_except_metadata_only() {
-        let entry = MigrationLedgerEntry {
-            source_revision: Some("prior".to_owned()),
-            target_revision: "target".to_owned(),
-            package_sequence: 2,
-            plan_kind: MigrationPlanKind::CompiledAdditive,
+    fn entry(migration_kind: MigrationKind) -> MigrationLedgerEntry {
+        MigrationLedgerEntry {
+            activation_id: Uuid::from_u128(1),
+            package_digest: statement_checksum("target"),
+            predecessor_package_digest: Some(statement_checksum("prior")),
+            registry_revision: "2".to_owned(),
+            plan_kind: ActivationPlanKind::Successor,
+            migration_kind,
+            role_mode: RoleMode::Split,
+            runtime_role: "registry_runtime".to_owned(),
+            operator_reference_hash: None,
             statement_checksums: Vec::new(),
             artifact_bindings: Vec::new(),
+            backup_references: Vec::new(),
             steps: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn migration_ledger_refuses_unbound_statement_checksums_except_metadata_only() {
+        let entry = entry(MigrationKind::CompiledAdditive);
         assert!(matches!(
             entry.validate(),
             Err(PostgresKernelError::Configuration(_))
         ));
 
         let mut metadata_only = entry.clone();
-        metadata_only.plan_kind = MigrationPlanKind::MetadataOnly;
+        metadata_only.migration_kind = MigrationKind::MetadataOnly;
         metadata_only
             .validate()
             .expect("metadata-only ledger binds the package transition without DDL");
@@ -828,18 +1066,11 @@ mod tests {
 
     #[test]
     fn reviewed_migration_ledger_identity_requires_ordered_artifacts_and_allows_no_step_reviews() {
-        let mut entry = MigrationLedgerEntry {
-            source_revision: Some("prior".to_owned()),
-            target_revision: "target".to_owned(),
-            package_sequence: 2,
-            plan_kind: MigrationPlanKind::Reviewed,
-            statement_checksums: Vec::new(),
-            artifact_bindings: vec![MigrationArtifactBinding {
-                path: "modules/core/migrations/change/descriptor.json".to_owned(),
-                checksum: statement_checksum("descriptor"),
-            }],
-            steps: Vec::new(),
-        };
+        let mut entry = entry(MigrationKind::Reviewed);
+        entry.artifact_bindings = vec![MigrationArtifactBinding {
+            path: "modules/core/migrations/change/descriptor.json".to_owned(),
+            checksum: statement_checksum("descriptor"),
+        }];
         entry
             .validate()
             .expect("closed reviewed metadata-only identity validates");
@@ -858,5 +1089,60 @@ mod tests {
             .artifact_bindings
             .push(entry.artifact_bindings[0].clone());
         assert!(entry.validate().is_err());
+    }
+
+    #[test]
+    fn activation_ledger_binds_the_plan_kind_to_its_predecessor_and_a_resolved_id() {
+        let metadata = entry(MigrationKind::MetadataOnly);
+        metadata
+            .validate()
+            .expect("a successor names its predecessor digest");
+
+        let mut unresolved = metadata.clone();
+        unresolved.activation_id = Uuid::nil();
+        assert!(
+            unresolved.validate().is_err(),
+            "the activation id is resolved under the lock"
+        );
+
+        let mut orphan = metadata.clone();
+        orphan.predecessor_package_digest = None;
+        assert!(
+            orphan.validate().is_err(),
+            "a successor without a predecessor is refused"
+        );
+
+        let mut initial = metadata.clone();
+        initial.plan_kind = ActivationPlanKind::Initial;
+        assert!(
+            initial.validate().is_err(),
+            "an initial activation has no predecessor"
+        );
+        initial.predecessor_package_digest = None;
+        initial.validate().expect("an initial activation validates");
+
+        let mut adopted = initial.clone();
+        adopted.plan_kind = ActivationPlanKind::Adopted;
+        adopted.validate().expect("an adoption records no DDL");
+        adopted.migration_kind = MigrationKind::CompiledAdditive;
+        adopted.statement_checksums = vec![statement_checksum("CREATE TABLE")];
+        assert!(adopted.validate().is_err(), "an adoption never runs DDL");
+
+        let mut reapplied = metadata;
+        reapplied.predecessor_package_digest = Some(reapplied.package_digest.clone());
+        reapplied
+            .validate()
+            .expect("a role-change activation succeeds its own package digest");
+    }
+
+    #[test]
+    fn role_mode_is_single_exactly_when_the_roles_are_equal() {
+        let migration = SqlIdentifier::parse("registry_migrator").expect("identifier");
+        let runtime = SqlIdentifier::parse("registry_runtime").expect("identifier");
+        assert_eq!(
+            RoleMode::from_roles(&migration, &migration),
+            RoleMode::Single
+        );
+        assert_eq!(RoleMode::from_roles(&migration, &runtime), RoleMode::Split);
     }
 }

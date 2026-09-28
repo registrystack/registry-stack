@@ -115,15 +115,17 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-delivery-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
-        hook_handlers(&compiled, &identity.package_revision),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity.clone(),
+        "webhook-delivery-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -793,9 +795,10 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
-        hook_handlers(&compiled, &identity.package_revision),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity.clone(),
+        "webhook-delivery-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -1079,6 +1082,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         lock_key,
         Duration::from_secs(2),
         original_identity.clone(),
+        "webhook-delivery-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
@@ -1099,29 +1103,29 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         "captured-before-upgrade",
     )
     .await;
-    assert_eq!(captured.package_revision, PACKAGE_REVISION);
+    assert_eq!(captured.package_revision, original_identity.activation_id);
     assert_eq!(
         captured.data_schema,
         compiled.event_deliveries().deliveries[0].data_schema
     );
 
     let successor_identity = ExpectedRegistryIdentity {
-        package_revision: SUCCESSOR_PACKAGE_REVISION.to_owned(),
+        package_digest: SUCCESSOR_PACKAGE_REVISION.to_owned(),
+        activation_id: registry_breg::postgres::test_activation_id(SUCCESSOR_PACKAGE_REVISION),
         schema_fingerprint: SUCCESSOR_SCHEMA_FINGERPRINT.to_owned(),
-        package_sequence: 2,
         ..original_identity
     };
     let changed = database
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-                SET active_package_revision = $1, schema_fingerprint = $2,
-                    package_sequence = $3
+                SET active_package_digest = $1, schema_fingerprint = $2,
+                    active_activation_id = $3::text::uuid
               WHERE singleton",
             &[
-                &successor_identity.package_revision,
+                &successor_identity.package_digest,
                 &successor_identity.schema_fingerprint,
-                &successor_identity.package_sequence,
+                &successor_identity.activation_id,
             ],
         )
         .await
@@ -1131,9 +1135,10 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
-        hook_handlers(&compiled, &successor_identity.package_revision),
+        hook_handlers(&compiled, &successor_identity.activation_id),
         Arc::new(compiled.clone()),
         successor_identity,
+        "webhook-delivery-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -1216,6 +1221,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-delivery-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
@@ -1240,9 +1246,10 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
-        hook_handlers(&compiled, &identity.package_revision),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity,
+        "webhook-delivery-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -1424,15 +1431,17 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-delivery-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
-        hook_handlers(&compiled, &identity.package_revision),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity.clone(),
+        "webhook-delivery-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -1578,15 +1587,17 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "webhook-delivery-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
-        hook_handlers(&compiled, &identity.package_revision),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity.clone(),
+        "webhook-delivery-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -1893,7 +1904,7 @@ async fn assert_seed_is_exact(
         .await
         .expect("one immutable capture and one mutable state seed join exactly");
     assert_eq!(row.get::<_, String>(0), binding_digest);
-    assert_eq!(row.get::<_, String>(1), identity.package_revision);
+    assert_eq!(row.get::<_, String>(1), identity.activation_id);
     assert_eq!(row.get::<_, String>(2), identity.schema_fingerprint);
     assert_eq!(
         row.get::<_, Vec<u8>>(3),
@@ -2268,11 +2279,8 @@ fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
 fn registry_state_test_identity() -> RegistryStateTestIdentity<'static> {
     RegistryStateTestIdentity {
         package_id: "webhook-delivery-registry",
-        environment: "local",
-        instance_id: "webhook-delivery-instance",
         database_id: "webhook-delivery-database",
-        package_revision: PACKAGE_REVISION,
-        package_sequence: 1,
+        label: PACKAGE_REVISION,
     }
 }
 
@@ -2295,7 +2303,6 @@ struct DestinationFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
     receiver_port: u16,
 }
 
@@ -2316,8 +2323,6 @@ impl DestinationFixture {
         let package_root = root.join("package");
         fs::create_dir_all(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         write_secret(&secret_root.join(KEY_REF_CANARY), HMAC_KEY);
         write_secret(
             &secret_root.join(CA_REF_CANARY),
@@ -2327,7 +2332,6 @@ impl DestinationFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
             receiver_port: receiver.address.port(),
         }
     }
@@ -2408,10 +2412,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -2449,8 +2449,6 @@ cursor:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
-            PACKAGE_REVISION,
         )
     }
 }
@@ -2504,12 +2502,13 @@ struct HttpsReceiver {
 impl HttpsReceiver {
     async fn start() -> Self {
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(vec!["localhost".to_owned()])
                 .expect("loopback TLS certificate generates");
         let certificate_der = cert.der().clone();
         let certificate_pem = pem("CERTIFICATE", certificate_der.as_ref());
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate_der], private_key)

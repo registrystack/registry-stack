@@ -185,7 +185,7 @@ impl MutationCoordinator {
                 context: claims,
                 method: HttpMethod::Post,
                 route: &action.route,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority,
                 result_effects: claims.result_effects(),
@@ -504,7 +504,7 @@ impl MutationCoordinator {
 
         // The compiled delivery the proposal arrived under, and the package
         // revision it must still match.
-        if application.package_revision != self.expected.package_revision {
+        if application.package_revision != self.expected.activation_id {
             return dead_lettered_proposal(
                 "hook.proposal.package_unavailable",
                 "The delivery row was captured under a package this deployment no longer holds.",
@@ -677,7 +677,7 @@ impl MutationCoordinator {
                 context: &claims,
                 method: HttpMethod::Post,
                 route: &action.route,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority: &target_authority,
                 result_effects: claims.result_effects(),
@@ -1048,7 +1048,7 @@ impl MutationCoordinator {
         let effects = candidate.as_ref().ok_or(MutationError::Unavailable)?;
         let application_reference = action_application_reference(
             self.audit.profile(),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             application_id,
         )?;
 
@@ -1109,7 +1109,7 @@ impl MutationCoordinator {
             let effect = effects[0];
             let record_reference = record_reference(
                 self.audit.profile(),
-                &self.expected.package_revision,
+                &self.expected.activation_id,
                 &current.record_id,
             )?;
             let snapshot = canonical_snapshot(&current.data)?;
@@ -1123,7 +1123,7 @@ impl MutationCoordinator {
                     record_revision: current.record_revision,
                     predecessor_revision: current.predecessor_revision,
                     lifecycle: &current.record_lifecycle,
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.activation_id,
                     operation_id: &effect.id,
                     mutation_kind: mutation_kind(effect.operation),
                     principal_reference: &binding.principal_reference,
@@ -1154,7 +1154,8 @@ impl MutationCoordinator {
                     record_id: &current.record_id,
                     record_reference: &record_reference,
                     record_revision: current.record_revision,
-                    package_revision: &self.expected.package_revision,
+                    package_revision: &self.expected.activation_id,
+                    package_digest: &self.expected.package_digest,
                     schema_fingerprint: &self.expected.schema_fingerprint,
                     before: current.before_data.as_ref(),
                     after: Some(&current.data),
@@ -1204,7 +1205,7 @@ impl MutationCoordinator {
                 operation_id: route_id.to_owned(),
                 entity_id: None,
                 action_id: Some(action.id.clone()),
-                package_revision: self.expected.package_revision.clone(),
+                package_revision: self.expected.activation_id.clone(),
                 selected_access_profile: claims.access_profile().to_owned(),
                 purpose_present: claims.purpose().is_some(),
                 principal_reference: Some(binding.principal_reference.clone()),
@@ -1231,7 +1232,7 @@ impl MutationCoordinator {
             binding,
             action,
             application_id,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             &binding.principal_reference,
             public_result_count,
         )
@@ -1305,7 +1306,7 @@ impl MutationCoordinator {
                     operation_id: route_id.to_owned(),
                     entity_id: None,
                     action_id: Some(action.id.clone()),
-                    package_revision: self.expected.package_revision.clone(),
+                    package_revision: self.expected.activation_id.clone(),
                     selected_access_profile: claims.access_profile().to_owned(),
                     purpose_present: claims.purpose().is_some(),
                     principal_reference: Some(binding.principal_reference.clone()),
@@ -1388,7 +1389,7 @@ impl MutationCoordinator {
             expected_revision,
             false,
             Some(application_id),
-            &self.expected.package_revision,
+            &self.expected.activation_id,
         )?;
         transaction
             .execute(
@@ -1532,7 +1533,7 @@ impl MutationCoordinator {
                         None,
                         true,
                         Some(application_id),
-                        &self.expected.package_revision,
+                        &self.expected.activation_id,
                     )?
                     .canonical_context()
                     .to_owned(),
@@ -1548,7 +1549,7 @@ impl MutationCoordinator {
                         claims,
                         target_authority,
                         record_id,
-                        &self.expected.package_revision,
+                        &self.expected.activation_id,
                     )?
                     .canonical_context()
                     .to_owned(),
@@ -1625,7 +1626,7 @@ impl MutationCoordinator {
                 None,
                 true,
                 Some(application_id),
-                &self.expected.package_revision,
+                &self.expected.activation_id,
             )?;
             transaction
                 .execute(
@@ -1660,7 +1661,7 @@ impl MutationCoordinator {
                 Some(current.record_revision),
                 false,
                 None,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
             )?;
             target_context
                 .authorize_rows(
@@ -1721,7 +1722,7 @@ impl MutationCoordinator {
                 None,
                 false,
                 None,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
             )?;
             transaction
                 .install_immediate_action_target_context(&target_context)
@@ -1768,7 +1769,7 @@ impl MutationCoordinator {
                 operation_id: route_id.to_owned(),
                 entity_id: None,
                 action_id: Some(action.id.clone()),
-                package_revision: self.expected.package_revision.clone(),
+                package_revision: self.expected.activation_id.clone(),
                 selected_access_profile: claims.access_profile().to_owned(),
                 purpose_present: claims.purpose().is_some(),
                 principal_reference: None,
@@ -1830,7 +1831,7 @@ impl MutationCoordinator {
                 claims,
                 target_authority,
                 record_uuid,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
             )?;
             transaction
                 .execute(
@@ -1896,7 +1897,7 @@ impl MutationCoordinator {
                 None,
                 false,
                 None,
-                &self.expected.package_revision,
+                &self.expected.activation_id,
             )?;
             transaction
                 .execute(
@@ -2801,7 +2802,7 @@ impl MutationCoordinator {
                 context: claims,
                 method: HttpMethod::Post,
                 route: &action.route,
-                package_revision: &self.expected.package_revision,
+                package_revision: &self.expected.activation_id,
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority,
                 result_effects: claims.result_effects(),

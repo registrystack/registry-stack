@@ -15,10 +15,8 @@ use registry_breg::contract::{
     parse_module_yaml, parse_project_yaml, ModuleAssetSource, Operation, RegistryProject,
 };
 use registry_breg::package::{
-    load_package, prepare_package_with_project_assets, PackageBuildRequest, PackageIntent,
-    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSignature,
-    PackageSourceFile, PackageTrustAnchor, SignaturePolicy, TrustAnchorKey,
-    TRUST_ANCHOR_API_VERSION,
+    load_package, prepare_package_with_project_assets, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -26,12 +24,9 @@ use registry_breg::postgres::{
 };
 use registry_breg::startup::{prepare_with_connection_and_key_source_for_test, PreparedServer};
 use registry_breg::CompiledRegistry;
-use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::MockIdp;
-use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -40,6 +35,8 @@ use tower::ServiceExt as _;
 use super::postgres_harness::TestDatabase;
 
 const AUDIENCE: &str = "urn:breg:pilot-acceptance";
+const PILOT_ENVIRONMENT: &str = "acceptance";
+const PILOT_INSTANCE_ID: &str = "registry-primary";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 // Every harness in one integration-test process shares the configured WASM
 // executor, so the lock follows the complete prepared-server lifetime.
@@ -94,12 +91,6 @@ impl PilotHarness {
     pub async fn start(fixture_name: &str) -> Self {
         let runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
         let sources = FixtureSources::load(fixture_name);
-        let identity = sources
-            .project
-            .package
-            .as_ref()
-            .expect("Production pilot fixture declares package identity")
-            .clone();
         let database_id = format!("{}-acceptance-db", sources.project.registry.id);
         let database = TestDatabase::create(8).await;
         database
@@ -135,19 +126,10 @@ impl PilotHarness {
         }
         let (migration, migration_task) = database.connect_migration().await;
         let scratch = ScratchDirectory::new(fixture_name);
-        let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-            .expect("pilot package signing key generates");
 
-        let provisional = PublishedPackage::build(
-            scratch.path(),
-            "provisional",
-            &sources,
-            &database_id,
-            fingerprint(1),
-            &signing,
-        );
-        let provisional_context =
-            provisional.context(&identity, &database_id, PackageIntent::InitialActivation);
+        let provisional =
+            PublishedPackage::build(scratch.path(), "provisional", &sources, fingerprint(1));
+        let provisional_context = PublishedPackage::context();
         let verified_provisional = load_package(&provisional.root, &provisional_context)
             .expect("exact committed pilot sources prepare a closed Production package");
         assert_eq!(verified_provisional.registry(), &sources.compiled);
@@ -165,18 +147,11 @@ impl PilotHarness {
                 .expect("installed pilot schema has an exact managed fingerprint");
         drop(verified_provisional);
 
-        let package = PublishedPackage::build(
-            scratch.path(),
-            "active",
-            &sources,
-            &database_id,
-            schema_fingerprint,
-            &signing,
-        );
-        let package_context =
-            package.context(&identity, &database_id, PackageIntent::InitialActivation);
+        let package =
+            PublishedPackage::build(scratch.path(), "active", &sources, schema_fingerprint);
+        let package_context = PublishedPackage::context();
         let verified = load_package(&package.root, &package_context)
-            .expect("signed pilot package verifies with its exact committed sources");
+            .expect("pilot package verifies with its exact committed sources");
         assert_eq!(verified.registry(), &sources.compiled);
         initialize_compiled_registry_state_for_test(
             &migration,
@@ -184,16 +159,12 @@ impl PilotHarness {
             verified.registry(),
             RegistryStateTestIdentity {
                 package_id: &verified.manifest().package_id,
-                environment: &verified.manifest().environment,
-                instance_id: &verified.manifest().instance_id,
-                database_id: &verified.manifest().database_id,
-                package_revision: &verified.manifest().package_revision,
-                package_sequence: i64::try_from(verified.manifest().sequence)
-                    .expect("pilot package sequence fits PostgreSQL"),
+                database_id: &database_id,
+                label: verified.package_digest(),
             },
         )
         .await
-        .expect("database initializes from the exact signed pilot identity");
+        .expect("database initializes from the exact pilot package and deployment identity");
         drop(verified);
         drop(migration);
         migration_task.abort();
@@ -202,7 +173,6 @@ impl PilotHarness {
         let config_path = write_runtime_config(
             scratch.path(),
             &package,
-            &identity,
             &database_id,
             &database,
             &idp,
@@ -469,8 +439,6 @@ impl FixtureSources {
 
 struct PublishedPackage {
     root: PathBuf,
-    anchor: PathBuf,
-    revision: String,
 }
 
 impl PublishedPackage {
@@ -478,28 +446,17 @@ impl PublishedPackage {
         parent: &Path,
         label: &str,
         sources: &FixtureSources,
-        database_id: &str,
         schema_fingerprint: String,
-        signing: &PrivateJwk,
     ) -> Self {
         let identity = sources
             .project
             .package
             .as_ref()
             .expect("Production pilot identity exists");
-        let key_id = signing.public().kid.expect("generated signing key has kid");
         let request = PackageBuildRequest {
-            environment: identity.environment.clone(),
-            instance_id: identity.instance_id.clone(),
-            database_id: database_id.to_owned(),
-            sequence: identity.sequence,
-            prior_revision: None,
+            from_package_digest: None,
             compiler_source_revision: identity.source_revision.clone(),
             schema_fingerprint,
-            signature_policy: SignaturePolicy {
-                threshold: 1,
-                key_ids: vec![key_id.clone()],
-            },
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
                 bytes: sources.project_bytes.clone(),
@@ -539,55 +496,16 @@ impl PublishedPackage {
             .collect();
         let prepared = prepare_package_with_project_assets(request, project_assets)
             .expect("exact pilot sources prepare as a Production package");
-        let signature = sign(prepared.canonical_signed_bytes(), signing)
-            .expect("pilot package signature succeeds");
         let root = parent.join(format!("package-{label}"));
         prepared
-            .publish_to_directory(
-                &root,
-                vec![PackageSignature {
-                    key_id: key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
-            .expect("signed pilot package publishes to a closed directory");
-        let anchor = parent.join(format!("trust-anchor-{label}.json"));
-        write_json(
-            &anchor,
-            &PackageTrustAnchor {
-                api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-                environment: identity.environment.clone(),
-                instance_id: identity.instance_id.clone(),
-                database_id: database_id.to_owned(),
-                threshold: 1,
-                keys: vec![TrustAnchorKey {
-                    key_id,
-                    jwk: serde_json::to_value(signing.public())
-                        .expect("pilot public JWK serializes"),
-                }],
-            },
-        );
-        Self {
-            root,
-            anchor,
-            revision: prepared.package_revision().to_owned(),
-        }
+            .publish_to_directory(&root)
+            .expect("pilot package publishes to a closed directory");
+        Self { root }
     }
 
-    fn context<'a>(
-        &'a self,
-        identity: &'a registry_breg::contract::PackageIdentitySource,
-        database_id: &'a str,
-        intent: PackageIntent<'a>,
-    ) -> PackageLoadContext<'a> {
+    fn context() -> PackageLoadContext<'static> {
         PackageLoadContext {
-            environment: &identity.environment,
-            instance_id: &identity.instance_id,
-            database_id,
-            database_initialization_environment: &identity.environment,
-            compiler_source_revision: &identity.source_revision,
-            trust_anchor: Some(&self.anchor),
-            intent,
+            database_initialization_environment: PILOT_ENVIRONMENT,
         }
     }
 }
@@ -664,7 +582,6 @@ fn fixture_journey_bytes(registry: &CompiledRegistry) -> Vec<u8> {
 fn write_runtime_config(
     root: &Path,
     package: &PublishedPackage,
-    identity: &registry_breg::contract::PackageIdentitySource,
     database_id: &str,
     database: &TestDatabase,
     idp: &MockIdp,
@@ -716,10 +633,10 @@ kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
 identity:
-  environment: {}
-  instanceId: {}
+  environment: {PILOT_ENVIRONMENT}
+  instanceId: {PILOT_INSTANCE_ID}
   databaseId: {database_id}
-  databaseInitializationEnvironment: {}
+  databaseInitializationEnvironment: {PILOT_ENVIRONMENT}
 secretProviders:
   file:
     root: {}
@@ -736,10 +653,6 @@ database:
     runtime: {}
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: {}
-  activeRevision: {}
-  activeSequence: {}
 authentication:
   oidc:
     issuer: {}
@@ -774,17 +687,10 @@ operationalTimeouts:
   migrationStatementMilliseconds: 5000
 {review_authority_config}
 "#,
-            identity.environment,
-            identity.instance_id,
-            identity.environment,
             secrets.display(),
             database.migration_role.as_str(),
             database.runtime_role.as_str(),
             package.root.display(),
-            package.anchor.display(),
-            identity.source_revision,
-            package.revision,
-            identity.sequence,
             idp.issuer(),
         ),
     )
@@ -795,13 +701,6 @@ operationalTimeouts:
 
 fn write_secret(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).expect("pilot secret writes");
-    set_private_permissions(path);
-}
-
-fn write_json(path: &Path, value: &impl Serialize) {
-    let bytes = canonicalize_json(&serde_json::to_value(value).expect("value serializes"))
-        .expect("value canonicalizes");
-    fs::write(path, bytes).expect("pilot trust anchor writes");
     set_private_permissions(path);
 }
 
@@ -847,13 +746,4 @@ impl Drop for ScratchDirectory {
 
 fn fingerprint(byte: u8) -> String {
     format!("sha256:{}", format!("{byte:02x}").repeat(32))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut result = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut result, "{byte:02x}").expect("writing to String succeeds");
-    }
-    result
 }

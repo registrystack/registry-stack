@@ -154,6 +154,8 @@ pub(crate) fn add_consent_module(
         command: COMMAND,
         profile: ProfileArg::Authoring,
         revision: compiles.then(|| compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: vec![
             artifact_report(

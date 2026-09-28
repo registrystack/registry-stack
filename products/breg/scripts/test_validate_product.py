@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 118)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 123)],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -701,24 +701,24 @@ class BRegProductCatalogTests(unittest.TestCase):
             errors,
         )
 
-    def test_asset_fixture_package_identity_and_sequence_are_exact(self) -> None:
+    def test_asset_fixture_package_refuses_a_retired_identity_key(self) -> None:
         original = VALIDATOR.load_yaml
 
-        def load_with_implicit_sequence(path: Path):
+        def load_with_retired_sequence(path: Path):
             value = copy.deepcopy(original(path))
             if (
                 path.name == "registry.yaml"
                 and path.parent.name == "asset-site-placement"
             ):
-                value["package"]["sequence"] = True
+                value["package"]["sequence"] = 1
             return value
 
         errors: list[str] = []
         with mock.patch.object(
-            VALIDATOR, "load_yaml", side_effect=load_with_implicit_sequence
+            VALIDATOR, "load_yaml", side_effect=load_with_retired_sequence
         ):
             VALIDATOR.validate_fixture(errors)
-        self.assertIn("asset fixture.package.sequence: expected integer", errors)
+        self.assertIn("asset fixture.package: unknown keys sequence", errors)
 
     def test_package_layout_cannot_drop_a_required_entry(self) -> None:
         original = VALIDATOR.load_yaml
@@ -810,18 +810,37 @@ class BRegProductCatalogTests(unittest.TestCase):
             any("missing required entry tuples" in error for error in errors), errors
         )
 
-    def test_package_layout_cannot_allow_embedded_signing_key(self) -> None:
+    def test_package_layout_refuses_a_package_signatures_entry(self) -> None:
         original = VALIDATOR.load_yaml
 
-        def load_without_signing_key(path: Path):
+        def load_with_signatures(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "package-layout.yaml":
-                value["forbiddenEmbeddedRoles"].remove("signing-key")
+                value["entries"].append(
+                    {"path": "signatures", "role": "package-signatures", "required": False}
+                )
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_signatures):
+            VALIDATOR.validate_package_layout(errors)
+        self.assertTrue(
+            any("unexpected entry tuples" in error and "package-signatures" in error for error in errors),
+            errors,
+        )
+
+    def test_package_layout_cannot_allow_embedded_migration_credential(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_migration_credential(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "package-layout.yaml":
+                value["forbiddenEmbeddedRoles"].remove("migration-credential")
             return value
 
         errors: list[str] = []
         with mock.patch.object(
-            VALIDATOR, "load_yaml", side_effect=load_without_signing_key
+            VALIDATOR, "load_yaml", side_effect=load_without_migration_credential
         ):
             VALIDATOR.validate_package_layout(errors)
         self.assertTrue(

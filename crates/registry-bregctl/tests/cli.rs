@@ -17,14 +17,11 @@ use registry_breg::fixtures::{
     validate_fixture_journeys, validate_schema_test_receipt_for_package,
 };
 use registry_breg::package::{
-    load_predecessor_package, prepare_package, PackageBuildRequest, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor,
-    PredecessorPackageContext, PreparedPackage, SignaturePolicy, TrustAnchorKey,
-    FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES, TRUST_ANCHOR_API_VERSION,
+    load_predecessor_package, prepare_package, PackageBuildRequest, PackageFileRole,
+    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    PreparedPackage, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
 };
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
-use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -669,12 +666,8 @@ impl Drop for TestProject {
 struct RuntimePackageFixture {
     directory: TestProject,
     package: PathBuf,
-    anchor: PathBuf,
     runtime_config: PathBuf,
-    package_revision: String,
-    /// The key the trust anchor names, so a test that builds a successor of
-    /// this package can sign it for the same anchor.
-    signing: PrivateJwk,
+    package_digest: String,
 }
 
 impl RuntimePackageFixture {
@@ -684,26 +677,15 @@ impl RuntimePackageFixture {
 
     fn production_with_module(bind: SocketAddr, module_bytes: Vec<u8>) -> Self {
         let directory = TestProject::from_registry_source(authoring_fixture());
-        let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-            .expect("production package signing key generates");
         let module = parse_module_json(&module_bytes).expect("package module parses");
         let project_bytes = package_project_bytes(&module_digest(&module));
-        let key_id = signing.public().kid.expect("generated key has an id");
         let prepared =
             prepare_package(PackageBuildRequest {
-                environment: "production".to_owned(),
-                instance_id: PACKAGE_INSTANCE.to_owned(),
-                database_id: PACKAGE_DATABASE.to_owned(),
-                sequence: 1,
-                prior_revision: None,
+                from_package_digest: None,
                 compiler_source_revision: PACKAGE_SOURCE_REVISION.to_owned(),
                 schema_fingerprint:
                     "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                         .to_owned(),
-                signature_policy: SignaturePolicy {
-                    threshold: 1,
-                    key_ids: vec![key_id.clone()],
-                },
                 project: PackageSourceFile {
                     path: "source/registry.yaml".to_owned(),
                     bytes: project_bytes,
@@ -723,30 +705,19 @@ impl RuntimePackageFixture {
             .expect("package prepares");
         validate_fixture_journeys(PACKAGE_FIXTURE_JOURNEYS, prepared.registry())
             .expect("package fixture journeys resolve against the packaged registry");
-        let signature = sign(prepared.canonical_signed_bytes(), &signing)
-            .expect("package canonical bytes sign");
         let package = directory.path().join("package");
-        let package_revision = prepared.package_revision().to_owned();
+        let package_digest = prepared
+            .package_digest()
+            .expect("the package digest derives");
         prepared
-            .publish_to_directory(
-                &package,
-                vec![PackageSignature {
-                    key_id: key_id.clone(),
-                    signature_hex: hex(&signature),
-                }],
-            )
+            .publish_to_directory(&package)
             .expect("package publishes");
-        let anchor = directory.path().join("trust.json");
-        write_anchor(&anchor, &signing);
-        let runtime_config =
-            write_runtime_config(directory.path(), &package, &anchor, &package_revision, bind);
+        let runtime_config = write_runtime_config(directory.path(), &package, bind);
         Self {
             directory,
             package,
-            anchor,
             runtime_config,
-            package_revision,
-            signing,
+            package_digest,
         }
     }
 
@@ -926,14 +897,7 @@ accessProfiles:
 "#
 }
 
-fn packaging_project() -> (TestProject, PrivateJwk, String) {
-    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-        .expect("production package signing key generates");
-    let key_id = signing
-        .public()
-        .kid
-        .clone()
-        .expect("generated key has an id");
+fn packaging_project() -> TestProject {
     let module_bytes = package_module_bytes();
     let module = parse_module_json(&module_bytes).expect("package module parses");
     let project =
@@ -948,16 +912,10 @@ fn packaging_project() -> (TestProject, PrivateJwk, String) {
         PACKAGE_FIXTURE_JOURNEYS,
     )
     .expect("package fixture journeys write");
-    (project, signing, key_id)
+    project
 }
 
-fn prepare_packaging_candidate(
-    project: &TestProject,
-    database_id: &str,
-    schema_fingerprint: &str,
-    signature_threshold: u16,
-    signature_key_ids: Vec<String>,
-) -> PreparedPackage {
+fn prepare_packaging_candidate(project: &TestProject, schema_fingerprint: &str) -> PreparedPackage {
     let project_bytes =
         fs::read(project.path().join("registry.yaml")).expect("package project reads");
     let project_source = parse_project_yaml(&project_bytes).expect("package project parses");
@@ -970,17 +928,9 @@ fn prepare_packaging_candidate(
     let journey_bytes =
         fs::read(project.path().join(FIXTURE_JOURNEYS_PATH)).expect("package journey reads");
     prepare_package(PackageBuildRequest {
-        environment: identity.environment.clone(),
-        instance_id: identity.instance_id.clone(),
-        database_id: database_id.to_owned(),
-        sequence: identity.sequence,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: identity.source_revision.clone(),
         schema_fingerprint: schema_fingerprint.to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: signature_threshold,
-            key_ids: signature_key_ids,
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: project_bytes,
@@ -1038,30 +988,40 @@ fn schema_test_receipt_bytes(prepared: &PreparedPackage, journey_ids: &[&str]) -
         FIXTURE_JOURNEYS_PATH.as_bytes(),
         journeys,
     );
+    for file in &manifest.files {
+        if matches!(
+            file.role,
+            PackageFileRole::ReviewedMigrationDescriptor
+                | PackageFileRole::ReviewedMigrationStepSql
+                | PackageFileRole::ReviewedMigrationAssertionSql
+                | PackageFileRole::MigrationRehearsalReceipt
+                | PackageFileRole::MigrationRehearsalFixture
+        ) {
+            digest_part(
+                &mut source_closure,
+                file.path.as_bytes(),
+                file.sha256.as_bytes(),
+            );
+        }
+    }
     let mut receipt = json!({
-        "apiVersion": "registry.registrystack.org/breg-schema-test-receipt/v1",
+        "apiVersion": "registry.registrystack.org/breg-schema-test-receipt/v2",
         "kind": "SchemaTestReceipt",
         "registryRevision": prepared.registry().revision(),
         "projectSourceRevision": project_identity.source_revision,
         "compilerSourceRevision": manifest.compiler.source_revision,
-        "environment": manifest.environment,
-        "instanceId": manifest.instance_id,
-        "databaseId": manifest.database_id,
-        "sequence": manifest.sequence,
-        "candidatePackageRevision": manifest.package_revision,
         "sourceClosureSha256": prefixed_digest(source_closure.finalize().as_slice()),
         "migrationPlanSha256": sha256_prefixed(migration_plan),
-        "signingInputSha256": sha256_prefixed(prepared.canonical_signed_bytes()),
         "postgresMajor": 16,
         "targetManagedSchemaFingerprint": manifest.schema_fingerprint,
         "successfulJourneyIds": journey_ids,
         "journeyFileSha256": sha256_prefixed(journeys),
     });
-    if let Some(prior) = &manifest.prior_revision {
+    if let Some(prior) = &manifest.migration_plan.from_package_digest {
         receipt
             .as_object_mut()
             .expect("receipt is an object")
-            .insert("priorPackageRevision".to_owned(), json!(prior));
+            .insert("priorPackageDigest".to_owned(), json!(prior));
     }
     let bytes = canonicalize_json(&receipt).expect("test receipt canonicalizes");
     let suite = validate_fixture_journeys(journeys, prepared.registry())
@@ -1095,89 +1055,42 @@ fn bregctl(arguments: &[&str]) -> Output {
 
 fn package_candidate_command(
     project: &TestProject,
-    database_id: &str,
     schema_fingerprint: &str,
-    signature_threshold: u16,
-    signature_key_ids: &[String],
     receipt: &Path,
     output: &Path,
 ) -> Output {
-    let mut arguments = vec![
-        "--format".to_owned(),
-        "json".to_owned(),
-        "package".to_owned(),
-        path(project.path()).to_owned(),
-        "--database-id".to_owned(),
-        database_id.to_owned(),
-        "--schema-fingerprint".to_owned(),
-        schema_fingerprint.to_owned(),
-        "--signature-threshold".to_owned(),
-        signature_threshold.to_string(),
-    ];
-    for key_id in signature_key_ids {
-        arguments.push(format!("--signature-key-id={key_id}"));
-    }
-    arguments.extend([
-        "--test-receipt".to_owned(),
-        path(receipt).to_owned(),
-        "--output".to_owned(),
-        path(output).to_owned(),
-    ]);
-    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-    bregctl(&arguments)
+    bregctl(&[
+        "--format",
+        "json",
+        "package",
+        path(project.path()),
+        "--schema-fingerprint",
+        schema_fingerprint,
+        "--test-receipt",
+        path(receipt),
+        "--output",
+        path(output),
+    ])
 }
 
 fn test_candidate_command(
     project: &TestProject,
-    signature_threshold: u16,
-    signature_key_ids: &[String],
     runtime_config: &Path,
     credentials: &Path,
     output: &Path,
 ) -> Output {
-    test_candidate_command_for_database(
-        project,
-        PACKAGE_DATABASE,
-        signature_threshold,
-        signature_key_ids,
-        runtime_config,
-        credentials,
-        output,
-    )
-}
-
-fn test_candidate_command_for_database(
-    project: &TestProject,
-    database_id: &str,
-    signature_threshold: u16,
-    signature_key_ids: &[String],
-    runtime_config: &Path,
-    credentials: &Path,
-    output: &Path,
-) -> Output {
-    let mut arguments = vec![
-        "--format".to_owned(),
-        "json".to_owned(),
-        "test".to_owned(),
-        path(project.path()).to_owned(),
-        "--database-id".to_owned(),
-        database_id.to_owned(),
-        "--signature-threshold".to_owned(),
-        signature_threshold.to_string(),
-    ];
-    for key_id in signature_key_ids {
-        arguments.push(format!("--signature-key-id={key_id}"));
-    }
-    arguments.extend([
-        "--runtime-config".to_owned(),
-        path(runtime_config).to_owned(),
-        "--credentials".to_owned(),
-        path(credentials).to_owned(),
-        "--output".to_owned(),
-        path(output).to_owned(),
-    ]);
-    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-    bregctl(&arguments)
+    bregctl(&[
+        "--format",
+        "json",
+        "test",
+        path(project.path()),
+        "--runtime-config",
+        path(runtime_config),
+        "--credentials",
+        path(credentials),
+        "--output",
+        path(output),
+    ])
 }
 
 fn json_stdout(output: &Output) -> Value {
@@ -3784,83 +3697,45 @@ entities:
 }
 
 #[test]
-fn production_package_emits_exact_signing_input_and_publishes_only_external_signatures() {
-    let (project, signing, key_id) = packaging_project();
+fn production_package_publishes_the_unsigned_package_in_one_step() {
+    let project = packaging_project();
     let build = project.path().join("build");
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let expected = prepare_packaging_candidate(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        vec![key_id.clone()],
-    );
+    let expected = prepare_packaging_candidate(&project, fingerprint);
     let receipt = project.path().join("schema-test-receipt.json");
     let receipt_bytes = schema_test_receipt_bytes(&expected, &["package-record-list"]);
     fs::write(&receipt, &receipt_bytes).expect("schema-test receipt writes");
-    let common = vec![
-        "--format".to_owned(),
-        "json".to_owned(),
-        "package".to_owned(),
-        path(project.path()).to_owned(),
-        "--database-id".to_owned(),
-        PACKAGE_DATABASE.to_owned(),
-        "--schema-fingerprint".to_owned(),
-        fingerprint.to_owned(),
-        "--signature-threshold".to_owned(),
-        "1".to_owned(),
-        format!("--signature-key-id={key_id}"),
-        "--test-receipt".to_owned(),
-        path(&receipt).to_owned(),
-        "--output".to_owned(),
-        path(&build).to_owned(),
-    ];
-    let common_args = common.iter().map(String::as_str).collect::<Vec<_>>();
 
-    let prepared = bregctl(&common_args);
-    assert!(prepared.status.success(), "{prepared:?}");
-    assert!(prepared.stderr.is_empty());
-    let report = json_stdout(&prepared);
+    let published = package_candidate_command(&project, fingerprint, &receipt, &build);
+    assert!(published.status.success(), "{published:?}");
+    assert!(published.stderr.is_empty());
+    let report = json_stdout(&published);
     assert_eq!(report["command"], "package");
     assert_eq!(report["profile"], "production");
-    assert_eq!(report["state"], "awaiting_signatures");
-    assert_eq!(report["signatureThreshold"], 1);
-    assert_eq!(report["providedSignatures"], 0);
-    assert!(build.join("signing-input.json").is_file());
+    assert_eq!(
+        report["packageDigest"],
+        expected
+            .package_digest()
+            .expect("the package digest derives")
+    );
+    assert_eq!(report["registryRevision"], expected.registry().revision());
+    for retired in [
+        "state",
+        "signatureThreshold",
+        "providedSignatures",
+        "signingInput",
+        "packageRevision",
+    ] {
+        assert!(report.get(retired).is_none(), "{retired} is not reported");
+    }
     assert_eq!(
         fs::read(build.join("schema-test-receipt.json")).expect("reviewer receipt reads"),
         receipt_bytes
     );
-    assert!(!build.join("package").exists());
-
-    let signing_input =
-        fs::read(build.join("signing-input.json")).expect("canonical signing input reads");
-    let signature = sign(&signing_input, &signing).expect("external signer signs exact bytes");
-    let signatures = project.path().join("signatures.json");
-    write_canonical(
-        &signatures,
-        &json!({
-            "signatures": [{"keyId": key_id, "signatureHex": hex(&signature)}]
-        }),
-    );
-    let mut final_arguments = common.clone();
-    final_arguments.extend(["--signatures".to_owned(), path(&signatures).to_owned()]);
-    let final_arguments = final_arguments
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let published = bregctl(&final_arguments);
-    assert!(published.status.success(), "{published:?}");
-    assert!(published.stderr.is_empty());
-    let published_report = json_stdout(&published);
-    assert_eq!(published_report["state"], "published");
-    assert_eq!(
-        published_report["packageRevision"],
-        report["packageRevision"]
-    );
-    assert_eq!(published_report["signingInput"], report["signingInput"]);
-    assert_eq!(published_report["providedSignatures"], 1);
+    assert!(!build.join("signing-input.json").exists());
     assert!(build.join("package/package.json").is_file());
+    assert!(build.join("package/SHA256SUMS").is_file());
+    assert!(!build.join("package/signatures.json").exists());
     assert!(!tree(&build.join("package"))
         .keys()
         .any(|entry| entry.contains("schema-test-receipt")));
@@ -3868,19 +3743,17 @@ fn production_package_emits_exact_signing_input_and_publishes_only_external_sign
         &fs::read(build.join("package/package.json")).expect("package envelope reads"),
     )
     .expect("package envelope parses");
-    assert!(!envelope["signed"]["files"]
+    assert!(envelope.get("signed").is_none());
+    assert!(envelope.get("signatures").is_none());
+    assert!(!envelope["manifest"]["files"]
         .as_array()
         .expect("package files are an array")
         .iter()
         .any(|entry| entry["path"] == "schema-test-receipt.json"));
 
-    let anchor = project.path().join("trust.json");
-    write_anchor(&anchor, &signing);
     let runtime = write_runtime_config(
         project.path(),
         &build.join("package"),
-        &anchor,
-        published_report["packageRevision"].as_str().unwrap(),
         "127.0.0.1:1".parse().unwrap(),
     );
     let verified = bregctl(&[
@@ -3892,46 +3765,26 @@ fn production_package_emits_exact_signing_input_and_publishes_only_external_sign
     ]);
     assert!(verified.status.success(), "{verified:?}");
     assert_eq!(
-        json_stdout(&verified)["packageRevision"],
-        published_report["packageRevision"]
+        json_stdout(&verified)["packageDigest"],
+        report["packageDigest"]
     );
 
     let rendered = String::from_utf8(published.stdout).expect("package report is UTF-8");
-    for forbidden in [
-        path(project.path()),
-        path(&signatures),
-        &hex(&signature),
-        PACKAGE_VALUE_CANARY,
-    ] {
+    for forbidden in [path(project.path()), PACKAGE_VALUE_CANARY] {
         assert!(!rendered.contains(forbidden));
     }
 }
 
 #[test]
 fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let prepared = prepare_packaging_candidate(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        vec![key_id.clone()],
-    );
+    let prepared = prepare_packaging_candidate(&project, fingerprint);
     let valid_receipt = schema_test_receipt_bytes(&prepared, &["package-record-list"]);
     let receipt = project.path().join("candidate-receipt.json");
-    let key_ids = vec![key_id.clone()];
 
     let missing_build = project.path().join("missing-receipt-build");
-    let missing = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        &key_ids,
-        &receipt,
-        &missing_build,
-    );
+    let missing = package_candidate_command(&project, fingerprint, &receipt, &missing_build);
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
     let missing_report = json_stdout(&missing);
     assert_eq!(
@@ -3947,15 +3800,7 @@ fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
 
     fs::write(&receipt, [&valid_receipt[..], b"\n"].concat()).expect("noncanonical receipt writes");
     let refused_build = project.path().join("noncanonical-receipt-build");
-    let refused = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        &key_ids,
-        &receipt,
-        &refused_build,
-    );
+    let refused = package_candidate_command(&project, fingerprint, &receipt, &refused_build);
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     let refused_report = json_stdout(&refused);
     assert_eq!(
@@ -3981,15 +3826,9 @@ fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
 
 #[test]
 fn package_receipt_is_stale_for_every_candidate_binding_change() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let prepared = prepare_packaging_candidate(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        vec![key_id.clone()],
-    );
+    let prepared = prepare_packaging_candidate(&project, fingerprint);
     let receipt = project.path().join("exact-receipt.json");
     fs::write(
         &receipt,
@@ -4007,13 +3846,6 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     let original_module_model =
         parse_module_json(&original_module).expect("original package module parses");
     let original_module_digest = module_digest(&original_module_model);
-    let alternate_signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
-        .expect("alternate signing key generates");
-    let alternate_key_id = alternate_signing
-        .public()
-        .kid
-        .expect("alternate signing key has an id");
-
     let altered_module = String::from_utf8(original_module.clone())
         .expect("module is UTF-8")
         .replace("\"maxLength\":16", "\"maxLength\":17")
@@ -4023,34 +3855,12 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     let altered_module_digest = module_digest(&altered_module_model);
     let cases = [
         (
-            "database",
-            "package.test_receipt.identity_mismatch",
-            original_project.clone(),
-            original_module.clone(),
-            original_journeys.clone(),
-            "alternate-database".to_owned(),
-            fingerprint.to_owned(),
-            vec![key_id.clone()],
-        ),
-        (
             "fingerprint",
             "package.test_receipt.fingerprint_mismatch",
             original_project.clone(),
             original_module.clone(),
             original_journeys.clone(),
-            PACKAGE_DATABASE.to_owned(),
             "sha256:4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
-            vec![key_id.clone()],
-        ),
-        (
-            "signature-policy",
-            "package.test_receipt.candidate_mismatch",
-            original_project.clone(),
-            original_module.clone(),
-            original_journeys.clone(),
-            PACKAGE_DATABASE.to_owned(),
-            fingerprint.to_owned(),
-            vec![alternate_key_id],
         ),
         (
             "project",
@@ -4060,9 +3870,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
                 .into_bytes(),
             original_module.clone(),
             original_journeys.clone(),
-            PACKAGE_DATABASE.to_owned(),
             fingerprint.to_owned(),
-            vec![key_id.clone()],
         ),
         (
             "module",
@@ -4072,36 +3880,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
                 .into_bytes(),
             altered_module,
             original_journeys.clone(),
-            PACKAGE_DATABASE.to_owned(),
             fingerprint.to_owned(),
-            vec![key_id.clone()],
-        ),
-        (
-            "environment",
-            "package.test_receipt.identity_mismatch",
-            original_project_text
-                .replace(
-                    "\"environment\":\"production\"",
-                    "\"environment\":\"pilot\"",
-                )
-                .into_bytes(),
-            original_module.clone(),
-            original_journeys.clone(),
-            PACKAGE_DATABASE.to_owned(),
-            fingerprint.to_owned(),
-            vec![key_id.clone()],
-        ),
-        (
-            "instance",
-            "package.test_receipt.identity_mismatch",
-            original_project_text
-                .replace(PACKAGE_INSTANCE, "alternate-instance")
-                .into_bytes(),
-            original_module.clone(),
-            original_journeys.clone(),
-            PACKAGE_DATABASE.to_owned(),
-            fingerprint.to_owned(),
-            vec![key_id.clone()],
         ),
         (
             "journey",
@@ -4112,15 +3891,11 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
                 .expect("journeys are UTF-8")
                 .replace("package-record-list", "package-record-list-alternate")
                 .into_bytes(),
-            PACKAGE_DATABASE.to_owned(),
             fingerprint.to_owned(),
-            vec![key_id.clone()],
         ),
     ];
 
-    for (name, expected_code, project_bytes, module_bytes, journeys, database, fingerprint, keys) in
-        cases
-    {
+    for (name, expected_code, project_bytes, module_bytes, journeys, fingerprint) in cases {
         fs::write(project.path().join("registry.yaml"), project_bytes)
             .expect("altered project writes");
         fs::write(
@@ -4131,15 +3906,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         fs::write(project.path().join(FIXTURE_JOURNEYS_PATH), journeys)
             .expect("altered journeys write");
         let build = project.path().join(format!("stale-{name}-build"));
-        let output = package_candidate_command(
-            &project,
-            &database,
-            &fingerprint,
-            1,
-            &keys,
-            &receipt,
-            &build,
-        );
+        let output = package_candidate_command(&project, &fingerprint, &receipt, &build);
         assert_eq!(output.status.code(), Some(1), "{name}: {output:?}");
         let report = json_stdout(&output);
         assert_eq!(report["diagnostics"][0]["code"], expected_code, "{name}");
@@ -4148,13 +3915,10 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         assert!(!rendered.contains(path(project.path())), "{name}");
     }
 
-    fs::write(
-        project.path().join("registry.yaml"),
-        original_project_text
-            .replace("\"sequence\":1", "\"sequence\":2")
-            .into_bytes(),
-    )
-    .expect("successor project writes");
+    // The same sources packaged as a successor of another package bind a
+    // predecessor digest the receipt does not record.
+    fs::write(project.path().join("registry.yaml"), &original_project)
+        .expect("original project restores");
     fs::write(
         project.path().join("modules/core/module.yaml"),
         &original_module,
@@ -4166,54 +3930,43 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     )
     .expect("original journeys restore");
     let baseline = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    let sequence_build = project.path().join("stale-sequence-build");
-    let signature_key_arg = format!("--signature-key-id={key_id}");
-    let sequence = bregctl(&[
+    let successor_build = project.path().join("stale-predecessor-build");
+    let successor = bregctl(&[
         "--format",
         "json",
         "package",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
         "--schema-fingerprint",
         fingerprint,
-        "--signature-threshold",
-        "1",
-        &signature_key_arg,
-        "--baseline-runtime-config",
-        path(&baseline.runtime_config),
+        "--baseline-package",
+        path(&baseline.package),
         "--test-receipt",
         path(&receipt),
         "--output",
-        path(&sequence_build),
+        path(&successor_build),
     ]);
-    assert_eq!(sequence.status.code(), Some(1), "{sequence:?}");
+    assert_eq!(successor.status.code(), Some(1), "{successor:?}");
+    let diagnostic = &json_stdout(&successor)["diagnostics"][0];
     assert_eq!(
-        json_stdout(&sequence)["diagnostics"][0]["code"],
-        "package.test_receipt.identity_mismatch"
+        diagnostic["code"],
+        "package.test_receipt.candidate_mismatch"
     );
-    assert!(!sequence_build.exists());
+    assert_eq!(diagnostic["path"], "testReceipt.priorPackageDigest");
+    assert!(!successor_build.exists());
 }
 
 #[test]
 fn package_takes_the_schema_fingerprint_from_the_receipt_and_refuses_disagreement() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
     let disagreeing = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
-    let prepared = prepare_packaging_candidate(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        vec![key_id.clone()],
-    );
+    let prepared = prepare_packaging_candidate(&project, fingerprint);
     let receipt = project.path().join("fingerprint-receipt.json");
     fs::write(
         &receipt,
         schema_test_receipt_bytes(&prepared, &["package-record-list"]),
     )
     .expect("schema-test receipt writes");
-    let signature_key_arg = format!("--signature-key-id={key_id}");
     let derived_build = project.path().join("derived-fingerprint-build");
 
     let derived = bregctl(&[
@@ -4221,11 +3974,6 @@ fn package_takes_the_schema_fingerprint_from_the_receipt_and_refuses_disagreemen
         "json",
         "package",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
-        "--signature-threshold",
-        "1",
-        &signature_key_arg,
         "--test-receipt",
         path(&receipt),
         "--output",
@@ -4234,20 +3982,17 @@ fn package_takes_the_schema_fingerprint_from_the_receipt_and_refuses_disagreemen
 
     assert!(derived.status.success(), "{derived:?}");
     let report = json_stdout(&derived);
-    assert_eq!(report["state"], "awaiting_signatures");
-    assert!(derived_build.join("signing-input.json").is_file());
+    assert_eq!(
+        report["packageDigest"],
+        prepared
+            .package_digest()
+            .expect("the package digest derives")
+    );
+    assert!(derived_build.join("package/package.json").is_file());
     assert!(derived_build.join("schema-test-receipt.json").is_file());
 
     let disagreeing_build = project.path().join("disagreeing-fingerprint-build");
-    let refused = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        disagreeing,
-        1,
-        &[key_id],
-        &receipt,
-        &disagreeing_build,
-    );
+    let refused = package_candidate_command(&project, disagreeing, &receipt, &disagreeing_build);
 
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     let report = json_stdout(&refused);
@@ -4265,44 +4010,33 @@ fn package_takes_the_schema_fingerprint_from_the_receipt_and_refuses_disagreemen
 
 #[test]
 fn package_resume_requires_the_exact_receipt_evidence() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let prepared = prepare_packaging_candidate(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        vec![key_id.clone()],
-    );
+    let prepared = prepare_packaging_candidate(&project, fingerprint);
     let receipt = project.path().join("resume-receipt.json");
     let receipt_bytes = schema_test_receipt_bytes(&prepared, &["package-record-list"]);
     fs::write(&receipt, &receipt_bytes).expect("schema-test receipt writes");
     let build = project.path().join("resume-build");
-    let key_ids = vec![key_id];
 
-    let first = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        &key_ids,
-        &receipt,
-        &build,
-    );
+    let first = package_candidate_command(&project, fingerprint, &receipt, &build);
     assert!(first.status.success(), "{first:?}");
-    assert!(!build.join("package").exists());
+    assert!(build.join("package/package.json").is_file());
 
+    // A build directory that already holds a published package is never
+    // written again.
+    let republished = package_candidate_command(&project, fingerprint, &receipt, &build);
+    assert_eq!(republished.status.code(), Some(1), "{republished:?}");
+    assert_eq!(
+        json_stdout(&republished)["diagnostics"][0]["code"],
+        "package.output.refused"
+    );
+
+    // A run interrupted before it published leaves only the reviewer evidence,
+    // and resuming it requires that exact evidence.
+    fs::remove_dir_all(build.join("package")).expect("published package removes");
     fs::remove_file(build.join("schema-test-receipt.json"))
         .expect("build receipt evidence removes");
-    let missing = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        &key_ids,
-        &receipt,
-        &build,
-    );
+    let missing = package_candidate_command(&project, fingerprint, &receipt, &build);
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
     assert_eq!(
         json_stdout(&missing)["diagnostics"][0]["code"],
@@ -4312,15 +4046,7 @@ fn package_resume_requires_the_exact_receipt_evidence() {
 
     fs::write(build.join("schema-test-receipt.json"), b"substituted")
         .expect("substituted receipt evidence writes");
-    let substituted = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        &key_ids,
-        &receipt,
-        &build,
-    );
+    let substituted = package_candidate_command(&project, fingerprint, &receipt, &build);
     assert_eq!(substituted.status.code(), Some(1), "{substituted:?}");
     assert_eq!(
         json_stdout(&substituted)["diagnostics"][0]["code"],
@@ -4330,56 +4056,12 @@ fn package_resume_requires_the_exact_receipt_evidence() {
 
     fs::write(build.join("schema-test-receipt.json"), receipt_bytes)
         .expect("exact receipt evidence restores");
-    let resumed = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        &key_ids,
-        &receipt,
-        &build,
-    );
+    let resumed = package_candidate_command(&project, fingerprint, &receipt, &build);
     assert!(resumed.status.success(), "{resumed:?}");
-    assert_eq!(json_stdout(&resumed)["state"], "awaiting_signatures");
-}
-
-#[test]
-fn local_package_requires_a_receipt_and_publishes_without_external_signatures() {
-    let (project, _signing, _key_id) = packaging_project();
-    let project_path = project.path().join("registry.yaml");
-    let local_source = String::from_utf8(fs::read(&project_path).expect("project reads"))
-        .expect("project is UTF-8")
-        .replace(
-            "\"environment\":\"production\"",
-            "\"environment\":\"local\"",
-        );
-    fs::write(&project_path, local_source).expect("local project writes");
-    let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let prepared = prepare_packaging_candidate(&project, PACKAGE_DATABASE, fingerprint, 0, vec![]);
-    let receipt = project.path().join("local-receipt.json");
-    let receipt_bytes = schema_test_receipt_bytes(&prepared, &["package-record-list"]);
-    fs::write(&receipt, &receipt_bytes).expect("local receipt writes");
-    let build = project.path().join("local-build");
-
-    let output = package_candidate_command(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        0,
-        &[],
-        &receipt,
-        &build,
-    );
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(json_stdout(&output)["state"], "published");
     assert_eq!(
-        fs::read(build.join("schema-test-receipt.json")).expect("reviewer receipt reads"),
-        receipt_bytes
+        json_stdout(&resumed)["packageDigest"],
+        json_stdout(&first)["packageDigest"]
     );
-    assert!(build.join("package/package.json").is_file());
-    assert!(!tree(&build.join("package"))
-        .keys()
-        .any(|entry| entry.contains("schema-test-receipt")));
 }
 
 #[test]
@@ -4387,21 +4069,20 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
     let help = bregctl(&["test", "--help"]);
     assert!(help.status.success(), "{help:?}");
     let rendered = String::from_utf8(help.stdout).expect("help is UTF-8");
-    for required in [
-        "--runtime-config",
-        "--credentials",
-        "--output",
-        "--database-id",
-    ] {
+    for required in ["--runtime-config", "--credentials", "--output"] {
         assert!(rendered.contains(required), "help omits {required}");
     }
     for forbidden in [
         "--test-receipt",
         "--signatures",
         "--schema-fingerprint",
-        "--package",
+        "--package ",
         "--initial",
         "--backup",
+        "--database-id",
+        "--baseline-runtime-config",
+        "--signature-threshold",
+        "--signature-key-id",
     ] {
         assert!(!rendered.contains(forbidden), "help exposes {forbidden}");
     }
@@ -4419,8 +4100,6 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
         "json",
         "test",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
         "--schema-fingerprint",
         "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "--runtime-config",
@@ -4441,8 +4120,6 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
         "json",
         "package",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
         "--test-receipt",
         path(&project.path().join("receipt.json")),
         "--output",
@@ -4457,7 +4134,7 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
 
 #[test]
 fn refused_fixture_journeys_name_the_journey_file_and_the_refusal() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let runtime = test_runtime_config(&project);
     write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
     let credentials = project.path().join("journey-credentials.yaml");
@@ -4483,7 +4160,7 @@ journeys:
     .expect("refused journey suite writes");
     let output = project.path().join("journey-receipt.json");
 
-    let result = test_candidate_command(&project, 1, &[key_id], &runtime, &credentials, &output);
+    let result = test_candidate_command(&project, &runtime, &credentials, &output);
 
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
@@ -4499,7 +4176,7 @@ journeys:
 
 #[test]
 fn refused_credentials_name_the_document_path_and_the_journey() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let runtime = test_runtime_config(&project);
     write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
     let credentials = project.path().join("unknown-journey-credentials.yaml");
@@ -4518,14 +4195,7 @@ bindings:
     .expect("credential fixture writes");
     let output = project.path().join("unknown-journey-receipt.json");
 
-    let result = test_candidate_command(
-        &project,
-        1,
-        std::slice::from_ref(&key_id),
-        &runtime,
-        &credentials,
-        &output,
-    );
+    let result = test_candidate_command(&project, &runtime, &credentials, &output);
 
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
@@ -4564,14 +4234,7 @@ bindings:
     .expect("credential fixture writes");
     let duplicate_output = project.path().join("duplicate-receipt.json");
 
-    let result = test_candidate_command(
-        &project,
-        1,
-        &[key_id],
-        &runtime,
-        &duplicate,
-        &duplicate_output,
-    );
+    let result = test_candidate_command(&project, &runtime, &duplicate, &duplicate_output);
 
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
@@ -4592,10 +4255,9 @@ bindings:
 
 #[test]
 fn test_credentials_are_strict_secret_refs_and_preflight_before_database() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let runtime = test_runtime_config(&project);
     write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
-    let key_ids = vec![key_id.clone()];
 
     let cases = [
         (
@@ -4669,7 +4331,7 @@ bindings:
         let credentials = project.path().join(format!("credentials-{name}.yaml"));
         fs::write(&credentials, source).expect("credential fixture writes");
         let output = project.path().join(format!("receipt-{name}.json"));
-        let result = test_candidate_command(&project, 1, &key_ids, &runtime, &credentials, &output);
+        let result = test_candidate_command(&project, &runtime, &credentials, &output);
         assert_schema_test_refusal(
             result,
             "test.credentials.refused",
@@ -4687,9 +4349,8 @@ bindings:
 
 #[test]
 fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let runtime = test_runtime_config(&project);
-    let key_ids = vec![key_id.clone()];
     let cases: Vec<(&str, Vec<u8>)> = vec![
         ("utf8", vec![0xff, b'.', b'a', b'.', b'b']),
         ("empty", Vec::new()),
@@ -4711,7 +4372,7 @@ fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
         )
         .expect("credential fixture writes");
         let output = project.path().join(format!("secret-receipt-{name}.json"));
-        let result = test_candidate_command(&project, 1, &key_ids, &runtime, &credentials, &output);
+        let result = test_candidate_command(&project, &runtime, &credentials, &output);
         assert_schema_test_refusal(
             result,
             "test.credentials.refused",
@@ -4725,7 +4386,7 @@ fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
 
 #[test]
 fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     let runtime = test_runtime_config(&project);
     write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
     let credentials = project.path().join("valid-credentials.yaml");
@@ -4735,7 +4396,7 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
     )
     .expect("credential fixture writes");
     let output = project.path().join("schema-test-receipt.json");
-    let result = test_candidate_command(&project, 1, &[key_id], &runtime, &credentials, &output);
+    let result = test_candidate_command(&project, &runtime, &credentials, &output);
 
     assert_schema_test_refusal(
         result,
@@ -4752,7 +4413,6 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
             PACKAGE_VALUE_CANARY,
         ],
     );
-    assert!(!project.path().join("signing-input.json").exists());
     assert!(!project.path().join("package").exists());
     assert!(!project.path().join("apply").exists());
     assert!(
@@ -4768,137 +4428,10 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
 }
 
 #[test]
-fn test_runtime_database_id_mismatch_is_candidate_refused_before_rehearsal() {
-    let (project, _signing, key_id) = packaging_project();
-    let runtime = test_runtime_config(&project);
-    write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
-    let credentials = project.path().join("database-mismatch-credentials.yaml");
-    fs::write(
-        &credentials,
-        credential_source("type: bearer\n      tokenRef: secret:file/operator-token\n"),
-    )
-    .expect("credential fixture writes");
-    let output = project.path().join("database-mismatch-receipt.json");
-    let result = test_candidate_command_for_database(
-        &project,
-        "wrong-database",
-        1,
-        &[key_id],
-        &runtime,
-        &credentials,
-        &output,
-    );
-
-    assert_eq!(
-        json_stdout(&result)["diagnostics"][0]["path"],
-        "runtimeConfig.identity.databaseId"
-    );
-
-    assert_schema_test_refusal(
-        result,
-        "test.candidate.refused",
-        "schema_test_candidate",
-        "correct_schema_test_candidate",
-        &output,
-        &[
-            path(&runtime),
-            path(&credentials),
-            "wrong-database",
-            PACKAGE_DATABASE,
-            "aaa.bbb.ccc",
-            "secret:file/operator-token",
-            PACKAGE_VALUE_CANARY,
-            "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
-        ],
-    );
-}
-
-#[test]
-fn test_runtime_binding_refusal_identifies_the_field_without_disclosing_values() {
-    for (original, replacement, diagnostic_path) in [
-        (
-            "environment: production".to_owned(),
-            "environment: wrong-environment",
-            "runtimeConfig.identity.environment",
-        ),
-        (
-            format!("instanceId: {PACKAGE_INSTANCE}"),
-            "instanceId: wrong-instance",
-            "runtimeConfig.identity.instanceId",
-        ),
-        (
-            format!("compilerSourceRevision: {PACKAGE_SOURCE_REVISION}"),
-            "compilerSourceRevision: wrong-source",
-            "runtimeConfig.package.compilerSourceRevision",
-        ),
-    ] {
-        let (project, _signing, key_id) = packaging_project();
-        let runtime = test_runtime_config(&project);
-        let source = fs::read_to_string(&runtime).expect("runtime fixture reads");
-        assert!(source.contains(&original));
-        fs::write(&runtime, source.replacen(&original, replacement, 1))
-            .expect("runtime fixture changes");
-        let credentials = project.path().join("credentials-not-opened.yaml");
-        let output = project.path().join("binding-refused-receipt.json");
-        let result =
-            test_candidate_command(&project, 1, &[key_id], &runtime, &credentials, &output);
-        assert_eq!(
-            json_stdout(&result)["diagnostics"][0]["path"],
-            diagnostic_path
-        );
-        assert_schema_test_refusal(
-            result,
-            "test.candidate.refused",
-            "schema_test_candidate",
-            "correct_schema_test_candidate",
-            &output,
-            &[
-                "wrong-environment",
-                "wrong-instance",
-                "wrong-source",
-                path(&runtime),
-                PACKAGE_VALUE_CANARY,
-            ],
-        );
-    }
-}
-
-#[test]
-fn test_deterministic_candidate_errors_are_refused_before_rehearsal() {
-    let (project, _signing, key_id) = packaging_project();
-    let runtime = test_runtime_config(&project);
-    write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
-    let credentials = project.path().join("invalid-policy-credentials.yaml");
-    fs::write(
-        &credentials,
-        credential_source("type: bearer\n      tokenRef: secret:file/operator-token\n"),
-    )
-    .expect("credential fixture writes");
-    let output = project.path().join("invalid-policy-receipt.json");
-    let result = test_candidate_command(&project, 2, &[key_id], &runtime, &credentials, &output);
-
-    assert_schema_test_refusal(
-        result,
-        "test.candidate.refused",
-        "schema_test_candidate",
-        "correct_schema_test_candidate",
-        &output,
-        &[
-            path(&runtime),
-            path(&credentials),
-            "aaa.bbb.ccc",
-            "secret:file/operator-token",
-            PACKAGE_VALUE_CANARY,
-            "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
-        ],
-    );
-}
-
-#[test]
 fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     let oversized_yaml_comment = vec![b'#'; SCHEMA_TEST_AUTHORED_SOURCE_CEILING_BYTES + 1];
 
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     fs::write(
         project.path().join("registry.yaml"),
         &oversized_yaml_comment,
@@ -4914,8 +4447,6 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     assert_eq!(project_report["diagnostics"][0]["path"], "registry.yaml");
     let test_project = test_candidate_command(
         &project,
-        1,
-        &[key_id],
         &project.path().join("unused-runtime.yaml"),
         &project.path().join("unused-credentials.yaml"),
         &project.path().join("oversized-project-receipt.json"),
@@ -4929,7 +4460,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
         &[path(project.path()), "unused-runtime", "unused-credentials"],
     );
 
-    let (project, _signing, key_id) = packaging_project();
+    let project = packaging_project();
     fs::write(
         project.path().join("modules/core/module.yaml"),
         oversized_yaml_comment,
@@ -4948,8 +4479,6 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     let test_module = test_candidate_command(
         &project,
-        1,
-        &[key_id],
         &project.path().join("unused-runtime.yaml"),
         &project.path().join("unused-credentials.yaml"),
         &project.path().join("oversized-module-receipt.json"),
@@ -4983,8 +4512,6 @@ fn test_output_target_is_absolute_new_and_under_existing_non_symlink_parent() {
             "json",
             "test",
             path(project.path()),
-            "--database-id",
-            PACKAGE_DATABASE,
             "--runtime-config",
             path(&runtime),
             "--credentials",
@@ -5020,8 +4547,6 @@ fn test_output_symlink_parent_is_refused_before_candidate_or_database_work() {
         "json",
         "test",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
         "--runtime-config",
         path(&project.path().join("runtime.yaml")),
         "--credentials",
@@ -5043,7 +4568,7 @@ fn test_output_symlink_parent_is_refused_before_candidate_or_database_work() {
 fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     use std::os::unix::fs::symlink;
 
-    let (project, _signing, _key_id) = packaging_project();
+    let project = packaging_project();
     let journey_path = project.path().join("tests/journeys.yaml");
     let build = project.path().join("fixture-source-build");
     let missing_receipt = project.path().join("missing-receipt.json");
@@ -5052,8 +4577,6 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
         "json",
         "package",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
         "--schema-fingerprint",
         "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "--test-receipt",
@@ -5126,8 +4649,6 @@ fn package_always_uses_production_compilation_and_never_offers_a_signing_command
         "json",
         "package",
         path(project.path()),
-        "--database-id",
-        PACKAGE_DATABASE,
         "--schema-fingerprint",
         "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "--test-receipt",
@@ -5193,11 +4714,41 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     );
     assert!(!String::from_utf8_lossy(&malformed_backup.stdout).contains(PACKAGE_VALUE_CANARY));
 
-    // Another package at the active sequence is not the active package: it
-    // refuses by naming the differing binding field, never its values, and
-    // before any database authority is opened.
-    let other = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    assert_ne!(other.package_revision, fixture.package_revision);
+    let control_reference = format!("{PACKAGE_VALUE_CANARY}\u{7}");
+    let long_reference = format!("{PACKAGE_VALUE_CANARY}{}", "r".repeat(512));
+    for reference in [control_reference.as_str(), long_reference.as_str()] {
+        let refused = bregctl(&[
+            "--format",
+            "json",
+            "apply",
+            "--runtime-config",
+            path(&fixture.runtime_config),
+            "--package",
+            path(&fixture.package),
+            "--initial",
+            "--operator-reference",
+            reference,
+        ]);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert_eq!(
+            json_stdout(&refused)["diagnostics"][0]["code"],
+            "apply.operator_reference.refused"
+        );
+        assert!(!String::from_utf8_lossy(&refused.stdout).contains(PACKAGE_VALUE_CANARY));
+        assert!(!String::from_utf8_lossy(&refused.stderr).contains(PACKAGE_VALUE_CANARY));
+    }
+
+    // A package names no place in the apply order, so whether another package
+    // follows the active one is the database's answer: it reaches database
+    // authority, and the refusal stays value free.
+    let other = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        String::from_utf8(package_module_bytes())
+            .unwrap()
+            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .into_bytes(),
+    );
+    assert_ne!(other.package_digest, fixture.package_digest);
     let output = bregctl(&[
         "--format",
         "json",
@@ -5212,22 +4763,15 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     let report = json_stdout(&output);
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "apply.package.binding_mismatch"
-    );
-    assert_eq!(report["diagnostics"][0]["path"], "package.activeSequence");
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "verified_package",
-        "verify_package_binding",
+        "apply.database_configuration.refused"
     );
     let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
     for forbidden in [
         path(&fixture.runtime_config),
         path(&fixture.package),
         path(&other.package),
-        path(&fixture.anchor),
-        fixture.package_revision.as_str(),
-        other.package_revision.as_str(),
+        fixture.package_digest.as_str(),
+        other.package_digest.as_str(),
         PACKAGE_VALUE_CANARY,
         VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
         VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
@@ -5236,8 +4780,8 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     }
 
     // The active package itself is verified in full and then needs the
-    // database to confirm it is active and ready, so it reaches database
-    // authority instead of refusing as a binding.
+    // database to confirm it is active and ready, so it too reaches database
+    // authority.
     let already_active = bregctl(&[
         "--format",
         "json",
@@ -5278,6 +4822,131 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     let rendered = String::from_utf8_lossy(&database_refusal.stdout);
     assert!(!rendered.contains(VERIFY_RUNTIME_DATABASE_SECRET_CANARY));
     assert!(!rendered.contains(VERIFY_MIGRATION_DATABASE_SECRET_CANARY));
+}
+
+#[test]
+fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() {
+    let help = bregctl(&["--help"]);
+    let rendered = String::from_utf8(help.stdout).expect("top-level help is UTF-8");
+    for available in ["plan", "status"] {
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_start().starts_with(available)),
+            "{rendered}"
+        );
+    }
+    let plan_help = bregctl(&["plan", "--help"]);
+    let plan_help = String::from_utf8(plan_help.stdout).expect("plan help is UTF-8");
+    for required in [
+        "--runtime-config <ABSOLUTE_FILE>",
+        "--package <ABSOLUTE_DIRECTORY>",
+        "--backup <BINDING_PATH=BINDING_FILE>",
+    ] {
+        assert!(plan_help.contains(required), "{plan_help}");
+    }
+    for refused in ["--initial", "--operator-reference", "--acknowledge"] {
+        assert!(!plan_help.contains(refused), "{plan_help}");
+    }
+    let status_help = bregctl(&["status", "--help"]);
+    let status_help = String::from_utf8(status_help.stdout).expect("status help is UTF-8");
+    assert!(status_help.contains("--runtime-config <ABSOLUTE_FILE>"));
+    assert!(!status_help.contains("--package"));
+
+    let relative = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        PACKAGE_VALUE_CANARY,
+        "--package",
+        PACKAGE_VALUE_CANARY,
+    ]);
+    assert_eq!(relative.status.code(), Some(1), "{relative:?}");
+    let report = json_stdout(&relative);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "plan");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "apply.runtime_config.path_invalid"
+    );
+    assert!(!String::from_utf8_lossy(&relative.stdout).contains(PACKAGE_VALUE_CANARY));
+
+    let relative = bregctl(&[
+        "--format",
+        "json",
+        "status",
+        "--runtime-config",
+        PACKAGE_VALUE_CANARY,
+    ]);
+    assert_eq!(relative.status.code(), Some(1), "{relative:?}");
+    let report = json_stdout(&relative);
+    assert_eq!(report["command"], "status");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "status.runtime_config.path_invalid"
+    );
+
+    // Both commands are read-only, yet each needs the migration credential
+    // the runtime file names; this fixture's is never opened, and the
+    // refusal names the fix and stays value free.
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let planned = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+    ]);
+    let status = bregctl(&[
+        "--format",
+        "json",
+        "status",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+    ]);
+    for (output, command, code) in [
+        (&planned, "plan", "apply.database_configuration.refused"),
+        (&status, "status", "status.database_configuration.refused"),
+    ] {
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let report = json_stdout(output);
+        assert_eq!(report["command"], command);
+        assert_eq!(report["diagnostics"][0]["code"], code);
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        for forbidden in [
+            path(&fixture.runtime_config),
+            path(&fixture.package),
+            VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+        ] {
+            assert!(!rendered.contains(forbidden), "{rendered}");
+        }
+    }
+
+    let malformed_backup = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+        "--backup",
+        PACKAGE_VALUE_CANARY,
+    ]);
+    assert_eq!(
+        malformed_backup.status.code(),
+        Some(1),
+        "{malformed_backup:?}"
+    );
+    assert_eq!(
+        json_stdout(&malformed_backup)["diagnostics"][0]["code"],
+        "apply.backup_evidence.refused"
+    );
 }
 
 #[test]
@@ -5457,13 +5126,116 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
     for forbidden in [
         path(&fixture.runtime_config),
         path(&fixture.package),
-        path(&fixture.anchor),
         PACKAGE_VALUE_CANARY,
         VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
         VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
     ] {
         assert!(!rendered.contains(forbidden));
     }
+}
+
+#[test]
+fn field_encryption_preflight_refuses_a_package_that_does_not_succeed_the_active_package() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let preflight = |package: &Path| {
+        bregctl(&[
+            "--format",
+            "json",
+            "field-encryption",
+            "preflight",
+            "--runtime-config",
+            path(&fixture.runtime_config),
+            "--package",
+            path(package),
+        ])
+    };
+
+    // The counts describe the state an apply starts from, so a package built
+    // from any other predecessor is refused before its plan is read.
+    let unbound = publish_unchanged_successor(
+        &fixture,
+        "unbound-successor",
+        "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    );
+    let output = preflight(&unbound);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "field_encryption.preflight.package.refused"
+    );
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "verified_package",
+        "verify_package_binding",
+    );
+
+    // The active package is never its own successor.
+    let output = preflight(&fixture.package);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "field_encryption.preflight.package.refused"
+    );
+
+    // The same package built from the active package passes the binding and
+    // stops only because it plans no backfill.
+    let bound = publish_unchanged_successor(&fixture, "bound-successor", &fixture.package_digest);
+    let output = preflight(&bound);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "field_encryption.preflight.plan.no_backfill"
+    );
+}
+
+/// Publishes the fixture's registry again as a successor that names
+/// `from_package_digest` as its predecessor and changes nothing else.
+fn publish_unchanged_successor(
+    fixture: &RuntimePackageFixture,
+    name: &str,
+    from_package_digest: &str,
+) -> PathBuf {
+    let module_bytes = package_module_bytes();
+    let module = parse_module_json(&module_bytes).expect("package module parses");
+    let project_bytes = package_project_bytes(&module_digest(&module));
+    let request = |from_package_digest: Option<String>, migration_plan| PackageBuildRequest {
+        from_package_digest,
+        compiler_source_revision: PACKAGE_SOURCE_REVISION.to_owned(),
+        schema_fingerprint:
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes: project_bytes.clone(),
+        },
+        modules: vec![PackageModuleSource {
+            id: "core".to_owned(),
+            path: "source/modules/core/module.yaml".to_owned(),
+            bytes: module_bytes.clone(),
+            assets: Vec::new(),
+        }],
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: PACKAGE_FIXTURE_JOURNEYS.to_vec(),
+        },
+        migration_plan,
+    };
+    let prior_registry =
+        prepare_package(request(None, PackageMigrationPlanInput::InitialCompiledDdl))
+            .expect("prior package prepares")
+            .registry()
+            .clone();
+    let package = fixture.directory.path().join(name);
+    prepare_package(request(
+        Some(from_package_digest.to_owned()),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(prior_registry),
+        },
+    ))
+    .expect("successor package prepares")
+    .publish_to_directory(&package)
+    .expect("successor package publishes");
+    package
 }
 
 #[test]
@@ -5494,7 +5266,7 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
             "ok": true,
             "command": "verify",
             "assurance": "runtime_bound",
-            "packageRevision": fixture.package_revision,
+            "packageDigest": fixture.package_digest,
             "registry": {
                 "id": "verify-registry",
                 "version": "1",
@@ -5519,7 +5291,6 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
         PACKAGE_VALUE_CANARY,
         path(&fixture.runtime_config),
         path(&fixture.package),
-        path(&fixture.anchor),
         "oidc-is-not-opened.invalid",
         VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
         VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
@@ -5535,8 +5306,8 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
         "Verified the package against the runtime it is bound to.\n  assurance            runtime_bound\n"
     ));
     assert!(human.contains(&format!(
-        "package revision     {}\n",
-        fixture.package_revision
+        "package digest       {}\n",
+        fixture.package_digest
     )));
     assert!(human.contains("registry id          verify-registry\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
@@ -5574,10 +5345,10 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
             "ok": true,
             "command": "migration explain",
             "assurance": "runtime_bound",
-            "packageRevision": fixture.package_revision,
+            "packageDigest": fixture.package_digest,
             "plan": {
                 "planKind": "initial",
-                "hasPriorRevision": false,
+                "hasPredecessor": false,
                 "hasPriorBaseline": false,
                 "changeCount": 0,
                 "changeCounts": {
@@ -5597,7 +5368,6 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
         PACKAGE_VALUE_CANARY,
         path(&fixture.runtime_config),
         path(&fixture.package),
-        path(&fixture.anchor),
         "CREATE TABLE",
         "signature",
     ] {
@@ -5620,6 +5390,61 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.contains("change count                         0\n"));
     assert!(human.contains("reviewed migration count             0\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
+}
+
+#[test]
+fn retired_package_flags_are_usage_errors_that_name_their_replacement() {
+    for (command, flag, value, replacement) in [
+        ("package", "--database-id", "db-1", "identity.databaseId"),
+        ("test", "--database-id", "db-1", "identity.databaseId"),
+        (
+            "package",
+            "--baseline-runtime-config",
+            "/runtime.yaml",
+            "--baseline-package",
+        ),
+        (
+            "test",
+            "--baseline-runtime-config",
+            "/runtime.yaml",
+            "--baseline-package",
+        ),
+        ("package", "--signature-threshold", "1", "bregctl apply"),
+        ("package", "--signature-key-id", "key-1", "bregctl apply"),
+        (
+            "package",
+            "--signatures",
+            "/signatures.json",
+            "bregctl package",
+        ),
+    ] {
+        let output = bregctl(&[command, PACKAGE_VALUE_CANARY, flag, value]);
+        assert_eq!(output.status.code(), Some(2), "{flag}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+        assert!(stderr.contains(&format!("`{flag}` is removed")), "{stderr}");
+        assert!(stderr.contains(replacement), "{flag}: {stderr}");
+
+        // A retired flag passed without its value reads the same replacement,
+        // not a generic missing-value error.
+        let output = bregctl(&[command, PACKAGE_VALUE_CANARY, flag]);
+        assert_eq!(output.status.code(), Some(2), "bare {flag}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+        assert!(stderr.contains(&format!("`{flag}` is removed")), "{stderr}");
+        assert!(stderr.contains(replacement), "bare {flag}: {stderr}");
+    }
+    let output = bregctl(&[
+        "package",
+        PACKAGE_VALUE_CANARY,
+        "--reviewed-migrations",
+        "/review",
+        "--test-receipt",
+        "/receipt.json",
+        "--output",
+        "/build",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+    assert!(stderr.contains("--baseline-package"), "{stderr}");
 }
 
 #[test]
@@ -5673,13 +5498,23 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
     let package_help = bregctl(&["package", "--help"]);
     let package_help = String::from_utf8(package_help.stdout).expect("package help is UTF-8");
     for required in [
-        "--database-id <ID>",
+        "--baseline-package <ABSOLUTE_DIRECTORY>",
         "--schema-fingerprint <SHA256>",
         "--test-receipt <ABSOLUTE_FILE>",
         "--output <DIRECTORY>",
-        "--signatures <FILE>",
+        "The package is the promotable unit `bregctl apply` activates",
+        "`caseworkctl package` is a different verb",
     ] {
-        assert!(package_help.contains(required));
+        assert!(package_help.contains(required), "{package_help}");
+    }
+    for retired in [
+        "--database-id",
+        "--baseline-runtime-config",
+        "--signature-threshold",
+        "--signature-key-id",
+        "--signatures",
+    ] {
+        assert!(!package_help.contains(retired), "{package_help}");
     }
     let apply_help = bregctl(&["apply", "--help"]);
     let apply_help = String::from_utf8(apply_help.stdout).expect("apply help is UTF-8");
@@ -5687,7 +5522,7 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
         "--runtime-config <ABSOLUTE_FILE>",
         "--package <ABSOLUTE_DIRECTORY>",
         "--initial",
-        "--backup <BINDING_PATH=ABSOLUTE_FILE>",
+        "--backup <BINDING_PATH=BINDING_FILE>",
     ] {
         assert!(apply_help.contains(required));
     }
@@ -5772,77 +5607,31 @@ fn runtime_bound_package_refusals_are_exact_and_value_free_for_both_commands() {
         );
     }
 
-    let wrong =
-        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("wrong trust key generates");
-    let wrong_anchor = fixture
-        .directory
-        .path()
-        .join(format!("{PACKAGE_VALUE_CANARY}.json"));
-    write_anchor(&wrong_anchor, &wrong);
-    let wrong_trust = fixture.variant("wrong-trust", path(&fixture.anchor), path(&wrong_anchor));
-    let wrong_binding = fixture.variant(
-        "wrong-binding",
-        &format!("activeRevision: {}", fixture.package_revision),
-        &format!("activeRevision: {PACKAGE_VALUE_CANARY}"),
+    let wrong_pin = fixture.variant(
+        PACKAGE_VALUE_CANARY,
+        &format!("  root: {}", path(&fixture.package)),
+        &format!(
+            "  root: {}\n  expectedDigest: sha256:{}",
+            path(&fixture.package),
+            "0".repeat(64)
+        ),
     );
-
-    for (runtime, suffix, action) in [
-        (&wrong_trust, "signature_refused", "verify_package_trust"),
-        (&wrong_binding, "binding_refused", "verify_package_binding"),
-    ] {
-        for (prefix, command) in [
-            ("verify", vec!["verify"]),
-            ("migration.explain", vec!["migration", "explain"]),
-        ] {
-            let mut arguments = vec!["--format", "json"];
-            arguments.extend(command);
-            arguments.extend(["--runtime-config", path(runtime)]);
-            assert_inspection_refusal(
-                &arguments,
-                &format!("{prefix}.package.{suffix}"),
-                "verified_package",
-                action,
-                &[
-                    PACKAGE_VALUE_CANARY,
-                    path(runtime),
-                    path(&fixture.package),
-                    path(&wrong_anchor),
-                ],
-            );
-        }
-    }
-}
-
-#[test]
-fn noncanonical_trust_anchor_is_refused_with_a_distinct_code() {
-    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-
-    let canonical = fs::read(&fixture.anchor).expect("trust anchor reads");
-    let value: Value = serde_json::from_slice(&canonical).expect("trust anchor parses");
-    let pretty = serde_json::to_vec_pretty(&value).expect("trust anchor re-serializes");
-    assert_ne!(
-        pretty, canonical,
-        "pretty-printed trust anchor must differ from the canonical bytes"
-    );
-    fs::write(&fixture.anchor, pretty).expect("trust anchor is replaced with pretty-printed bytes");
-
     for (prefix, command) in [
         ("verify", vec!["verify"]),
         ("migration.explain", vec!["migration", "explain"]),
     ] {
         let mut arguments = vec!["--format", "json"];
         arguments.extend(command);
-        arguments.extend(["--runtime-config", path(&fixture.runtime_config)]);
+        arguments.extend(["--runtime-config", path(&wrong_pin)]);
         assert_inspection_refusal(
             &arguments,
-            &format!("{prefix}.package.anchor_not_canonical"),
+            &format!("{prefix}.package.integrity_refused"),
             "verified_package",
             "verify_package_integrity",
             &[
                 PACKAGE_VALUE_CANARY,
-                path(&fixture.runtime_config),
+                path(&wrong_pin),
                 path(&fixture.package),
-                path(&fixture.anchor),
             ],
         );
     }
@@ -5880,7 +5669,7 @@ fn canonical_package_tampering_is_refused_without_rendering_package_values() {
 }
 
 #[test]
-fn package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_fix() {
+fn a_directory_without_the_shared_envelope_is_refused_as_not_a_package() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
     strip_shared_package_envelope(&fixture.package);
 
@@ -5902,192 +5691,9 @@ fn package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_f
         let message = report["diagnostics"][0]["message"]
             .as_str()
             .expect("refusal message is a string");
-        assert!(
-            message.contains("apply a successor with this bregctl"),
-            "{message}"
-        );
+        assert!(message.contains("SHA256SUMS"), "{message}");
+        assert!(message.contains("bregctl package"), "{message}");
     }
-}
-
-#[test]
-fn diff_reads_a_running_package_without_the_shared_envelope_unless_a_digest_pin_is_configured() {
-    let diff_against = |fixture: &RuntimePackageFixture, runtime_config: &Path| {
-        bregctl(&[
-            "--format",
-            "json",
-            "diff",
-            path(&fixture.package.join("source")),
-            "--runtime-config",
-            path(runtime_config),
-        ])
-    };
-
-    let enveloped = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    let expected = diff_against(&enveloped, &enveloped.runtime_config);
-    assert!(expected.status.success(), "{expected:?}");
-    let expected = json_stdout(&expected);
-    assert_eq!(expected["baselineAssurance"], "runtime_bound", "{expected}");
-
-    let legacy = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    strip_shared_package_envelope(&legacy.package);
-    let unpinned = diff_against(&legacy, &legacy.runtime_config);
-    assert!(unpinned.status.success(), "{unpinned:?}");
-    let unpinned = json_stdout(&unpinned);
-    assert_eq!(unpinned["baselineAssurance"], expected["baselineAssurance"]);
-    assert_eq!(unpinned["diff"], expected["diff"], "{unpinned}");
-
-    let pinned_runtime = legacy.variant(
-        "pinned",
-        &format!("  trustAnchorPath: {}", path(&legacy.anchor)),
-        &format!(
-            "  trustAnchorPath: {}\n  expectedDigest: sha256:{}",
-            path(&legacy.anchor),
-            "0".repeat(64)
-        ),
-    );
-    let pinned = diff_against(&legacy, &pinned_runtime);
-    assert_eq!(pinned.status.code(), Some(1), "{pinned:?}");
-    let report = json_stdout(&pinned);
-    assert_eq!(
-        report["diagnostics"][0]["code"], "diff.package.digest_pin_unverifiable",
-        "{report}"
-    );
-}
-
-#[test]
-fn package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured() {
-    let (project, _signing, key_id) = packaging_project();
-    let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    let prepared = prepare_packaging_candidate(
-        &project,
-        PACKAGE_DATABASE,
-        fingerprint,
-        1,
-        vec![key_id.clone()],
-    );
-    let receipt = project.path().join("baseline-receipt.json");
-    fs::write(
-        &receipt,
-        schema_test_receipt_bytes(&prepared, &["package-record-list"]),
-    )
-    .expect("schema-test receipt writes");
-    let signature_key_arg = format!("--signature-key-id={key_id}");
-    let package_with_baseline = |runtime_config: &Path, name: &str| {
-        bregctl(&[
-            "--format",
-            "json",
-            "package",
-            path(project.path()),
-            "--database-id",
-            PACKAGE_DATABASE,
-            "--schema-fingerprint",
-            fingerprint,
-            "--signature-threshold",
-            "1",
-            &signature_key_arg,
-            "--baseline-runtime-config",
-            path(runtime_config),
-            "--test-receipt",
-            path(&receipt),
-            "--output",
-            path(&project.path().join(name)),
-        ])
-    };
-
-    let enveloped = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    let expected = json_stdout(&package_with_baseline(
-        &enveloped.runtime_config,
-        "enveloped-build",
-    ))["diagnostics"][0]["code"]
-        .clone();
-    assert!(
-        !expected
-            .as_str()
-            .is_some_and(|code| code.starts_with("package.baseline")),
-        "{expected}"
-    );
-
-    let legacy = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    strip_shared_package_envelope(&legacy.package);
-    let unpinned = json_stdout(&package_with_baseline(
-        &legacy.runtime_config,
-        "legacy-build",
-    ));
-    assert_eq!(unpinned["diagnostics"][0]["code"], expected, "{unpinned}");
-
-    let pinned_runtime = legacy.variant(
-        "pinned",
-        &format!("  trustAnchorPath: {}", path(&legacy.anchor)),
-        &format!(
-            "  trustAnchorPath: {}\n  expectedDigest: sha256:{}",
-            path(&legacy.anchor),
-            "0".repeat(64)
-        ),
-    );
-    let pinned = package_with_baseline(&pinned_runtime, "pinned-build");
-    assert_eq!(pinned.status.code(), Some(1), "{pinned:?}");
-    let report = json_stdout(&pinned);
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "package.baseline.package.digest_pin_unverifiable"
-    );
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
-    );
-    let message = report["diagnostics"][0]["message"]
-        .as_str()
-        .expect("pin refusal message is a string");
-    assert!(message.contains("package.expectedDigest"), "{message}");
-    assert!(message.contains("SHA256SUMS"), "{message}");
-}
-
-#[test]
-fn field_encryption_preflight_reports_the_digest_pin_on_a_predecessor_without_the_shared_envelope()
-{
-    let legacy = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    strip_shared_package_envelope(&legacy.package);
-    let pinned_runtime = legacy.variant(
-        "pinned",
-        &format!("  trustAnchorPath: {}", path(&legacy.anchor)),
-        &format!(
-            "  trustAnchorPath: {}\n  expectedDigest: sha256:{}",
-            path(&legacy.anchor),
-            "0".repeat(64)
-        ),
-    );
-    let pinned = bregctl(&[
-        "--format",
-        "json",
-        "field-encryption",
-        "preflight",
-        "--runtime-config",
-        path(&pinned_runtime),
-        "--package",
-        path(&legacy.package),
-    ]);
-    assert_eq!(pinned.status.code(), Some(1), "{pinned:?}");
-    let report = json_stdout(&pinned);
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "field_encryption.preflight.package.digest_pin_unverifiable",
-        "{report}"
-    );
-    assert_eq!(
-        report["diagnostics"][0]["path"], "package.expectedDigest",
-        "{report}"
-    );
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
-    );
-    let message = report["diagnostics"][0]["message"]
-        .as_str()
-        .expect("pin refusal message is a string");
-    assert!(message.contains("package.expectedDigest"), "{message}");
-    assert!(message.contains("SHA256SUMS"), "{message}");
 }
 
 #[cfg(unix)]
@@ -6179,7 +5785,10 @@ fn human_usage_errors_name_the_offending_argument() {
     assert_eq!(missing_argument.status.code(), Some(2));
     assert!(missing_argument.stdout.is_empty());
     let rendered = String::from_utf8_lossy(&missing_argument.stderr).into_owned();
-    assert!(rendered.contains("<PROJECT>"), "{rendered}");
+    assert!(
+        rendered.contains("<PROJECT|--package <DIRECTORY>>"),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -6281,7 +5890,7 @@ fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
 
 fn package_project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"production","instanceId":"{PACKAGE_INSTANCE}","sequence":1,"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -6357,24 +5966,16 @@ fn data_package_fixture() -> (TestProject, PathBuf) {
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(
         format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"environment":"local","instanceId":"data-instance","sequence":1,"sourceRevision":"data-source"}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
         )
         .as_bytes(),
     );
     let package = project.path().join("data-package");
     let prepared = prepare_package(PackageBuildRequest {
-        environment: "local".to_owned(),
-        instance_id: "data-instance".to_owned(),
-        database_id: "data-database".to_owned(),
-        sequence: 1,
-        prior_revision: None,
+        from_package_digest: None,
         compiler_source_revision: "data-source".to_owned(),
         schema_fingerprint:
             "sha256:3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-        signature_policy: SignaturePolicy {
-            threshold: 0,
-            key_ids: vec![],
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: fs::read(project.path().join("registry.yaml")).expect("data project reads"),
@@ -6395,42 +5996,12 @@ fn data_package_fixture() -> (TestProject, PathBuf) {
     validate_fixture_journeys(DATA_FIXTURE_JOURNEYS, prepared.registry())
         .expect("data fixture journeys resolve against the packaged registry");
     prepared
-        .publish_to_directory(&package, vec![])
+        .publish_to_directory(&package)
         .expect("data package publishes");
     (project, package)
 }
 
-fn write_anchor(path: &Path, key: &PrivateJwk) {
-    let public = key.public();
-    write_canonical(
-        path,
-        &PackageTrustAnchor {
-            api_version: TRUST_ANCHOR_API_VERSION.to_owned(),
-            environment: "production".to_owned(),
-            instance_id: PACKAGE_INSTANCE.to_owned(),
-            database_id: PACKAGE_DATABASE.to_owned(),
-            threshold: 1,
-            keys: vec![TrustAnchorKey {
-                key_id: public.kid.clone().expect("generated key has an id"),
-                jwk: serde_json::to_value(public).expect("public key serializes"),
-            }],
-        },
-    );
-}
-
-fn write_canonical(path: &Path, value: &impl Serialize) {
-    let value = serde_json::to_value(value).expect("value serializes");
-    let bytes = canonicalize_json(&value).expect("value canonicalizes");
-    fs::write(path, bytes).expect("canonical file writes");
-}
-
-fn write_runtime_config(
-    parent: &Path,
-    package: &Path,
-    trust_anchor: &Path,
-    revision: &str,
-    bind: SocketAddr,
-) -> PathBuf {
+fn write_runtime_config(parent: &Path, package: &Path, bind: SocketAddr) -> PathBuf {
     let secret_root = parent.join("secrets");
     fs::create_dir_all(&secret_root).expect("secret root creates");
     let path = parent.join("runtime.yaml");
@@ -6468,10 +6039,6 @@ database:
     runtime: registry_runtime
 package:
   root: {package}
-  trustAnchorPath: {trust_anchor}
-  compilerSourceRevision: {PACKAGE_SOURCE_REVISION}
-  activeRevision: {revision}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://oidc-is-not-opened.invalid
@@ -6509,7 +6076,6 @@ operationalTimeouts:
 "#,
             secret_root = secret_root.display(),
             package = package.display(),
-            trust_anchor = trust_anchor.display(),
         ),
     )
     .expect("runtime configuration writes");
@@ -6519,13 +6085,9 @@ operationalTimeouts:
 fn test_runtime_config(project: &TestProject) -> PathBuf {
     let package_root = project.path().join("runtime-package-root");
     fs::create_dir(&package_root).expect("runtime package root creates");
-    let trust_anchor = project.path().join("runtime-trust-anchor.json");
-    fs::write(&trust_anchor, b"{}").expect("runtime trust anchor writes");
     write_runtime_config(
         project.path(),
         &package_root,
-        &trust_anchor,
-        "schema-test-active-revision",
         "127.0.0.1:1".parse().expect("loopback address parses"),
     )
 }

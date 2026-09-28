@@ -26,14 +26,15 @@ use registry_breg::field_encryption_backfill::{
     FieldEncryptionHistoryErasureOutcome, FieldEncryptionHistoryErasureRequest,
 };
 use registry_breg::migration_plan::ReviewedMigrationStepDescriptor;
-use registry_breg::package::{
-    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPredecessorPackage,
-};
-use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
+use registry_breg::package::{load_package, PackageError};
+use registry_breg::postgres::RegistryLockKey;
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 
+use crate::active_registry::{
+    recorded_active_identity, recorded_identity_for_digest, ActiveRegistryError,
+};
 use crate::safe_path::SafeEntry;
 
 const MAX_ERASE_REQUEST_BYTES: u64 = 16 * 1024;
@@ -45,6 +46,7 @@ pub(crate) enum FieldEncryptionPreflightLifecycleError {
     NoBackfillSteps,
     RuntimeConfig(RuntimeConfigError),
     PredecessorPackage(PackageError),
+    ActiveRegistry(ActiveRegistryError),
     TargetPackage(PackageError),
     DatabaseConfiguration,
     TimeoutConfiguration,
@@ -60,7 +62,7 @@ pub(crate) struct FieldEncryptionPreflightLifecycleRequest<'a> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FieldEncryptionPreflightLifecycleOutcome {
-    pub package_revision: String,
+    pub package_digest: String,
     #[serde(flatten)]
     pub report: FieldEncryptionBackfillPreflightReport,
 }
@@ -82,28 +84,20 @@ pub(crate) fn run_preflight(
     let predecessor = config
         .load_active_predecessor_package()
         .map_err(FieldEncryptionPreflightLifecycleError::PredecessorPackage)?;
-    let expected = predecessor_identity(&predecessor)?;
-    let target_intent = PackageIntent::Activation {
-        active_revision: &expected.package_revision,
-        active_sequence: u64::try_from(expected.package_sequence).map_err(|_| {
-            FieldEncryptionPreflightLifecycleError::PredecessorPackage(PackageError::Binding)
-        })?,
-    };
-    let target = load_package(
-        request.package,
-        &PackageLoadContext {
-            environment: config.identity().environment(),
-            instance_id: config.identity().instance_id(),
-            database_id: config.identity().database_id(),
-            database_initialization_environment: config
-                .identity()
-                .database_initialization_environment(),
-            compiler_source_revision: config.package().compiler_source_revision(),
-            trust_anchor: config.package_trust_anchor(),
-            intent: target_intent,
-        },
-    )
-    .map_err(FieldEncryptionPreflightLifecycleError::TargetPackage)?;
+    let target = load_package(request.package, &config.package_load_context())
+        .map_err(FieldEncryptionPreflightLifecycleError::TargetPackage)?;
+    // Only the exact successor of the active package describes a backfill
+    // from that state; any other package would report counts for an apply
+    // the engine refuses.
+    let manifest = target.manifest();
+    if manifest.package_id != predecessor.package_id()
+        || manifest.migration_plan.from_package_digest.as_deref()
+            != Some(predecessor.package_digest())
+    {
+        return Err(FieldEncryptionPreflightLifecycleError::TargetPackage(
+            PackageError::Binding,
+        ));
+    }
     let plan = target
         .reviewed_migration_plan()
         .ok_or(FieldEncryptionPreflightLifecycleError::NoBackfillSteps)?;
@@ -129,6 +123,14 @@ pub(crate) fn run_preflight(
         .enable_all()
         .build()
         .map_err(|_| FieldEncryptionPreflightLifecycleError::Runtime)?;
+    let expected = recorded_identity_for_digest(
+        &runtime,
+        &config,
+        &connection,
+        predecessor.package_id(),
+        predecessor.package_digest(),
+    )
+    .map_err(FieldEncryptionPreflightLifecycleError::ActiveRegistry)?;
     let report = runtime
         .block_on(preflight_field_encryption_backfill_with_connection(
             &connection,
@@ -139,12 +141,12 @@ pub(crate) fn run_preflight(
                 registry: target.registry(),
                 plan,
                 predecessor_baseline: Some(predecessor.migration_baseline()),
-                target_package_revision: target.manifest().package_revision.as_str(),
+                target_package_revision: target.package_digest(),
             },
         ))
         .map_err(FieldEncryptionPreflightLifecycleError::Preflight)?;
     Ok(FieldEncryptionPreflightLifecycleOutcome {
-        package_revision: target.manifest().package_revision.clone(),
+        package_digest: target.package_digest().to_owned(),
         report,
     })
 }
@@ -158,6 +160,7 @@ pub(crate) enum FieldEncryptionEraseHistoryLifecycleError {
     RequestDocument,
     RuntimeConfig(RuntimeConfigError),
     ActivePackage(PackageError),
+    ActiveRegistry(ActiveRegistryError),
     DatabaseConfiguration,
     TimeoutConfiguration,
     Runtime,
@@ -172,7 +175,7 @@ pub(crate) struct FieldEncryptionEraseHistoryLifecycleRequest<'a> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FieldEncryptionEraseHistoryLifecycleOutcome {
-    pub package_revision: String,
+    pub package_digest: String,
     #[serde(flatten)]
     pub outcome: FieldEncryptionHistoryErasureOutcome,
 }
@@ -190,26 +193,13 @@ pub(crate) fn run_erase_history(
     let package = config
         .load_active_package()
         .map_err(FieldEncryptionEraseHistoryLifecycleError::ActivePackage)?;
-    let manifest = package.manifest();
-    let package_sequence = i64::try_from(manifest.sequence).map_err(|_| {
-        FieldEncryptionEraseHistoryLifecycleError::ActivePackage(PackageError::Binding)
-    })?;
-    let expected = ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence,
-    };
     let migration_connection = config
         .migration_database_connection_config()
         .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?;
     config
         .audit_profile()
         .map_err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig)?;
-    let lock_key = RegistryLockKey::derive(&expected.package_id)
+    let lock_key = RegistryLockKey::derive(&package.manifest().package_id)
         .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?;
     let timeouts = FieldEncryptionBackfillTimeouts::new(
         bounded_erase_timeout(config.operational_timeouts().migration_lock)?,
@@ -220,6 +210,8 @@ pub(crate) fn run_erase_history(
         .enable_all()
         .build()
         .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::Runtime)?;
+    let expected = recorded_active_identity(&runtime, &config, &migration_connection, &package)
+        .map_err(FieldEncryptionEraseHistoryLifecycleError::ActiveRegistry)?;
     let audit = runtime
         .block_on(RegistryAudit::open_companion(&config))
         .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::Audit)?;
@@ -239,24 +231,8 @@ pub(crate) fn run_erase_history(
         ))
         .map_err(FieldEncryptionEraseHistoryLifecycleError::Erase)?;
     Ok(FieldEncryptionEraseHistoryLifecycleOutcome {
-        package_revision: expected.package_revision,
+        package_digest: expected.package_digest,
         outcome,
-    })
-}
-
-fn predecessor_identity(
-    package: &VerifiedPredecessorPackage,
-) -> Result<ExpectedRegistryIdentity, FieldEncryptionPreflightLifecycleError> {
-    Ok(ExpectedRegistryIdentity {
-        package_id: package.package_id().to_owned(),
-        environment: package.environment().to_owned(),
-        instance_id: package.instance_id().to_owned(),
-        database_id: package.database_id().to_owned(),
-        package_revision: package.package_revision().to_owned(),
-        schema_fingerprint: package.schema_fingerprint().to_owned(),
-        package_sequence: i64::try_from(package.sequence()).map_err(|_| {
-            FieldEncryptionPreflightLifecycleError::PredecessorPackage(PackageError::Binding)
-        })?,
     })
 }
 

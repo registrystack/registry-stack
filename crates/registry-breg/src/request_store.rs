@@ -270,11 +270,15 @@ pub(crate) async fn install(
     ).await.map_err(|_| MutationError::Unavailable)?;
     crate::attachment_store::install(client, runtime_role).await?;
     crate::review_store::install(client, runtime_role).await?;
+    let revoke_grantees = crate::postgres::RuntimeRevoke::detect(client, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .with_public();
     for (table, privileges) in REQUEST_TABLES {
         let role = runtime_role.as_str();
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON registry_internal.{table} FROM PUBLIC, \"{role}\";
+                "REVOKE ALL ON registry_internal.{table} FROM {revoke_grantees};
              GRANT {} ON registry_internal.{table} TO \"{role}\";",
                 privileges.join(", ")
             ))

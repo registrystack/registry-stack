@@ -22,7 +22,9 @@ use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{self, Metrics};
 use registry_breg::package::PackageError;
-use registry_breg::postgres::{advise, AdvisorySeverity, BaselineAdvisory, BaselineSettings};
+use registry_breg::postgres::{
+    advise, AdvisorySeverity, BaselineAdvisory, BaselineSettings, RoleMode,
+};
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, with_request_timeout_and_metrics_for_test,
@@ -34,6 +36,17 @@ use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
+
+/// The document refusal with its message set aside, so a table can name it
+/// beside the refusals that carry none.
+const DOCUMENT: RuntimeConfigError = RuntimeConfigError::Document(String::new());
+
+fn refusal(error: RuntimeConfigError) -> RuntimeConfigError {
+    match error {
+        RuntimeConfigError::Document(_) => DOCUMENT,
+        other => other,
+    }
+}
 
 const RAW_PRINCIPAL_CANARY: &str = "breg-v1-25-raw-principal-canary";
 const RECORD_ID_CANARY: &str = "aaaaaaaa-aaaa-4aaa-8aaa-rsv125canary";
@@ -485,16 +498,21 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 19] {
+fn startup_errors() -> [StartupError; 25] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
-        StartupError::RuntimeConfig(RuntimeConfigError::Document),
+        StartupError::RuntimeConfig(DOCUMENT),
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
+        StartupError::DatabaseUninitialized,
+        StartupError::PreLedgerDatabase,
         StartupError::InstanceClaimMismatch,
+        StartupError::RuntimeWriteAuthority,
+        StartupError::RuntimeGrantsMissing,
+        StartupError::RoleModeChanged,
         StartupError::FieldPatternSyntax {
             entity_id: "pattern-private-entity".to_owned(),
             field_id: "pattern-private-field".to_owned(),
@@ -505,6 +523,11 @@ fn startup_errors() -> [StartupError; 19] {
         StartupError::Oidc,
         StartupError::Authentication,
         StartupError::EventDestinations,
+        StartupError::InstanceIdChangedWithPendingDeliveries {
+            stored_source: "instance-source-private-canary".to_owned(),
+            configured_instance_id: "instance-id-private-canary".to_owned(),
+            pending_deliveries: 2,
+        },
         StartupError::ReviewAuthorityMissing {
             authority: "review-authority-private-canary".to_owned(),
             retained_submissions: 2,
@@ -584,6 +607,20 @@ fn expected_operational_event(
             None,
             Some(expected_webhook_state_transition_code(code)),
         ),
+        OperationalEvent::RoleMode(RoleMode::Single) => (
+            OperationalLogLevel::Info,
+            "registry_breg::startup",
+            "Base Registry Engine serves with the migration role (roleMode single); the activation ledger check catches mistakes but not someone holding that credential",
+            None,
+            Some("startup.role_mode.single"),
+        ),
+        OperationalEvent::RoleMode(RoleMode::Split) => (
+            OperationalLogLevel::Info,
+            "registry_breg::startup",
+            "Base Registry Engine serves with a separate runtime role (roleMode split)",
+            None,
+            Some("startup.role_mode.split"),
+        ),
         OperationalEvent::PostgresBaselineAdvisory(advisory) => (
             match advisory.severity() {
                 AdvisorySeverity::Warning => OperationalLogLevel::Warn,
@@ -636,8 +673,29 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::DatabaseUninitialized => {
+            "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
+        }
+        StartupError::PreLedgerDatabase => {
+            "the Registry database predates the activation ledger; run `bregctl apply --package DIR` once to adopt this database into the ledger"
+        }
+        StartupError::DatabaseIdentityMismatch => {
+            "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
+        }
+        StartupError::ActivePackageMismatch => {
+            "the Registry database has not activated the package at package.root; run `bregctl plan --package DIR` then `bregctl apply --package DIR`"
+        }
         StartupError::InstanceClaimMismatch => {
             "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
+        }
+        StartupError::RuntimeWriteAuthority => {
+            "the Registry runtime role can write the activation ledger or the registry state; run `bregctl apply --package DIR` to name the fix"
+        }
+        StartupError::RuntimeGrantsMissing => {
+            "the Registry runtime role is missing grants the active package gives it; run `bregctl apply --package DIR` to reissue them"
+        }
+        StartupError::RoleModeChanged => {
+            "the Registry database was activated for a separate runtime role but the runtime file names one role; run `bregctl apply --package DIR` to activate it for one role"
         }
         StartupError::FieldPatternSyntax { .. } => {
             "a persisted field pattern has invalid PostgreSQL syntax"
@@ -648,6 +706,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
+        StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
+            "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+        }
         StartupError::ReviewBindings | StartupError::ReviewAuthorityMissing { .. } => {
             "the Registry retained review bindings were refused"
         }
@@ -697,6 +758,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             .into_iter()
             .map(OperationalEvent::StoppedWithError),
     );
+    events.push(OperationalEvent::RoleMode(RoleMode::Single));
+    events.push(OperationalEvent::RoleMode(RoleMode::Split));
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
@@ -728,6 +791,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     let output = writer.text();
     assert!(!output.contains("pattern-private-entity"));
     assert!(!output.contains("pattern-private-field"));
+    assert!(!output.contains("instance-source-private-canary"));
+    assert!(!output.contains("instance-id-private-canary"));
     assert_forbidden_values_absent(&output);
     let rendered = output
         .lines()
@@ -954,7 +1019,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     for (member, expected) in [
         (
             format!("metrics:\n  labels:\n    principal: {RAW_PRINCIPAL_CANARY}\n"),
-            RuntimeConfigError::Document,
+            DOCUMENT,
         ),
         (
             format!("telemetry:\n  tracestate: {TRACESTATE_CANARY}\n"),
@@ -964,7 +1029,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         let error =
             parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
                 .expect_err("runtime telemetry authority is absent");
-        assert_eq!(error, expected);
+        assert_eq!(refusal(error.clone()), expected);
         assert_forbidden_values_absent(&format!("{error:?} {error}"));
     }
 
@@ -1363,10 +1428,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -1404,8 +1465,7 @@ operationalTimeouts:
   migrationStatementMilliseconds: 60000
 "#,
         root.display(),
-        root.display(),
-        root.join("trust-anchor.json").display()
+        root.display()
     )
 }
 

@@ -31,6 +31,7 @@ pub struct TestDatabase {
     database: SqlIdentifier,
     migration_raw: Config,
     audit: AuditCapture,
+    activation_audit: AuditCapture,
 }
 
 impl TestDatabase {
@@ -116,6 +117,7 @@ impl TestDatabase {
             database,
             migration_raw,
             audit: AuditCapture::default(),
+            activation_audit: AuditCapture::default(),
         }
     }
 
@@ -125,6 +127,29 @@ impl TestDatabase {
     #[allow(dead_code)] // Not every integration target builds services directly.
     pub fn audit(&self, profile: AuditProfile) -> RegistryAudit {
         self.audit.audit(profile)
+    }
+
+    /// The audit handle a package apply records through, under a keyed
+    /// profile. Its entries land in a capture of their own, so a test that
+    /// reads a service's journal reads no activation entry.
+    #[allow(dead_code)] // Not every integration target applies a package.
+    pub fn activation_audit(&self) -> RegistryAudit {
+        self.activation_audit.audit(
+            AuditProfile::production_from_secret_bytes(vec![7; 32].into())
+                .expect("the activation audit key is valid"),
+        )
+    }
+
+    /// The capture behind [`Self::activation_audit`], for failure injection.
+    #[allow(dead_code)] // Only the activation audit tests inject refusals.
+    pub fn activation_audit_capture(&self) -> &AuditCapture {
+        &self.activation_audit
+    }
+
+    /// The record of every activation audit entry accepted so far.
+    #[allow(dead_code)] // Not every integration target reads activation audit entries.
+    pub fn activation_audit_entries(&self) -> Vec<Value> {
+        self.activation_audit.entries()
     }
 
     /// The capture behind [`Self::audit`], for failure injection.

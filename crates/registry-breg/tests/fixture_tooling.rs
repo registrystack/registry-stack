@@ -1282,7 +1282,7 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "package":{"environment":"local","instanceId":"spatial-fixture-instance","sequence":1,"sourceRevision":"spatial-fixture-source"},
+          "package":{"sourceRevision":"spatial-fixture-source"},
           "entities":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
             "fields":[

@@ -426,7 +426,6 @@ mod live_postgres {
     use tokio_postgres::GenericClient;
 
     const PACKAGE_ID: &str = "spatial-storage-registry";
-    const INSTANCE_ID: &str = "spatial-storage-instance";
     const DATABASE_ID: &str = "spatial-storage-database";
     const PACKAGE_REVISION: &str = "spatial-storage-package-1";
 
@@ -1190,11 +1189,8 @@ mod live_postgres {
             &catalog,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
-                environment: "local",
-                instance_id: INSTANCE_ID,
                 database_id: DATABASE_ID,
-                package_revision: PACKAGE_REVISION,
-                package_sequence: 1,
+                label: PACKAGE_REVISION,
             },
         )
         .await

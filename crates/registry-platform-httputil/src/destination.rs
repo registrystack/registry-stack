@@ -4212,14 +4212,14 @@ mod tests {
 
     #[test]
     fn configured_tls_material_accepts_private_roots_and_client_identity_without_debug_leakage() {
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(vec!["registry.example.test".to_owned()])
                 .expect("generate TLS fixture");
         let certificate_pem = pem("CERTIFICATE", cert.der().as_ref());
         let identity_pem = format!(
             "{}{}",
             certificate_pem,
-            pem("PRIVATE KEY", &key_pair.serialize_der())
+            pem("PRIVATE KEY", &signing_key.serialize_der())
         );
         let material = DestinationTlsMaterial::from_pem(
             Some(certificate_pem.as_bytes()),
@@ -4459,14 +4459,15 @@ mod tests {
         String,
         JoinHandle<Result<(), ()>>,
     ) {
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(vec![subject_alt_name.to_owned()])
                 .expect("generate test certificate");
         let certificate_der = cert.der().clone();
         let request_certificate = reqwest::Certificate::from_der(certificate_der.as_ref())
             .expect("parse test root certificate");
         let certificate_pem = pem("CERTIFICATE", certificate_der.as_ref());
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate_der], private_key)

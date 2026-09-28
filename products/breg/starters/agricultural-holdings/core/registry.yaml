@@ -12,9 +12,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: agricultural-holdings-starter
-  sequence: 1
   sourceRevision: agricultural-holdings-core-0.1.0
 manifestProjection:
   accessProfile: editor

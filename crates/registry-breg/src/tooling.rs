@@ -918,12 +918,12 @@ mod tests {
         }));
     }
 
-    /// A predecessor signed by an engine that emitted fewer indexes
-    /// recompiles with them under this one. Classifying against the signed
+    /// A predecessor packaged by an engine that emitted fewer indexes
+    /// recompiles with them under this one. Classifying against the packaged
     /// migration baseline still reports the index the successor plan creates.
     #[cfg(feature = "runtime")]
     #[test]
-    fn a_signed_baseline_without_an_index_reports_the_index_the_plan_adds() {
+    fn a_packaged_baseline_without_an_index_reports_the_index_the_plan_adds() {
         let registry = compiled(
             "1",
             "internal",
@@ -931,21 +931,21 @@ mod tests {
             r#", "indexes":[{"id":"code-index","fields":["code"]}]"#,
             "principal",
         );
-        let mut signed = crate::package::CompiledRegistryMigrationBaseline::from_compiled(
+        let mut packaged = crate::package::CompiledRegistryMigrationBaseline::from_compiled(
             PACKAGE_REVISION,
             &registry,
         );
-        for entity in signed.entities.values_mut() {
+        for entity in packaged.entities.values_mut() {
             entity.indexes.clear();
         }
-        for names in signed.physical_names.entities.values_mut() {
+        for names in packaged.physical_names.entities.values_mut() {
             names.indexes.clear();
         }
 
         let recompiled = classify_registry_diff(&registry, &registry, PACKAGE_REVISION);
         assert!(recompiled.changes.is_empty());
 
-        let baseline = registry.with_migration_baseline_schema(&signed);
+        let baseline = registry.with_migration_baseline_schema(&packaged);
         assert_class(
             &baseline,
             &registry,
@@ -987,7 +987,7 @@ mod tests {
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
         let project_bytes = format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"temporal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"instance-under-test","sequence":1,"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"consumer","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Temporal Registry Catalog","publisher":{{"id":"temporal-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"temporal-registry-service","title":"Temporal Registry Catalog"}},"datasets":[{{"id":"temporal-registry","title":"Temporal Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"temporal-registry-data-service","title":"Temporal Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["temporal-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"temporal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"consumer","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Temporal Registry Catalog","publisher":{{"id":"temporal-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"temporal-registry-service","title":"Temporal Registry Catalog"}},"datasets":[{{"id":"temporal-registry","title":"Temporal Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"temporal-registry-data-service","title":"Temporal Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["temporal-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
         );
         let project = parse_project_json(project_bytes.as_bytes()).expect("project parses");
         compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")
@@ -1006,7 +1006,7 @@ mod tests {
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
         let project_bytes = format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"{version}","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"instance-under-test","sequence":1,"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"{version}","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
         );
         let project = parse_project_json(project_bytes.as_bytes()).expect("project parses");
         compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")

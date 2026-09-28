@@ -94,7 +94,7 @@ python3 products/breg/acceptance/farmer-landholding-evidence/tests/run-live.py \
 The runner starts the real Evidence binary with a synthetic HTTP source and
 imports its published contracts into a temporary project copy. It creates its
 own database roles, schema-test database and live database. It drives the native
-schema-test receipt, external Ed25519 signing, package publication, apply,
+schema-test receipt, package publication, apply,
 verification and a live BREG HTTP process. The journey checks canonical stored
 fields, active/inactive decisions, receipt replay, denied direct create and
 expiry maintenance. Its databases and roles are removed on exit; owner-only

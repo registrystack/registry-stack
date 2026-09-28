@@ -971,11 +971,8 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
         &registry,
         RegistryStateTestIdentity {
             package_id: "change-request-retention",
-            environment: "local",
-            instance_id: "change-request-retention-instance",
             database_id: "change-request-retention-database",
-            package_revision: "package-1",
-            package_sequence: 1,
+            label: "package-1",
         },
     )
     .await
@@ -1161,11 +1158,8 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         &registry,
         RegistryStateTestIdentity {
             package_id: "change-request-retention",
-            environment: "local",
-            instance_id: "change-request-retention-instance",
             database_id: "change-request-retention-database",
-            package_revision: "package-1",
-            package_sequence: 1,
+            label: "package-1",
         },
     )
     .await

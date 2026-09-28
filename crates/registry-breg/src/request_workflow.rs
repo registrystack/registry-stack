@@ -1802,13 +1802,18 @@ impl ContractFingerprint {
     }
 }
 
+/// The activation a proposal was prepared under: its activation id, or the
+/// package digest a proposal prepared before the database kept an activation
+/// ledger recorded.
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PackageFingerprint(String);
 
 impl PackageFingerprint {
     pub fn new(value: impl Into<String>) -> Result<Self, WorkflowError> {
-        Ok(Self(ValidatedToken::new(value, TokenKind::Digest)?.0))
+        let value = value.into();
+        Self::check(&value)?;
+        Ok(Self(value))
     }
 
     pub fn as_str(&self) -> &str {
@@ -1816,8 +1821,21 @@ impl PackageFingerprint {
     }
 
     fn validate(&self) -> Result<(), WorkflowError> {
-        ValidatedToken::new(self.0.clone(), TokenKind::Digest).map(|_| ())
+        Self::check(&self.0)
     }
+
+    fn check(value: &str) -> Result<(), WorkflowError> {
+        if is_activation_id(value) {
+            return Ok(());
+        }
+        ValidatedToken::new(value, TokenKind::Digest).map(|_| ())
+    }
+}
+
+/// An activation id is a UUID in its lowercase hyphenated form, the form the
+/// database renders `activation_id::text` in.
+fn is_activation_id(value: &str) -> bool {
+    uuid::Uuid::try_parse(value).is_ok_and(|parsed| parsed.hyphenated().to_string() == value)
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -2502,6 +2520,25 @@ mod source_owned_review_tests {
         };
         AcceptedReviewEvidence::from_approved("casework-main", &accepted, &result)
             .expect("accepted evidence")
+    }
+
+    #[test]
+    fn originating_package_is_an_activation_id_or_a_pre_ledger_digest() {
+        PackageFingerprint::new("3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b01")
+            .expect("activation id is an originating package");
+        PackageFingerprint::new(format!("sha256:{}", "a".repeat(64)))
+            .expect("a pre-ledger package digest is an originating package");
+        for refused in [
+            "",
+            "package-1",
+            "3B0C7A52-5D1E-4F6A-8B9C-0D1E2F3A4B01",
+            "3b0c7a525d1e4f6a8b9c0d1e2f3a4b01",
+        ] {
+            assert!(matches!(
+                PackageFingerprint::new(refused),
+                Err(WorkflowError::InvalidDigest)
+            ));
+        }
     }
 
     #[test]

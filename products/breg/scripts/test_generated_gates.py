@@ -117,6 +117,60 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertNotIn("BREG_TEST_DATABASE_URL=", script)
         self.assertNotIn("Authorization: Bearer", script)
 
+    def test_example_workflows_publish_unsigned_packages(self) -> None:
+        product = SCRIPT_DIR.parent
+        workflows = [
+            SCRIPT_DIR / "test-historical-workflow.sh",
+            SCRIPT_DIR / "test-change-request-examples.sh",
+            SCRIPT_DIR / "test-promotion.sh",
+            product / "acceptance/person-registration-rhai/tests/live_registration.py",
+            product / "acceptance/farmer-landholding-evidence/tests/live_registration.py",
+            product / "acceptance/farmer-landholding-evidence/tests/run-live.py",
+        ]
+        for workflow in workflows:
+            source = workflow.read_text(encoding="utf-8")
+            for retired in (
+                "--signatures",
+                "--signature-threshold",
+                "--signature-key-id",
+                "--database-id",
+                "--baseline-runtime-config",
+                "signing-input.json",
+                "trustAnchorPath",
+                "activeRevision",
+                "activeSequence",
+                "compilerSourceRevision",
+            ):
+                with self.subTest(workflow=workflow.name, retired=retired):
+                    self.assertNotIn(retired, source)
+
+    def test_promotion_workflow_moves_one_package_through_two_environments(self) -> None:
+        promotion = SCRIPT_DIR / "test-promotion.sh"
+        self.assertTrue(os.access(promotion, os.X_OK))
+        source = promotion.read_text(encoding="utf-8")
+        for marker in (
+            "BREG_TEST_TLS_CA_PEM_PATH",
+            'if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]',
+            "registry_prepare_cargo_runtime",
+            "plan --runtime-config",
+            "--initial",
+            "status --runtime-config",
+            "--baseline-package",
+            "--reviewed-migrations",
+            "--backup",
+            "generate evidence-source",
+            "registryRevision",
+            "apply.backup_evidence.refused",
+            "apply.package.refused",
+            "apply.database.identity_mismatch",
+            "has not activated the package at package.root",
+            "catalog_digest",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+        workflow = (SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("run: products/breg/scripts/test-promotion.sh", workflow)
+
     def test_adopter_workflow_uses_public_binaries_database_and_recovery(self) -> None:
         adopter_gate = (SCRIPT_DIR / "test-adopter-workflow.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", adopter_gate)
@@ -164,8 +218,6 @@ class GeneratedGateTests(unittest.TestCase):
             "--production",
             "compare-generated-tree.py",
             "schemaFingerprint",
-            "signing-input.json",
-            "--signatures",
             "missing-migration-url",
             "apply.database_configuration.refused",
             "author refusal changed the production database state",
@@ -183,11 +235,19 @@ class GeneratedGateTests(unittest.TestCase):
             "LOCK TABLE",
             "pg_terminate_backend",
             "apply.migration.failed",
-            "maintenance_status",
-            "maintenance_target_revision",
+            "plan --runtime-config",
+            "status --runtime-config",
+            "assert_plan",
+            "assert_ledger",
+            "resumes",
+            "maintenanceTargetPackageDigest",
+            "--baseline-package",
+            "--reviewed-migrations",
             "restricted successor field was disclosed",
         ):
             self.assertIn(marker, adopter_gate)
+        self.assertNotIn("--from-release", adopter_gate)
+        self.assertNotIn("--signature", adopter_gate)
         self.assertNotIn('"psql", admin, "-d", database', adopter_gate)
         self.assertNotIn('"scope": "registry:records"', adopter_gate)
 

@@ -69,11 +69,8 @@ async fn facility_registration_transfer_and_events_use_governed_actions() {
         &registry,
         RegistryStateTestIdentity {
             package_id: REGISTRY_ID,
-            environment: "acceptance",
-            instance_id: "facility-registry-actions-fixture",
             database_id: "facility-registry-actions-test",
-            package_revision: "facility-actions-1",
-            package_sequence: 1,
+            label: "facility-actions-1",
         },
     )
     .await
@@ -486,6 +483,7 @@ fn build_app(
         pool,
         registry.clone(),
         identity.clone(),
+        "facility-registry-actions-fixture",
         lock_key,
         Duration::from_secs(2),
         audit,
@@ -500,7 +498,7 @@ fn build_app(
         HttpService::new(
             registry.clone(),
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -551,8 +549,6 @@ fn event_destinations(
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600))
             .expect("key is private");
     }
-    let anchor = root.join("trust-anchor.json");
-    std::fs::write(&anchor, "{}").expect("unread anchor placeholder");
     let config = json!({
         "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1",
         "kind":"BRegRuntimeConfig",
@@ -564,7 +560,7 @@ fn event_destinations(
             "pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},
             "roles":{"migration":"registry_migration","runtime":"registry_runtime"}
         },
-        "package":{"root":root,"trustAnchorPath":anchor,"compilerSourceRevision":"fixture-1", "activeRevision":format!("sha256:{}", "a".repeat(64)),"activeSequence":1},
+        "package":{"root":root},
         "authentication":{
             "oidc":{
                 "issuer":"https://issuer.example", "audience":AUDIENCE, "allowedAlgorithm":"EdDSA", "accessTokenType":"JWT",

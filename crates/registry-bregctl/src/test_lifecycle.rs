@@ -41,9 +41,8 @@ pub(crate) struct TestLifecycleRequest<'a> {
 
 #[derive(Debug)]
 pub(crate) struct TestLifecycleOutcome {
-    pub package_revision: String,
+    pub registry_revision: String,
     pub schema_fingerprint: String,
-    pub signing_input_sha256: String,
     pub successful_journey_ids: Vec<String>,
     pub receipt_sha256: String,
     pub receipt_bytes: usize,
@@ -63,7 +62,6 @@ pub(crate) enum TestLifecycleError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
     Candidate,
-    CandidateBinding { path: &'static str },
     ReviewFingerprint,
     Rehearsal(Box<MigrationRehearsalError>),
     Journeys { message: String },
@@ -158,7 +156,6 @@ pub(crate) fn run(
     request: TestLifecycleRequest<'_>,
 ) -> Result<TestLifecycleOutcome, TestLifecycleError> {
     let config = load_test_runtime_config(request.runtime_config)?;
-    request.candidate.validate_runtime_binding(&config)?;
     request
         .candidate
         .prevalidate()
@@ -217,8 +214,7 @@ pub(crate) fn run(
             .map_err(|error| TestLifecycleError::Rehearsal(Box::new(error)))?
             .baseline_fingerprint_drift;
     }
-    let signing_input_sha256 = sha256(prepared.canonical_signed_bytes());
-    let package_revision = prepared.package_revision().to_owned();
+    let registry_revision = prepared.registry().revision().to_owned();
     let receipt = runtime.block_on(async {
         let database = startup::prepare_schema_test_database(&config, &prepared)
             .await
@@ -233,9 +229,8 @@ pub(crate) fn run(
         .map_err(|_| TestLifecycleError::Execution)?;
     publish_receipt(&request.output, &receipt_bytes)?;
     Ok(TestLifecycleOutcome {
-        package_revision,
+        registry_revision,
         schema_fingerprint,
-        signing_input_sha256,
         successful_journey_ids,
         receipt_sha256: sha256(&receipt_bytes),
         receipt_bytes: receipt_bytes.len(),

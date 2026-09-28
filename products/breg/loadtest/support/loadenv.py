@@ -27,8 +27,6 @@ DATABASE_NAME = "breg_dev"
 DEV_POOL_MAX = 4
 BUILD_PROFILES = ("debug", "release")
 PROJECT_REPLACEMENTS = {
-    "  environment: acceptance": "  environment: local",
-    "  instanceId: business-establishments-acceptance": "  instanceId: business-establishments-loadtest",
     "  sourceRevision: business-establishments-acceptance-0.1.0": "  sourceRevision: business-establishments-loadtest-0.1.0",
 }
 DEV_CLIENTS = """version: 1

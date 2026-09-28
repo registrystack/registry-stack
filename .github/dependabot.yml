@@ -26,6 +26,43 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+      # jsonwebtoken 11 sits under every token-verifying path (#1684).
+      - dependency-name: "jsonwebtoken"
+        update-types:
+          - "version-update:semver-major"
+      # jsonschema moves once, to the current release, across every crate (#1655).
+      - dependency-name: "jsonschema"
+        update-types:
+          - "version-update:semver-major"
+      # The RustCrypto and rand generation moves together: ed25519-dalek 3,
+      # p256 0.14, pkcs8 0.11, and rand/rand_core/rand_chacha 0.10 (#1695).
+      - dependency-name: "ed25519-dalek"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "p256"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "pkcs8"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "rand"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "rand_core"
+        update-types:
+          - "version-update:semver-major"
+      # rand_chacha and fake move with the rand 0.10 generation; fake is also
+      # pinned exactly so evidencectl source mocks stay deterministic (#1695).
+      - dependency-name: "rand_chacha"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "fake"
+        update-types:
+          - "version-update:semver-major"
+      # ureq 3 changes proxy and redirect defaults in evidencectl (#1696).
+      - dependency-name: "ureq"
+        update-types:
+          - "version-update:semver-major"
 
   # BReg WASM handler SDK: guest authoring crates, the build-time
   # pre-initializer, and the admission-proof harness. A standalone workspace
@@ -69,6 +106,34 @@ updates:
           - "version-update:semver-major"
           - "version-update:semver-minor"
           - "version-update:semver-patch"
+    # The SDK's path dependencies on workspace crates inherit the root
+    # workspace's versions, so the root entry's deferred majors are deferred
+    # here too, under the same tickets.
+      # jsonwebtoken 11 sits under every token-verifying path (#1684).
+      - dependency-name: "jsonwebtoken"
+        update-types:
+          - "version-update:semver-major"
+      # jsonschema moves once, to the current release, across every crate (#1655).
+      - dependency-name: "jsonschema"
+        update-types:
+          - "version-update:semver-major"
+      # The RustCrypto and rand generation moves together: ed25519-dalek 3,
+      # p256 0.14, pkcs8 0.11, and rand/rand_core/rand_chacha 0.10 (#1695).
+      - dependency-name: "ed25519-dalek"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "p256"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "pkcs8"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "rand"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "rand_core"
+        update-types:
+          - "version-update:semver-major"
 
   # Remaining standalone cargo workspaces: the Zed editor extension and the
   # cargo-fuzz targets. Each has its own Cargo.lock outside the root
@@ -92,13 +157,41 @@ updates:
       cargo-major:
         update-types:
           - major
+    # The platform fuzz targets path-depend on the platform crates, so the
+    # root entry's deferred majors are deferred here too, under the same
+    # tickets.
+    ignore:
+      # jsonwebtoken 11 sits under every token-verifying path (#1684).
+      - dependency-name: "jsonwebtoken"
+        update-types:
+          - "version-update:semver-major"
+      # The RustCrypto and rand generation moves together: ed25519-dalek 3,
+      # p256 0.14, pkcs8 0.11, and rand/rand_core/rand_chacha 0.10 (#1695).
+      - dependency-name: "ed25519-dalek"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "p256"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "pkcs8"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "rand"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "rand_core"
+        update-types:
+          - "version-update:semver-major"
+
+  # The npm and GitHub Actions entries run monthly; the cargo and docker
+  # entries stay weekly. A schedule governs version updates only: Dependabot
+  # security updates open when an alert is raised, whatever the interval.
 
   # Docs site dependencies.
   - package-ecosystem: npm
     directory: "/docs/site"
     schedule:
-      interval: weekly
-      day: wednesday
+      interval: monthly
       time: "05:30"
       timezone: Etc/UTC
     open-pull-requests-limit: 1
@@ -110,6 +203,16 @@ updates:
       npm-major:
         update-types:
           - major
+    ignore:
+      # astro-mermaid accepts only mermaid 10 and 11, and mermaid 12 re-lays
+      # out existing diagrams (#1697).
+      - dependency-name: "mermaid"
+        update-types:
+          - "version-update:semver-major"
+      # @astrojs/check accepts only TypeScript 5 and 6 (#1698).
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
 
   # Unified product client Node.js bindings: thin napi-rs wrappers, each with
   # its own package-lock.json. optionalDependencies seen in these lockfiles
@@ -127,8 +230,7 @@ updates:
       - "/crates/registry-relay-client-node"
       - "/crates/registry-stack-client-node"
     schedule:
-      interval: weekly
-      day: wednesday
+      interval: monthly
       time: "05:45"
       timezone: Etc/UTC
     open-pull-requests-limit: 1
@@ -152,8 +254,7 @@ updates:
   - package-ecosystem: npm
     directory: "/editors/vscode"
     schedule:
-      interval: weekly
-      day: wednesday
+      interval: monthly
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 1
@@ -170,13 +271,23 @@ updates:
     # Move both together when the floor is raised.
     ignore:
       - dependency-name: "@types/vscode"
+      # TypeScript 7 needs tsconfig changes before the extension type-checks
+      # (#1667).
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
+      # @types/node tracks the Node.js runtime the extension targets (the
+      # esbuild bundle targets node20 for the engines.vscode floor), not the
+      # latest Node.js; move it deliberately with that floor.
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
 
   # Architecture diagram site (LikeC4) dependencies.
   - package-ecosystem: npm
     directory: "/docs/architecture"
     schedule:
-      interval: weekly
-      day: wednesday
+      interval: monthly
       time: "06:15"
       timezone: Etc/UTC
     open-pull-requests-limit: 1
@@ -193,8 +304,7 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-      day: wednesday
+      interval: monthly
       time: "07:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 1

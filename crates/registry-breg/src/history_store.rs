@@ -45,6 +45,10 @@ pub(crate) async fn install_history_schema_store(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), HistoryStoreError> {
+    let revoke_grantees = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+        .await
+        .map_err(|_| HistoryStoreError::Unavailable)?
+        .with_public();
     migration
         .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_history_schemas (
@@ -60,9 +64,9 @@ pub(crate) async fn install_history_schema_store(
                      ),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
-             REVOKE ALL ON registry_internal.registry_history_schemas FROM PUBLIC, {};
+             REVOKE ALL ON registry_internal.registry_history_schemas FROM {};
              GRANT SELECT ON registry_internal.registry_history_schemas TO {};",
-            quoted_identifier(runtime_role.as_str()),
+            revoke_grantees,
             quoted_identifier(runtime_role.as_str()),
         ))
         .await

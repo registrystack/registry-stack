@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use chrono::Utc;
-use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use registry_evidence::bundle::{Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::{
     AcquisitionPosture, DeclaredUnresolvedProblem, FixedRequest, HttpMethod, OutboundTlsConfig,
@@ -689,7 +689,7 @@ async fn spawn_private_ca_tls_server(
         .expect("server certificate parameters are valid");
     let server_key = KeyPair::generate().expect("server key generates");
     let server_certificate = server_parameters
-        .signed_by(&server_key, &ca_certificate, &ca_key)
+        .signed_by(&server_key, &Issuer::from_params(&ca_parameters, &ca_key))
         .expect("private CA signs server certificate");
     let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
     let server_config = ServerConfig::builder()
@@ -2230,9 +2230,9 @@ async fn basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_reda
 
 async fn assert_oauth_success_matrix_case(placement: &str, maximum_cache_seconds: u64) {
     let server = MockServer::start().await;
-    let client_id = format!("client-id-{}", ulid::Ulid::new());
-    let client_secret = format!("client-secret-{}", ulid::Ulid::new());
-    let access_token = format!("access-token-{}", ulid::Ulid::new());
+    let client_id = format!("client-id-{}", ulid::Ulid::generate());
+    let client_secret = format!("client-secret-{}", ulid::Ulid::generate());
+    let access_token = format!("access-token-{}", ulid::Ulid::generate());
     let expected_token_requests: usize = if maximum_cache_seconds == 0 { 2 } else { 1 };
 
     Mock::given(method("POST"))
@@ -2359,7 +2359,7 @@ async fn oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounde
 async fn oauth_assumed_lifetime_caches_an_omitted_provider_lifetime_and_stays_clamped() {
     for (maximum_cache_seconds, expected_token_requests) in [(60_u64, 1_u64), (0, 2)] {
         let server = MockServer::start().await;
-        let access_token = format!("access-token-{}", ulid::Ulid::new());
+        let access_token = format!("access-token-{}", ulid::Ulid::generate());
         Mock::given(method("POST"))
             .and(path("/token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -2446,9 +2446,9 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
 
     for case_id in declared {
         let server = MockServer::start().await;
-        let client_id = format!("client-id-{}", ulid::Ulid::new());
-        let client_secret = format!("client-secret-{}", ulid::Ulid::new());
-        let access_token = format!("access-token-{}", ulid::Ulid::new());
+        let client_id = format!("client-id-{}", ulid::Ulid::generate());
+        let client_secret = format!("client-secret-{}", ulid::Ulid::generate());
+        let access_token = format!("access-token-{}", ulid::Ulid::generate());
         let response = match case_id.as_str() {
             "transport-connection-failure" => None,
             "token-success" => Some(ResponseTemplate::new(200).set_body_json(json!({

@@ -1038,7 +1038,7 @@ fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
     );
     let unrelated = compiled_request(change_request_correction_project(
         "change-request-fingerprint",
-        ",\"package\":{\"environment\":\"local\",\"instanceId\":\"local\",\"sequence\":7,\"sourceRevision\":\"unrelated\"}",
+        ",\"package\":{\"sourceRevision\":\"unrelated\"}",
         r#"{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#,
         "internal",
         "internal",
@@ -2442,11 +2442,9 @@ fn production_refuses_incomplete_authoring_closure() {
         .iter()
         .find(|diagnostic| diagnostic.code == "package.identity.required")
         .expect("the missing package identity is reported");
-    for key in ["environment", "instanceId", "sequence", "sourceRevision"] {
-        assert!(
-            identity.message.contains(key),
-            "{key} is listed: {identity:?}"
-        );
+    assert!(identity.message.contains("sourceRevision"), "{identity:?}");
+    for retired in ["environment", "instanceId", "sequence"] {
+        assert!(!identity.message.contains(retired), "{identity:?}");
     }
 
     let findings = compile_project(&incomplete, &asset_modules(), CompileProfile::Authoring)
@@ -2457,11 +2455,102 @@ fn production_refuses_incomplete_authoring_closure() {
         .iter()
         .find(|diagnostic| diagnostic.code == "package.identity.missing")
         .expect("the absent package identity is a finding under authoring");
-    for key in ["environment", "instanceId", "sequence", "sourceRevision"] {
-        assert!(
-            missing.message.contains(key),
-            "{key} is listed: {missing:?}"
+    assert!(missing.message.contains("sourceRevision"), "{missing:?}");
+    for retired in ["environment", "instanceId", "sequence"] {
+        assert!(!missing.message.contains(retired), "{missing:?}");
+    }
+}
+
+#[test]
+fn registry_revision_is_a_function_of_the_compiled_model_only() {
+    let compile = |project: &registry_breg::contract::RegistryProject| {
+        compile_project(project, &asset_modules(), CompileProfile::Authoring)
+            .expect("the acceptance project compiles")
+    };
+    let declared = asset_project();
+    let mut relabelled = declared.clone();
+    let identity = relabelled
+        .package
+        .as_mut()
+        .expect("the acceptance project declares a package identity");
+    identity.source_revision = "another-source-revision".to_owned();
+    let mut undeclared = declared.clone();
+    undeclared.package = None;
+
+    let baseline = compile(&declared);
+    for other in [compile(&relabelled), compile(&undeclared)] {
+        assert_eq!(other.revision(), baseline.revision());
+        assert_eq!(
+            other
+                .artifacts()
+                .get("compiled/effective-model.json")
+                .expect("effective model")
+                .bytes,
+            baseline
+                .artifacts()
+                .get("compiled/effective-model.json")
+                .expect("effective model")
+                .bytes
         );
+    }
+    let effective: Value = serde_json::from_slice(
+        &baseline
+            .artifacts()
+            .get("compiled/effective-model.json")
+            .expect("effective model")
+            .bytes,
+    )
+    .expect("effective model is JSON");
+    assert!(effective.get("package").is_none());
+}
+
+#[test]
+fn retired_package_identity_keys_are_refused_with_their_replacement() {
+    for (key, value, code, replacement) in [
+        (
+            "environment",
+            json!("local"),
+            "package.environment.removed",
+            "identity.environment",
+        ),
+        (
+            "instanceId",
+            json!("local-instance"),
+            "package.instance_id.removed",
+            "identity.instanceId",
+        ),
+        (
+            "sequence",
+            json!(1),
+            "package.sequence.removed",
+            "migrationPlan.fromPackageDigest",
+        ),
+    ] {
+        let mut project = json!({
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "package":{"sourceRevision":"source"},
+          "entities":[]
+        });
+        project["package"][key] = value;
+        let bytes = serde_json::to_vec(&project).expect("project serializes");
+        for failure in [
+            parse_project_json(&bytes).expect_err("a retired package key is refused"),
+            parse_project_yaml(&bytes).expect_err("a retired package key is refused in YAML"),
+        ] {
+            let diagnostic = failure
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("{key} has a removal diagnostic: {failure:?}"));
+            assert_eq!(diagnostic.path, format!("project.package.{key}"));
+            assert!(
+                diagnostic.message.contains(replacement),
+                "{}",
+                diagnostic.message
+            );
+        }
     }
 }
 
@@ -2473,7 +2562,7 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
               "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "package":{"environment":"local","instanceId":"local-instance","sequence":1,"sourceRevision":"source"},
+              "package":{"sourceRevision":"source"},
               "entities":[{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
                 "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
@@ -2970,9 +3059,6 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
         project
             .package
             .get_or_insert_with(|| PackageIdentitySource {
-                environment: "local".to_owned(),
-                instance_id: format!("{domain}-instance"),
-                sequence: 1,
                 source_revision: "acceptance-fixture-source".to_owned(),
             });
         let mut modules = Vec::new();
@@ -6876,7 +6962,7 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
           "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "package":{"environment":"production","instanceId":"neutral-instance","sequence":1,"sourceRevision":"revision-1"},
+          "package":{"sourceRevision":"revision-1"},
           "modules":[{"id":"missing-module","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],
           "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create_only","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
@@ -6905,7 +6991,7 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
     let project_source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
       "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
-      "package":{"environment":"production","instanceId":"neutral-instance","sequence":1,"sourceRevision":"revision-1"},
+      "package":{"sourceRevision":"revision-1"},
       "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"id":"neutral-authority","name":"Neutral Publisher"}},"publicService":{"id":"neutral-service","title":"Neutral service"},"datasets":[{"id":"neutral","title":"Neutral Dataset"}],"dataServices":[{"id":"neutral-api","title":"Neutral API","endpointUrl":"https://neutral.example.test","servesDatasets":["neutral"]}]},
       "modules":[{"id":"core","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]
     }"#;

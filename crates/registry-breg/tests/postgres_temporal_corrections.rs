@@ -62,11 +62,8 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
         &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
-            environment: "local",
-            instance_id: "temporal-corrections-instance",
             database_id: "temporal-corrections-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -337,6 +334,7 @@ fn mutation_router(
         pool,
         registry.clone(),
         identity.clone(),
+        "temporal-corrections-instance",
         lock_key,
         Duration::from_secs(2),
         profile,
@@ -349,7 +347,7 @@ fn mutation_router(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             records,

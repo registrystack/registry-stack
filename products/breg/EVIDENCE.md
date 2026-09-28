@@ -69,7 +69,7 @@ prepares a dedicated source client and a policy-only successor package, imports
 the generated source contract, copies its credential privately, and configures
 local endpoints and paths from the retained session. It creates no business
 question. Add your authored questions, run fixtures, and restart BReg to activate
-the successor over the retained records. The package revision advances; records,
+the successor over the retained records. The active package changes; records,
 audit history, and existing client identities remain.
 
 The reviewed `evidence/organization-selection.yaml` and `evidence/named-starter/`
@@ -148,7 +148,7 @@ and reached derived behavior. A reached derived SQL file is fingerprinted as
 one implementation, together with its referenced source schemas and row
 visibility. An unused derived computation or unrelated field on a simple
 stored-field lookup does not change that consumed identity. The complete
-registry package revision is separate export provenance.
+`registryRevision` is separate export provenance.
 
 Changing a record's values does not require another export. Changing consumed
 lookup behavior does. Build and test the Evidence candidate against the exact

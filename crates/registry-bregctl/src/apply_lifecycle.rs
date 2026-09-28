@@ -3,16 +3,19 @@
 
 use std::path::{Path, PathBuf};
 
+use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    apply_verified_package, confirm_active_package, AppliedFieldEncryptionKeySource,
-    ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
-    DestructiveBackupEvidence, MigrationError,
+    apply_verified_package, bind_active_package, operator_reference_is_well_formed,
+    plan_verified_package, read_activation_status, read_recorded_registry_state,
+    successor_plan_is_empty, ActivationDeployment, ActivationPlan, ActivationStatus,
+    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, RecordedRegistryState,
 };
 use registry_breg::package::{
-    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPredecessorPackage,
+    load_package, MigrationInspectionSummary, PackageError, VerifiedPredecessorPackage,
 };
-use registry_breg::postgres::ExpectedRegistryIdentity;
+use registry_breg::postgres::ConnectionConfig;
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 
 #[derive(Debug)]
@@ -22,6 +25,7 @@ pub(crate) enum ApplyLifecycleError {
     TargetPackagePath,
     CurrentPackage(PackageError),
     TargetPackage(PackageError),
+    Uninitialized,
     EventDestinations,
     FieldEncryptionConfiguration,
     FieldEncryptionCustody,
@@ -29,7 +33,16 @@ pub(crate) enum ApplyLifecycleError {
     TimeoutConfiguration,
     BackupArgument,
     Runtime,
+    Audit,
     Apply(MigrationError),
+}
+
+/// Whether the lifecycle activates the package or only runs the checks an
+/// activation runs, writing nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LifecycleMode {
+    Apply,
+    Plan,
 }
 
 pub(crate) struct ApplyLifecycleRequest<'a> {
@@ -38,26 +51,146 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
     pub initial: bool,
     pub backups: &'a [String],
     pub acknowledge_retired_audit_discard: bool,
+    pub operator_reference: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApplyLifecycleActivation {
     Initial,
     Successor,
-    AlreadyActive,
+    RoleChange,
+    Adopted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyLifecycleOutcome {
-    pub package_revision: String,
+    pub package_digest: String,
     pub schema_fingerprint: String,
-    pub package_sequence: i64,
+    pub activation_id: String,
     pub activation: ApplyLifecycleActivation,
+}
+
+/// What `bregctl plan` reports: the activation `bregctl apply` would make,
+/// after the checks it runs passed and were rolled back.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlanLifecycleOutcome {
+    pub package_digest: String,
+    pub registry_revision: String,
+    pub active_package_digest: Option<String>,
+    pub plan: ActivationPlan,
+    pub migration: MigrationInspectionSummary,
+}
+
+pub(crate) struct PlanLifecycleRequest<'a> {
+    pub runtime_config: &'a Path,
+    pub package: &'a Path,
+    pub backups: &'a [String],
 }
 
 pub(crate) fn run(
     request: ApplyLifecycleRequest<'_>,
 ) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
+    match execute(request, LifecycleMode::Apply)? {
+        Executed::Applied(outcome) => Ok(outcome),
+        Executed::Planned(_) => Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed)),
+    }
+}
+
+/// Runs every check `run` would for the same package and runtime
+/// configuration, including the database checks inside transactions it rolls
+/// back, and writes nothing: no ledger entry, no maintenance state, and no
+/// audit entry. It holds the apply lock while it checks, as an apply would.
+pub(crate) fn plan(
+    request: PlanLifecycleRequest<'_>,
+) -> Result<PlanLifecycleOutcome, ApplyLifecycleError> {
+    match execute(
+        ApplyLifecycleRequest {
+            runtime_config: request.runtime_config,
+            package: request.package,
+            initial: false,
+            backups: request.backups,
+            acknowledge_retired_audit_discard: false,
+            operator_reference: None,
+        },
+        LifecycleMode::Plan,
+    )? {
+        Executed::Planned(outcome) => Ok(outcome),
+        Executed::Applied(_) => Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed)),
+    }
+}
+
+/// Reads what the database records about its activations, as the migration
+/// role, without the apply lock. `None` means it was never activated.
+pub(crate) fn status(
+    runtime_config: &Path,
+) -> Result<Option<ActivationStatus>, ApplyLifecycleError> {
+    if !runtime_config.is_absolute() {
+        return Err(ApplyLifecycleError::RuntimeConfigPath);
+    }
+    let config = load_runtime_config(runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
+    let access = DatabaseAccess::resolve(&config)?;
+    access
+        .runtime
+        .block_on(read_activation_status(
+            &access.connection,
+            config.database().roles().migration(),
+            access.timeouts,
+        ))
+        .map_err(ApplyLifecycleError::Apply)
+}
+
+enum Executed {
+    Applied(ApplyLifecycleOutcome),
+    Planned(PlanLifecycleOutcome),
+}
+
+struct DatabaseAccess {
+    connection: ConnectionConfig,
+    timeouts: ApplyTimeouts,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl DatabaseAccess {
+    fn resolve(config: &RuntimeConfig) -> Result<Self, ApplyLifecycleError> {
+        let connection = config
+            .migration_database_connection_config()
+            .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
+        let timeouts = ApplyTimeouts::new(
+            config.operational_timeouts().migration_lock,
+            config.operational_timeouts().migration_statement,
+        )
+        .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| ApplyLifecycleError::Runtime)?;
+        Ok(Self {
+            connection,
+            timeouts,
+            runtime,
+        })
+    }
+}
+
+/// Whether a plan reports the package as the database's first activation:
+/// the database was never activated, or its initial activation is
+/// unfinished, which the next `apply --initial` resumes. A database a
+/// release before the activation ledger installed is adopted instead.
+fn plans_initial_activation(
+    recorded: Result<Option<RecordedRegistryState>, MigrationError>,
+) -> Result<bool, ApplyLifecycleError> {
+    match recorded {
+        Ok(None) => Ok(true),
+        Ok(Some(recorded)) => Ok(!recorded.activation_applied),
+        Err(MigrationError::PreLedgerDatabase) => Ok(false),
+        Err(error) => Err(ApplyLifecycleError::Apply(error)),
+    }
+}
+
+fn execute(
+    request: ApplyLifecycleRequest<'_>,
+    mode: LifecycleMode,
+) -> Result<Executed, ApplyLifecycleError> {
     if !request.runtime_config.is_absolute() {
         return Err(ApplyLifecycleError::RuntimeConfigPath);
     }
@@ -65,46 +198,61 @@ pub(crate) fn run(
         return Err(ApplyLifecycleError::TargetPackagePath);
     }
     let backup_arguments = parse_backup_arguments(request.backups)?;
+    if request
+        .operator_reference
+        .is_some_and(|reference| !operator_reference_is_well_formed(reference))
+    {
+        return Err(ApplyLifecycleError::Apply(
+            MigrationError::OperatorReference,
+        ));
+    }
     let config =
         load_runtime_config(request.runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
 
-    let current_package = if request.initial {
+    let target = load_package(request.package, &config.package_load_context())
+        .map_err(ApplyLifecycleError::TargetPackage)?;
+    let identity = config.identity();
+    let deployment = ActivationDeployment::new(
+        identity.environment(),
+        identity.instance_id(),
+        identity.database_id(),
+    );
+    // A plan learns from the database whether the package would be the first,
+    // so it resolves database authority first; an apply is told by --initial
+    // and checks everything the package and the runtime file decide before
+    // any database authority is resolved.
+    let mut access = None;
+    let initial = match mode {
+        LifecycleMode::Apply => request.initial,
+        LifecycleMode::Plan => {
+            let resolved = DatabaseAccess::resolve(&config)?;
+            let recorded = resolved.runtime.block_on(read_recorded_registry_state(
+                &resolved.connection,
+                &target.manifest().package_id,
+                config.database().roles().migration(),
+                resolved.timeouts,
+            ));
+            let initial = plans_initial_activation(recorded)?;
+            access = Some(resolved);
+            initial
+        }
+    };
+    let current_package = if initial {
         None
     } else {
+        // An empty successor plan is a property of the package alone.
+        if successor_plan_is_empty(&target) {
+            return Err(ApplyLifecycleError::Apply(MigrationError::EmptyPlan));
+        }
         Some(
             config
                 .load_active_predecessor_package()
                 .map_err(ApplyLifecycleError::CurrentPackage)?,
         )
     };
-    let current_identity = current_package
-        .as_ref()
-        .map(expected_identity)
-        .transpose()?;
     let current_history_descriptor = current_package
         .as_ref()
         .map(VerifiedPredecessorPackage::history_schema_descriptor);
-    let target_intent = match current_identity.as_ref() {
-        Some(current) => PackageIntent::Activation {
-            active_revision: &current.package_revision,
-            active_sequence: u64::try_from(current.package_sequence)
-                .map_err(|_| ApplyLifecycleError::TargetPackage(PackageError::Binding))?,
-        },
-        None => PackageIntent::InitialActivation,
-    };
-    let target = match load_package(request.package, &target_context(&config, target_intent)) {
-        Err(PackageError::AlreadyActive) => {
-            return confirm_already_active(&config, request.package)
-        }
-        loaded => loaded.map_err(ApplyLifecycleError::TargetPackage)?,
-    };
-    if request.initial
-        && (target.manifest().package_revision != config.package().active_revision()
-            || target.manifest().sequence != config.package().active_sequence()
-            || target.manifest().sequence != 1)
-    {
-        return Err(ApplyLifecycleError::TargetPackage(PackageError::Binding));
-    }
     let declares_encrypted_fields = target.registry().entities().values().any(|entity| {
         entity
             .fields
@@ -133,42 +281,111 @@ pub(crate) fn run(
         .map_err(|_| ApplyLifecycleError::EventDestinations)?;
     let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
-    let connection = config
-        .migration_database_connection_config()
-        .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
-    let timeouts = ApplyTimeouts::new(
-        config.operational_timeouts().migration_lock,
-        config.operational_timeouts().migration_statement,
-    )
-    .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
+    let DatabaseAccess {
+        connection,
+        timeouts,
+        runtime,
+    } = match access {
+        Some(access) => access,
+        None => DatabaseAccess::resolve(&config)?,
+    };
+
+    // A package carries no place in the apply order, so a successor is bound
+    // to what the database records: the active package digest, and the
+    // configured active package that must be that exact package.
+    //
+    // A database a release before the activation ledger installed records
+    // neither, so the configured active package adopts it as it stands.
+    let mut adoption = false;
+    let current_identity = match current_package.as_ref() {
+        None => None,
+        Some(current_package) => match runtime.block_on(read_recorded_registry_state(
+            &connection,
+            &target.manifest().package_id,
+            config.database().roles().migration(),
+            timeouts,
+        )) {
+            Err(MigrationError::PreLedgerDatabase)
+                if current_package.package_digest() == target.package_digest() =>
+            {
+                adoption = true;
+                None
+            }
+            recorded => {
+                let recorded = recorded
+                    .map_err(ApplyLifecycleError::Apply)?
+                    .ok_or(ApplyLifecycleError::Uninitialized)?;
+                bind_active_package(
+                    &recorded.identity,
+                    current_package.package_digest(),
+                    deployment,
+                )
+                .map_err(ApplyLifecycleError::Apply)?;
+                Some(recorded.identity)
+            }
+        },
+    };
+
+    // A plan appends no audit entry, so it never opens the audit destination.
+    let audit = match mode {
+        LifecycleMode::Apply => Some(
+            runtime
+                .block_on(RegistryAudit::open_companion(&config))
+                .map_err(|_| ApplyLifecycleError::Audit)?,
+        ),
+        LifecycleMode::Plan => None,
+    };
     let backup_evidence = backup_arguments
         .iter()
         .map(|backup| {
             DestructiveBackupEvidence::new(backup.binding_path.as_str(), &backup.local_path)
         })
         .collect::<Vec<_>>();
-    let precondition = current_identity
+    // Applying the active package again is a role change: the library
+    // refuses it as already active when the configured roles are the ones
+    // the active activation serves with.
+    let role_change = current_identity
         .as_ref()
-        .map_or(ApplyPrecondition::InitialActivation, |current| {
-            ApplyPrecondition::Successor { current }
-        });
-    let mut apply = ApplyVerifiedPackageRequest::new(
-        &connection,
-        &target,
-        precondition,
-        ApplyRoles::new(
-            config.database().roles().migration(),
-            config.database().roles().runtime(),
+        .is_some_and(|current| current.package_digest == target.package_digest());
+    let precondition = match current_identity.as_ref() {
+        None if adoption => ApplyPrecondition::Adoption,
+        None => ApplyPrecondition::InitialActivation,
+        Some(current) if role_change => ApplyPrecondition::RoleChange { current },
+        Some(current) => ApplyPrecondition::Successor { current },
+    };
+    let roles = ApplyRoles::new(
+        config.database().roles().migration(),
+        config.database().roles().runtime(),
+    );
+    let mut apply = match audit {
+        Some(audit) => ApplyVerifiedPackageRequest::new(
+            &connection,
+            &target,
+            deployment,
+            precondition,
+            roles,
+            timeouts,
+            audit,
         ),
-        timeouts,
-    )
+        None => ApplyVerifiedPackageRequest::plan(
+            &connection,
+            &target,
+            deployment,
+            precondition,
+            roles,
+            timeouts,
+        ),
+    }
     .with_destructive_backup_evidence(&backup_evidence)
     .with_event_destination_compatibility_inventory(&event_destination_compatibility)
     .with_acknowledge_retired_audit_discard(request.acknowledge_retired_audit_discard);
-    if let Some(package) = current_package.as_ref() {
+    if let Some(reference) = request.operator_reference {
+        apply = apply.with_operator_reference(reference);
+    }
+    if let Some(package) = current_package.as_ref().filter(|_| !adoption) {
         apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
     }
-    if let Some(descriptor) = current_history_descriptor.as_ref() {
+    if let Some(descriptor) = current_history_descriptor.as_ref().filter(|_| !adoption) {
         apply = apply.with_predecessor_history_descriptor(descriptor);
     }
     if let (Some(provider), Some(secrets)) =
@@ -178,88 +395,38 @@ pub(crate) fn run(
             provider, secrets,
         ));
     }
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| ApplyLifecycleError::Runtime)?;
+    if mode == LifecycleMode::Plan {
+        let plan = runtime
+            .block_on(plan_verified_package(apply))
+            .map_err(ApplyLifecycleError::Apply)?;
+        let migration = target
+            .migration_summary()
+            .map_err(ApplyLifecycleError::TargetPackage)?;
+        return Ok(Executed::Planned(PlanLifecycleOutcome {
+            package_digest: target.package_digest().to_owned(),
+            registry_revision: target.registry().revision().to_owned(),
+            active_package_digest: current_identity.map(|current| current.package_digest),
+            plan,
+            migration,
+        }));
+    }
     let activated = runtime
         .block_on(apply_verified_package(apply))
         .map_err(ApplyLifecycleError::Apply)?;
-    Ok(ApplyLifecycleOutcome {
-        package_revision: activated.package_revision,
+    Ok(Executed::Applied(ApplyLifecycleOutcome {
+        package_digest: activated.package_digest,
         schema_fingerprint: activated.schema_fingerprint,
-        package_sequence: activated.package_sequence,
-        activation: if request.initial {
+        activation_id: activated.activation_id,
+        activation: if initial {
             ApplyLifecycleActivation::Initial
+        } else if adoption {
+            ApplyLifecycleActivation::Adopted
+        } else if role_change {
+            ApplyLifecycleActivation::RoleChange
         } else {
             ApplyLifecycleActivation::Successor
         },
-    })
-}
-
-fn target_context<'a>(
-    config: &'a RuntimeConfig,
-    intent: PackageIntent<'a>,
-) -> PackageLoadContext<'a> {
-    PackageLoadContext {
-        environment: config.identity().environment(),
-        instance_id: config.identity().instance_id(),
-        database_id: config.identity().database_id(),
-        database_initialization_environment: config
-            .identity()
-            .database_initialization_environment(),
-        compiler_source_revision: config.package().compiler_source_revision(),
-        trust_anchor: config.package_trust_anchor(),
-        intent,
-    }
-}
-
-/// Re-presenting the active package is a no-op, so repeated deploys stay
-/// idempotent. The activation load only routed here from an unverified
-/// manifest claim; the target is then verified in full as the configured
-/// active package, and the database must record that exact identity as active
-/// and ready. Nothing is written.
-fn confirm_already_active(
-    config: &RuntimeConfig,
-    package: &Path,
-) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
-    let target = load_package(
-        package,
-        &target_context(
-            config,
-            PackageIntent::Startup {
-                active_revision: config.package().active_revision(),
-                active_sequence: config.package().active_sequence(),
-            },
-        ),
-    )
-    .map_err(ApplyLifecycleError::TargetPackage)?;
-    let connection = config
-        .migration_database_connection_config()
-        .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
-    let timeouts = ApplyTimeouts::new(
-        config.operational_timeouts().migration_lock,
-        config.operational_timeouts().migration_statement,
-    )
-    .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| ApplyLifecycleError::Runtime)?;
-    let confirmed = runtime
-        .block_on(confirm_active_package(
-            &connection,
-            &target,
-            config.database().roles().migration(),
-            timeouts,
-        ))
-        .map_err(ApplyLifecycleError::Apply)?;
-    Ok(ApplyLifecycleOutcome {
-        package_revision: confirmed.package_revision,
-        schema_fingerprint: confirmed.schema_fingerprint,
-        package_sequence: confirmed.package_sequence,
-        activation: ApplyLifecycleActivation::AlreadyActive,
-    })
+    }))
 }
 
 fn validate_field_encryption_custody(
@@ -280,21 +447,6 @@ fn validate_field_encryption_custody_kind(
         return Err(ApplyLifecycleError::FieldEncryptionCustody);
     }
     Ok(())
-}
-
-fn expected_identity(
-    package: &VerifiedPredecessorPackage,
-) -> Result<ExpectedRegistryIdentity, ApplyLifecycleError> {
-    Ok(ExpectedRegistryIdentity {
-        package_id: package.package_id().to_owned(),
-        environment: package.environment().to_owned(),
-        instance_id: package.instance_id().to_owned(),
-        database_id: package.database_id().to_owned(),
-        package_revision: package.package_revision().to_owned(),
-        schema_fingerprint: package.schema_fingerprint().to_owned(),
-        package_sequence: i64::try_from(package.sequence())
-            .map_err(|_| ApplyLifecycleError::CurrentPackage(PackageError::Binding))?,
-    })
 }
 
 struct BackupArgument {
@@ -345,6 +497,34 @@ mod tests {
         ] {
             assert!(parse_backup_arguments(&[refused.to_owned()]).is_err());
         }
+    }
+
+    #[test]
+    fn a_plan_is_initial_until_the_ledger_records_an_applied_activation() {
+        let recorded = |activation_applied| {
+            Ok(Some(RecordedRegistryState {
+                identity: registry_breg::postgres::ExpectedRegistryIdentity {
+                    package_id: "registry".to_owned(),
+                    database_id: "database".to_owned(),
+                    package_digest: "sha256:package".to_owned(),
+                    activation_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+                    schema_fingerprint: "sha256:schema".to_owned(),
+                },
+                ready: false,
+                activation_applied,
+            }))
+        };
+        assert!(plans_initial_activation(Ok(None)).expect("never activated"));
+        assert!(plans_initial_activation(recorded(false)).expect("unfinished initial"));
+        assert!(!plans_initial_activation(recorded(true)).expect("activated"));
+        assert!(
+            !plans_initial_activation(Err(MigrationError::PreLedgerDatabase))
+                .expect("a pre-ledger database is adopted")
+        );
+        assert!(matches!(
+            plans_initial_activation(Err(MigrationError::ApplyFailed)),
+            Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed))
+        ));
     }
 
     #[test]

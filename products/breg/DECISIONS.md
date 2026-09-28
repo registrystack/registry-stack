@@ -80,9 +80,8 @@
   algorithm and key policy. They are loaded once per verifier construction and
   rotate only by configuration change and restart.
 - `bregctl test` may use a dedicated schema-test database, but it
-  grants no package-signing or production-migration authority. Package signing
-  remains external to the CLI, and production activation requires the separate
-  migration database credential. The clean adopter proof uses distinct schema
+  grants no production-migration authority. Production activation requires the
+  separate migration database credential. The clean adopter proof uses distinct schema
   test databases for the initial and successor candidates plus a third
   production database.
 - `bregctl init --from <MODEL>` derives a project from a reference model

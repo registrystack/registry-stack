@@ -12,9 +12,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: local
-  instanceId: seed-lots-starter
-  sequence: 1
   sourceRevision: seed-lots-core-0.1.0
 manifestProjection:
   accessProfile: reader

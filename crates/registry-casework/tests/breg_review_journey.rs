@@ -520,6 +520,7 @@ fn breg_service(
     database: &TestDatabase,
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    instance_id: &str,
     authorities: Arc<registry_breg::review_store::ReviewAuthorityRegistry>,
     fault: Option<MutationFaultPoint>,
 ) -> Arc<HttpService> {
@@ -546,6 +547,7 @@ fn breg_service(
         pool,
         registry.clone(),
         identity.clone(),
+        instance_id,
         lock,
         Duration::from_secs(2),
         audit,
@@ -559,7 +561,7 @@ fn breg_service(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
+                package_revision: identity.activation_id,
                 schema_fingerprint: identity.schema_fingerprint,
             },
             reads,
@@ -650,7 +652,7 @@ fn runtime_config(root: &std::path::Path, casework: &Url) -> Value {
         "identity":{"environment":"local","instanceId":"composed-review","databaseId":Uuid::new_v4().to_string(),"databaseInitializationEnvironment":"local"},
         "secretProviders":{"file":{"root":root}},
         "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
-        "package":{"root":root,"trustAnchorPath":root.join("anchor"),"compilerSourceRevision":"test-source","activeRevision":PACKAGE_REVISION,"activeSequence":1},
+        "package":{"root":root},
         "authentication":{"oidc":{"issuer":"https://issuer.example","audience":BREG_AUDIENCE,"allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal"}},
         "audit":{"hashKeyRef":"secret:file/audit","path":root.join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},
@@ -828,11 +830,8 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
         &registry,
         RegistryStateTestIdentity {
             package_id: REGISTRY_ID,
-            environment: "local",
-            instance_id: "composed-review",
             database_id: "composed-review-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -872,6 +871,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
         &database,
         registry.clone(),
         identity.clone(),
+        "composed-review",
         Arc::clone(&authorities),
         None,
     );
@@ -879,6 +879,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
         &database,
         registry.clone(),
         identity.clone(),
+        "composed-review",
         Arc::clone(&authorities),
         Some(MutationFaultPoint::AfterCommitBeforeResponseRelease),
     );
@@ -1478,11 +1479,8 @@ async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
         &registry,
         RegistryStateTestIdentity {
             package_id: REGISTRY_ID,
-            environment: "local",
-            instance_id: "composed-review",
             database_id: "composed-review-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -1521,6 +1519,7 @@ async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
         &database,
         registry.clone(),
         identity,
+        "composed-review",
         Arc::clone(&authorities),
         None,
     );
@@ -2097,11 +2096,8 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
         &registry,
         RegistryStateTestIdentity {
             package_id: STARTER_SOURCE_ID,
-            environment: "local",
-            instance_id: "professional-licences-starter",
             database_id: "professional-licences-database",
-            package_revision: PACKAGE_REVISION,
-            package_sequence: 1,
+            label: PACKAGE_REVISION,
         },
     )
     .await
@@ -2139,6 +2135,7 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
         &database,
         registry.clone(),
         identity,
+        "professional-licences-starter",
         Arc::clone(&authorities),
         None,
     );

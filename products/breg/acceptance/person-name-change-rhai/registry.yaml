@@ -6,9 +6,6 @@ registry:
   version: 0.1.0
   defaultLanguage: en
 package:
-  environment: acceptance
-  instanceId: person-name-change-rhai-acceptance
-  sequence: 1
   sourceRevision: person-name-change-rhai-acceptance-0.1.0
 manifestProjection:
   accessProfile: person-operator

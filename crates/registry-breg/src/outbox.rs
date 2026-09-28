@@ -52,7 +52,12 @@ pub(crate) struct OutboxMutation<'a> {
     pub record_id: &'a str,
     pub record_reference: &'a str,
     pub record_revision: i64,
+    /// The activation that wrote the record, the scope value stored with the
+    /// captured event and its deliveries.
     pub package_revision: &'a str,
+    /// The active package digest, which event data names as
+    /// `packageRevision`.
+    pub package_digest: &'a str,
     pub schema_fingerprint: &'a str,
     pub before: Option<&'a Map<String, Value>>,
     pub after: Option<&'a Map<String, Value>>,
@@ -218,7 +223,7 @@ pub(crate) async fn insert_configured_events(
             "recordId": mutation.record_id,
             "revision": mutation.record_revision,
             "trigger": trigger_name(mutation.trigger),
-            "packageRevision": mutation.package_revision,
+            "packageRevision": mutation.package_digest,
             "values": values,
         });
         let event_id = Uuid::new_v4();
@@ -724,10 +729,10 @@ mod tests {
     /// The wrapper proof budgets `source`'s instance id at its raw byte
     /// length, `compiler::MAX_BUILD_ID_BYTES`, so the budget only holds while
     /// `package::valid_build_id` accepts nothing longer and no byte its
-    /// grammar admits needs JSON escaping. The runtime deployment identity
-    /// cannot extend the value either: startup holds it to exact equality
-    /// with the package manifest identity, whose instance id `valid_build_id`
-    /// already bound at package build.
+    /// grammar admits needs JSON escaping. The instance id reaches the
+    /// envelope from the runtime configuration's `identity.instanceId`, which
+    /// the configuration loader holds to `valid_build_id`, through the
+    /// registry state `bregctl apply` records from it.
     #[test]
     fn the_widest_build_id_fits_the_envelope_source_term_unescaped() {
         let widest = "i".repeat(crate::compiler::MAX_BUILD_ID_BYTES as usize);

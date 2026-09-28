@@ -6,9 +6,6 @@ registry:
   defaultLanguage: en
   canonicalBaseIri: https://registry.example.test
 package:
-  environment: local
-  instanceId: issuer-portability-acceptance
-  sequence: 1
   sourceRevision: issuer-portability-acceptance-0.1.0
 entities:
   - id: record

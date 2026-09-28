@@ -250,13 +250,19 @@ pub(crate) async fn install_history_commit_schema(
         .await
         .map_err(|_| HistoryCommitError::Unavailable)?;
     let role = quoted_identifier(runtime_role.as_str());
-    migration
-        .batch_execute(&format!(
-            "REVOKE ALL ON registry_internal.registry_commit_head,
+    let runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+        .await
+        .map_err(|_| HistoryCommitError::Unavailable)?
+        .revoke_all_on(
+            "registry_internal.registry_commit_head,
                  registry_internal.registry_revision_commits,
                  registry_internal.registry_revision_commit_members,
                  registry_internal.registry_history_erasure_coverage,
-                 registry_internal.registry_field_encryption_lifecycle_progress FROM {role};
+                 registry_internal.registry_field_encryption_lifecycle_progress",
+        );
+    migration
+        .batch_execute(&format!(
+            "{runtime_revoke}
              GRANT SELECT ON registry_internal.registry_commit_head TO {role};
              GRANT UPDATE (latest_position, updated_at)
                  ON registry_internal.registry_commit_head TO {role};

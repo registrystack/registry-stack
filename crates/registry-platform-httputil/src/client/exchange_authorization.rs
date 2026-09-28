@@ -1214,12 +1214,18 @@ mod tests {
     async fn cached_person_token_stops_at_verified_context_deadline() {
         let server = MockServer::start().await;
         endpoint(&server, Some(300)).await;
+        // Build the key-holding parts before the boundary wait, so the
+        // context deadline below is read right after it. Building them can
+        // stall past the next second on a loaded host, which would otherwise
+        // push the deadline one second later than intended.
+        let token_exchange = exchange(&server, "urn:records", &["records:read"]);
+        let assertion_source = source(&["records:read"]);
         wait_for_second_boundary().await;
         let deadline_set_at = Instant::now();
         let provider = ExchangeAuthorization::first_party(
-            exchange(&server, "urn:records", &["records:read"]),
+            token_exchange,
             context("person-1", now_seconds().unwrap() + 2),
-            source(&["records:read"]),
+            assertion_source,
         )
         .unwrap();
         provider.bearer_token().await.unwrap();

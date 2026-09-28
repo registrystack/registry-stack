@@ -10294,7 +10294,7 @@ fn request(requirement: &str, purpose: &str, subjects: Vec<RequestedSubject>) ->
 fn fresh_request_nonce() -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let mut bytes = [0u8; 32];
-    let unique = ulid::Ulid::new().to_bytes();
+    let unique = ulid::Ulid::generate().to_bytes();
     bytes[..16].copy_from_slice(&unique);
     URL_SAFE_NO_PAD.encode(bytes)
 }

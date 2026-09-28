@@ -22,9 +22,8 @@ use registry_breg::migration_plan::{ReviewedMigrationError, ReviewedMigrationRec
 use registry_breg::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, PreparedPackage, SignaturePolicy,
-    DIGEST_PIN_UNVERIFIABLE, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
-    MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES,
+    PackageModuleSource, PackageSourceFile, PreparedPackage, FIXTURE_JOURNEYS_PATH,
+    MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_breg::postgres::{BaselineFingerprintDrift, MigrationRehearsalError};
 use registry_breg::runtime_config::RuntimeConfigError;
@@ -40,6 +39,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 mod action_handler_test;
+mod active_registry;
 mod apply_lifecycle;
 mod consent_module;
 mod data_lifecycle;
@@ -65,7 +65,10 @@ mod starters;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
-use apply_lifecycle::{ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest};
+use active_registry::ActiveRegistryError;
+use apply_lifecycle::{
+    ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest, PlanLifecycleRequest,
+};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
 };
@@ -84,10 +87,10 @@ use history_rebaseline_lifecycle::{
 use import_authority_lifecycle::ImportAuthorityCliError;
 use instance_claim_lifecycle::InstanceClaimCliError;
 use package_inspection::{
-    inspect_runtime_package, inspect_runtime_predecessor_package,
+    inspect_baseline_package, inspect_baseline_rehearsal, inspect_runtime_package,
     inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
 };
-use package_lifecycle::{PackageLifecycleError, PackageLifecycleState};
+use package_lifecycle::PackageLifecycleError;
 use reconcile_lifecycle::{
     ReconcileLifecycleError, ReconcileLifecycleOutcome, ReconcileLifecycleRequest,
 };
@@ -157,12 +160,27 @@ enum Command {
     Explain(ExplainArgs),
     /// Compare an authoring candidate with a rederived closed package.
     Diff(DiffArgs),
-    /// Build a deterministic production-profile signing input or publish its externally signed package.
+    /// Build a deterministic production-profile package from a tested candidate.
+    ///
+    /// The package is the promotable unit `bregctl apply` activates: it is built from a project
+    /// `bregctl test` passed, so it needs that run's --test-receipt. `caseworkctl package` is a
+    /// different verb that writes a Casework project's checked policy to its own package.
     Package(PackageArgs),
-    /// Execute the production schema-test journey suite for one unsigned package candidate.
+    /// Execute the production schema-test journey suite for one package candidate.
     Test(TestArgs),
-    /// Apply one already signed package using the configured migration authority.
+    /// Apply one built package using the configured migration authority.
     Apply(ApplyArgs),
+    /// Report what `bregctl apply` would activate for one package, running its checks without changing the database.
+    ///
+    /// A plan uses the migration credential, because apply's checks read what only the migration
+    /// role may read. It rolls back every check it runs, appends no audit entry, and holds the
+    /// apply lock while it checks. Pending changes exit 0; a refusal exits 1 and names the fix.
+    Plan(PlanArgs),
+    /// Report the active package and the activation ledger the database records.
+    ///
+    /// Status reads as the migration role in one read-only transaction and takes no apply lock,
+    /// so it answers while an apply runs.
+    Status(StatusArgs),
     /// Verify configured startup dependencies without binding a listener.
     Doctor(DoctorArgs),
     /// Verify one configured package without opening runtime dependencies.
@@ -302,10 +320,20 @@ struct InitArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("checked")
+        .required(true)
+        .multiple(false)
+        .args(["project", "package"])
+))]
 struct CheckArgs {
     /// Base Registry Engine project directory.
     #[arg(value_name = "PROJECT")]
-    project: PathBuf,
+    project: Option<PathBuf>,
+
+    /// Closed package to verify against its sums, reporting the registry revision it rederives.
+    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["production", "deny_findings"])]
+    package: Option<PathBuf>,
 
     /// Enforce production-only package closure requirements.
     #[arg(long)]
@@ -493,29 +521,75 @@ struct PackageCandidateArgs {
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Stable deployment database identity recorded in the package.
-    #[arg(long, value_name = "ID")]
-    database_id: String,
+    /// Absolute directory of the chain tip package a successor follows. The
+    /// same package directory is named in every environment.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    baseline_package: Option<PathBuf>,
 
-    /// Runtime configuration selecting the verified active baseline for a successor.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    baseline_runtime_config: Option<PathBuf>,
-
-    /// Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline.
-    #[arg(long, value_name = "DIRECTORY", requires = "baseline_runtime_config")]
+    /// Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a baseline package.
+    #[arg(long, value_name = "DIRECTORY", requires = "baseline_package")]
     reviewed_migrations: Option<PathBuf>,
 
-    /// Production signature threshold. Local packages require zero.
-    #[arg(long, default_value_t = 0, value_name = "COUNT")]
-    signature_threshold: u16,
+    #[arg(
+        long = "database-id",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_database_id_flag
+    )]
+    _database_id: Option<String>,
 
-    /// Allowed package-signing key id. Repeat once per trust-anchor key.
+    #[arg(
+        long = "baseline-runtime-config",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_baseline_runtime_config_flag
+    )]
+    _baseline_runtime_config: Option<String>,
+
+    #[arg(
+        long = "signature-threshold",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_signature_threshold_flag
+    )]
+    _signature_threshold: Option<String>,
+
     #[arg(
         long = "signature-key-id",
-        value_name = "KEY_ID",
-        allow_hyphen_values = true
+        hide = true,
+        allow_hyphen_values = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_signature_key_id_flag
     )]
-    signature_key_ids: Vec<String>,
+    _signature_key_id: Option<String>,
+}
+
+// Each retired package flag stays a hidden argument so an operator who still
+// passes it reads a usage error naming its replacement, not an unknown flag.
+// Its value is optional, so a bare flag reaches the same refusal instead of a
+// generic missing-value error.
+fn refuse_database_id_flag(_: &str) -> Result<String, String> {
+    Err("`--database-id` is removed; a package names no database. Remove it: the runtime configuration's `identity.databaseId` names the database at apply".to_owned())
+}
+
+fn refuse_baseline_runtime_config_flag(_: &str) -> Result<String, String> {
+    Err("`--baseline-runtime-config` is removed; name the chain tip package directory with `--baseline-package DIR` instead".to_owned())
+}
+
+fn refuse_signature_threshold_flag(_: &str) -> Result<String, String> {
+    Err("`--signature-threshold` is removed; packages are unsigned. Remove it: `bregctl apply` with the migration credential authorizes an activation".to_owned())
+}
+
+fn refuse_signature_key_id_flag(_: &str) -> Result<String, String> {
+    Err("`--signature-key-id` is removed; packages are unsigned. Remove it: `bregctl apply` with the migration credential authorizes an activation".to_owned())
+}
+
+fn refuse_signatures_flag(_: &str) -> Result<String, String> {
+    Err("`--signatures` is removed; packages are unsigned. Remove it: `bregctl package` publishes the package directory in one step".to_owned())
 }
 
 #[derive(Debug, Args)]
@@ -532,11 +606,16 @@ struct PackageArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     test_receipt: PathBuf,
 
-    /// JSON document containing externally produced package signatures.
-    #[arg(long, value_name = "FILE")]
-    signatures: Option<PathBuf>,
+    #[arg(
+        long = "signatures",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_signatures_flag
+    )]
+    _signatures: Option<String>,
 
-    /// New build directory containing signing-input.json and, once approved, package/.
+    /// New build directory that receives the schema-test receipt and the published package/.
     #[arg(long, value_name = "DIRECTORY")]
     output: PathBuf,
 
@@ -565,7 +644,7 @@ struct TestArgs {
 
 #[derive(Debug, Args)]
 struct ApplyArgs {
-    /// Absolute runtime configuration for deployment identity, trust, roles, and database access.
+    /// Absolute runtime configuration for deployment identity, roles, and database access.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -573,12 +652,12 @@ struct ApplyArgs {
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     package: PathBuf,
 
-    /// Activate sequence one in an uninitialized Registry database.
+    /// Activate the first package in an uninitialized Registry database.
     #[arg(long)]
     initial: bool,
 
-    /// Reviewed backup binding and absolute local artifact as BINDING_PATH=ABSOLUTE_FILE.
-    #[arg(long = "backup", value_name = "BINDING_PATH=ABSOLUTE_FILE")]
+    /// Reviewed backup binding the plan requires and the absolute backup binding file that satisfies it, as BINDING_PATH=BINDING_FILE.
+    #[arg(long = "backup", value_name = "BINDING_PATH=BINDING_FILE")]
     backups: Vec<String>,
 
     /// Acknowledge discarding rows retained in a pre-simplification
@@ -587,6 +666,32 @@ struct ApplyArgs {
     /// while installing the current schema.
     #[arg(long)]
     acknowledge_retired_audit_discard: bool,
+
+    /// Operator change reference, at most 512 bytes, recorded as a keyed hash in the activation ledger and audit.
+    #[arg(long, value_name = "REFERENCE")]
+    operator_reference: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct PlanArgs {
+    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute target package directory.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    package: PathBuf,
+
+    /// Reviewed backup binding to verify as apply would, as BINDING_PATH=BINDING_FILE; without it, the plan lists the bindings apply requires.
+    #[arg(long = "backup", value_name = "BINDING_PATH=BINDING_FILE")]
+    backups: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct StatusArgs {
+    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -755,6 +860,11 @@ enum InstanceClaimCommand {
     /// Report the claimed database beside the one the runtime role reaches.
     Status(InstanceClaimStatusArgs),
     /// Make the connected database, such as a restored copy, the one the claim names.
+    ///
+    /// Run it once after any restore, logical or physical, before the restored
+    /// database serves. On a database the claim already names, as after a
+    /// point-in-time recovery or a snapshot, it claims the database again and
+    /// supersedes every import authority the restore reopened.
     Adopt(InstanceClaimAdoptArgs),
 }
 
@@ -771,7 +881,8 @@ struct InstanceClaimAdoptArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Acknowledge that the database the claim names today no longer serves
+    /// Acknowledge that every other copy of this Registry, including the
+    /// database the claim names today when it is another one, no longer serves
     /// and never will again.
     ///
     /// Two databases serving one Registry become divergent writers of its
@@ -1120,7 +1231,7 @@ struct DiffArgs {
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Absolute runtime configuration whose package bindings and trust apply.
+    /// Absolute runtime configuration whose configured package is the baseline.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
 
@@ -1200,6 +1311,14 @@ struct SuccessReport {
     /// names its revision here.
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
+    /// Named only by `check`: the registry revision it compiled from a
+    /// project or rederived from a verified package, the value a Casework
+    /// BReg source description pins as its `sourceRevision`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_revision: Option<String>,
+    /// Named only by `check --package`: the digest of the package it verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    package_digest: Option<String>,
     #[serde(serialize_with = "serialize_findings")]
     findings: Vec<ToolDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1336,7 +1455,6 @@ enum DiagnosticArtifact {
     BaselinePackage,
     CompiledDiff,
     PackageBuild,
-    PackageSigningInput,
     SchemaTestReceipt,
     SchemaTestCandidate,
     FixtureJourneys,
@@ -1344,7 +1462,6 @@ enum DiagnosticArtifact {
     SchemaTestDatabase,
     SchemaTestExecution,
     SchemaTestOutput,
-    PackageSignatures,
     PackageActivation,
     DatabaseMigration,
     StartupDependencies,
@@ -1380,12 +1497,10 @@ enum SuggestedAction {
     CorrectRuntimeConfiguration,
     VerifyPackagePath,
     VerifyPackagePermissions,
-    VerifyPackageTrust,
     VerifyPackageBinding,
     VerifyPackageIntegrity,
     ReviewCompiledDiff,
     CorrectPackageBuild,
-    ReviewSigningInput,
     SupplySchemaTestReceipt,
     CorrectSchemaTestCandidate,
     CorrectFixtureJourneys,
@@ -1393,7 +1508,6 @@ enum SuggestedAction {
     PrepareSchemaTestDatabase,
     RecreateDisposableDatabase,
     ChooseSchemaTestOutput,
-    SupplyExternalSignatures,
     VerifyMigrationAuthority,
     ReconcileFailedMigration,
     RestorePreActivationBackup,
@@ -1423,12 +1537,19 @@ enum SuggestedAction {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DoctorSuccessReport<'a> {
     ok: bool,
     command: &'static str,
     checked: &'static [&'static str],
+    role_mode: &'static str,
     advisories: Vec<DoctorAdvisory<'a>>,
 }
+
+/// What one-role mode guards and what it does not, said wherever the role
+/// mode is reported.
+const SINGLE_ROLE_MODE_NOTE: &str = "the runtime serves with the migration role; the activation \
+     ledger check catches mistakes but not someone holding that credential";
 
 /// One PostgreSQL baseline advisory as doctor reports it. Advisories never
 /// change the outcome: doctor passed before they were decided.
@@ -1461,7 +1582,7 @@ struct VerifySuccessReport {
     ok: bool,
     command: &'static str,
     assurance: BaselineAssurance,
-    package_revision: String,
+    package_digest: String,
     registry: VerifiedRegistryReport,
     inventory: VerifiedInventoryReport,
 }
@@ -1472,7 +1593,7 @@ struct MigrationExplainSuccessReport {
     ok: bool,
     command: &'static str,
     assurance: BaselineAssurance,
-    package_revision: String,
+    package_digest: String,
     plan: MigrationInspectionSummary,
 }
 
@@ -1528,16 +1649,11 @@ struct PackageSuccessReport {
     ok: bool,
     command: &'static str,
     profile: ProfileArg,
-    state: PackageReportState,
-    package_revision: String,
-    signature_threshold: u16,
-    provided_signatures: usize,
+    package_digest: String,
+    registry_revision: String,
     package_files: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    package_digest: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
-    signing_input: ArtifactReport,
 }
 
 #[derive(Serialize)]
@@ -1546,20 +1662,12 @@ struct SchemaTestSuccessReport {
     ok: bool,
     command: &'static str,
     profile: ProfileArg,
-    package_revision: String,
+    registry_revision: String,
     schema_fingerprint: String,
-    signing_input_sha256: String,
     successful_journey_ids: Vec<String>,
     receipt: ArtifactReport,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     diagnostics: Vec<Diagnostic>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum PackageReportState {
-    AwaitingSignatures,
-    Published,
 }
 
 #[derive(Serialize)]
@@ -1568,9 +1676,73 @@ struct ApplySuccessReport {
     ok: bool,
     command: &'static str,
     activation: ApplyActivation,
-    package_revision: String,
+    package_digest: String,
     schema_fingerprint: String,
-    package_sequence: i64,
+    activation_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanSuccessReport {
+    ok: bool,
+    command: &'static str,
+    /// Whether `bregctl apply` would record an activation.
+    pending: bool,
+    activation: PlanActivation,
+    package_digest: String,
+    registry_revision: String,
+    active_package_digest: Option<String>,
+    role_mode: &'static str,
+    resumes_activation_id: Option<String>,
+    required_backups: Vec<String>,
+    checks: &'static [&'static str],
+    migration: MigrationInspectionSummary,
+}
+
+/// The activation `bregctl apply` would report, or `none` when the package is
+/// already active with the configured roles.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PlanActivation {
+    Initial,
+    Successor,
+    RoleChange,
+    Adopted,
+    None,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusSuccessReport {
+    ok: bool,
+    command: &'static str,
+    package_id: String,
+    database_id: String,
+    active_package_digest: String,
+    activation_id: String,
+    registry_revision: Option<String>,
+    role_mode: Option<String>,
+    schema_fingerprint: String,
+    maintenance_status: String,
+    maintenance_target_package_digest: Option<String>,
+    ledger: Vec<StatusLedgerEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusLedgerEntry {
+    activation_id: String,
+    apply_order: i64,
+    package_digest: String,
+    predecessor_package_digest: Option<String>,
+    registry_revision: String,
+    plan_kind: String,
+    migration_kind: String,
+    outcome: String,
+    role_mode: String,
+    started_at: String,
+    completed_at: Option<String>,
+    applied_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1702,8 +1874,8 @@ struct AttachmentCleanupSuccessReport {
 enum ApplyActivation {
     Initial,
     Successor,
-    /// The target was already the active package; nothing was applied.
-    AlreadyActive,
+    RoleChange,
+    Adopted,
 }
 
 #[derive(Serialize)]
@@ -1785,13 +1957,8 @@ struct CapturedModuleAssetSource {
 #[derive(Clone, Debug)]
 struct CapturedPackageCandidate {
     compiled: CompiledRegistry,
-    environment: String,
-    instance_id: String,
-    database_id: String,
-    sequence: u64,
     compiler_source_revision: String,
-    prior_revision: Option<String>,
-    signature_policy: SignaturePolicy,
+    from_package_digest: Option<String>,
     project: PackageSourceFile,
     project_assets: Vec<PackageSourceFile>,
     modules: Vec<PackageModuleSource>,
@@ -1802,8 +1969,8 @@ struct CapturedPackageCandidate {
 }
 
 /// The verified predecessor a successor candidate is rehearsed over: its
-/// registry compiled from the signed sources and the schema fingerprint its
-/// signed manifest binds.
+/// registry compiled from the packaged sources and the schema fingerprint its
+/// manifest binds.
 #[derive(Clone, Debug)]
 struct RehearsalBaseline {
     registry: CompiledRegistry,
@@ -1817,35 +1984,6 @@ impl CapturedPackageCandidate {
 
     fn fixture_journeys(&self) -> &[u8] {
         &self.fixture_journeys.bytes
-    }
-
-    fn validate_runtime_binding(
-        &self,
-        config: &registry_breg::runtime_config::RuntimeConfig,
-    ) -> Result<(), TestLifecycleError> {
-        for (path, matches) in [
-            (
-                "runtimeConfig.identity.environment",
-                config.identity().environment() == self.environment,
-            ),
-            (
-                "runtimeConfig.identity.instanceId",
-                config.identity().instance_id() == self.instance_id,
-            ),
-            (
-                "runtimeConfig.identity.databaseId",
-                config.identity().database_id() == self.database_id,
-            ),
-            (
-                "runtimeConfig.package.compilerSourceRevision",
-                config.package().compiler_source_revision() == self.compiler_source_revision,
-            ),
-        ] {
-            if !matches {
-                return Err(TestLifecycleError::CandidateBinding { path });
-            }
-        }
-        Ok(())
     }
 
     fn prevalidate(&self) -> Result<(), PackageError> {
@@ -1864,14 +2002,9 @@ impl CapturedPackageCandidate {
     fn prepare(self, schema_fingerprint: String) -> Result<PreparedPackage, PackageError> {
         registry_breg::package::prepare_package_with_project_assets(
             PackageBuildRequest {
-                environment: self.environment,
-                instance_id: self.instance_id,
-                database_id: self.database_id,
-                sequence: self.sequence,
-                prior_revision: self.prior_revision,
+                from_package_digest: self.from_package_digest,
                 compiler_source_revision: self.compiler_source_revision,
                 schema_fingerprint,
-                signature_policy: self.signature_policy,
                 project: self.project,
                 modules: self.modules,
                 fixture_journeys: self.fixture_journeys,
@@ -2017,7 +2150,12 @@ where
             }
             (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },
-        Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
+        Command::Check(args) => match (&args.project, &args.package) {
+            (Some(project), None) => check(project, profile(args.production)),
+            (None, Some(package)) => check_package(package),
+            _ => unreachable!("clap enforces exactly one of a project and a package"),
+        }
+        .and_then(|report| {
             if args.deny_findings && !report.findings.is_empty() {
                 Err(FailureReport {
                     ok: false,
@@ -2081,9 +2219,27 @@ where
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
+        Command::Plan(args) => {
+            return match plan(&args) {
+                Ok(report) => write_plan_success(&report, format, stdout, stderr),
+                Err(failure) => write_failure(&failure, format, stdout, stderr),
+            };
+        }
+        Command::Status(args) => {
+            return match status(&args) {
+                Ok(report) => write_status_success(&report, format, stdout, stderr),
+                Err(failure) => write_failure(&failure, format, stdout, stderr),
+            };
+        }
         Command::Doctor(args) => {
             return match doctor::run(&args.runtime_config) {
-                Ok(advisories) => write_doctor_success(&advisories, format, stdout, stderr),
+                Ok(checked) => write_doctor_success(
+                    &checked.postgres_advisories,
+                    checked.role_mode,
+                    format,
+                    stdout,
+                    stderr,
+                ),
                 Err(diagnostic) => {
                     let (artifact, action) =
                         if diagnostic.code.starts_with("startup.runtime_config") {
@@ -2643,7 +2799,7 @@ fn instance_claim_acknowledgement_required() -> FailureReport {
             diagnostic(
                 "instance_claim.acknowledgement.required",
                 "acknowledgeOriginalRetired",
-                "adopting moves the Registry to this database for good, and two databases serving one Registry become divergent writers of it: stop and retire the database the claim names, then pass --acknowledge-original-retired",
+                "adopting makes this database the only one that serves the Registry, and two databases serving one Registry become divergent writers of it: stop and retire every other copy, including the database the claim names when it is another one, then pass --acknowledge-original-retired",
             ),
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
@@ -2663,15 +2819,6 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         ),
-        InstanceClaimCliError::Claim(InstanceClaimError::AlreadyCurrent) => (
-            diagnostic(
-                "instance_claim.already_current",
-                "instanceClaim",
-                "the instance claim already names this database; there is nothing to adopt",
-            ),
-            DiagnosticArtifact::InstanceClaim,
-            SuggestedAction::VerifyInstanceClaim,
-        ),
         InstanceClaimCliError::Claim(InstanceClaimError::Unavailable) => (
             diagnostic(
                 "instance_claim.unavailable",
@@ -2680,6 +2827,11 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             ),
             DiagnosticArtifact::InstanceClaim,
             SuggestedAction::VerifyInstanceClaim,
+        ),
+        InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(message)) => (
+            diagnostic("instance_claim.package.refused", "package", &message),
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackageBinding,
         ),
     };
     FailureReport {
@@ -2837,7 +2989,7 @@ fn import_authority_pairs(
             "committed items",
             format!("{} of {}", authority.committed_items, authority.max_items),
         ),
-        ("activation revision", authority.activation_revision.clone()),
+        ("activation id", authority.activation_id.to_string()),
         ("opened at", authority.opened_at.to_rfc3339()),
         ("expires at", authority.expires_at.to_rfc3339()),
     ];
@@ -2888,6 +3040,9 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
         HistoryErasureLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("history erase", "history.erase", error);
         }
+        HistoryErasureLifecycleError::ActiveRegistry(error) => {
+            return active_registry_failure("history erase", "history.erase", error);
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -2913,14 +3068,12 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
             SuggestedAction::PrepareHistoryErasureRequest,
         ),
         HistoryErasureLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        HistoryErasureLifecycleError::ActiveRegistry(_) => unreachable!("handled before match"),
         HistoryErasureLifecycleError::Package(error) => {
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
-                | PackageError::BindingMismatch(_)
-                | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3017,6 +3170,9 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
         HistoryRebaselineLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("history rebaseline", "history.rebaseline", error);
         }
+        HistoryRebaselineLifecycleError::ActiveRegistry(error) => {
+            return active_registry_failure("history rebaseline", "history.rebaseline", error);
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -3042,14 +3198,12 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
             SuggestedAction::PrepareHistoryRebaselineRequest,
         ),
         HistoryRebaselineLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        HistoryRebaselineLifecycleError::ActiveRegistry(_) => unreachable!("handled before match"),
         HistoryRebaselineLifecycleError::Package(error) => {
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3219,12 +3373,11 @@ fn field_encryption_preflight_failure(
                 error,
             );
         }
-        FieldEncryptionPreflightLifecycleError::PredecessorPackage(
-            PackageError::DigestPinUnverifiable,
-        ) => {
-            return digest_pin_unverifiable_failure(
+        FieldEncryptionPreflightLifecycleError::ActiveRegistry(error) => {
+            return active_registry_failure(
                 "field-encryption preflight",
                 "field_encryption.preflight",
+                error,
             );
         }
         error => error,
@@ -3252,14 +3405,12 @@ fn field_encryption_preflight_failure(
             SuggestedAction::ReviewFieldEncryptionBackfill,
         ),
         FieldEncryptionPreflightLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        FieldEncryptionPreflightLifecycleError::ActiveRegistry(_) => unreachable!("handled before match"),
         FieldEncryptionPreflightLifecycleError::PredecessorPackage(error) => {
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3274,11 +3425,7 @@ fn field_encryption_preflight_failure(
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive
- | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3367,6 +3514,13 @@ fn field_encryption_erase_history_failure(
                 error,
             );
         }
+        FieldEncryptionEraseHistoryLifecycleError::ActiveRegistry(error) => {
+            return active_registry_failure(
+                "field-encryption erase-history",
+                "field_encryption.erase_history",
+                error,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -3392,14 +3546,12 @@ fn field_encryption_erase_history_failure(
             SuggestedAction::PrepareFieldEncryptionEraseRequest,
         ),
         FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        FieldEncryptionEraseHistoryLifecycleError::ActiveRegistry(_) => unreachable!("handled before match"),
         FieldEncryptionEraseHistoryLifecycleError::ActivePackage(error) => {
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3772,10 +3924,7 @@ fn data_lifecycle_failure(
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3953,10 +4102,11 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
         match (&args.runtime_config, &args.package) {
             (Some(runtime_path), None) => {
                 // The running package is the predecessor of the project being
-                // diffed, so it is read the way test and package read it: an
-                // earlier release's package is verified from its signed manifest.
-                // Its changes are classified against the signed migration
-                // baseline, the schema the successor plan runs over.
+                // diffed, so it is read the way test and package read a
+                // baseline package: an earlier release's package is verified
+                // against its sum file. Its changes are classified against the
+                // packaged migration baseline, the schema the successor plan
+                // runs over.
                 let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(
                     runtime_path,
                 )
@@ -3969,9 +4119,6 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                     RuntimePackageInspectionError::RuntimeConfig(error) => {
                         runtime_config_diff_failure(error)
                     }
-                    RuntimePackageInspectionError::Package(PackageError::DigestPinUnverifiable) => {
-                        digest_pin_unverifiable_failure("diff", "diff")
-                    }
                     RuntimePackageInspectionError::Package(error) => package_diff_failure(error),
                     RuntimePackageInspectionError::SharedPackage(message) => {
                         diff_failure("diff.package.integrity_refused", "package", &message)
@@ -3979,7 +4126,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                 })?;
                 (
                     registry.with_migration_baseline_schema(predecessor.migration_baseline()),
-                    predecessor.package_revision().to_owned(),
+                    predecessor.package_digest().to_owned(),
                     BaselineAssurance::RuntimeBound,
                 )
             }
@@ -3988,7 +4135,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                     inspect_package_integrity(package_root).map_err(package_diff_failure)?;
                 (
                     inspected.registry().clone(),
-                    inspected.package_revision().to_owned(),
+                    inspected.package_digest().to_owned(),
                     BaselineAssurance::IntegrityOnly,
                 )
             }
@@ -4044,34 +4191,16 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
         args.schema_fingerprint.as_deref(),
     )
     .map_err(package_lifecycle_failure)?;
-    let outcome = package_lifecycle::run(
-        prepared,
-        receipt,
-        &args.output,
-        args.signatures.as_deref(),
-        args.revision.as_deref(),
-    )
-    .map_err(package_lifecycle_failure)?;
+    let outcome = package_lifecycle::run(prepared, receipt, &args.output, args.revision.as_deref())
+        .map_err(package_lifecycle_failure)?;
     Ok(PackageSuccessReport {
         ok: true,
         command: "package",
         profile: ProfileArg::Production,
-        state: match outcome.state {
-            PackageLifecycleState::AwaitingSignatures => PackageReportState::AwaitingSignatures,
-            PackageLifecycleState::Published => PackageReportState::Published,
-        },
-        package_revision: outcome.package_revision,
-        signature_threshold: outcome.signature_threshold,
-        provided_signatures: outcome.provided_signatures,
-        package_files: outcome.package_files,
         package_digest: outcome.package_digest,
+        registry_revision: outcome.registry_revision,
+        package_files: outcome.package_files,
         revision: outcome.revision,
-        signing_input: ArtifactReport {
-            path: "signing-input.json".to_owned(),
-            media_type: "application/json".to_owned(),
-            sha256: outcome.signing_input_sha256,
-            byte_length: outcome.signing_input_bytes,
-        },
     })
 }
 
@@ -4089,9 +4218,8 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
         ok: true,
         command: "test",
         profile: ProfileArg::Production,
-        package_revision: outcome.package_revision,
+        registry_revision: outcome.registry_revision,
         schema_fingerprint: outcome.schema_fingerprint,
-        signing_input_sha256: outcome.signing_input_sha256,
         successful_journey_ids: outcome.successful_journey_ids,
         receipt: ArtifactReport {
             path: test_lifecycle::receipt_artifact_path().to_owned(),
@@ -4108,14 +4236,14 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
 }
 
 /// The advisory finding for a predecessor schema that this compiler installs
-/// differently from the fingerprint its signed package binds.
+/// differently from the fingerprint its package binds.
 fn baseline_fingerprint_drift_finding(drift: &BaselineFingerprintDrift) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Finding,
         code: "migration.rehearsal.baseline_fingerprint_drift".to_owned(),
-        path: "baselineRuntimeConfig".to_owned(),
+        path: "baselinePackage".to_owned(),
         message: format!(
-            "the predecessor schema this bregctl installs measures {}, but its signed package binds {}; \
+            "the predecessor schema this bregctl installs measures {}, but its package binds {}; \
              an earlier bregctl release built it, or this compiler installs it differently. The successor \
              migration was rehearsed over this bregctl's installation of the predecessor and reaches the \
              candidate fingerprint; apply checks the live database before it migrates",
@@ -4126,25 +4254,25 @@ fn baseline_fingerprint_drift_finding(drift: &BaselineFingerprintDrift) -> Diagn
 
 /// Compile the verified predecessor so `test` can rehearse the successor
 /// migration over its schema. The predecessor was verified a moment earlier;
-/// this second read is bound to the same signed revision.
+/// this second read is bound to the same package digest.
 fn capture_rehearsal_baseline(
     command: &'static str,
-    runtime_config: &std::path::Path,
-    package_revision: &str,
+    baseline_package: &std::path::Path,
+    package_digest: &str,
 ) -> Result<RehearsalBaseline, FailureReport> {
     let unavailable = || {
         candidate_failure(
             command,
             "migration.rehearsal.baseline_unavailable",
-            "baselineRuntimeConfig",
-            "the current compiler cannot rebuild the verified predecessor registry from its signed sources, so the successor migration cannot be rehearsed; run test with a bregctl release that compiles the predecessor sources",
+            "baselinePackage",
+            "the current compiler cannot rebuild the verified predecessor registry from its packaged sources, so the successor migration cannot be rehearsed; run test with a bregctl release that compiles the predecessor sources",
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackageIntegrity,
         )
     };
-    let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(runtime_config)
-        .map_err(|_| unavailable())?;
-    if predecessor.package_revision() != package_revision {
+    let (predecessor, registry) =
+        inspect_baseline_rehearsal(baseline_package).map_err(|_| unavailable())?;
+    if predecessor.package_digest() != package_digest {
         return Err(unavailable());
     }
     Ok(RehearsalBaseline {
@@ -4187,9 +4315,6 @@ fn capture_candidate(
             SuggestedAction::CorrectPackageBuild,
         )
     })?;
-    let environment = identity.environment.clone();
-    let instance_id = identity.instance_id.clone();
-    let sequence = identity.sequence;
     let compiler_source_revision = identity.source_revision.clone();
     let project_bytes = source.project_bytes;
     let project_assets = source
@@ -4235,34 +4360,31 @@ fn capture_candidate(
     let mut prevalidation_schema_fingerprint = None;
     let mut rehearsal_baseline = None;
     let mut reviewed_changes = String::new();
-    let (prior_revision, migration_plan) = match args.baseline_runtime_config.as_deref() {
-        Some(runtime_config) => {
-            let baseline = inspect_runtime_predecessor_package(runtime_config)
-                .map_err(|error| inspection_failure(command, "package.baseline", error))?;
-            if baseline.environment() != environment
-                || baseline.instance_id() != instance_id
-                || baseline.database_id() != args.database_id
-            {
+    let (from_package_digest, migration_plan) = match args.baseline_package.as_deref() {
+        Some(baseline_package) => {
+            let baseline = inspect_baseline_package(baseline_package)
+                .map_err(|error| baseline_package_failure(command, error))?;
+            if baseline.package_id() != compiled.registry_id() {
                 return Err(candidate_failure(
                     command,
                     "package.baseline.identity",
-                    "baselineRuntimeConfig",
-                    "the verified predecessor package identity does not match the candidate package and database binding",
-                    DiagnosticArtifact::RuntimeConfiguration,
-                    SuggestedAction::CorrectRuntimeConfiguration,
+                    "baselinePackage",
+                    "the baseline package belongs to another registry; name this registry's chain tip package directory with --baseline-package",
+                    DiagnosticArtifact::VerifiedPackage,
+                    SuggestedAction::CorrectPackageBuild,
                 ));
             }
             if rehearse_successor {
                 rehearsal_baseline = Some(capture_rehearsal_baseline(
                     command,
-                    runtime_config,
-                    baseline.package_revision(),
+                    baseline_package,
+                    baseline.package_digest(),
                 )?);
             }
             let changes = registry_breg::package::compiled_registry_change_set_from_baseline(
                 baseline.migration_baseline(),
                 &compiled,
-                baseline.package_revision(),
+                baseline.package_digest(),
             );
             let unsupported = rendered_changes(&changes.changes, |change| {
                 change.class == CompiledRegistryChangeClass::Unsupported
@@ -4317,34 +4439,14 @@ fn capture_candidate(
                     prior_baseline: Box::new(baseline.migration_baseline().clone()),
                 }
             };
-            (Some(baseline.package_revision().to_owned()), plan)
+            (Some(baseline.package_digest().to_owned()), plan)
         }
         None => (None, PackageMigrationPlanInput::InitialCompiledDdl),
     };
-    let mut signature_key_ids = args.signature_key_ids.clone();
-    signature_key_ids.sort();
-    if signature_key_ids.windows(2).any(|ids| ids[0] == ids[1]) {
-        return Err(candidate_failure(
-            command,
-            "package.signature_policy.refused",
-            "signaturePolicy",
-            "the package signature policy was refused",
-            candidate_artifact(command),
-            SuggestedAction::CorrectPackageBuild,
-        ));
-    }
     let candidate = CapturedPackageCandidate {
         compiled,
-        environment,
-        instance_id,
-        database_id: args.database_id.clone(),
-        sequence,
-        prior_revision,
+        from_package_digest,
         compiler_source_revision,
-        signature_policy: SignaturePolicy {
-            threshold: args.signature_threshold,
-            key_ids: signature_key_ids,
-        },
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
             bytes: project_bytes,
@@ -4362,7 +4464,7 @@ fn capture_candidate(
     if args.reviewed_migrations.is_some() {
         candidate.prevalidate().map_err(|error| {
             // The generic code is the fallback for a structural precondition
-            // (sequence, prior revision, baseline binding) that never reaches
+            // (predecessor digest, baseline binding) that never reaches
             // `ReviewedMigrationError`; a reviewed plan refusal names its kind.
             let code = match error {
                 PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
@@ -4404,6 +4506,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         initial: args.initial,
         backups: &args.backups,
         acknowledge_retired_audit_discard: args.acknowledge_retired_audit_discard,
+        operator_reference: args.operator_reference.as_deref(),
     })
     .map_err(apply_lifecycle_failure)?;
     Ok(ApplySuccessReport {
@@ -4412,22 +4515,152 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         activation: match outcome.activation {
             ApplyLifecycleActivation::Initial => ApplyActivation::Initial,
             ApplyLifecycleActivation::Successor => ApplyActivation::Successor,
-            ApplyLifecycleActivation::AlreadyActive => ApplyActivation::AlreadyActive,
+            ApplyLifecycleActivation::RoleChange => ApplyActivation::RoleChange,
+            ApplyLifecycleActivation::Adopted => ApplyActivation::Adopted,
         },
-        package_revision: outcome.package_revision,
+        package_digest: outcome.package_digest,
         schema_fingerprint: outcome.schema_fingerprint,
-        package_sequence: outcome.package_sequence,
+        activation_id: outcome.activation_id,
     })
+}
+
+fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, FailureReport> {
+    let outcome = apply_lifecycle::plan(PlanLifecycleRequest {
+        runtime_config: &args.runtime_config,
+        package: &args.package,
+        backups: &args.backups,
+    })
+    .map_err(|error| lifecycle_failure("plan", error))?;
+    Ok(PlanSuccessReport {
+        ok: true,
+        command: "plan",
+        pending: outcome.plan.activation.is_pending(),
+        activation: match outcome.plan.activation {
+            registry_breg::migration::PlannedActivation::Initial => PlanActivation::Initial,
+            registry_breg::migration::PlannedActivation::Successor => PlanActivation::Successor,
+            registry_breg::migration::PlannedActivation::RoleChange => PlanActivation::RoleChange,
+            registry_breg::migration::PlannedActivation::Adoption => PlanActivation::Adopted,
+            registry_breg::migration::PlannedActivation::AlreadyActive => PlanActivation::None,
+        },
+        package_digest: outcome.package_digest,
+        registry_revision: outcome.registry_revision,
+        active_package_digest: outcome.active_package_digest,
+        role_mode: outcome.plan.role_mode,
+        resumes_activation_id: outcome.plan.resumes_activation_id,
+        required_backups: outcome.plan.required_backups,
+        checks: outcome.plan.checks,
+        migration: outcome.migration,
+    })
+}
+
+fn status(args: &StatusArgs) -> Result<StatusSuccessReport, FailureReport> {
+    let status = apply_lifecycle::status(&args.runtime_config)
+        .map_err(status_lifecycle_failure)?
+        .ok_or_else(|| status_lifecycle_failure(ApplyLifecycleError::Uninitialized))?;
+    let active = status.active_entry().cloned();
+    Ok(StatusSuccessReport {
+        ok: true,
+        command: "status",
+        package_id: status.identity.package_id,
+        database_id: status.identity.database_id,
+        active_package_digest: status.identity.package_digest,
+        activation_id: status.identity.activation_id,
+        registry_revision: active.as_ref().map(|entry| entry.registry_revision.clone()),
+        role_mode: active.map(|entry| entry.role_mode),
+        schema_fingerprint: status.identity.schema_fingerprint,
+        maintenance_status: status.maintenance_status,
+        maintenance_target_package_digest: status.maintenance_target_package_digest,
+        ledger: status
+            .ledger
+            .into_iter()
+            .map(|entry| StatusLedgerEntry {
+                activation_id: entry.activation_id,
+                apply_order: entry.apply_order,
+                package_digest: entry.package_digest,
+                predecessor_package_digest: entry.predecessor_package_digest,
+                registry_revision: entry.registry_revision,
+                plan_kind: entry.plan_kind,
+                migration_kind: entry.migration_kind,
+                outcome: entry.outcome,
+                role_mode: entry.role_mode,
+                started_at: entry.started_at,
+                completed_at: entry.completed_at,
+                applied_at: entry.applied_at,
+            })
+            .collect(),
+    })
+}
+
+fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
+    let (code, path, message, artifact, action) = match error {
+        ApplyLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("status", "status", error);
+        }
+        ApplyLifecycleError::RuntimeConfigPath => (
+            "status.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ApplyLifecycleError::DatabaseConfiguration | ApplyLifecycleError::TimeoutConfiguration => (
+            "status.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused: correct database.migrationUrlRef, its secret, and the migration timeouts in the runtime configuration, then run `bregctl status` again",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ApplyLifecycleError::Uninitialized => (
+            "status.database.uninitialized",
+            "database",
+            "the database records no activated registry: run `bregctl plan --package DIR` to check the first package, then `bregctl apply --initial --package DIR` to activate it",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::PreLedgerDatabase) => (
+            "status.database.pre_ledger",
+            "database",
+            "the database was installed by a release before the activation ledger, so it records no activation this release reads: build the deployed project with this release's `bregctl package`, set package.root to that package directory, and run `bregctl apply --package DIR` without --initial once to adopt it",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::DatabaseUnavailable) => (
+            "status.database.unavailable",
+            "database",
+            "the migration database could not be reached: check database.migrationUrlRef and that the database accepts the migration role, then run `bregctl status` again",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ApplyLifecycleError::Runtime => (
+            "status.runtime.unavailable",
+            "runtime",
+            "the status runtime is unavailable",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        _ => (
+            "status.database.refused",
+            "database.roles.migration",
+            "the database refused the activation state read: the connection must use database.roles.migration, which must own the registry schemas and hold no superuser, CREATEDB, CREATEROLE, or BYPASSRLS authority; correct the role, then run `bregctl status` again",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command: "status",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
 }
 
 fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
     match error {
         PackageLifecycleError::Package(error) => {
             let (code, action) = match error {
-                PackageError::Signature => (
-                    "package.signatures.refused",
-                    SuggestedAction::SupplyExternalSignatures,
-                ),
                 PackageError::UnsafePath | PackageError::Permissions => (
                     "package.output.refused",
                     SuggestedAction::CorrectPackageBuild,
@@ -4449,15 +4682,8 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             "package.output.refused",
             "output",
             "the package output was refused",
-            DiagnosticArtifact::PackageSigningInput,
-            SuggestedAction::ReviewSigningInput,
-        ),
-        PackageLifecycleError::SignatureDocument => package_failure(
-            "package.signatures.refused",
-            "signatures",
-            "the external package signatures were refused",
-            DiagnosticArtifact::PackageSignatures,
-            SuggestedAction::SupplyExternalSignatures,
+            DiagnosticArtifact::PackageBuild,
+            SuggestedAction::ChooseSafeOutputDirectory,
         ),
         PackageLifecycleError::TestReceiptMissing => package_failure(
             "package.test_receipt.missing",
@@ -4485,19 +4711,6 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             "testReceipt.targetManagedSchemaFingerprint",
             &format!(
                 "--schema-fingerprint is {supplied} but the schema-test receipt was produced for {receipt}"
-            ),
-            DiagnosticArtifact::SchemaTestReceipt,
-            SuggestedAction::SupplySchemaTestReceipt,
-        ),
-        PackageLifecycleError::TestReceiptIdentity {
-            field,
-            receipt,
-            package,
-        } => package_failure(
-            "package.test_receipt.identity_mismatch",
-            &format!("testReceipt.{field}"),
-            &format!(
-                "the schema-test receipt records {field} {receipt} but this candidate declares {package}"
             ),
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
@@ -4604,16 +4817,6 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 )],
             };
         }
-        TestLifecycleError::CandidateBinding { path } => {
-            return candidate_failure(
-                "test",
-                "test.candidate.refused",
-                path,
-                "the runtime identity must match the project package identity and the --database-id selection",
-                DiagnosticArtifact::SchemaTestCandidate,
-                SuggestedAction::CorrectSchemaTestCandidate,
-            );
-        }
         TestLifecycleError::JourneyStep { path, message } => {
             return FailureReport {
                 ok: false,
@@ -4682,7 +4885,6 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         TestLifecycleError::Journeys { .. } => unreachable!("handled before match"),
         TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
-        TestLifecycleError::CandidateBinding { .. } => unreachable!("handled before match"),
         TestLifecycleError::Rehearsal(_) => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
             "test.candidate.refused",
@@ -4763,7 +4965,7 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
         ),
         MigrationRehearsalError::BaselineNotReproducible => (
             "migration.rehearsal.baseline_not_reproducible",
-            "baselineRuntimeConfig".to_owned(),
+            "baselinePackage".to_owned(),
             SuggestedAction::VerifyPackageIntegrity,
         ),
         MigrationRehearsalError::CompilerStatement { statement_id, .. } => (
@@ -4830,34 +5032,15 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
 }
 
 fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
+    lifecycle_failure("apply", error)
+}
+
+/// Maps an apply lifecycle refusal for `apply` or `plan`: a plan runs apply's
+/// checks, so it refuses with apply's codes and names the same next command.
+fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> FailureReport {
     let error = match error {
         ApplyLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("apply", "apply", error);
-        }
-        ApplyLifecycleError::CurrentPackage(PackageError::DigestPinUnverifiable) => {
-            return digest_pin_unverifiable_failure("apply", "apply");
-        }
-        ApplyLifecycleError::CurrentPackage(PackageError::BindingMismatch(field))
-        | ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(field)) => {
-            let subject = if matches!(error, ApplyLifecycleError::CurrentPackage(_)) {
-                "the active package at package.root"
-            } else {
-                "the target package"
-            };
-            let path = field.runtime_config_path();
-            return source_failure(
-                "apply",
-                diagnostic(
-                    "apply.package.binding_mismatch",
-                    path,
-                    &format!(
-                        "{subject} is bound to a different {path} than the runtime configuration; \
-                         build the package for this deployment or correct {path}. Nothing was changed"
-                    ),
-                ),
-                DiagnosticArtifact::VerifiedPackage,
-                SuggestedAction::VerifyPackageBinding,
-            );
+            return runtime_config_failure(command, "apply", error);
         }
         error => error,
     };
@@ -4877,31 +5060,36 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
-        ApplyLifecycleError::TargetPackage(PackageError::OlderThanActive) => (
-            "apply.package.older_than_active",
+        ApplyLifecycleError::TargetPackage(error) => (
+            "apply.package.refused",
             "package",
-            "the target package is older than the active package, and packages apply forward only; to undo a change, build and apply a successor that reverts it, or restore the pre-activation backup: https://docs.registrystack.org/operate/breg-changes/#roll-back-by-rolling-forward",
+            package_refusal_message(error, "the activation package was refused"),
             DiagnosticArtifact::VerifiedPackage,
-            SuggestedAction::CorrectPackageBuild,
+            package_refusal_action(error),
         ),
-        ApplyLifecycleError::CurrentPackage(error) | ApplyLifecycleError::TargetPackage(error) => {
-            let action = match error {
-                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
-                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
-                _ => SuggestedAction::VerifyPackageIntegrity,
-            };
-            (
-                "apply.package.refused",
-                "package",
-                "the activation package was refused",
-                DiagnosticArtifact::VerifiedPackage,
-                action,
-            )
-        }
+        // The configured active package is refused apart from the target, so
+        // the operator reads which of the two directories to fix.
+        ApplyLifecycleError::CurrentPackage(error) => (
+            "apply.package.refused",
+            "package.root",
+            match error {
+                PackageError::LegacyFormat => {
+                    "the active package at package.root uses the retired package/v1 manifest format: rebuild the deployed project with this release's `bregctl package`, point package.root at the rebuilt package, and run the command again"
+                }
+                _ => {
+                    "the active package at package.root was refused"
+                }
+            },
+            DiagnosticArtifact::VerifiedPackage,
+            package_refusal_action(error),
+        ),
+        ApplyLifecycleError::Uninitialized => (
+            "apply.database.uninitialized",
+            "database",
+            "the database records no activated registry for this package; run `bregctl apply --initial` to activate the first package. Nothing was changed",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
         ApplyLifecycleError::EventDestinations => (
             "apply.event_destinations.refused",
             "eventDestinations",
@@ -4937,6 +5125,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::CorrectPackageBuild,
         ),
+        ApplyLifecycleError::Audit => (
+            "apply.audit.unavailable",
+            "audit",
+            "the activation audit destination could not be opened; check the audit path and its directory permissions",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         ApplyLifecycleError::Runtime => (
             "apply.runtime.unavailable",
             "runtime",
@@ -4950,7 +5145,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 field_id,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field.pattern.syntax_invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
@@ -4965,7 +5160,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 field_id,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field.pattern.existing_rows_invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
@@ -4980,7 +5175,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 record_ids,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field_encryption.lookup.collision",
                         &format!("entities[{entity_id}]"),
@@ -5003,7 +5198,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 field_id,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field_encryption.history.retained_request_snapshot",
                         &format!("entities[{entity_id}].fields[{field_id}].encryption"),
@@ -5013,11 +5208,54 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                     SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
+            registry_breg::migration::MigrationError::ActivationAuditIncomplete => (
+                "apply.audit.incomplete",
+                "audit",
+                "the package was activated, but the audit destination refused a record the activation owed, so the audit trail is incomplete: do not apply again; check the audit path and its directory permissions, and run `bregctl status` to see the active package",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            registry_breg::migration::MigrationError::ActivationAuditUnavailable => (
+                "apply.audit.unavailable",
+                "audit",
+                "the audit destination refused the activation's request entry, so the activation did not start: check the audit path and its directory permissions, then run the same `bregctl apply` again. Nothing was changed",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            registry_breg::migration::MigrationError::OperatorReference => (
+                "apply.operator_reference.refused",
+                "operatorReference",
+                "--operator-reference must be 1 to 512 bytes without control characters, and the runtime audit profile must be keyed to record its hash: correct the reference or the audit profile and apply again. Nothing was changed",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
             registry_breg::migration::MigrationError::ActivePackageMismatch => (
                 "apply.package.active_mismatch",
-                "package.activeRevision",
-                "the runtime configuration names the target package as active, but the database does not record it as its active, ready package: set package.activeRevision and package.activeSequence to the package the database runs and apply again; if the database has never been activated, apply it with --initial; if the database is pinned in maintenance, assess it with migration reconcile. Nothing was changed",
+                "package.root",
+                "package.root names a package the database does not record as its active, ready package: set package.root to the active package directory, which `bregctl status` reports, and apply again; if the database has never been activated, apply it with --initial; if the database is pinned in maintenance, assess it with migration reconcile. Nothing was changed",
                 DiagnosticArtifact::PackageActivation,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            registry_breg::migration::MigrationError::AlreadyActive => {
+                return FailureReport {
+                    ok: false,
+                    command,
+                    diagnostics: vec![tool_diagnostic(
+                        diagnostic(
+                            "apply.package.already_active",
+                            "package",
+                            "the database already runs this package with the configured database roles, so there is nothing to apply; run `bregctl status` to see the active package. Nothing was changed",
+                        ),
+                        DiagnosticArtifact::PackageActivation,
+                        SuggestedAction::CorrectPackageBuild,
+                    )],
+                };
+            }
+            registry_breg::migration::MigrationError::DatabaseMismatch => (
+                "apply.database.identity_mismatch",
+                "identity.databaseId",
+                "the database records another database id than identity.databaseId: point database.migrationUrlRef at the database identity.databaseId names, or correct identity.databaseId. Nothing was changed",
+                DiagnosticArtifact::RuntimeConfiguration,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
             registry_breg::migration::MigrationError::EmptyPlan => (
@@ -5030,7 +5268,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             registry_breg::migration::MigrationError::PackageBinding => (
                 "apply.package.refused",
                 "package",
-                "the activation package was refused",
+                "the target package does not follow the active package: it must be this registry's package and its migrationPlan.fromPackageDigest must name the active package digest; build the successor with `bregctl package --baseline-package <active package directory>`. Packages apply forward only: to undo a change, build and apply a successor that reverts it, or restore the pre-activation backup: https://docs.registrystack.org/operate/breg-changes/#roll-back-by-rolling-forward. Nothing was changed",
                 DiagnosticArtifact::VerifiedPackage,
                 SuggestedAction::VerifyPackageBinding,
             ),
@@ -5057,7 +5295,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             ),
             registry_breg::migration::MigrationError::StatementFailed(failure) => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "apply.migration.statement_failed",
                         "database",
@@ -5083,6 +5321,73 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::ResolveActiveRequestProposals,
             ),
+            registry_breg::migration::MigrationError::PreLedgerDatabase => (
+                "apply.database.pre_ledger",
+                "database",
+                "the database was installed by a release before the activation ledger: build the deployed project with this release's `bregctl package`, set package.root to that package directory, and run `bregctl apply --package DIR` without --initial once to adopt the database into the ledger. Nothing was changed",
+                DiagnosticArtifact::PackageActivation,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            registry_breg::migration::MigrationError::AdoptionNotReady => (
+                "apply.adoption.not_ready",
+                "database",
+                "the release that installed the database left an activation in maintenance, so it cannot be adopted: finish that activation with the release that started it, retrying its apply or running its `bregctl migration reconcile`, then run `bregctl apply --package DIR` with this release again. Nothing was changed",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::ReconcileFailedMigration,
+            ),
+            registry_breg::migration::MigrationError::RuntimeWriteAuthority(finding) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.runtime_role.can_write",
+                        "database.roles.runtime",
+                        &format!("{finding}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::ResumeRolesDiffer { .. } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "apply.resume.roles_differ",
+                        "database.roles",
+                        &format!("{error}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                );
+            }
+            registry_breg::migration::MigrationError::SuccessorRolesDiffer { .. } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "apply.successor.roles_differ",
+                        "database.roles",
+                        &format!("{error}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                );
+            }
+            registry_breg::migration::MigrationError::AdoptionFingerprintMismatch {
+                live,
+                package,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.adoption.fingerprint_mismatch",
+                        "package",
+                        &format!(
+                            "the live managed schema fingerprint {live} differs from the package's {package}, so the package does not describe the database it would adopt: rebuild the package from the project that is deployed, with this release's `bregctl package`, and apply it again. Nothing was changed"
+                        ),
+                    ),
+                    DiagnosticArtifact::VerifiedPackage,
+                    SuggestedAction::CorrectPackageBuild,
+                );
+            }
             registry_breg::migration::MigrationError::RetiredAuditRowsPresent => (
                 "apply.audit.retired_rows_present",
                 "database",
@@ -5094,7 +5399,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
     };
     FailureReport {
         ok: false,
-        command: "apply",
+        command,
         diagnostics: vec![tool_diagnostic(
             diagnostic(code, path, message),
             artifact,
@@ -5134,10 +5439,7 @@ fn candidate_package_error(command: &'static str, error: PackageError) -> Failur
         match error {
             PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
             PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-            PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-            PackageError::Binding
-            | PackageError::BindingMismatch(_)
-            | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
+            PackageError::Binding => SuggestedAction::VerifyPackageBinding,
             _ => SuggestedAction::CorrectSchemaTestCandidate,
         },
     )
@@ -5178,7 +5480,7 @@ fn verify(args: &VerifyArgs) -> Result<VerifySuccessReport, FailureReport> {
         ok: true,
         command: "verify",
         assurance: BaselineAssurance::RuntimeBound,
-        package_revision: inspected.package_revision().to_owned(),
+        package_digest: inspected.package_digest().to_owned(),
         registry: VerifiedRegistryReport {
             id: registry.registry_id().to_owned(),
             version: registry.version().to_owned(),
@@ -5206,7 +5508,7 @@ fn migration_explain(
         ok: true,
         command: "migration explain",
         assurance: BaselineAssurance::RuntimeBound,
-        package_revision: inspected.package_revision().to_owned(),
+        package_digest: inspected.package_digest().to_owned(),
         plan: inspected.migration_summary().clone(),
     })
 }
@@ -5262,6 +5564,9 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
         ReconcileLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("migration reconcile", "migration.reconcile", error);
         }
+        ReconcileLifecycleError::ActiveRegistry(error) => {
+            return active_registry_failure("migration reconcile", "migration.reconcile", error);
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5273,6 +5578,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ReconcileLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        ReconcileLifecycleError::ActiveRegistry(_) => unreachable!("handled before match"),
         ReconcileLifecycleError::TargetPackagePath => (
             "migration.reconcile.package.path_invalid",
             "package",
@@ -5292,11 +5598,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding
- | PackageError::BindingMismatch(_)
- | PackageError::AlreadyActive
- | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -5422,9 +5724,6 @@ fn inspection_failure(
                 )],
             };
         }
-        RuntimePackageInspectionError::Package(PackageError::DigestPinUnverifiable) => {
-            return digest_pin_unverifiable_failure(command, prefix);
-        }
         other => other,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5438,43 +5737,11 @@ fn inspection_failure(
         RuntimePackageInspectionError::RuntimeConfig(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::SharedPackage(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::Package(error) => {
-            let (suffix, action) = match error {
-                PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),
-                PackageError::Permissions => (
-                    "permissions_refused",
-                    SuggestedAction::VerifyPackagePermissions,
-                ),
-                PackageError::Signature => {
-                    ("signature_refused", SuggestedAction::VerifyPackageTrust)
-                }
-                PackageError::Binding
-                | PackageError::BindingMismatch(_)
-                | PackageError::AlreadyActive
-                | PackageError::OlderThanActive => {
-                    ("binding_refused", SuggestedAction::VerifyPackageBinding)
-                }
-                PackageError::TrustAnchorNotCanonical => (
-                    "anchor_not_canonical",
-                    SuggestedAction::VerifyPackageIntegrity,
-                ),
-                PackageError::DigestPinUnverifiable => unreachable!("handled before match"),
-                PackageError::Envelope
-                | PackageError::Closure
-                | PackageError::Integrity
-                | PackageError::CanonicalJson
-                | PackageError::Derivation
-                | PackageError::MigrationPlan
-                | PackageError::ReviewedMigration(_) => {
-                    ("integrity_refused", SuggestedAction::VerifyPackageIntegrity)
-                }
-                PackageError::Bounds | PackageError::Read => {
-                    ("package_refused", SuggestedAction::VerifyPackageIntegrity)
-                }
-            };
+            let (suffix, action) = package_refusal(error);
             (
                 format!("{prefix}.package.{suffix}"),
                 "package",
-                "the configured package was refused",
+                package_refusal_message(error, "the configured package was refused"),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
             )
@@ -5491,21 +5758,119 @@ fn inspection_failure(
     }
 }
 
-/// A predecessor without `SHA256SUMS` under a `package.expectedDigest` pin.
-fn digest_pin_unverifiable_failure(command: &'static str, prefix: &str) -> FailureReport {
+/// The diagnostic code suffix and next action for a refused package, shared
+/// by every command that reads one.
+fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
+    match error {
+        PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),
+        PackageError::Permissions => (
+            "permissions_refused",
+            SuggestedAction::VerifyPackagePermissions,
+        ),
+        PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
+        PackageError::LegacyFormat => ("legacy_format", SuggestedAction::CorrectPackageBuild),
+        PackageError::Envelope
+        | PackageError::Closure
+        | PackageError::Integrity
+        | PackageError::CanonicalJson
+        | PackageError::Derivation
+        | PackageError::MigrationPlan
+        | PackageError::ReviewedMigration(_) => {
+            ("integrity_refused", SuggestedAction::VerifyPackageIntegrity)
+        }
+        PackageError::Bounds | PackageError::Read => {
+            ("package_refused", SuggestedAction::VerifyPackageIntegrity)
+        }
+    }
+}
+
+fn package_refusal_action(error: PackageError) -> SuggestedAction {
+    match error {
+        PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+        PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+        PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+        _ => SuggestedAction::VerifyPackageIntegrity,
+    }
+}
+
+/// A package in the retired format is refused with the command that rebuilds
+/// it; every other refusal keeps the caller's value-free sentence.
+fn package_refusal_message(error: PackageError, message: &'static str) -> &'static str {
+    match error {
+        PackageError::LegacyFormat => registry_breg::package::LEGACY_PACKAGE_FORMAT,
+        _ => message,
+    }
+}
+
+/// A lifecycle that could not bind the configured active package to the
+/// identity the database records. Each refusal names the next command.
+fn active_registry_failure(
+    command: &'static str,
+    prefix: &str,
+    error: ActiveRegistryError,
+) -> FailureReport {
+    let (suffix, path, message, artifact, action) = match error {
+        ActiveRegistryError::Unavailable => (
+            "unavailable",
+            "database",
+            "the database could not be read to find its active registry; check that database.migrationUrlRef reaches PostgreSQL as the migration role, then rerun the command",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ActiveRegistryError::Uninitialized => (
+            "uninitialized",
+            "database",
+            "the database records no activated registry for this package; run `bregctl apply --initial` first",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ActiveRegistryError::PreLedger => (
+            "pre_ledger",
+            "database",
+            "the database was installed by a release before the activation ledger; run `bregctl apply --package DIR` once to adopt it into the ledger, then rerun the command",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ActiveRegistryError::DatabaseMismatch => (
+            "database_mismatch",
+            "identity.databaseId",
+            "the database records another database id than identity.databaseId; point database.migrationUrlRef at the database identity.databaseId names, or correct identity.databaseId",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ActiveRegistryError::PackageMismatch => (
+            "package_mismatch",
+            "package.root",
+            "package.root names a package the database does not run; set package.root to the active package directory, which `bregctl status` reports",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+    };
     FailureReport {
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
-            diagnostic(
-                &format!("{prefix}.package.digest_pin_unverifiable"),
-                "package.expectedDigest",
-                DIGEST_PIN_UNVERIFIABLE,
-            ),
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
+            diagnostic(&format!("{prefix}.active_registry.{suffix}"), path, message),
+            artifact,
+            action,
         )],
     }
+}
+
+/// A `--baseline-package` directory that `test` or `package` refused.
+fn baseline_package_failure(command: &'static str, error: PackageError) -> FailureReport {
+    let (suffix, action) = package_refusal(error);
+    candidate_failure(
+        command,
+        &format!("package.baseline.{suffix}"),
+        "baselinePackage",
+        package_refusal_message(
+            error,
+            "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
+        ),
+        DiagnosticArtifact::BaselinePackage,
+        action,
+    )
 }
 
 fn runtime_config_diff_failure(error: RuntimeConfigError) -> FailureReport {
@@ -5546,53 +5911,11 @@ fn runtime_config_failure(
 }
 
 fn package_diff_failure(error: PackageError) -> FailureReport {
-    let (code, action) = match error {
-        PackageError::UnsafePath => (
-            "diff.baseline.path_refused",
-            SuggestedAction::VerifyPackagePath,
-        ),
-        PackageError::Permissions => (
-            "diff.baseline.permissions_refused",
-            SuggestedAction::VerifyPackagePermissions,
-        ),
-        PackageError::Signature => (
-            "diff.baseline.signature_refused",
-            SuggestedAction::VerifyPackageTrust,
-        ),
-        PackageError::Binding
-        | PackageError::BindingMismatch(_)
-        | PackageError::AlreadyActive
-        | PackageError::OlderThanActive => (
-            "diff.baseline.binding_refused",
-            SuggestedAction::VerifyPackageBinding,
-        ),
-        PackageError::TrustAnchorNotCanonical => (
-            "diff.baseline.anchor_not_canonical",
-            SuggestedAction::VerifyPackageIntegrity,
-        ),
-        PackageError::DigestPinUnverifiable => (
-            "diff.baseline.digest_pin_unverifiable",
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
-        PackageError::Envelope
-        | PackageError::Closure
-        | PackageError::Integrity
-        | PackageError::CanonicalJson
-        | PackageError::Derivation
-        | PackageError::MigrationPlan
-        | PackageError::ReviewedMigration(_) => (
-            "diff.baseline.integrity_refused",
-            SuggestedAction::VerifyPackageIntegrity,
-        ),
-        PackageError::Bounds | PackageError::Read => (
-            "diff.baseline.package_refused",
-            SuggestedAction::VerifyPackageIntegrity,
-        ),
-    };
+    let (suffix, action) = package_refusal(error);
     diff_failure_with_action(
-        code,
+        &format!("diff.baseline.{suffix}"),
         "baseline",
-        "the baseline package was refused",
+        package_refusal_message(error, "the baseline package was refused"),
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -5795,6 +6118,8 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
         command: "init",
         profile: ProfileArg::Authoring,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: files
             .iter()
@@ -5851,7 +6176,43 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
         command: "check",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: Some(compiled.revision().to_owned()),
+        package_digest: None,
         findings,
+        artifacts: Vec::new(),
+        explanation: None,
+        next_steps: Vec::new(),
+    })
+}
+
+/// Verify a closed package against its sums and rederive its registry
+/// revision, with no database, runtime configuration, or test receipt.
+fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
+    let inspected = inspect_package_integrity(package_root).map_err(|error| {
+        let (suffix, action) = package_refusal(error);
+        FailureReport {
+            ok: false,
+            command: "check",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    &format!("check.package.{suffix}"),
+                    "package",
+                    package_refusal_message(error, "the package was refused"),
+                ),
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )],
+        }
+    })?;
+    let revision = inspected.registry().revision().to_owned();
+    Ok(SuccessReport {
+        ok: true,
+        command: "check",
+        profile: ProfileArg::Production,
+        revision: Some(revision.clone()),
+        registry_revision: Some(revision),
+        package_digest: Some(inspected.package_digest().to_owned()),
+        findings: Vec::new(),
         artifacts: Vec::new(),
         explanation: None,
         next_steps: Vec::new(),
@@ -6145,6 +6506,8 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
         command: "project lock",
         profile: ProfileArg::Authoring,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: Some(json!({
@@ -6220,6 +6583,8 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         command: "generate",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: export
             .artifacts
@@ -6268,6 +6633,8 @@ fn generate(
         command: "generate",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: None,
@@ -6633,6 +7000,8 @@ fn explain_lifecycle(
         command: "explain",
         profile,
         revision: None,
+        registry_revision: None,
+        package_digest: None,
         findings: Vec::new(),
         artifacts: Vec::new(),
         explanation: Some(explain_envelope(
@@ -6707,6 +7076,8 @@ fn explain(
         command: "explain",
         profile,
         revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
         findings: compiler_findings(&compiled),
         artifacts: Vec::new(),
         explanation: Some(explanation),
@@ -7729,17 +8100,11 @@ registry:
   defaultLanguage: en
   canonicalBaseIri: https://generic-registry.example.invalid
 
-# Package identity binds a compiled package to one environment, one instance,
-# and one reviewed source revision. `local` is the unsigned environment that
-# `bregctl dev` runs on your machine. A deployment names its own environment,
-# such as `production`, and a package for any other environment than `local`
-# must be signed. Raise `sequence` by one for each package you build; the
-# runtime refuses a package whose identity does not match its configuration
-# file.
+# Package identity names the reviewed source revision a package is built
+# from. A package carries no environment: the same package directory is
+# applied unchanged to every environment, and each runtime file names its own
+# `identity.environment` and `identity.instanceId`.
 package:
-  environment: local
-  instanceId: generic-registry-1
-  sequence: 1
   sourceRevision: generic-registry-0.1.0
 
 # The Registry Manifest projection is the catalogue description this registry
@@ -7954,10 +8319,9 @@ kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
 
-# The environment, instance, and database this file may serve. `environment`
-# and `instanceId` must equal the `package` block in registry.yaml, and
-# `databaseId` the `--database-id` given to `test` and `package`. The project
-# starts as `local`; when you name a deployment environment, change both files.
+# The environment, instance, and database this file serves. A package names
+# none of them, so the same package directory is applied in every environment;
+# `bregctl apply` records this identity in the database it activates.
 identity:
   environment: local
   instanceId: generic-registry-1
@@ -7980,15 +8344,11 @@ database:
     migration: registry_migration
     runtime: registry_runtime
 
-# The activated package directory and the revision it must be.
-# `bregctl package` reports `activeRevision`; `compilerSourceRevision`
-# must equal `package.sourceRevision` in registry.yaml.
+# The activated package directory. The server starts only when the database
+# records this package's digest, the `packageDigest` `bregctl package` reports,
+# as its active package.
 package:
   root: /replace/me/packages/build-1/package
-  trustAnchorPath: /replace/me/package-trust-anchor.json
-  compilerSourceRevision: generic-registry-0.1.0
-  activeRevision: sha256:replace-me-with-the-revision-package-reported
-  activeSequence: 1
 
 # The token issuer this deployment accepts, and the claim names that carry
 # Registry authority. `authorityClaims` must name the claims the access profiles
@@ -10472,6 +10832,7 @@ fn success_lead(report: &SuccessReport) -> String {
             "Initialized a registry project. {} written.",
             report::counted(artifacts, "artifact")
         ),
+        "check" if report.package_digest.is_some() => "Package verified.".to_owned(),
         "check" => match report.profile {
             ProfileArg::Authoring => "Authoring check passed.".to_owned(),
             ProfileArg::Production => "Production check passed.".to_owned(),
@@ -10503,6 +10864,9 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
     lines.lead(&success_lead(report));
     if let Some(revision) = &report.revision {
         lines.pairs(&[("revision", revision.clone())]);
+    }
+    if let Some(digest) = &report.package_digest {
+        lines.pairs(&[("package digest", digest.clone())]);
     }
 
     if !report.artifacts.is_empty() {
@@ -11197,7 +11561,7 @@ fn write_dev_success(
                 ("breg url", "bregUrl"),
                 ("token endpoint", "tokenEndpoint"),
                 ("audience", "audience"),
-                ("package revision", "packageRevision"),
+                ("package digest", "packageDigest"),
                 ("state file", "stateFile"),
                 ("runtime config", "runtimeConfig"),
                 ("webhook receiver", "webhookUrl"),
@@ -11276,6 +11640,7 @@ fn write_dev_success(
 
 fn write_doctor_success(
     advisories: &[registry_breg::postgres::BaselineAdvisory],
+    role_mode: registry_breg::postgres::RoleMode,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -11284,6 +11649,7 @@ fn write_doctor_success(
         ok: true,
         command: "doctor",
         checked: &doctor::CHECKED_DEPENDENCIES,
+        role_mode: role_mode.as_str(),
         advisories: advisories
             .iter()
             .map(|advisory| DoctorAdvisory {
@@ -11305,12 +11671,16 @@ fn write_doctor_success(
                 "{} passed.",
                 report::counted(report.checked.len(), "dependency check")
             ));
-            let pairs: Vec<(&str, String)> = report
+            let mut pairs: Vec<(&str, String)> = report
                 .checked
                 .iter()
                 .map(|dependency| (*dependency, "pass".to_owned()))
                 .collect();
+            pairs.push(("roleMode", report.role_mode.to_owned()));
             lines.pairs(&pairs);
+            if role_mode == registry_breg::postgres::RoleMode::Single {
+                lines.prose(2, SINGLE_ROLE_MODE_NOTE);
+            }
             if !report.advisories.is_empty() {
                 lines.heading("PostgreSQL advisories:");
                 for advisory in &report.advisories {
@@ -11393,8 +11763,8 @@ fn write_field_encryption_preflight_success(
                 report::counted_total(covered, "plaintext value")
             ));
             let mut pairs = vec![(
-                "package revision".to_owned(),
-                report.outcome.package_revision.clone(),
+                "package digest".to_owned(),
+                report.outcome.package_digest.clone(),
             )];
             for step in &report.outcome.report.steps {
                 let choice = match step.history_choice {
@@ -11459,7 +11829,7 @@ fn write_field_encryption_erase_history_success(
                 )
             ),
             &[
-                ("package revision", report.outcome.package_revision.clone()),
+                ("package digest", report.outcome.package_digest.clone()),
                 (
                     "erased records",
                     report.outcome.outcome.erased_record_count.to_string(),
@@ -11599,7 +11969,7 @@ fn write_verify_success(
             "Verified the package against the runtime it is bound to.",
             &[
                 ("assurance", "runtime_bound".to_owned()),
-                ("package revision", report.package_revision.clone()),
+                ("package digest", report.package_digest.clone()),
                 ("registry id", report.registry.id.clone()),
                 ("registry version", report.registry.version.clone()),
                 ("registry revision", report.registry.revision.clone()),
@@ -11647,39 +12017,18 @@ fn write_package_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
+        let mut fields = vec![
+            ("profile", "production".to_owned()),
+            ("package digest", report.package_digest.clone()),
+            ("registry revision", report.registry_revision.clone()),
+            ("package files", report.package_files.to_string()),
+        ];
+        if let Some(revision) = &report.revision {
+            fields.push(("revision", revision.clone()));
+        }
         render_report(
-            match report.state {
-                PackageReportState::AwaitingSignatures => {
-                    "Sealed a deployment package. It is awaiting signatures."
-                }
-                PackageReportState::Published => "Sealed and published a deployment package.",
-            },
-            &[
-                ("profile", "production".to_owned()),
-                (
-                    "state",
-                    match report.state {
-                        PackageReportState::AwaitingSignatures => "awaiting_signatures",
-                        PackageReportState::Published => "published",
-                    }
-                    .to_owned(),
-                ),
-                ("package revision", report.package_revision.clone()),
-                (
-                    "signature threshold",
-                    report.signature_threshold.to_string(),
-                ),
-                (
-                    "provided signatures",
-                    report.provided_signatures.to_string(),
-                ),
-                ("package files", report.package_files.to_string()),
-                ("signing input sha256", report.signing_input.sha256.clone()),
-                (
-                    "signing input bytes",
-                    report.signing_input.byte_length.to_string(),
-                ),
-            ],
+            "Sealed and published a deployment package.",
+            &fields,
             stdout,
         )
     };
@@ -11704,9 +12053,8 @@ fn write_schema_test_success(
             ),
             &[
                 ("profile", "production".to_owned()),
-                ("package revision", report.package_revision.clone()),
+                ("registry revision", report.registry_revision.clone()),
                 ("schema fingerprint", report.schema_fingerprint.clone()),
-                ("signing input sha256", report.signing_input_sha256.clone()),
                 (
                     "successful journeys",
                     list_or_none(&report.successful_journey_ids),
@@ -11736,8 +12084,11 @@ fn write_apply_success(
             match report.activation {
                 ApplyActivation::Initial => "Activated the first package on this registry.",
                 ApplyActivation::Successor => "Activated the package over its predecessor.",
-                ApplyActivation::AlreadyActive => {
-                    "The package is already active; nothing was applied."
+                ApplyActivation::RoleChange => {
+                    "Activated the active package again with the configured database roles."
+                }
+                ApplyActivation::Adopted => {
+                    "Adopted the database into the activation ledger as it stands; the ledger history of the release that installed it was dropped."
                 }
             },
             &[
@@ -11746,16 +12097,147 @@ fn write_apply_success(
                     match report.activation {
                         ApplyActivation::Initial => "initial",
                         ApplyActivation::Successor => "successor",
-                        ApplyActivation::AlreadyActive => "already active",
+                        ApplyActivation::RoleChange => "role_change",
+                        ApplyActivation::Adopted => "adopted",
                     }
                     .to_owned(),
                 ),
-                ("package revision", report.package_revision.clone()),
+                ("package digest", report.package_digest.clone()),
                 ("schema fingerprint", report.schema_fingerprint.clone()),
-                ("package sequence", report.package_sequence.to_string()),
+                ("activation id", report.activation_id.clone()),
             ],
             stdout,
         )
+    };
+    write_result(result, stderr)
+}
+
+fn write_plan_success(
+    report: &PlanSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let lead = match report.activation {
+            PlanActivation::Initial => "Planned the first activation on this registry; nothing was changed. Run `bregctl apply --initial --package DIR` to activate it.",
+            PlanActivation::Successor => "Planned a successor activation over the active package; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
+            PlanActivation::RoleChange => "Planned activating the active package again with the configured database roles; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
+            PlanActivation::Adopted => "Planned adopting the database into the activation ledger as it stands; nothing was changed. Run `bregctl apply --package DIR` to adopt it; the ledger history of the release that installed it is dropped.",
+            PlanActivation::None => "The database already runs this package with the configured database roles; there is nothing to apply.",
+        };
+        let mut lines = report::Lines::new();
+        lines.lead(lead);
+        let mut pairs = vec![
+            (
+                "activation",
+                match report.activation {
+                    PlanActivation::Initial => "initial",
+                    PlanActivation::Successor => "successor",
+                    PlanActivation::RoleChange => "role_change",
+                    PlanActivation::Adopted => "adopted",
+                    PlanActivation::None => "none",
+                }
+                .to_owned(),
+            ),
+            ("package digest", report.package_digest.clone()),
+            ("registry revision", report.registry_revision.clone()),
+        ];
+        if let Some(active) = &report.active_package_digest {
+            pairs.push(("active package digest", active.clone()));
+        }
+        pairs.push(("role mode", report.role_mode.to_owned()));
+        if let Some(resumed) = &report.resumes_activation_id {
+            pairs.push(("resumes activation", resumed.clone()));
+        }
+        pairs.push((
+            "plan kind",
+            plan_kind_name(report.migration.plan_kind()).to_owned(),
+        ));
+        pairs.push(("change count", report.migration.change_count().to_string()));
+        pairs.push((
+            "reviewed migration count",
+            report.migration.reviewed_migrations().len().to_string(),
+        ));
+        pairs.push(("checks passed", report.checks.join(", ")));
+        lines.pairs(&pairs);
+        if !report.required_backups.is_empty() {
+            lines.blank();
+            lines.item("apply requires --backup for");
+            for binding in &report.required_backups {
+                lines.item_at(1, binding);
+            }
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
+}
+
+fn write_status_success(
+    report: &StatusSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let lead = if report.maintenance_status == "ready" {
+            "The database runs its active package and is ready.".to_owned()
+        } else {
+            format!(
+                "The database is in maintenance: an activation it pinned is {}. Retry the same `bregctl apply --package DIR`, or assess it with `bregctl migration reconcile`.",
+                report.maintenance_status
+            )
+        };
+        let mut lines = report::Lines::new();
+        lines.lead(&lead);
+        let mut pairs = vec![
+            ("package id", report.package_id.clone()),
+            ("database id", report.database_id.clone()),
+            (
+                "active package digest",
+                report.active_package_digest.clone(),
+            ),
+            ("activation id", report.activation_id.clone()),
+        ];
+        if let Some(revision) = &report.registry_revision {
+            pairs.push(("registry revision", revision.clone()));
+        }
+        if let Some(role_mode) = &report.role_mode {
+            pairs.push(("role mode", role_mode.clone()));
+        }
+        pairs.push(("schema fingerprint", report.schema_fingerprint.clone()));
+        pairs.push(("maintenance status", report.maintenance_status.clone()));
+        if let Some(target) = &report.maintenance_target_package_digest {
+            pairs.push(("maintenance target", target.clone()));
+        }
+        lines.pairs(&pairs);
+        for entry in &report.ledger {
+            lines.blank();
+            lines.item(&format!("activation {}", entry.apply_order));
+            let mut fields = vec![
+                ("activation id", entry.activation_id.clone()),
+                ("package digest", entry.package_digest.clone()),
+                ("registry revision", entry.registry_revision.clone()),
+                ("plan kind", entry.plan_kind.clone()),
+                ("migration kind", entry.migration_kind.clone()),
+                ("outcome", entry.outcome.clone()),
+                ("role mode", entry.role_mode.clone()),
+                ("started at", entry.started_at.clone()),
+            ];
+            if let Some(applied) = &entry.applied_at {
+                fields.push(("applied at", applied.clone()));
+            }
+            lines.pairs_at(1, &fields);
+        }
+        stdout.write_all(lines.finish().as_bytes())
     };
     write_result(result, stderr)
 }
@@ -11827,16 +12309,16 @@ fn write_migration_reconcile_human(
                 optional(outcome.maintenance_status.as_deref()).to_owned(),
             ),
             (
-                "pinned target revision",
-                optional(outcome.maintenance_target_revision.as_deref()).to_owned(),
+                "pinned target digest",
+                optional(outcome.maintenance_target_package_digest.as_deref()).to_owned(),
             ),
             (
-                "active package revision",
-                optional(outcome.active_package_revision.as_deref()).to_owned(),
+                "active package digest",
+                optional(outcome.active_package_digest.as_deref()).to_owned(),
             ),
             (
-                "presented target revision",
-                outcome.target_package_revision.to_string(),
+                "presented target digest",
+                outcome.target_package_digest.to_string(),
             ),
             (
                 "target catalog finding",
@@ -12428,9 +12910,9 @@ fn write_migration_explain_human(
     ));
     lines.pairs(&[
         ("assurance", "runtime_bound".to_owned()),
-        ("package revision", report.package_revision.clone()),
+        ("package digest", report.package_digest.clone()),
         ("plan kind", plan_kind_name(plan.plan_kind()).to_owned()),
-        ("has prior revision", plan.has_prior_revision().to_string()),
+        ("has predecessor", plan.has_predecessor().to_string()),
         ("has prior baseline", plan.has_prior_baseline().to_string()),
         ("change count", plan.change_count().to_string()),
         (
@@ -12635,15 +13117,16 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_breg::postgres::RoleMode;
 
     fn reconcile_lifecycle_outcome(outcome: &'static str) -> ReconcileLifecycleOutcome {
         ReconcileLifecycleOutcome {
             outcome,
             executed: false,
             maintenance_status: Some("failed".to_owned()),
-            maintenance_target_revision: Some("rev-2".to_owned()),
-            active_package_revision: Some("rev-1".to_owned()),
-            target_package_revision: "rev-2".to_owned(),
+            maintenance_target_package_digest: Some("rev-2".to_owned()),
+            active_package_digest: Some("rev-1".to_owned()),
+            target_package_digest: "rev-2".to_owned(),
             target_catalog_finding: None,
             active_catalog_finding: None,
             unresolvable_reason: None,
@@ -12652,6 +13135,47 @@ mod tests {
             reviewed_plan_closed: None,
             durable_step_progress: None,
         }
+    }
+
+    #[test]
+    fn a_refused_active_package_names_package_root_apart_from_the_target() {
+        let diagnostic = |error| {
+            let report = serde_json::to_value(lifecycle_failure("plan", error))
+                .expect("the failure report serializes");
+            report["diagnostics"][0].clone()
+        };
+        let target = diagnostic(ApplyLifecycleError::TargetPackage(
+            PackageError::LegacyFormat,
+        ));
+        assert_eq!(target["code"], "apply.package.refused");
+        assert_eq!(target["path"], "package");
+        assert_eq!(
+            target["message"],
+            registry_breg::package::LEGACY_PACKAGE_FORMAT
+        );
+
+        // A database a release before the activation ledger activated is
+        // adopted by the package package.root names, and that release's
+        // packages all use the retired format.
+        let active = diagnostic(ApplyLifecycleError::CurrentPackage(
+            PackageError::LegacyFormat,
+        ));
+        assert_eq!(active["code"], "apply.package.refused");
+        assert_eq!(active["path"], "package.root");
+        let message = active["message"].as_str().expect("the message renders");
+        assert!(message.contains("package.root"), "{message}");
+        assert!(message.contains("`bregctl package`"), "{message}");
+
+        let active = diagnostic(ApplyLifecycleError::CurrentPackage(
+            PackageError::Permissions,
+        ));
+        assert_eq!(active["path"], "package.root");
+        assert!(
+            active["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("package.root")),
+            "{active}"
+        );
     }
 
     #[test]
@@ -13744,7 +14268,7 @@ mod tests {
             max_items: 10,
             committed_items: 4,
             input_digests: Vec::new(),
-            activation_revision: "package-1".to_owned(),
+            activation_id: uuid::Uuid::nil(),
             opened_at,
             expires_at: opened_at + chrono::Duration::days(7),
             status: ImportAuthorityStatus::Open,
@@ -13809,6 +14333,8 @@ mod tests {
                 "package",
                 "test",
                 "apply",
+                "plan",
+                "status",
                 "doctor",
                 "verify",
                 "migration",
@@ -13860,7 +14386,7 @@ mod tests {
             "bregUrl": "http://127.0.0.1:8090",
             "tokenEndpoint": "http://127.0.0.1:8091/token",
             "audience": "urn:breg:dev:local",
-            "packageRevision": "revision-1",
+            "packageDigest": "sha256:package-1",
             "clients": [{
                 "id": "operator",
                 "accessProfiles": ["operator"],
@@ -13878,14 +14404,14 @@ mod tests {
         assert_eq!(
             plain(&stdout),
             "bregctl dev succeeded.\n\
-             \x20 status            ready\n\
-             \x20 project           /local/registry\n\
-             \x20 breg url          http://127.0.0.1:8090\n\
-             \x20 token endpoint    http://127.0.0.1:8091/token\n\
-             \x20 audience          urn:breg:dev:local\n\
-             \x20 package revision  revision-1\n\
-             \x20 state file        /local/registry/.breg/dev/state.json\n\
-             \x20 runtime config    /local/registry/.breg/dev/runtime.yaml\n\
+             \x20 status          ready\n\
+             \x20 project         /local/registry\n\
+             \x20 breg url        http://127.0.0.1:8090\n\
+             \x20 token endpoint  http://127.0.0.1:8091/token\n\
+             \x20 audience        urn:breg:dev:local\n\
+             \x20 package digest  sha256:package-1\n\
+             \x20 state file      /local/registry/.breg/dev/state.json\n\
+             \x20 runtime config  /local/registry/.breg/dev/runtime.yaml\n\
              \n\
              \x20 client operator\n\
              \x20   client id file      \
@@ -14120,23 +14646,65 @@ mod tests {
                  \u{20}\u{20}eventDestinations    pass\n\
                  \u{20}\u{20}reviewBindings       pass\n\
                  \u{20}\u{20}authentication       pass\n\
-                 \u{20}\u{20}fieldEncryption      pass\n",
+                 \u{20}\u{20}fieldEncryption      pass\n\
+                 \u{20}\u{20}roleMode             split\n",
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"advisories\": []\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(plain(&stdout), expected);
             assert!(stderr.is_empty());
         }
+    }
+
+    #[test]
+    fn doctor_says_what_one_role_mode_does_not_guard() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_doctor_success(
+                &[],
+                RoleMode::Single,
+                OutputFormat::Human,
+                &mut stdout,
+                &mut stderr
+            ),
+            ExitCode::SUCCESS
+        );
+        let human = plain(&stdout);
+        assert!(human.contains("roleMode             single\n"), "{human}");
+        assert!(
+            human
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("catches mistakes but not someone holding that credential"),
+            "{human}"
+        );
+
+        let mut stdout = Vec::new();
+        assert_eq!(
+            write_doctor_success(
+                &[],
+                RoleMode::Single,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr
+            ),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).expect("doctor JSON parses");
+        assert_eq!(report["roleMode"], "single");
     }
 
     #[test]
@@ -14156,7 +14724,13 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_doctor_success(&advisories, OutputFormat::Human, &mut stdout, &mut stderr),
+            write_doctor_success(
+                &advisories,
+                RoleMode::Split,
+                OutputFormat::Human,
+                &mut stdout,
+                &mut stderr
+            ),
             ExitCode::SUCCESS
         );
         assert!(stderr.is_empty());
@@ -14165,7 +14739,7 @@ mod tests {
             .split_once("\n\nPostgreSQL advisories:\n")
             .expect("advisories follow the passing checks in their own section");
         assert!(checks.starts_with("10 dependency checks passed.\n"));
-        assert!(checks.ends_with("fieldEncryption      pass"));
+        assert!(checks.ends_with("roleMode             split"));
         assert_eq!(
             advisory_section,
             "  warning  postgres.connections.pool_over_half\n\
@@ -14187,7 +14761,13 @@ mod tests {
 
         let mut stdout = Vec::new();
         assert_eq!(
-            write_doctor_success(&advisories, OutputFormat::Json, &mut stdout, &mut stderr),
+            write_doctor_success(
+                &advisories,
+                RoleMode::Split,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr
+            ),
             ExitCode::SUCCESS
         );
         assert!(stderr.is_empty());
@@ -14304,22 +14884,21 @@ mod tests {
     #[test]
     fn a_fixture_run_names_its_journeys_the_way_an_export_names_its_fields() {
         for (journeys, expected) in [
-            (Vec::new(), "successful journeys   none\n"),
+            (Vec::new(), "successful journeys  none\n"),
             (
                 vec![
                     "package-record-list".to_owned(),
                     "package-record-get".to_owned(),
                 ],
-                "successful journeys   package-record-list, package-record-get\n",
+                "successful journeys  package-record-list, package-record-get\n",
             ),
         ] {
             let report = SchemaTestSuccessReport {
                 ok: true,
                 command: "test",
                 profile: ProfileArg::Production,
-                package_revision: "pkg-1".to_owned(),
+                registry_revision: "sha256:registry-1".to_owned(),
                 schema_fingerprint: "sha256:1111".to_owned(),
-                signing_input_sha256: "sha256:2222".to_owned(),
                 successful_journey_ids: journeys,
                 receipt: ArtifactReport {
                     path: "result.json".to_owned(),
@@ -14354,9 +14933,8 @@ mod tests {
             ok: true,
             command: "test",
             profile: ProfileArg::Production,
-            package_revision: "pkg-2".to_owned(),
+            registry_revision: "sha256:registry-2".to_owned(),
             schema_fingerprint: "sha256:3333".to_owned(),
-            signing_input_sha256: "sha256:4444".to_owned(),
             successful_journey_ids: vec!["package-record-list".to_owned()],
             receipt: ArtifactReport {
                 path: "result.json".to_owned(),
@@ -14958,6 +15536,29 @@ fn apply_reports_an_empty_successor_plan_as_nothing_to_apply() {
 
 #[cfg(test)]
 #[test]
+fn apply_reports_a_refused_operator_reference_without_repeating_it() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::OperatorReference,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.operator_reference.refused");
+    assert_eq!(diagnostic.path, "operatorReference");
+    for fragment in [
+        "--operator-reference",
+        "512 bytes",
+        "keyed",
+        "Nothing was changed",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
 fn apply_reports_a_history_coverage_refusal_with_its_recovery() {
     let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
         registry_breg::migration::MigrationError::HistoryCoverage,
@@ -14988,55 +15589,119 @@ fn apply_reports_a_history_coverage_refusal_with_its_recovery() {
 
 #[cfg(test)]
 #[test]
-fn apply_names_the_differing_binding_field_and_never_its_values() {
-    use registry_breg::package::PackageBindingField;
+fn an_instance_claim_package_refusal_keeps_the_pin_sentence_it_names() {
+    use registry_breg::instance_claim::InstanceClaimError;
 
-    for (error, path, subject) in [
+    let sentence = "package.expectedDigest is sha256:a but the package at package.root is sha256:b; deploy the pinned package or update package.expectedDigest";
+    let report = instance_claim_failure(
+        "instance-claim status",
+        InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(sentence.to_owned())),
+    );
+    assert!(!report.ok);
+    assert_eq!(report.command, "instance-claim status");
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "instance_claim.package.refused");
+    assert_eq!(diagnostic.path, "package");
+    assert_eq!(diagnostic.message, sentence);
+}
+
+#[cfg(test)]
+#[test]
+fn apply_chain_refusals_name_the_operators_next_command() {
+    use registry_breg::migration::MigrationError;
+
+    for (error, code, path, next) in [
         (
-            ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(
-                PackageBindingField::Environment,
-            )),
-            "identity.environment",
-            "target package",
+            ApplyLifecycleError::Uninitialized,
+            "apply.database.uninitialized",
+            "database",
+            "bregctl apply --initial",
         ),
         (
-            ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(
-                PackageBindingField::DatabaseId,
-            )),
+            ApplyLifecycleError::Apply(MigrationError::AlreadyActive),
+            "apply.package.already_active",
+            "package",
+            "bregctl status",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::DatabaseMismatch),
+            "apply.database.identity_mismatch",
             "identity.databaseId",
-            "target package",
+            "database.migrationUrlRef",
         ),
         (
-            ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(
-                PackageBindingField::InstanceId,
-            )),
-            "identity.instanceId",
-            "target package",
+            ApplyLifecycleError::Apply(MigrationError::PackageBinding),
+            "apply.package.refused",
+            "package",
+            "bregctl package --baseline-package",
         ),
         (
-            ApplyLifecycleError::CurrentPackage(PackageError::BindingMismatch(
-                PackageBindingField::ActiveRevision,
+            ApplyLifecycleError::Apply(MigrationError::PreLedgerDatabase),
+            "apply.database.pre_ledger",
+            "database",
+            "bregctl apply --package",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::AdoptionNotReady),
+            "apply.adoption.not_ready",
+            "database",
+            "bregctl migration reconcile",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::RuntimeWriteAuthority(
+                registry_breg::postgres::RuntimeWriteAuthority::Privilege {
+                    grantee: "PUBLIC".to_owned(),
+                    privilege: "CREATE".to_owned(),
+                    object: "SCHEMA registry_data".to_owned(),
+                },
             )),
-            "package.activeRevision",
-            "active package",
+            "apply.runtime_role.can_write",
+            "database.roles.runtime",
+            "`REVOKE CREATE ON SCHEMA registry_data FROM PUBLIC`, then rerun the refused command",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::AdoptionFingerprintMismatch {
+                live: "sha256:live".to_owned(),
+                package: "sha256:package".to_owned(),
+            }),
+            "apply.adoption.fingerprint_mismatch",
+            "package",
+            "bregctl package",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::ResumeRolesDiffer {
+                role_mode: "split".to_owned(),
+                runtime_role: "registry_runtime".to_owned(),
+            }),
+            "apply.resume.roles_differ",
+            "database.roles",
+            "runtime role `registry_runtime`; rerun the apply with the database roles it started with, or, for a new package, assess it with `bregctl migration reconcile`",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::SuccessorRolesDiffer {
+                role_mode: "split".to_owned(),
+                runtime_role: "registry_runtime".to_owned(),
+            }),
+            "apply.successor.roles_differ",
+            "database.roles",
+            "runtime role `registry_runtime`; apply the active package with the new roles first",
         ),
     ] {
         let report = apply_lifecycle_failure(error);
+        assert!(!report.ok);
         let diagnostic = &report.diagnostics[0];
-        assert_eq!(diagnostic.code, "apply.package.binding_mismatch");
+        assert_eq!(diagnostic.code, code);
         assert_eq!(diagnostic.path, path);
-        assert_eq!(diagnostic.artifact, DiagnosticArtifact::VerifiedPackage);
-        assert_eq!(
-            diagnostic.suggested_action,
-            SuggestedAction::VerifyPackageBinding
+        assert!(
+            diagnostic.message.contains(next),
+            "{next}: {}",
+            diagnostic.message
         );
-        for fragment in [path, subject] {
-            assert!(
-                diagnostic.message.contains(fragment),
-                "{fragment}: {}",
-                diagnostic.message
-            );
-        }
+        assert!(
+            diagnostic.message.contains("Nothing was changed"),
+            "{}",
+            diagnostic.message
+        );
     }
 }
 
@@ -15048,14 +15713,15 @@ fn apply_refuses_an_already_active_package_the_database_does_not_run() {
     ));
     let diagnostic = &report.diagnostics[0];
     assert_eq!(diagnostic.code, "apply.package.active_mismatch");
-    assert_eq!(diagnostic.path, "package.activeRevision");
+    assert_eq!(diagnostic.path, "package.root");
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::PackageActivation);
     assert_eq!(
         diagnostic.suggested_action,
         SuggestedAction::CorrectRuntimeConfiguration
     );
     for fragment in [
-        "names the target package as active",
+        "set package.root to the active package directory",
+        "bregctl status",
         "migration reconcile",
         "never been activated, apply it with --initial",
         "Nothing was changed",
@@ -15133,38 +15799,6 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
         "{}",
         diagnostic.message
     );
-}
-
-#[cfg(test)]
-#[test]
-fn apply_reports_an_already_active_package_as_nothing_applied() {
-    let report = ApplySuccessReport {
-        ok: true,
-        command: "apply",
-        activation: ApplyActivation::AlreadyActive,
-        package_revision: "sha256:active".to_owned(),
-        schema_fingerprint: "sha256:schema".to_owned(),
-        package_sequence: 2,
-    };
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    assert_eq!(
-        write_apply_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
-        ExitCode::SUCCESS
-    );
-    let text = String::from_utf8(stdout).expect("text output is UTF-8");
-    assert!(text.contains("already active"), "{text}");
-    assert!(text.contains("nothing was applied"), "{text}");
-
-    let mut stdout = Vec::new();
-    assert_eq!(
-        write_apply_success(&report, OutputFormat::Json, &mut stdout, &mut stderr),
-        ExitCode::SUCCESS
-    );
-    let json: serde_json::Value = serde_json::from_slice(&stdout).expect("JSON output parses");
-    assert_eq!(json["activation"], "already_active");
-    assert_eq!(json["ok"], true);
-    assert!(stderr.is_empty());
 }
 
 #[cfg(test)]
@@ -15472,7 +16106,7 @@ mod field_encryption_lifecycle_cli_tests {
             ok: true,
             command: "field-encryption preflight",
             outcome: FieldEncryptionPreflightLifecycleOutcome {
-                package_revision: "pkg-1".to_owned(),
+                package_digest: "pkg-1".to_owned(),
                 report: registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightReport {
                     steps: vec![
                         registry_breg::field_encryption_backfill::FieldEncryptionBackfillStepPreflight {
@@ -15548,7 +16182,7 @@ mod field_encryption_lifecycle_cli_tests {
             ok: true,
             command: "field-encryption erase-history",
             outcome: FieldEncryptionEraseHistoryLifecycleOutcome {
-                package_revision: "pkg-1".to_owned(),
+                package_digest: "pkg-1".to_owned(),
                 outcome:
                     registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureOutcome {
                         erased_record_count: 2,

@@ -75,7 +75,7 @@ pub(crate) const READ_POLICY: &str = "import_authority_runtime_read";
 pub(crate) const ADVANCE_POLICY: &str = "import_authority_runtime_advance";
 
 const AUTHORITY_COLUMNS: &str = "authority_id, entity_id, profile_id, operation, max_items,
-    committed_items, input_digests, activation_revision, opened_at, expires_at, status,
+    committed_items, input_digests, activation_id, opened_at, expires_at, status,
     closed_at";
 
 /// The lifecycle state of one authority. Only `open` admits work; every other
@@ -125,7 +125,9 @@ pub struct ImportAuthority {
     pub max_items: i64,
     pub committed_items: i64,
     pub input_digests: Vec<String>,
-    pub activation_revision: String,
+    /// The activation the authority was opened under. A later activation
+    /// supersedes it.
+    pub activation_id: Uuid,
     pub opened_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub status: ImportAuthorityStatus,
@@ -191,6 +193,9 @@ pub(crate) async fn install(
     migration: &impl tokio_postgres::GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), ImportAuthorityError> {
+    let runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?;
     migration
         .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_import_authorities (
@@ -206,7 +211,7 @@ pub(crate) async fn install(
                      CHECK (max_items BETWEEN 1 AND {MAX_IMPORT_AUTHORITY_ITEMS}),
                  committed_items bigint NOT NULL DEFAULT 0,
                  input_digests text[] NOT NULL DEFAULT '{{}}',
-                 activation_revision text NOT NULL CHECK (activation_revision <> ''),
+                 activation_id uuid NOT NULL,
                  opened_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  expires_at timestamptz NOT NULL,
                  status text NOT NULL DEFAULT 'open'
@@ -238,7 +243,7 @@ pub(crate) async fn install(
                  ON registry_internal.registry_import_authorities (entity_id)
                  WHERE status = 'open';
              REVOKE ALL ON registry_internal.registry_import_authorities FROM PUBLIC;
-             REVOKE ALL ON registry_internal.registry_import_authorities FROM \"{role}\";
+             {runtime_revoke}
              GRANT SELECT ON registry_internal.registry_import_authorities TO \"{role}\";
              GRANT UPDATE ({columns}) ON registry_internal.registry_import_authorities
                  TO \"{role}\";
@@ -257,6 +262,7 @@ pub(crate) async fn install(
             window_days = MAX_IMPORT_AUTHORITY_WINDOW.as_secs() / (24 * 60 * 60),
             columns = RUNTIME_UPDATE_COLUMNS.join(", "),
             role = runtime_role.as_str(),
+            runtime_revoke = runtime_revoke.revoke_all_on("registry_internal.registry_import_authorities"),
         ))
         .await
         .map_err(|_| ImportAuthorityError::Unavailable)?;
@@ -273,7 +279,7 @@ fn parse_row(row: &tokio_postgres::Row) -> Result<ImportAuthority, ImportAuthori
         max_items: row.get("max_items"),
         committed_items: row.get("committed_items"),
         input_digests: row.get("input_digests"),
-        activation_revision: row.get("activation_revision"),
+        activation_id: row.get("activation_id"),
         opened_at: row.get("opened_at"),
         expires_at: row.get("expires_at"),
         status: ImportAuthorityStatus::parse(&status).ok_or(ImportAuthorityError::Unavailable)?,
@@ -329,7 +335,7 @@ fn audit_record(
         "entityId": authority.entity_id,
         "profileId": authority.profile_id,
         "operation": authority.operation,
-        "activationRevision": authority.activation_revision,
+        "activationId": authority.activation_id.to_string(),
         "maxItems": authority.max_items,
         "committedItems": authority.committed_items,
         "openedAt": authority.opened_at.to_rfc3339(),
@@ -407,7 +413,9 @@ fn due_transition(
     if authority.status != ImportAuthorityStatus::Open {
         return None;
     }
-    if authority.activation_revision != package_revision {
+    // An activation id that does not parse names no activation this
+    // authority was opened under, so it retires the authority.
+    if !Uuid::parse_str(package_revision).is_ok_and(|id| id == authority.activation_id) {
         return Some(ImportAuthorityStatus::Superseded);
     }
     if authority.expires_at <= now {
@@ -476,11 +484,10 @@ async fn settle_open(
 /// Supersede every open authority inside the caller's transaction, which
 /// holds the registry lock, collecting one transition record for each into
 /// `pending` for the caller to append once it commits, and answer the
-/// authorities it moved. Adopting a restored copy calls this, so
-/// an authority the copy carries from its backup, even one an operator
-/// closed after the backup was taken, admits no work until an operator
-/// opens a new one.
-#[cfg(feature = "tooling")]
+/// authorities it moved. Every successful activation calls this, and so does
+/// adopting a restored copy, so an authority the copy carries from its
+/// backup, even one an operator closed after the backup was taken, admits no
+/// work until an operator opens a new one.
 pub(crate) async fn supersede_every_open(
     transaction: &Transaction<'_>,
     pending: &mut Vec<Value>,
@@ -729,6 +736,7 @@ impl ImportAuthorityOperatorService {
             .map_err(|_| ImportAuthorityError::Unavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
+            config.identity().database_id(),
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),
@@ -789,7 +797,7 @@ impl ImportAuthorityOperatorService {
         if !names_import_grant(&self.registry, request.entity_id, request.profile_id) {
             return Err(ImportAuthorityError::NotImportable);
         }
-        let package_revision = &self.expected.package_revision;
+        let package_revision = &self.expected.activation_id;
         let references = operator_references(
             self.audit.profile(),
             package_revision,
@@ -824,9 +832,9 @@ impl ImportAuthorityOperatorService {
                 &format!(
                     "INSERT INTO registry_internal.registry_import_authorities
                          (authority_id, entity_id, profile_id, operation, max_items,
-                          input_digests, activation_revision, expires_at,
+                          input_digests, activation_id, expires_at,
                           operator_reference, reason_reference)
-                     VALUES ($1, $2, $3, 'create', $4, $5, $6,
+                     VALUES ($1, $2, $3, 'create', $4, $5, $6::text::uuid,
                              transaction_timestamp() + make_interval(secs => $7::bigint),
                              $8, $9)
                      RETURNING {AUTHORITY_COLUMNS}"
@@ -864,7 +872,7 @@ impl ImportAuthorityOperatorService {
         request: ImportAuthorityCloseRequest<'_>,
     ) -> Result<ImportAuthority, ImportAuthorityError> {
         validate_close(&request)?;
-        let package_revision = &self.expected.package_revision;
+        let package_revision = &self.expected.activation_id;
         let references = operator_references(
             self.audit.profile(),
             package_revision,
@@ -925,7 +933,7 @@ impl ImportAuthorityOperatorService {
         let (_, transitioned) = settle_open(
             &transaction,
             &mut pending,
-            &self.expected.package_revision,
+            &self.expected.activation_id,
             None,
         )
         .await?;
@@ -982,8 +990,7 @@ impl ImportAuthorityOperatorService {
             .iter()
             .map(|row| {
                 let mut authority = parse_row(row)?;
-                if let Some(reached) =
-                    due_transition(&authority, &self.expected.package_revision, now)
+                if let Some(reached) = due_transition(&authority, &self.expected.activation_id, now)
                 {
                     authority.status = reached;
                 }
@@ -1143,6 +1150,9 @@ mod tests {
     #[test]
     fn supersession_wins_over_expiry_and_only_open_rows_move() {
         let now = Utc::now();
+        let first = Uuid::from_u128(1);
+        let first_revision = first.to_string();
+        let second_revision = Uuid::from_u128(2).to_string();
         let mut authority = ImportAuthority {
             authority_id: Uuid::nil(),
             entity_id: "enrollment".to_owned(),
@@ -1151,23 +1161,28 @@ mod tests {
             max_items: 1,
             committed_items: 0,
             input_digests: Vec::new(),
-            activation_revision: "revision-1".to_owned(),
+            activation_id: first,
             opened_at: now - chrono::Duration::days(2),
             expires_at: now - chrono::Duration::days(1),
             status: ImportAuthorityStatus::Open,
             closed_at: None,
         };
         assert_eq!(
-            due_transition(&authority, "revision-2", now),
+            due_transition(&authority, &second_revision, now),
             Some(ImportAuthorityStatus::Superseded)
         );
         assert_eq!(
-            due_transition(&authority, "revision-1", now),
+            due_transition(&authority, &first_revision, now),
             Some(ImportAuthorityStatus::Expired)
         );
         authority.expires_at = now + chrono::Duration::days(1);
-        assert_eq!(due_transition(&authority, "revision-1", now), None);
+        assert_eq!(due_transition(&authority, &first_revision, now), None);
+        assert_eq!(
+            due_transition(&authority, "not-an-activation-id", now),
+            Some(ImportAuthorityStatus::Superseded),
+            "an activation id that does not parse retires the authority"
+        );
         authority.status = ImportAuthorityStatus::Closed;
-        assert_eq!(due_transition(&authority, "revision-2", now), None);
+        assert_eq!(due_transition(&authority, &second_revision, now), None);
     }
 }

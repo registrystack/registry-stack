@@ -36,9 +36,9 @@ use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
-    RuntimePool,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{WebhookDeliveryError, WebhookDeliveryService, WebhookWorkOutcome};
@@ -476,6 +476,7 @@ async fn setup_with_options(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
+        "hook-proposal-instance",
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
@@ -486,12 +487,10 @@ async fn setup_with_options(
     let service = WebhookDeliveryService::new_with_field_encryption(
         pool.clone(),
         Arc::clone(&destinations),
-        Arc::new(HookHandlerRegistry::new(
-            &compiled,
-            &identity.package_revision,
-        )),
+        Arc::new(HookHandlerRegistry::new(&compiled, &identity.activation_id)),
         Arc::new(compiled.clone()),
         identity.clone(),
+        "hook-proposal-instance",
         lock_key,
         Duration::from_secs(2),
         database.audit(audit_profile.clone()),
@@ -551,10 +550,11 @@ impl Setup {
             destinations,
             Arc::new(HookHandlerRegistry::new(
                 &self.compiled,
-                &identity.package_revision,
+                &identity.activation_id,
             )),
             Arc::new(self.compiled.clone()),
             identity,
+            "hook-proposal-instance",
             lock_key,
             Duration::from_secs(2),
             self.database.audit(audit_profile),
@@ -574,11 +574,8 @@ impl Setup {
 fn registry_state_test_identity() -> RegistryStateTestIdentity<'static> {
     RegistryStateTestIdentity {
         package_id: "hook-proposal-registry",
-        environment: "local",
-        instance_id: "hook-proposal-instance",
         database_id: "hook-proposal-database",
-        package_revision: PACKAGE_REVISION,
-        package_sequence: 1,
+        label: PACKAGE_REVISION,
     }
 }
 
@@ -1487,18 +1484,18 @@ async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() 
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
 
     let mut successor_identity = setup.identity.clone();
-    successor_identity.package_revision = SUCCESSOR_PACKAGE_REVISION.to_owned();
-    successor_identity.package_sequence += 1;
+    successor_identity.package_digest = test_package_digest(SUCCESSOR_PACKAGE_REVISION);
+    successor_identity.activation_id = test_activation_id(SUCCESSOR_PACKAGE_REVISION);
     let changed = setup
         .database
         .admin
         .execute(
             "UPDATE registry_internal.registry_state
-             SET active_package_revision = $1, package_sequence = $2
+             SET active_package_digest = $1, active_activation_id = $2::text::uuid
              WHERE singleton",
             &[
-                &successor_identity.package_revision,
-                &successor_identity.package_sequence,
+                &successor_identity.package_digest,
+                &successor_identity.activation_id,
             ],
         )
         .await
@@ -2394,7 +2391,6 @@ struct DestinationFixture {
     root: PathBuf,
     secret_root: PathBuf,
     package_root: PathBuf,
-    trust_anchor: PathBuf,
     receiver_port: u16,
 }
 
@@ -2412,8 +2408,6 @@ impl DestinationFixture {
         let package_root = root.join("package");
         fs::create_dir_all(&secret_root).expect("secret root creates");
         fs::create_dir(&package_root).expect("package root creates");
-        let trust_anchor = root.join("trust-anchor.json");
-        fs::write(&trust_anchor, "{}").expect("trust anchor placeholder writes");
         write_secret(&secret_root.join(KEY_REF_CANARY), HMAC_KEY);
         write_secret(
             &secret_root.join(CA_REF_CANARY),
@@ -2423,7 +2417,6 @@ impl DestinationFixture {
             root,
             secret_root,
             package_root,
-            trust_anchor,
             receiver_port: receiver.address.port(),
         }
     }
@@ -2500,10 +2493,6 @@ database:
     runtime: registry_runtime
 package:
   root: {}
-  trustAnchorPath: {}
-  compilerSourceRevision: source-revision-1
-  activeRevision: {}
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example
@@ -2541,8 +2530,6 @@ cursor:
 "#,
             self.secret_root.display(),
             self.package_root.display(),
-            self.trust_anchor.display(),
-            PACKAGE_REVISION,
         )
     }
 }
@@ -2588,12 +2575,13 @@ struct HttpsReceiver {
 impl HttpsReceiver {
     async fn start() -> Self {
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(vec!["localhost".to_owned()])
                 .expect("loopback TLS certificate generates");
         let certificate_der = cert.der().clone();
         let certificate_pem = pem("CERTIFICATE", certificate_der.as_ref());
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate_der], private_key)
