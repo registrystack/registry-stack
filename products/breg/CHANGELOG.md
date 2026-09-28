@@ -42,6 +42,14 @@
     recorded identity, and `bregctl instance-claim` refuses a package root the
     runtime `package.expectedDigest` does not pin before it connects.
 
+- `bregctl apply` of the active package under other configured database
+  roles, such as a separate runtime role in place of one role for both, is its
+  own activation: it records a ledger row with the same package digest and the
+  role mode and runtime role it serves with, grants the runtime role, revokes
+  what the retired runtime role held as the runtime, and reports the
+  activation `role_change`. Under the roles the database already serves with,
+  it is refused as `apply.package.already_active`, naming `bregctl status`.
+
 - `bregctl apply --operator-reference TEXT` binds an operator's change
   reference to the activation. The text must be 1 to 512 bytes without control
   characters, and the audit profile must be keyed: the ledger row records only

@@ -1604,6 +1604,9 @@ impl DedicatedApplyConnection {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         let transaction = self.client.transaction().await?;
         install_registry_state_schema(&transaction, runtime_role).await?;
+        install_history_schema_store(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
         transaction.commit().await?;
         Ok(())
     }
@@ -2015,6 +2018,86 @@ impl DedicatedApplyConnection {
             return Ok(None);
         }
         in_flight_activation(&self.client, package_digest).await
+    }
+
+    /// The role mode and runtime role the ledger records for the active
+    /// activation. A database whose active activation has no applied ledger
+    /// row answers none.
+    pub(crate) async fn active_activation_roles(&mut self) -> Result<Option<(String, String)>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let row = self
+            .client
+            .query_opt(
+                "SELECT migration.role_mode, migration.runtime_role
+                 FROM registry_internal.registry_state AS state
+                 JOIN registry_internal.registry_migrations AS migration
+                   ON migration.activation_id = state.active_activation_id
+                 WHERE state.singleton AND migration.outcome = 'applied'",
+                &[],
+            )
+            .await?;
+        Ok(row.map(|row| (row.get(0), row.get(1))))
+    }
+
+    /// Retires the runtime role an activation stops serving with, so the role
+    /// a registry stops serving with keeps no access it held as the runtime.
+    /// A separate runtime role loses every privilege on the managed schemas
+    /// and their tables, sequences, and functions; a role that no longer
+    /// exists holds nothing to revoke. When the retired runtime role is the
+    /// migration role, it keeps its ownership and loses only the column
+    /// grants it held as the runtime, which the serving runtime role now holds.
+    pub(crate) async fn retire_runtime_role(
+        &mut self,
+        retired: &SqlIdentifier,
+        migration_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let transaction = self.client.transaction().await?;
+        if retired == migration_role {
+            let revokes = transaction
+                .query(
+                    "SELECT DISTINCT format(
+                         'REVOKE ALL (%I) ON TABLE %I.%I FROM %I',
+                         attribute.attname, namespace.nspname, class.relname,
+                         pg_catalog.pg_get_userbyid(class.relowner)
+                     )
+                     FROM pg_catalog.pg_class AS class
+                     JOIN pg_catalog.pg_namespace AS namespace
+                       ON namespace.oid = class.relnamespace
+                     JOIN pg_catalog.pg_attribute AS attribute
+                       ON attribute.attrelid = class.oid
+                      AND attribute.attnum > 0
+                      AND NOT attribute.attisdropped
+                     CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+                     WHERE namespace.nspname = ANY($1::text[])
+                       AND acl.grantee = class.relowner",
+                    &[&super::catalog::MANAGED_SCHEMAS],
+                )
+                .await?;
+            for revoke in revokes {
+                let revoke: String = revoke.try_get(0)?;
+                transaction.batch_execute(&revoke).await?;
+            }
+        } else {
+            let exists: bool = transaction
+                .query_one("SELECT to_regrole($1) IS NOT NULL", &[&retired.as_str()])
+                .await?
+                .try_get(0)?;
+            if exists {
+                let schemas = super::catalog::MANAGED_SCHEMAS.join(", ");
+                let role = retired.quoted();
+                transaction
+                    .batch_execute(&format!(
+                        "REVOKE ALL ON ALL TABLES IN SCHEMA {schemas} FROM {role};
+                         REVOKE ALL ON ALL SEQUENCES IN SCHEMA {schemas} FROM {role};
+                         REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schemas} FROM {role};
+                         REVOKE ALL ON SCHEMA {schemas} FROM {role};"
+                    ))
+                    .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(())
     }
 
     /// Reads the durable maintenance state while this session holds the

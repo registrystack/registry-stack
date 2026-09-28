@@ -220,6 +220,51 @@ pub(crate) fn verify_successor_package_binding(
     Ok(())
 }
 
+/// Binds a role change to the active package: the same database, the same
+/// package id, and the very package the database records as active.
+fn verify_role_change_binding(
+    package: &VerifiedPackage,
+    database_id: &str,
+    current: &ExpectedRegistryIdentity,
+) -> Result<()> {
+    current
+        .validate()
+        .map_err(|_| MigrationError::PackageBinding)?;
+    if database_id != current.database_id {
+        return Err(MigrationError::DatabaseMismatch);
+    }
+    if package.package_digest() != current.package_digest
+        || package.manifest().package_id != current.package_id
+    {
+        return Err(MigrationError::PackageBinding);
+    }
+    Ok(())
+}
+
+/// The ledger entry of a role change: a metadata-only successor of the
+/// active package to itself, under the roles the apply names.
+fn role_change_ledger_entry(
+    package: &VerifiedPackage,
+    current: &ExpectedRegistryIdentity,
+    roles: ApplyRoles<'_>,
+) -> MigrationLedgerEntry {
+    MigrationLedgerEntry {
+        activation_id: uuid::Uuid::nil(),
+        package_digest: package.package_digest().to_owned(),
+        predecessor_package_digest: Some(current.package_digest.clone()),
+        registry_revision: package.registry().revision().to_owned(),
+        plan_kind: ActivationPlanKind::Successor,
+        migration_kind: MigrationKind::MetadataOnly,
+        role_mode: RoleMode::from_roles(roles.migration, roles.runtime),
+        runtime_role: roles.runtime.as_str().to_owned(),
+        operator_reference_hash: None,
+        statement_checksums: Vec::new(),
+        artifact_bindings: Vec::new(),
+        backup_references: Vec::new(),
+        steps: Vec::new(),
+    }
+}
+
 /// The checksums of the compiler-owned DDL statements, in plan order.
 pub(crate) fn compiler_statement_checksums(statements: &[DdlStatement]) -> Vec<String> {
     statements
@@ -272,6 +317,12 @@ pub(crate) fn package_ledger_entry(
 pub enum ApplyPrecondition<'a> {
     InitialActivation,
     Successor {
+        current: &'a ExpectedRegistryIdentity,
+    },
+    /// Activate the active package again under different roles: a change of
+    /// role mode or of runtime role is its own activation, with no DDL, and
+    /// the runtime role it retires keeps no privilege.
+    RoleChange {
         current: &'a ExpectedRegistryIdentity,
     },
 }
@@ -593,6 +644,7 @@ pub async fn apply_verified_package(
     request: ApplyVerifiedPackageRequest<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
     let manifest = request.package.manifest();
+    let role_change = matches!(request.precondition, ApplyPrecondition::RoleChange { .. });
     let current = match request.precondition {
         ApplyPrecondition::InitialActivation => None,
         ApplyPrecondition::Successor { current } => {
@@ -603,15 +655,24 @@ pub async fn apply_verified_package(
             )?;
             Some(current)
         }
+        ApplyPrecondition::RoleChange { current } => {
+            verify_role_change_binding(request.package, request.deployment.database_id(), current)?;
+            Some(current)
+        }
     };
     // An uninitialized database accepts any package of a chain: it installs
     // the package's full compiled catalog, so neither the package's successor
     // plan nor its reviewed migrations apply to it.
-    let compiler_statements = match current {
+    // A role change runs no DDL: the active package's catalog is already in
+    // place, and only the runtime ACL changes.
+    let compiler_statements: &[DdlStatement] = match current {
+        Some(_) if role_change => &[],
         Some(_) => &manifest.migration_plan.statements,
         None => &request.package.registry().ddl().statements,
     };
-    let reviewed_plan = current.and(request.package.reviewed_migration_plan());
+    let reviewed_plan = current
+        .filter(|_| !role_change)
+        .and(request.package.reviewed_migration_plan());
     let declares_encrypted_fields = request
         .package
         .registry()
@@ -627,12 +688,13 @@ pub async fn apply_verified_package(
         return Err(MigrationError::PackageBinding);
     }
     if current.is_some()
+        && !role_change
         && manifest.migration_plan.reviewed_descriptors.is_empty() != reviewed_plan.is_none()
     {
         return Err(MigrationError::PackageBinding);
     }
     let rescoped_descriptor;
-    let successor_history = if let Some(plan_current) = current {
+    let successor_history = if let Some(plan_current) = current.filter(|_| !role_change) {
         let predecessor_baseline = bind_predecessor_baseline(
             manifest.migration_plan.prior_baseline.as_ref(),
             request.predecessor_migration_baseline,
@@ -661,13 +723,17 @@ pub async fn apply_verified_package(
     } else {
         None
     };
-    if current.is_some() && successor_plan_is_empty(request.package) {
+    if current.is_some() && !role_change && successor_plan_is_empty(request.package) {
         return Err(MigrationError::EmptyPlan);
     }
 
     let compiler_checksums = compiler_statement_checksums(compiler_statements);
-    let mut ledger =
-        package_ledger_entry(request.package, current, request.roles, &compiler_checksums)?;
+    let mut ledger = match current {
+        Some(current) if role_change => {
+            role_change_ledger_entry(request.package, current, request.roles)
+        }
+        _ => package_ledger_entry(request.package, current, request.roles, &compiler_checksums)?,
+    };
     ledger
         .validate_plan()
         .map_err(|_| MigrationError::PackageBinding)?;
@@ -755,6 +821,27 @@ pub async fn apply_verified_package(
             }
         }
     }
+    // A re-apply of the active package is an activation only when it changes
+    // the roles the active activation serves with.
+    let retired_runtime_role = if role_change {
+        match connection.active_activation_roles().await {
+            Ok(Some((role_mode, runtime_role))) => {
+                if role_mode == ledger.role_mode.as_str() && runtime_role == ledger.runtime_role {
+                    let _ = connection.release().await;
+                    return Err(MigrationError::AlreadyActive);
+                }
+                SqlIdentifier::parse(&runtime_role)
+                    .ok()
+                    .filter(|retired| retired != request.roles.runtime)
+            }
+            Ok(None) | Err(_) => {
+                let _ = connection.release().await;
+                return Err(MigrationError::ApplyFailed);
+            }
+        }
+    } else {
+        None
+    };
     let target = target_package_identity(
         request.package,
         request.deployment.database_id(),
@@ -773,12 +860,18 @@ pub async fn apply_verified_package(
             let _ = connection.release().await;
             return Err(MigrationError::ApplyFailed);
         }
-        if let Err(error) = crate::request_retention::guard_successor_activation(
-            connection.client_for_request_retention_guard(),
-            request.package.registry(),
-        )
-        .await
-        {
+        // A role change keeps the compiled model, so no request proposal
+        // needs a rebase.
+        let proposals_guarded = if role_change {
+            Ok(())
+        } else {
+            crate::request_retention::guard_successor_activation(
+                connection.client_for_request_retention_guard(),
+                request.package.registry(),
+            )
+            .await
+        };
+        if let Err(error) = proposals_guarded {
             let _ = connection.release().await;
             return Err(match error {
                 crate::request_retention::RequestRetentionError::ActiveProposalRequiresRebase => {
@@ -858,6 +951,49 @@ pub async fn apply_verified_package(
     }
 
     let expected_catalog = ExpectedManagedCatalog::compiled(request.package.registry());
+    if role_change {
+        if connection
+            .retain_target_history_descriptor(request.package.registry(), &target.activation_id)
+            .await
+            .is_err()
+        {
+            return fail_and_release(connection, &target, &ledger).await;
+        }
+        if let Err(error) = connection
+            .reconcile_runtime_acl(
+                request.package.registry(),
+                request.roles.runtime,
+                request.acknowledge_retired_audit_discard,
+            )
+            .await
+        {
+            return fail_with_error_and_release(connection, &target, &ledger, error).await;
+        }
+        if let Some(retired) = retired_runtime_role.as_ref() {
+            if let Err(error) = connection
+                .retire_runtime_role(retired, request.roles.migration)
+                .await
+            {
+                return fail_with_error_and_release(connection, &target, &ledger, error).await;
+            }
+        }
+        let Ok(superseded) = connection
+            .activate_verified_package(
+                current,
+                &target,
+                MaintenanceTransition {
+                    ledger: &ledger,
+                    expected_catalog: &expected_catalog,
+                    migration_role: request.roles.migration,
+                    runtime_role: request.roles.runtime,
+                },
+            )
+            .await
+        else {
+            return fail_and_release(connection, &target, &ledger).await;
+        };
+        return finish_activation(connection, &request.audit, superseded, target).await;
+    }
     if let Some(plan) = reviewed_plan {
         let prior_tables = successor_history
             .and_then(|(baseline, _)| baseline)
