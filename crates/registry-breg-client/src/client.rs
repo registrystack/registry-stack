@@ -2522,6 +2522,13 @@ enum BRegProblemPath {
     EvidenceAlias,
     ActionInputField,
     ActionRequest,
+    /// A record write body member: `/data`, `/data/<apiName>`, a JSON Patch
+    /// operation member, or a batch item member.
+    RecordRequest,
+    /// The `Idempotency-Key` header.
+    IdempotencyKey,
+    /// A fixed query parameter name such as `$select`.
+    QueryParameter,
 }
 
 impl BRegProblemPath {
@@ -2532,7 +2539,10 @@ impl BRegProblemPath {
                 code,
                 BRegProblemCode::ActionRefused | BRegProblemCode::RequestInvalid
             ),
-            Self::ActionRequest => code == BRegProblemCode::RequestInvalid,
+            Self::ActionRequest | Self::RecordRequest | Self::IdempotencyKey => {
+                code == BRegProblemCode::RequestInvalid
+            }
+            Self::QueryParameter => code == BRegProblemCode::QueryInvalid,
         }
     }
 }
@@ -2596,7 +2606,78 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
     if valid_action_input_problem_path(path) {
         return Some(BRegProblemPath::ActionInputField);
     }
-    valid_action_request_problem_path(path).then_some(BRegProblemPath::ActionRequest)
+    if valid_action_request_problem_path(path) {
+        return Some(BRegProblemPath::ActionRequest);
+    }
+    if path == "Idempotency-Key" {
+        return Some(BRegProblemPath::IdempotencyKey);
+    }
+    if BREG_QUERY_PARAMETERS.contains(&path) {
+        return Some(BRegProblemPath::QueryParameter);
+    }
+    valid_record_request_problem_path(path).then_some(BRegProblemPath::RecordRequest)
+}
+
+/// The fixed query parameters a `query.invalid` refusal may name.
+const BREG_QUERY_PARAMETERS: [&str; 12] = [
+    "$select",
+    "$filter",
+    "$orderby",
+    "$top",
+    "$count",
+    "$skiptoken",
+    "bbox",
+    "accessProfile",
+    "asOf",
+    "snapshot",
+    "validAt",
+    "requestHistoryAfterProposalVersion",
+];
+
+/// A record write location: a create body's `/data` member or one of its API
+/// names, a JSON Patch operation or one of its members, or a batch body's
+/// `items`, `changeContext`, an item, or an item member.
+fn valid_record_request_problem_path(path: &str) -> bool {
+    if path.len() > 256 {
+        return false;
+    }
+    if matches!(path, "/items" | "/changeContext") {
+        return true;
+    }
+    let Some(remainder) = path.strip_prefix('/') else {
+        return false;
+    };
+    let segments = remainder.split('/').collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["items", index, rest @ ..] if valid_problem_index(index) => match rest {
+            [] | ["operation" | "recordId" | "ifMatch" | "patch"] => true,
+            ["patch", operation, member @ ..] => valid_patch_problem_path(operation, member),
+            data => valid_data_problem_path(data),
+        },
+        [operation, member @ ..] if valid_problem_index(operation) => {
+            valid_patch_problem_path(operation, member)
+        }
+        data => valid_data_problem_path(data),
+    }
+}
+
+fn valid_data_problem_path(segments: &[&str]) -> bool {
+    match segments {
+        ["data"] => true,
+        ["data", name] => valid_api_problem_segment(name),
+        _ => false,
+    }
+}
+
+fn valid_patch_problem_path(index: &str, member: &[&str]) -> bool {
+    valid_problem_index(index) && matches!(member, [] | ["op" | "path" | "value"])
+}
+
+fn valid_problem_index(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 5
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'))
 }
 
 fn valid_evidence_problem_path(path: &str) -> bool {

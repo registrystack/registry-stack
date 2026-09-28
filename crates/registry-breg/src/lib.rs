@@ -110,6 +110,7 @@ pub mod physical_names;
 #[cfg(feature = "runtime")]
 pub mod postgres;
 pub mod problem;
+pub mod problem_location;
 pub mod query;
 #[cfg(feature = "runtime")]
 pub(crate) mod query_binding;

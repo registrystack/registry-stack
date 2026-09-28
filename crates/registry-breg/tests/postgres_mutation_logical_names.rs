@@ -109,7 +109,10 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
     assert_eq!(batch["results"][1]["data"]["assetCode"], "A-103");
     assert!(batch["results"][0]["data"].get("asset-code").is_none());
 
-    for (key, invalid_data) in [
+    // #1442: the refusal names `/data` for a name the caller made up, such
+    // as a field id where its API name belongs, and the field for a missing
+    // required member the grant admits.
+    for (key, invalid_data, field_path) in [
         (
             "logical-name-internal-alias",
             json!({
@@ -117,6 +120,7 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
                 "label":"Alias attempt",
                 "assetClass":"equipment"
             }),
+            "/data",
         ),
         (
             "logical-name-unknown",
@@ -126,10 +130,12 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
                 "assetClass":"equipment",
                 "unreviewedValue":"must-not-leak"
             }),
+            "/data",
         ),
         (
             "logical-name-required",
             json!({"label":"Missing code","assetClass":"equipment"}),
+            "/data/assetCode",
         ),
     ] {
         let refused = harness
@@ -145,6 +151,8 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
         let body = response_bytes(refused).await;
         let problem: Value = serde_json::from_slice(&body).expect("problem body is JSON");
         assert_eq!(problem["code"], "request.invalid");
+        assert_eq!(problem["detail"], "The request is invalid.");
+        assert_eq!(problem["fieldPath"], field_path);
         let rendered = String::from_utf8(body).expect("problem body is UTF-8");
         assert!(!rendered.contains("asset-code"));
         assert!(!rendered.contains("unreviewedValue"));
@@ -169,9 +177,13 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
         .await;
     assert_eq!(alias_patch.status(), StatusCode::BAD_REQUEST);
     let alias_patch_body = response_bytes(alias_patch).await;
-    assert!(!String::from_utf8(alias_patch_body)
-        .expect("problem body is UTF-8")
-        .contains("must-not-leak"));
+    let alias_patch_problem: Value =
+        serde_json::from_slice(&alias_patch_body).expect("problem body is JSON");
+    assert_eq!(alias_patch_problem["code"], "request.invalid");
+    assert_eq!(alias_patch_problem["fieldPath"], "/0/path");
+    let alias_patch_body = String::from_utf8(alias_patch_body).expect("problem body is UTF-8");
+    assert!(!alias_patch_body.contains("must-not-leak"));
+    assert!(!alias_patch_body.contains("asset-code"));
 
     harness.finish().await;
 }

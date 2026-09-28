@@ -70,6 +70,7 @@ use crate::model::{
     MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
+use crate::problem_location::{BatchItemMember, RequestLocation};
 use crate::query as strict_query;
 use crate::query_binding::CursorBindingQuery;
 use crate::record_profile::{self, RecordRepresentation};
@@ -608,13 +609,13 @@ async fn read_dispatch(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse(raw_query.as_deref(), true) {
         Ok(options) => options,
-        Err(QueryParseError::Invalid) => {
+        Err(error) => {
             return audited_known_read_refusal(
                 &service,
                 &route,
                 &claims,
                 path.get("record_id"),
-                invalid_query(),
+                error.problem(),
                 &correlation,
             )
             .await;
@@ -645,7 +646,7 @@ async fn read_dispatch(
             &route,
             &surface,
             path.get("record_id"),
-            invalid_query(),
+            invalid_query_at(REQUEST_HISTORY_PARAMETER),
             &correlation,
         )
         .await;
@@ -658,7 +659,9 @@ async fn read_dispatch(
                     &route,
                     &surface,
                     path.get("record_id"),
-                    invalid_query(),
+                    options
+                        .first_non_history_member()
+                        .map_or_else(invalid_query, invalid_query_at),
                     &correlation,
                 )
                 .await;
@@ -776,13 +779,13 @@ async fn read_dispatch(
             {
                 Ok(Some(query)) => query,
                 Ok(None) => return unavailable(),
-                Err(ReadQueryError::Invalid) => {
+                Err(error @ (ReadQueryError::Invalid | ReadQueryError::InvalidAt(_))) => {
                     return audited_read_refusal(
                         &service,
                         &route,
                         &surface,
                         path.get("record_id"),
-                        invalid_query(),
+                        error.problem(),
                         &correlation,
                     )
                     .await;
@@ -886,13 +889,13 @@ async fn lookup_dispatch(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse(raw_query.as_deref(), true) {
         Ok(options) => options,
-        Err(QueryParseError::Invalid) => {
+        Err(error) => {
             return audited_known_read_refusal(
                 &service,
                 &route,
                 &claims,
                 None,
-                invalid_query(),
+                error.problem(),
                 &correlation,
             )
             .await;
@@ -911,7 +914,9 @@ async fn lookup_dispatch(
             &route,
             &surface,
             None,
-            invalid_query(),
+            options
+                .first_non_projection_member()
+                .map_or_else(invalid_query, invalid_query_at),
             &correlation,
         )
         .await;
@@ -1065,13 +1070,13 @@ async fn revision_dispatch(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse(raw_query.as_deref(), false) {
         Ok(options) => options,
-        Err(QueryParseError::Invalid) => {
+        Err(error) => {
             return audited_known_revision_refusal(
                 revisions.as_ref(),
                 &route,
                 &claims,
                 path.get("record_id"),
-                invalid_query(),
+                error.problem(),
                 &correlation,
             )
             .await;
@@ -1240,10 +1245,7 @@ async fn snapshot_dispatch(
         Ok(Some(query)) if surface.read_path.is_none() => query,
         Ok(_) => return unavailable(),
         Err(error) => {
-            let response = match error {
-                ReadQueryError::Invalid => invalid_query(),
-                ReadQueryError::CursorInvalid => cursor_invalid(),
-            };
+            let response = error.problem();
             return audited_read_refusal(&service, &route, &surface, None, response, &correlation)
                 .await;
         }
@@ -1523,7 +1525,7 @@ async fn create_dispatch(
             &route,
             &surface.context,
             None,
-            invalid_request(),
+            invalid_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1550,16 +1552,19 @@ async fn create_dispatch(
         )
         .await;
     };
-    let Ok(data) = parse_create_body(&body) else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            None,
-            invalid_request(),
-            &correlation,
-        )
-        .await;
+    let data = match parse_create_body(&body) {
+        Ok(data) => data,
+        Err(location) => {
+            return audited_mutation_refusal(
+                mutations,
+                &route,
+                &surface.context,
+                None,
+                body_refusal(location),
+                &correlation,
+            )
+            .await;
+        }
     };
     match mutations
         .create(CreateMutationInput {
@@ -1646,7 +1651,7 @@ async fn patch_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            invalid_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1706,16 +1711,19 @@ async fn patch_dispatch(
         )
         .await;
     };
-    let Ok(patch) = parse_json_patch_document(document) else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            invalid_request(),
-            &correlation,
-        )
-        .await;
+    let patch = match parse_json_patch_document(document) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return audited_mutation_refusal(
+                mutations,
+                &route,
+                &surface.context,
+                Some(record_id.as_str()),
+                mutation_problem(error),
+                &correlation,
+            )
+            .await;
+        }
     };
     match mutations
         .patch(
@@ -1812,7 +1820,11 @@ async fn batch_dispatch(
             &route,
             &surface.context,
             None,
-            invalid_request(),
+            if valid_idempotency_key(idempotency_key) {
+                invalid_request()
+            } else {
+                invalid_idempotency_key()
+            },
             &correlation,
         )
         .await;
@@ -1839,16 +1851,19 @@ async fn batch_dispatch(
         )
         .await;
     };
-    let Ok(parsed) = parse_batch_body(&body, usize::from(batch.maximum_items)) else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            None,
-            invalid_request(),
-            &correlation,
-        )
-        .await;
+    let parsed = match parse_batch_body(&body, usize::from(batch.maximum_items)) {
+        Ok(parsed) => parsed,
+        Err(location) => {
+            return audited_mutation_refusal(
+                mutations,
+                &route,
+                &surface.context,
+                None,
+                body_refusal(location),
+                &correlation,
+            )
+            .await;
+        }
     };
     match mutations
         .batch(BatchMutationInput {
@@ -1936,7 +1951,7 @@ async fn tombstone_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            invalid_idempotency_key(),
             &correlation,
         )
         .await;
@@ -2071,7 +2086,7 @@ async fn request_action_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            invalid_idempotency_key(),
             &correlation,
         )
         .await;
@@ -2979,7 +2994,7 @@ async fn read_query(
         }
         if let Some(reference) = &historical.snapshot {
             crate::history_reference::SnapshotReference::parse(reference)
-                .map_err(|_| ReadQueryError::Invalid)?;
+                .map_err(|_| ReadQueryError::InvalidAt("snapshot"))?;
         }
         CursorQueryScope::Snapshot {
             reference: historical.snapshot.clone(),
@@ -3163,7 +3178,8 @@ async fn read_query(
                     .cloned(),
             )
             .collect(),
-        Err(()) => return Err(ReadQueryError::Invalid),
+        // An unknown and a withheld field take this one branch.
+        Err(()) => return Err(ReadQueryError::InvalidAt("$select")),
     };
     if fields.is_empty()
         || !fields.is_subset(&surface.readable_fields)
@@ -3173,25 +3189,30 @@ async fn read_query(
                     && surface.response_entity.attachments.contains_key(field))
         })
     {
-        return Err(ReadQueryError::Invalid);
+        return Err(if query_options.select.is_some() {
+            ReadQueryError::InvalidAt("$select")
+        } else {
+            ReadQueryError::Invalid
+        });
     }
     let projection = projection_plan(surface.response_entity, &fields)?;
     let filter = first_page_filter_expr(
         surface.response_entity,
         operation,
         query_options.filter.as_ref(),
-    )?;
-    let spatial = first_page_spatial_query(surface, operation, query_options.bbox.as_ref())?;
+    )
+    .map_err(|error| error.at("$filter"))?;
+    let spatial = first_page_spatial_query(surface, operation, query_options.bbox.as_ref())
+        .map_err(|error| error.at("bbox"))?;
     let order = match &query_options.orderby {
         Some(orderby) => {
             if orderby.direction != strict_query::OrderDirection::Asc {
-                return Err(ReadQueryError::Invalid);
+                return Err(ReadQueryError::InvalidAt("$orderby"));
             }
-            Some(resolve_order_clause(
-                surface.response_entity,
-                operation,
-                orderby,
-            )?)
+            Some(
+                resolve_order_clause(surface.response_entity, operation, orderby)
+                    .map_err(|error| error.at("$orderby"))?,
+            )
         }
         None => None,
     };
@@ -3199,11 +3220,11 @@ async fn read_query(
         .top
         .map(u16::try_from)
         .transpose()
-        .map_err(|_| ReadQueryError::Invalid)?
+        .map_err(|_| ReadQueryError::InvalidAt("$top"))?
         .unwrap_or(operation.max_page_size);
     let include_count = query_options.count.unwrap_or(false);
     if include_count && !operation.allow_count {
-        return Err(ReadQueryError::Invalid);
+        return Err(ReadQueryError::InvalidAt("$count"));
     }
     validate_query_shape(
         surface.response_entity,
@@ -3744,17 +3765,18 @@ fn validate_query_shape(
     page_size: u16,
 ) -> Result<(), ReadQueryError> {
     if page_size == 0 || page_size > operation.max_page_size {
-        return Err(ReadQueryError::Invalid);
+        return Err(ReadQueryError::InvalidAt("$top"));
     }
     let mut stats = QueryShapeStats::default();
     if let Some(filter) = filter {
-        validate_filter_shape(entity, operation, filter, &mut stats)?;
+        validate_filter_shape(entity, operation, filter, &mut stats)
+            .map_err(|error| error.at("$filter"))?;
         if stats.predicates > MAX_FILTER_CLAUSES || stats.in_values > MAX_IN_VALUES {
-            return Err(ReadQueryError::Invalid);
+            return Err(ReadQueryError::InvalidAt("$filter"));
         }
     }
     if let Some(spatial) = spatial {
-        validate_spatial_shape(entity, operation, spatial)?;
+        validate_spatial_shape(entity, operation, spatial).map_err(|error| error.at("bbox"))?;
     }
     if let Some(order) = order {
         let sortable = operation.sort_fields.iter().any(|field| {
@@ -3767,7 +3789,7 @@ fn validate_query_shape(
             || query_field_type(entity, operation, &order.field_id)
                 != Some(order.field_type.clone())
         {
-            return Err(ReadQueryError::Invalid);
+            return Err(ReadQueryError::InvalidAt("$orderby"));
         }
     }
     Ok(())
@@ -3908,13 +3930,13 @@ fn temporal_instant_for(
     match kind {
         CompiledQueryKind::List => {
             if options.parsed.as_of.is_some() {
-                return Err(ReadQueryError::Invalid);
+                return Err(ReadQueryError::InvalidAt("asOf"));
             }
             Ok(None)
         }
         CompiledQueryKind::Current => {
             if options.parsed.as_of.is_some() {
-                return Err(ReadQueryError::Invalid);
+                return Err(ReadQueryError::InvalidAt("asOf"));
             }
             OffsetDateTime::now_utc()
                 .format(&Rfc3339)
@@ -3926,8 +3948,8 @@ fn temporal_instant_for(
                 .parsed
                 .as_of
                 .as_deref()
-                .ok_or(ReadQueryError::Invalid)?;
-            parse_strict_rfc3339_utc(value).map_err(|_| ReadQueryError::Invalid)?;
+                .ok_or(ReadQueryError::InvalidAt("asOf"))?;
+            parse_strict_rfc3339_utc(value).map_err(|_| ReadQueryError::InvalidAt("asOf"))?;
             Ok(Some(value.to_owned()))
         }
         CompiledQueryKind::Snapshot => options
@@ -3937,7 +3959,8 @@ fn temporal_instant_for(
             .valid_at
             .as_deref()
             .map(|value| {
-                normalize_history_valid_at(entity, value).map_err(|_| ReadQueryError::Invalid)
+                normalize_history_valid_at(entity, value)
+                    .map_err(|_| ReadQueryError::InvalidAt("validAt"))
             })
             .transpose(),
     }
@@ -4529,28 +4552,29 @@ impl QueryOptions {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
             let name = percent_decode(name)?;
             let value = percent_decode(value)?;
-            if name == "requestHistoryAfterProposalVersion" {
-                let version = value.parse::<u32>().map_err(|_| QueryParseError::Invalid)?;
+            if name == REQUEST_HISTORY_PARAMETER {
+                let at_fault = QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER);
+                let version = value.parse::<u32>().map_err(|_| at_fault)?;
                 if version == 0
                     || version.to_string() != value
                     || request_history_after_proposal_version
                         .replace(i64::from(version))
                         .is_some()
                 {
-                    return Err(QueryParseError::Invalid);
+                    return Err(at_fault);
                 }
                 continue;
             }
             pairs.push((name, value));
         }
-        let parsed = strict_query::parse_read_query(pairs).map_err(|_| QueryParseError::Invalid)?;
+        let parsed = strict_query::parse_read_query_located(pairs).map_err(located_parse_error)?;
         let result = Self {
             parsed,
             request_history_after_proposal_version,
             historical: None,
         };
         if result.request_history_after_proposal_version.is_some() && result.skiptoken().is_some() {
-            return Err(QueryParseError::Invalid);
+            return Err(QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER));
         }
         if !allow_read_query && result.has_any_query_member() {
             return Err(QueryParseError::Invalid);
@@ -4570,7 +4594,7 @@ impl QueryOptions {
             }
         }
         let parsed =
-            strict_query::parse_snapshot_query(pairs).map_err(|_| QueryParseError::Invalid)?;
+            strict_query::parse_snapshot_query_located(pairs).map_err(located_parse_error)?;
         Ok(Self {
             parsed: strict_query::ParsedReadQuery {
                 access_profile: parsed.access_profile,
@@ -4613,6 +4637,42 @@ impl QueryOptions {
     fn has_non_projection_query_members(&self) -> bool {
         self.request_history_after_proposal_version.is_some()
             || self.has_non_history_query_members()
+    }
+
+    /// The first query member a route without a query plan refuses, in a
+    /// fixed order that never depends on the caller's grants.
+    fn first_non_history_member(&self) -> Option<&'static str> {
+        let options = self.query_options();
+        [
+            ("asOf", self.parsed.as_of.is_some()),
+            ("$skiptoken", self.skiptoken().is_some()),
+            (
+                "$filter",
+                options.is_some_and(|options| options.filter.is_some()),
+            ),
+            (
+                "$orderby",
+                options.is_some_and(|options| options.orderby.is_some()),
+            ),
+            ("$top", options.is_some_and(|options| options.top.is_some())),
+            (
+                "$count",
+                options.is_some_and(|options| options.count.is_some()),
+            ),
+            (
+                "bbox",
+                options.is_some_and(|options| options.bbox.is_some()),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(name, present)| present.then_some(name))
+    }
+
+    fn first_non_projection_member(&self) -> Option<&'static str> {
+        if self.request_history_after_proposal_version.is_some() {
+            return Some(REQUEST_HISTORY_PARAMETER);
+        }
+        self.first_non_history_member()
     }
 
     fn has_non_history_query_members(&self) -> bool {
@@ -4658,15 +4718,56 @@ impl Default for QueryOptions {
     }
 }
 
+const REQUEST_HISTORY_PARAMETER: &str = "requestHistoryAfterProposalVersion";
+
+fn located_parse_error(
+    (_, parameter): (strict_query::QueryParseError, Option<&'static str>),
+) -> QueryParseError {
+    parameter.map_or(QueryParseError::Invalid, QueryParseError::InvalidAt)
+}
+
+/// A refused query string. `InvalidAt` names the one fixed parameter at
+/// fault, never a caller-supplied parameter or field name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QueryParseError {
     Invalid,
+    InvalidAt(&'static str),
 }
 
+impl QueryParseError {
+    fn problem(self) -> Response {
+        match self {
+            Self::Invalid => invalid_query(),
+            Self::InvalidAt(parameter) => invalid_query_at(parameter),
+        }
+    }
+}
+
+/// A refused read query. `InvalidAt` names the one fixed parameter at fault.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadQueryError {
     Invalid,
+    InvalidAt(&'static str),
     CursorInvalid,
+}
+
+impl ReadQueryError {
+    /// Locate an unlocated refusal at `parameter`; a located or cursor
+    /// refusal keeps its own answer.
+    fn at(self, parameter: &'static str) -> Self {
+        match self {
+            Self::Invalid => Self::InvalidAt(parameter),
+            other => other,
+        }
+    }
+
+    fn problem(self) -> Response {
+        match self {
+            Self::Invalid => invalid_query(),
+            Self::InvalidAt(parameter) => invalid_query_at(parameter),
+            Self::CursorInvalid => cursor_invalid(),
+        }
+    }
 }
 
 fn percent_decode(value: &str) -> Result<String, QueryParseError> {
@@ -4792,6 +4893,22 @@ fn invalid_query() -> Response {
         StatusCode::BAD_REQUEST,
         "query.invalid",
         "The query request is invalid.",
+    )
+}
+
+/// The registered `query.invalid` refusal naming the fixed query parameter at
+/// fault. A field name inside the parameter's value is never named, so an
+/// unknown and a withheld field answer the same problem.
+fn invalid_query_at(parameter: &'static str) -> Response {
+    debug_assert!(crate::problem_location::is_query_parameter_location(
+        parameter
+    ));
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::BAD_REQUEST,
+        "Bad Request",
+        "The query request is invalid.",
+        "query.invalid",
+        parameter,
     )
 }
 
@@ -5149,62 +5266,85 @@ struct ParsedBatchBody {
     change_context: Option<crate::history_context::ChangeContext>,
 }
 
-fn parse_batch_body(body: &[u8], maximum_items: usize) -> Result<ParsedBatchBody, ()> {
-    let value = parse_json_strict(body).map_err(|_| ())?;
-    let object = value.as_object().ok_or(())?;
+/// Parse a batch body, naming the fixed member at fault. A member name the
+/// caller invented is never named: the location stops at its container.
+fn parse_batch_body(
+    body: &[u8],
+    maximum_items: usize,
+) -> Result<ParsedBatchBody, Option<RequestLocation>> {
+    let value = parse_json_strict(body).map_err(|_| None)?;
+    let object = value.as_object().ok_or(None)?;
     if object
         .keys()
         .any(|key| !matches!(key.as_str(), "items" | "changeContext"))
     {
-        return Err(());
+        return Err(None);
     }
     let change_context = object
         .get("changeContext")
         .map(crate::history_context::ChangeContext::parse_json)
         .transpose()
-        .map_err(|_| ())?;
-    let items = object.get("items").and_then(Value::as_array).ok_or(())?;
+        .map_err(|_| Some(RequestLocation::batch_change_context()))?;
+    let items = object
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Some(RequestLocation::batch_items()))?;
     if items.is_empty() || items.len() > maximum_items {
-        return Err(());
+        return Err(Some(RequestLocation::batch_items()));
     }
     let items = items
         .iter()
-        .map(|item| {
-            let object = item.as_object().ok_or(())?;
+        .enumerate()
+        .map(|(index, item)| {
+            let at = |member| Some(RequestLocation::batch_item(index, member));
+            let object = item.as_object().ok_or_else(|| at(None))?;
             match object.get("operation").and_then(Value::as_str) {
-                Some("create")
-                    if object.len() == 2 && object.get("data").is_some_and(Value::is_object) =>
-                {
-                    Ok(BatchMutationItem::Create(
-                        object["data"].as_object().expect("checked object").clone(),
-                    ))
-                }
-                Some("patch")
-                    if object.len() == 4
-                        && object.contains_key("recordId")
-                        && object.contains_key("ifMatch")
-                        && object.contains_key("patch") =>
-                {
-                    let record_id = object["recordId"].as_str().ok_or(())?;
-                    let expected_etag = object["ifMatch"].as_str().ok_or(())?;
-                    if !Uuid::parse_str(record_id)
-                        .is_ok_and(|identifier| identifier.to_string() == record_id)
-                        || !valid_if_match(expected_etag)
-                    {
-                        return Err(());
+                Some("create") => {
+                    let data = object
+                        .get("data")
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| at(Some(BatchItemMember::Data)))?;
+                    if object.len() != 2 {
+                        return Err(at(None));
                     }
-                    let patch =
-                        parse_json_patch_document(object["patch"].clone()).map_err(|_| ())?;
+                    Ok(BatchMutationItem::Create(data.clone()))
+                }
+                Some("patch") => {
+                    let record_id = object
+                        .get("recordId")
+                        .and_then(Value::as_str)
+                        .filter(|record_id| {
+                            Uuid::parse_str(record_id)
+                                .is_ok_and(|identifier| identifier.to_string() == *record_id)
+                        })
+                        .ok_or_else(|| at(Some(BatchItemMember::RecordId)))?;
+                    let expected_etag = object
+                        .get("ifMatch")
+                        .and_then(Value::as_str)
+                        .filter(|etag| valid_if_match(etag))
+                        .ok_or_else(|| at(Some(BatchItemMember::IfMatch)))?;
+                    let patch = object
+                        .get("patch")
+                        .ok_or_else(|| at(Some(BatchItemMember::Patch)))?;
+                    if object.len() != 4 {
+                        return Err(at(None));
+                    }
+                    let patch = parse_json_patch_document(patch.clone()).map_err(|error| {
+                        match error.in_batch_item(index) {
+                            MutationError::InvalidRequestAt(location) => Some(location),
+                            _ => at(Some(BatchItemMember::Patch)),
+                        }
+                    })?;
                     Ok(BatchMutationItem::Patch {
                         record_id: record_id.to_owned(),
                         expected_etag: expected_etag.to_owned(),
                         patch,
                     })
                 }
-                _ => Err(()),
+                _ => Err(at(Some(BatchItemMember::Operation))),
             }
         })
-        .collect::<Result<Vec<_>, ()>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ParsedBatchBody {
         items,
         change_context,
@@ -5215,17 +5355,25 @@ async fn body_is_empty(body: Body) -> bool {
     to_bytes(body, 0).await.is_ok_and(|bytes| bytes.is_empty())
 }
 
-fn parse_create_body(body: &[u8]) -> Result<Map<String, Value>, ()> {
-    let value = parse_json_strict(body).map_err(|_| ())?;
-    let object = value.as_object().ok_or(())?;
-    if object.len() != 1 {
-        return Err(());
-    }
-    object
+/// Parse a create body, naming `/data` when that fixed member is absent or
+/// not an object. A member beside it is caller-named and stays unlocated.
+fn parse_create_body(body: &[u8]) -> Result<Map<String, Value>, Option<RequestLocation>> {
+    let value = parse_json_strict(body).map_err(|_| None)?;
+    let object = value.as_object().ok_or(None)?;
+    let data = object
         .get("data")
         .and_then(Value::as_object)
-        .cloned()
-        .ok_or(())
+        .ok_or_else(|| Some(RequestLocation::data()))?;
+    if object.len() != 1 {
+        return Err(None);
+    }
+    Ok(data.clone())
+}
+
+/// The `request.invalid` refusal of a write body, located when one fixed
+/// member is at fault.
+fn body_refusal(location: Option<RequestLocation>) -> Response {
+    location.map_or_else(invalid_request, |location| invalid_request_at(&location))
 }
 
 fn parse_request_action_body(operation: Operation, body: &[u8]) -> Result<RequestActionBody, ()> {
@@ -5350,6 +5498,23 @@ fn invalid_request() -> Response {
     )
 }
 
+/// The registered `request.invalid` refusal located at one closed write-body
+/// member (see [`crate::problem_location`]).
+fn invalid_request_at(location: &RequestLocation) -> Response {
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::BAD_REQUEST,
+        "Bad Request",
+        "The request is invalid.",
+        "request.invalid",
+        location.as_str(),
+    )
+}
+
+/// A malformed `Idempotency-Key` names the header, like a missing one.
+fn invalid_idempotency_key() -> Response {
+    missing_idempotency_key()
+}
+
 /// A required mutation header was absent. The problem keeps the registered
 /// `request.invalid` detail, which typed clients match exactly, and names the
 /// header in `fieldPath` so the fix is discoverable from the response instead
@@ -5392,6 +5557,7 @@ fn precondition_failed() -> Response {
 fn mutation_problem(error: MutationError) -> Response {
     match error {
         MutationError::InvalidRequest => invalid_request(),
+        MutationError::InvalidRequestAt(location) => invalid_request_at(&location),
         MutationError::PreconditionFailed => precondition_failed(),
         MutationError::Conflict => fixed_problem(
             StatusCode::CONFLICT,

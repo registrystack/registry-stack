@@ -1587,6 +1587,157 @@ async fn action_request_paths_are_closed_bounded_and_discarded() {
     assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
 }
 
+#[tokio::test]
+async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
+    let request_invalid = problem_response(BRegProblemCode::RequestInvalid);
+    let request_document: Value = serde_json::from_slice(&request_invalid.body).unwrap();
+    let query_invalid = problem_response(BRegProblemCode::QueryInvalid);
+    let query_document: Value = serde_json::from_slice(&query_invalid.body).unwrap();
+    let response_for = |base: &MockResponse, mut value: Value, path: Value| {
+        value["fieldPath"] = path;
+        MockResponse {
+            body: serde_json::to_vec(&value).unwrap(),
+            ..base.clone()
+        }
+    };
+
+    let mut accepted = [
+        "/data",
+        "/data/householdCode",
+        "/0",
+        "/0/op",
+        "/0/path",
+        "/127/value",
+        "/items",
+        "/changeContext",
+        "/items/3",
+        "/items/3/operation",
+        "/items/3/recordId",
+        "/items/3/ifMatch",
+        "/items/3/patch",
+        "/items/3/data",
+        "/items/3/data/householdCode",
+        "/items/3/patch/0",
+        "/items/3/patch/0/path",
+        "Idempotency-Key",
+    ]
+    .iter()
+    .map(|path| response_for(&request_invalid, request_document.clone(), json!(path)))
+    .collect::<Vec<_>>();
+    for parameter in [
+        "$select",
+        "$filter",
+        "$orderby",
+        "$top",
+        "$count",
+        "$skiptoken",
+        "bbox",
+        "accessProfile",
+        "asOf",
+        "snapshot",
+        "validAt",
+        "requestHistoryAfterProposalVersion",
+    ] {
+        accepted.push(response_for(
+            &query_invalid,
+            query_document.clone(),
+            json!(parameter),
+        ));
+    }
+
+    let mut refused = [
+        json!("/data/household-code"),
+        json!("/data/HouseholdCode"),
+        json!("/data/household~1code"),
+        json!("/data/a/b"),
+        json!(format!("/data/a{}", "b".repeat(64))),
+        json!("/01/path"),
+        json!("/0/from"),
+        json!("/0/path/extra"),
+        json!("/items/x"),
+        json!("/items/03"),
+        json!("/items/3/other"),
+        json!("/items/3/data/a/b"),
+        json!("/items/3/patch/0/from"),
+        json!("/items/3/patch/x"),
+        json!("idempotency-key"),
+        json!("$select"),
+        json!("data"),
+        json!(format!("/items/{}", "1".repeat(300))),
+    ]
+    .into_iter()
+    .map(|path| response_for(&request_invalid, request_document.clone(), path))
+    .collect::<Vec<_>>();
+    for path in [
+        "/data",
+        "/data/householdCode",
+        "/0/path",
+        "/items/3",
+        "Idempotency-Key",
+        "$expand",
+        "select",
+        "fields",
+        "noSuchField",
+    ] {
+        refused.push(response_for(
+            &query_invalid,
+            query_document.clone(),
+            json!(path),
+        ));
+    }
+
+    let accepted_count = accepted.len();
+    let total = accepted_count + refused.len();
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(accepted)
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for index in 0..total {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("record-path-problem"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("problem or malformed problem is returned");
+        if index < accepted_count {
+            assert!(matches!(
+                error.problem_code(),
+                Some(BRegProblemCode::RequestInvalid | BRegProblemCode::QueryInvalid)
+            ));
+            assert_eq!(error.status(), Some(400));
+            assert_eq!(error.trace_id().unwrap().as_str(), TRACE_ID);
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        let rendered = format!("{error:?}: {error}");
+        assert!(!rendered.contains("householdCode"));
+        assert!(!rendered.contains("/data"));
+        assert!(!rendered.contains("/items"));
+        assert!(!rendered.contains("$select"));
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
+}
+
 fn problem_response(code: BRegProblemCode) -> MockResponse {
     let mut body = json!({
         "type": format!(

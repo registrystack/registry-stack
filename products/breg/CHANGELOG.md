@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- BREAKING: a record or query `400` names the member or parameter at fault
+  in `fieldPath`, where it carried none before. `detail` and `code` are
+  unchanged. A create body names `/data` for a field the grant does not let
+  the caller write, known or not, and `/data/<apiName>` for a missing
+  required field or a wrong value of a writable one; a JSON Patch document
+  names `/<n>`, `/<n>/op`, `/<n>/path`, or `/<n>/value`; a batch body names
+  `/items`, `/changeContext`, `/items/<n>` and its fixed members, and the
+  create and patch forms under them; a malformed `Idempotency-Key` names the
+  header; and a `query.invalid` refusal names the parameter, such as
+  `$select`. An unknown and a withheld name answer the same problem and are
+  never echoed. A client that rejects an unfamiliar problem member accepts
+  `fieldPath` on `request.invalid` and `query.invalid`; the Rust, Node.js,
+  and Python BReg clients do in this release, and a client that pins exact
+  problem bodies drops `fieldPath` before comparing.
+- A write whose body names a field the grant withholds is refused before its
+  transaction opens, exactly like one naming an unknown field, where a patch
+  `test` of a withheld field was refused only after the record was read.
+
 - A read path answers when the caller's profile holds no permission entry
   for the path's target entity. It returns the records the path grant and
   the generated target policy authorize, the same answer as a target

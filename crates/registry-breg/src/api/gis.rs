@@ -287,9 +287,11 @@ async fn items(
     let Some(authorized) = authorize_gis_collection(&service, &claims, &collection) else {
         return concealed();
     };
+    // The feature surface speaks its own parameter names, so a refusal here
+    // stays unlocated rather than naming a native query parameter.
     let query = match parse_items_query(raw_query.as_deref()) {
         Ok(query) => query,
-        Err(QueryParseError::Invalid) => {
+        Err(QueryParseError::Invalid | QueryParseError::InvalidAt(_)) => {
             return audited_read_refusal(
                 &service,
                 authorized.route,
@@ -303,7 +305,7 @@ async fn items(
     };
     let options = match query_options(&authorized, query) {
         Ok(options) => options,
-        Err(QueryParseError::Invalid) => {
+        Err(QueryParseError::Invalid | QueryParseError::InvalidAt(_)) => {
             return audited_read_refusal(
                 &service,
                 authorized.route,
@@ -338,7 +340,7 @@ async fn items(
     {
         Ok(Some(query)) => query,
         Ok(None) => return unavailable(),
-        Err(ReadQueryError::Invalid) => {
+        Err(ReadQueryError::Invalid | ReadQueryError::InvalidAt(_)) => {
             return audited_read_refusal(
                 &service,
                 authorized.route,
