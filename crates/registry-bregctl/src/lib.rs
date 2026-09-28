@@ -2074,17 +2074,16 @@ where
                 let _ = write!(stdout, "{error}");
                 return ExitCode::SUCCESS;
             }
+            let message = usage_message(&error, &arguments);
             if !machine_mode {
-                // The parser already names the unknown flag or the missing
-                // argument, so an adopter reads clap's own rendering.
-                let _ = write!(stderr, "{error}");
+                let _ = writeln!(stderr, "error: {message}");
                 return ExitCode::from(USAGE_EXIT);
             }
             let report = FailureReport {
                 ok: false,
                 command: "usage",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic("usage.invalid", "arguments", &unstyled_usage(&error)),
+                    diagnostic("usage.invalid", "arguments", &message),
                     DiagnosticArtifact::CommandArguments,
                     SuggestedAction::CorrectCommandUsage,
                 )],
@@ -6082,15 +6081,138 @@ fn requested_json(arguments: &[OsString]) -> bool {
     })
 }
 
-/// Render a parser error as plain text so a machine-readable diagnostic carries
-/// the argument the parser named without terminal styling.
-fn unstyled_usage(error: &clap::Error) -> String {
-    let rendered = error.render().to_string();
-    let rendered = rendered.trim();
-    rendered
-        .strip_prefix("error: ")
-        .unwrap_or(rendered)
-        .to_owned()
+/// Describe a command line clap refused by the error kind and the argument
+/// name only, followed by the usage clap renders from the declared arguments.
+/// Clap's own message is never repeated because it quotes the rejected token,
+/// which may carry an operator value such as a change reference that is
+/// otherwise recorded only as a keyed hash. A value one of our own parsers
+/// refused is described by that parser's reason instead, as long as the reason
+/// does not repeat the value; a reason that does not name the argument follows
+/// it. The text is plain, without terminal styling.
+fn usage_message(error: &clap::Error, arguments: &[OsString]) -> String {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    let argument = refused_argument(error, arguments);
+    let named = |text: &str| match &argument {
+        Some(argument) => format!("{text} {argument}"),
+        None => text.to_owned(),
+    };
+    let mut message = match error.kind() {
+        ErrorKind::ValueValidation => {
+            let general = named("invalid value for");
+            let flag = argument
+                .as_deref()
+                .and_then(|name| name.split_whitespace().next());
+            match validator_reason(error) {
+                Some(reason) if flag.is_none_or(|flag| reason.contains(flag)) => reason,
+                Some(reason) => format!("{general}: {reason}"),
+                None => general,
+            }
+        }
+        ErrorKind::InvalidValue => {
+            // The possible values are the declared ones, never the operator's.
+            let general = named("invalid value for");
+            match error.get(ContextKind::ValidValue) {
+                Some(ContextValue::Strings(values)) if !values.is_empty() => {
+                    format!("{general}\n  [possible values: {}]", values.join(", "))
+                }
+                _ => general,
+            }
+        }
+        ErrorKind::UnknownArgument => named("unexpected argument"),
+        ErrorKind::InvalidSubcommand => "unrecognized subcommand".to_owned(),
+        ErrorKind::NoEquals => named("an equals sign is required for"),
+        ErrorKind::TooManyValues | ErrorKind::TooFewValues | ErrorKind::WrongNumberOfValues => {
+            named("wrong number of values for")
+        }
+        ErrorKind::ArgumentConflict => named("conflicting use of"),
+        ErrorKind::MissingRequiredArgument => named("missing required argument"),
+        ErrorKind::MissingSubcommand | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            "missing subcommand".to_owned()
+        }
+        ErrorKind::InvalidUtf8 => "invalid UTF-8 in the command arguments".to_owned(),
+        _ => "invalid command arguments".to_owned(),
+    };
+    // Clap renders the usage from the declared arguments, never their values.
+    if let Some(ContextValue::StyledStr(usage)) = error.get(ContextKind::Usage) {
+        message.push_str(&format!("\n\n{usage}"));
+    }
+    message.push_str("\n\nFor more information, try '--help'.");
+    message
+}
+
+/// The reason one of our own value parsers gave, kept only while it does not
+/// repeat the rejected value.
+fn validator_reason(error: &clap::Error) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue};
+    let reason = std::error::Error::source(error)?.to_string();
+    let rejected = match error.get(ContextKind::InvalidValue) {
+        Some(ContextValue::String(value)) => value.as_str(),
+        _ => return None,
+    };
+    let repeats = !rejected.is_empty() && reason.contains(rejected);
+    (!reason.is_empty() && !repeats).then_some(reason)
+}
+
+/// The name of the argument clap refused, without any value. A declared
+/// argument is named as clap renders its definition. An unknown argument is
+/// the operator's own token, so it is named only when it has the shape of a
+/// long option, only up to any `=`, and never when it sits where an option
+/// expects its value, since `--operator-reference --change-42` refuses the
+/// value itself as an unknown argument.
+fn refused_argument(error: &clap::Error, arguments: &[OsString]) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    let names = match error.get(ContextKind::InvalidArg)? {
+        ContextValue::String(name) => vec![name.as_str()],
+        ContextValue::Strings(names) => names.iter().map(String::as_str).collect(),
+        _ => return None,
+    };
+    let names = names
+        .into_iter()
+        .filter_map(|name| {
+            if error.kind() == ErrorKind::UnknownArgument {
+                let option = name.split('=').next()?;
+                let flag = option.strip_prefix("--")?;
+                let shaped = !flag.is_empty()
+                    && flag.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'
+                    });
+                (shaped && !follows_a_value_option(option, arguments)).then(|| option.to_owned())
+            } else {
+                Some(name.to_owned())
+            }
+        })
+        .collect::<Vec<_>>();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// Whether a token starting with `option` directly follows an option that
+/// takes a value anywhere in the command tree, which makes it that value.
+fn follows_a_value_option(option: &str, arguments: &[OsString]) -> bool {
+    fn value_options(command: &clap::Command, names: &mut BTreeSet<String>) {
+        for argument in command.get_arguments() {
+            if argument.get_action().takes_values() {
+                if let Some(long) = argument.get_long() {
+                    names.insert(format!("--{long}"));
+                }
+                if let Some(short) = argument.get_short() {
+                    names.insert(format!("-{short}"));
+                }
+            }
+        }
+        for subcommand in command.get_subcommands() {
+            value_options(subcommand, names);
+        }
+    }
+    let mut names = BTreeSet::new();
+    value_options(&command(), &mut names);
+    arguments.windows(2).any(|pair| {
+        pair[1]
+            .to_str()
+            .is_some_and(|token| token.split('=').next() == Some(option))
+            && pair[0].to_str().is_some_and(|flag| names.contains(flag))
+    })
 }
 
 fn profile(production: bool) -> ProfileArg {
@@ -13118,6 +13240,38 @@ fn write_failure(
 mod tests {
     use super::*;
     use registry_breg::postgres::RoleMode;
+
+    #[test]
+    fn a_validator_reason_that_repeats_the_value_is_not_the_usage_message() {
+        let refused = |reason: fn(&str) -> Result<String, String>, value: &str| {
+            let error = clap::Command::new("bregctl")
+                .arg(
+                    clap::Arg::new("reference")
+                        .long("reference")
+                        .value_parser(reason),
+                )
+                .try_get_matches_from(["bregctl", "--reference", value])
+                .unwrap_err();
+            usage_message(&error, &[])
+        };
+        let echoing = refused(
+            |value| Err(format!("--reference refused {value}")),
+            "sentinel-7f3a9c",
+        );
+        assert!(!echoing.contains("sentinel-7f3a9c"), "{echoing}");
+        assert!(
+            echoing.starts_with("invalid value for --reference <reference>"),
+            "{echoing}"
+        );
+        let value_free = refused(
+            |_| Err("--reference must not contain control characters".to_owned()),
+            "change\n42",
+        );
+        assert!(
+            value_free.starts_with("--reference must not contain control characters\n"),
+            "{value_free}"
+        );
+    }
 
     fn reconcile_lifecycle_outcome(outcome: &'static str) -> ReconcileLifecycleOutcome {
         ReconcileLifecycleOutcome {
