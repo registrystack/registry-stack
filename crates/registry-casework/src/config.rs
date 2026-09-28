@@ -965,28 +965,17 @@ impl RuntimeConfig {
         Ok(())
     }
 
-    /// Refuse a bound source whose timeouts or reconciliation interval fall
-    /// outside the adapter's accepted range. This runs at configuration load,
-    /// before secrets are resolved or any adapter is built, so an operator
-    /// sees the refusal without the runtime ever starting.
+    /// Refuse a bound source that breaks one of the adapter's binding rules.
+    /// This runs at configuration load, before secrets are resolved or any
+    /// adapter is built, so an operator sees the refusal without the runtime
+    /// ever starting. The refusal names the member that broke the rule and
+    /// the rule itself, never the configured value.
     fn validate_source_bindings(&self) -> Result<(), RuntimeConfigError> {
         for (source_id, binding) in &self.sources {
-            let path = format!("sources.{source_id}");
-            // Named ahead of the adapter's own check so the common mistake of
-            // leaving connectTimeoutMilliseconds at its default while lowering
-            // requestTimeoutMilliseconds below it is refused with the rule
-            // that failed, not a bare "not a valid source binding".
-            if binding.connect_timeout_milliseconds > binding.request_timeout_milliseconds {
-                return Err(RuntimeConfigError::InvalidSourceBinding {
-                    path,
-                    reason:
-                        "requestTimeoutMilliseconds must be at least connectTimeoutMilliseconds",
-                });
-            }
-            registry_casework_breg::validate_binding_input(binding).map_err(|_| {
+            registry_casework_breg::validate_binding_input(binding).map_err(|rule| {
                 RuntimeConfigError::InvalidSourceBinding {
-                    path: path.clone(),
-                    reason: "the binding does not meet the source adapter's accepted range",
+                    path: format!("sources.{source_id}.{}", rule.field()),
+                    reason: rule.reason(),
                 }
             })?;
         }
@@ -2575,48 +2564,220 @@ reviewProducers:
             .contains("accessProfiles[].principalClaim"));
     }
 
-    #[test]
-    fn an_out_of_range_source_binding_interval_is_refused_at_load() {
+    /// Load the operator fixture with one member of its only source binding
+    /// replaced, and return the refusal. Each binding rule is refused at load
+    /// with its own key path and reason, never the value that broke it.
+    fn source_binding_refusal(member: &str, value: serde_json::Value) -> RuntimeConfigError {
         let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
         let operator = root.path().join("runtime.yaml");
         let mut document = operator_value(&package, "development-loopback");
-        document["sources"]["professional"]["reconciliationIntervalMilliseconds"] =
-            serde_json::json!(999);
+        document["sources"]["professional"][member] = value;
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::InvalidSourceBinding { path, .. }
-                if path == "sources.professional"
-        ));
-        assert_eq!(error.path(), "sources.professional");
+        RuntimeConfig::load(&operator).unwrap_err()
+    }
+
+    fn assert_source_binding_rule(
+        error: &RuntimeConfigError,
+        member: &str,
+        reason_names: &[&str],
+        withheld: &[&str],
+    ) {
+        let expected = format!("sources.professional.{member}");
+        assert!(
+            matches!(
+                error,
+                RuntimeConfigError::InvalidSourceBinding { path, .. } if *path == expected
+            ),
+            "the refusal does not name {expected}: {error:?}"
+        );
+        assert_eq!(error.path(), expected);
+        let message = error.to_string();
+        assert!(
+            !message.contains("accepted range"),
+            "the refusal collapses to the generic sentence: {message}"
+        );
+        for name in reason_names {
+            assert!(
+                message.contains(name),
+                "the refusal does not state {name:?}: {message}"
+            );
+        }
+        for value in withheld {
+            assert!(
+                !message.contains(value),
+                "the refusal echoes the configured value {value:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_source_binding_interval_is_refused_at_load() {
+        for (interval, withheld) in [(999, "999"), (3_600_001, "3600001")] {
+            let error = source_binding_refusal(
+                "reconciliationIntervalMilliseconds",
+                serde_json::json!(interval),
+            );
+            assert_source_binding_rule(
+                &error,
+                "reconciliationIntervalMilliseconds",
+                &["reconciliationIntervalMilliseconds", "1000", "3600000"],
+                &[withheld],
+            );
+        }
     }
 
     #[test]
     fn a_request_timeout_shorter_than_the_connect_timeout_names_that_rule() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        document["sources"]["professional"]["requestTimeoutMilliseconds"] =
-            serde_json::json!(9_000);
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(matches!(
+        let error = source_binding_refusal("requestTimeoutMilliseconds", serde_json::json!(9_000));
+        assert_source_binding_rule(
             &error,
-            RuntimeConfigError::InvalidSourceBinding { path, .. }
-                if path == "sources.professional"
-        ));
-        assert!(
-            error.to_string().contains("requestTimeoutMilliseconds")
-                && error.to_string().contains("connectTimeoutMilliseconds"),
-            "the refusal does not name the timeout ordering rule: {error}"
+            "requestTimeoutMilliseconds",
+            &["requestTimeoutMilliseconds", "connectTimeoutMilliseconds"],
+            &["9000"],
         );
+    }
+
+    #[test]
+    fn an_invalid_reader_profile_names_that_rule() {
+        let error = source_binding_refusal("readerProfile", serde_json::json!(" casework-reader"));
+        assert_source_binding_rule(
+            &error,
+            "readerProfile",
+            &["readerProfile", "512"],
+            &["casework-reader"],
+        );
+        let error = source_binding_refusal("readerProfile", serde_json::json!("r".repeat(513)));
+        assert_source_binding_rule(&error, "readerProfile", &["readerProfile"], &["rrrr"]);
+    }
+
+    #[test]
+    fn a_zero_connect_timeout_names_that_rule() {
+        let error = source_binding_refusal("connectTimeoutMilliseconds", serde_json::json!(0));
+        assert_source_binding_rule(
+            &error,
+            "connectTimeoutMilliseconds",
+            &["connectTimeoutMilliseconds", "greater than zero"],
+            &[],
+        );
+    }
+
+    #[test]
+    fn a_zero_request_timeout_names_that_rule() {
+        let error = source_binding_refusal("requestTimeoutMilliseconds", serde_json::json!(0));
+        assert_source_binding_rule(
+            &error,
+            "requestTimeoutMilliseconds",
+            &["requestTimeoutMilliseconds", "greater than zero"],
+            &[],
+        );
+    }
+
+    #[test]
+    fn a_request_timeout_above_the_maximum_names_that_rule() {
+        let error =
+            source_binding_refusal("requestTimeoutMilliseconds", serde_json::json!(300_001));
+        assert_source_binding_rule(
+            &error,
+            "requestTimeoutMilliseconds",
+            &["requestTimeoutMilliseconds", "at most 300000"],
+            &["300001"],
+        );
+    }
+
+    #[test]
+    fn a_malformed_event_source_names_that_rule() {
+        let error = source_binding_refusal(
+            "eventSource",
+            serde_json::json!("urn:registrystack:registry:professional:pilot"),
+        );
+        assert_source_binding_rule(
+            &error,
+            "eventSource",
+            &[
+                "eventSource",
+                "urn:registrystack:registry:<package>:instance:<instance>",
+            ],
+            &["professional:pilot"],
+        );
+    }
+
+    #[test]
+    fn an_invalid_client_assertion_audience_names_that_rule() {
+        let error = source_binding_refusal(
+            "clientAssertionAudience",
+            serde_json::json!("https://identity.example.test/#assertion"),
+        );
+        assert_source_binding_rule(
+            &error,
+            "clientAssertionAudience",
+            &["clientAssertionAudience", "absolute URI"],
+            &["identity.example.test/#assertion"],
+        );
+    }
+
+    #[test]
+    fn an_invalid_resource_names_that_rule() {
+        let error = source_binding_refusal("resource", serde_json::json!(" urn:breg:professional"));
+        assert_source_binding_rule(
+            &error,
+            "resource",
+            &["resource", "absolute URI"],
+            &["urn:breg:professional"],
+        );
+    }
+
+    #[test]
+    fn an_empty_scope_list_names_that_rule() {
+        let error = source_binding_refusal("scopes", serde_json::json!([]));
+        assert_source_binding_rule(&error, "scopes", &["scopes", "at least one"], &[]);
+    }
+
+    #[test]
+    fn too_many_scopes_names_that_rule() {
+        let scopes = (0..33)
+            .map(|index| format!("casework:scope-{index}"))
+            .collect::<Vec<_>>();
+        let error = source_binding_refusal("scopes", serde_json::json!(scopes));
+        assert_source_binding_rule(
+            &error,
+            "scopes",
+            &["scopes", "at most 32"],
+            &["casework:scope-"],
+        );
+    }
+
+    #[test]
+    fn a_repeated_scope_names_that_rule() {
+        let error = source_binding_refusal(
+            "scopes",
+            serde_json::json!(["casework:source-reader", "casework:source-reader"]),
+        );
+        assert_source_binding_rule(
+            &error,
+            "scopes",
+            &["scopes", "repeat"],
+            &["casework:source-reader"],
+        );
+    }
+
+    #[test]
+    fn a_scope_that_is_not_a_scope_token_names_that_rule() {
+        let error = source_binding_refusal("scopes", serde_json::json!(["casework source-reader"]));
+        assert_source_binding_rule(
+            &error,
+            "scopes",
+            &["scopes", "scope-token"],
+            &["casework source-reader"],
+        );
+    }
+
+    #[test]
+    fn a_scope_longer_than_the_maximum_names_that_rule() {
+        let error = source_binding_refusal("scopes", serde_json::json!(["s".repeat(257)]));
+        assert_source_binding_rule(&error, "scopes", &["scopes", "256 bytes"], &["ssss"]);
     }
 
     #[test]
@@ -2831,7 +2992,7 @@ pub enum RuntimeConfigError {
         "each source namespace admitted for source-context review work must have an activated source adapter"
     )]
     InactiveReviewSourceNamespace,
-    #[error("{path} is not a valid Casework source binding: {reason}")]
+    #[error("{path} is not valid in a Casework source binding: {reason}")]
     InvalidSourceBinding { path: String, reason: &'static str },
     #[error(
         "{path} must name exactly one completion secret, in a header the runtime does not reserve"
