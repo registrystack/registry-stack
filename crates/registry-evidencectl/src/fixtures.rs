@@ -172,6 +172,21 @@ fn no_case_diagnostic() -> JsonValue {
     })
 }
 
+/// The refusal for a run whose check or fixture steps failed; each failed
+/// step and case carries its own detail.
+fn failed_run_diagnostic(command: &str) -> JsonValue {
+    serde_json::json!({
+        "severity": "error",
+        "code": "evidencectl.fixtures.failed",
+        "artifact": "fixtures",
+        "path": "$.fixtures",
+        "message": "At least one check or fixture step failed.",
+        "suggestedAction": format!(
+            "Correct the failing check or fixture cases this report names, then rerun evidencectl {command} <project>."
+        ),
+    })
+}
+
 pub fn run(command: FixturesCommand) -> Result<ExitCode> {
     match command {
         FixturesCommand::Run(mut args) => {
@@ -295,6 +310,8 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         evaluated_cases,
         diagnostics: if steps_passed && evaluated_cases == 0 {
             vec![no_case_diagnostic()]
+        } else if !overall_passed {
+            vec![failed_run_diagnostic(args.command)]
         } else {
             Vec::new()
         },

@@ -65,7 +65,7 @@ fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
         args.evidence_bin.as_deref(),
         "EVIDENCECTL_TEST_EVIDENCE_BIN",
     )
-    .map_err(|_| failed())?;
+    .map_err(|_| unavailable())?;
     let output = inspect_core(&evidence, &stopped.runtime_path)?;
     let view: CoreAuditOperation = serde_json::from_slice(&output).map_err(|_| failed())?;
     let rendered = render(&view, &stopped.questions)?;
@@ -89,7 +89,7 @@ fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
                     "rendered": rendered.lines().collect::<Vec<_>>(),
                 }),
             );
-            crate::report::print(&report).map_err(|_| failed())?;
+            crate::print_report(&report);
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -108,7 +108,7 @@ fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|_| failed())?;
+        .map_err(|_| unavailable())?;
     let mut bytes = Vec::with_capacity(MAX_CORE_OUTPUT_BYTES.min(8192));
     let read = child
         .stdout
@@ -382,9 +382,31 @@ fn failed() -> anyhow::Error {
     )
 }
 
+/// The evidence binary that reads the history could not be found or started:
+/// an unavailable process, not a refused input.
+fn unavailable() -> anyhow::Error {
+    closed_failure(
+        true,
+        "evidence.audit.runtime-unavailable",
+        "evidence binary",
+        "Evidence adopter tooling could not start the evidence binary that reads the local audit history.",
+        "Install the evidence binary of this evidencectl version on PATH, then rerun evidencectl audit show --last-operation.",
+    )
+}
+
 fn refusal(code: &str, artifact: &str, message: &str, suggested_action: &str) -> anyhow::Error {
+    closed_failure(false, code, artifact, message, suggested_action)
+}
+
+fn closed_failure(
+    operational: bool,
+    code: &str,
+    artifact: &str,
+    message: &str,
+    suggested_action: &str,
+) -> anyhow::Error {
     crate::SafeCliFailure {
-        operational: false,
+        operational,
         code: code.to_owned(),
         artifact: artifact.to_owned(),
         path: "$".to_owned(),

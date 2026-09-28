@@ -24,17 +24,19 @@
   - Every command that reads one project takes it as a positional
     `<project>`. The former `--project` flag stays accepted but hidden on
     those commands; `source import`, `source diff`, `source update`, and
-    `target new` still document it.
+    `target new` still document it. `access` and `audit show` still act on
+    the current directory and take no positional project.
   - `test` and `fixtures run` accept `--format junit`: one JUnit XML document
     on standard output, one test case per traced case, and the human summary
     on standard error. Other commands refuse it as a usage error.
   - `dev start --name-prefix <prefix>` sets the local issuer container name
     prefix, `evidence-dev` by default, so parallel jobs on one host keep
-    their containers apart. The session keeps it until `dev clean`.
+    their containers apart. A restart without the flag reuses the session's
+    prefix, and a different prefix is refused until `dev clean`.
   - To migrate, read `command` instead of `operation`, read the camelCase
     fixture keys, parse JSON reports from standard output alone, treat exit
     `3` as an unavailable dependency, and replace `--project <dir>` with
-    `<dir>` in scripts.
+    `<dir>` in scripts for the commands that now take a positional project.
 
 ## v0.35.0 - 2026-09-28
 

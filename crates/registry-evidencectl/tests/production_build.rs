@@ -527,8 +527,25 @@ fn a_missing_target_public_key_is_reported_by_explain_before_compilation() {
     let output = fixture.explain();
 
     assert_failed(&output, "a missing target public key must fail explain");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a missing key refuses the target"
+    );
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("explain JSON report");
+    assert_eq!(report["ok"], false, "{report}");
+    assert_eq!(report["status"], "refused", "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidencectl.target.public-key-missing"
+    );
+    assert!(
+        report["diagnostics"][0]["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("evidencectl target explain")),
+        "{report}"
+    );
     assert_eq!(
         report["missingPublicKeyFiles"],
         serde_json::json!([relative])
