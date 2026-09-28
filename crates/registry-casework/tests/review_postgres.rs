@@ -5566,12 +5566,15 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         .expect("create source-context review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
 
-    let concealed_without_source_profile = fixture
-        .service_v2
-        .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
-        .await
-        .expect("source-context task is omitted without a source profile");
-    assert!(concealed_without_source_profile.items.is_empty());
+    // The only candidate is source-backed, so an inbox read without a source
+    // profile names the missing header instead of answering an empty page.
+    assert!(matches!(
+        fixture
+            .service_v2
+            .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
+            .await,
+        Err(ReviewRuntimeError::SourceProfileRequired)
+    ));
 
     let visible = fixture
         .service_v2

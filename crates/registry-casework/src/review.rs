@@ -398,6 +398,7 @@ impl CaseworkService {
         let mut completed_preflights = 0usize;
         let mut budget_exhausted = false;
         let mut source_timed_out = false;
+        let mut skipped_without_source_profile = false;
         while items.len() <= limit
             && examined < policy.maximum_candidate_scan
             && started.elapsed() < deadline
@@ -450,10 +451,12 @@ impl CaseworkService {
                         source_timed_out = true;
                         break;
                     }
+                    Ok(Err(ReviewRuntimeError::SourceProfileRequired)) => {
+                        skipped_without_source_profile = true;
+                    }
                     Ok(Err(
                         ReviewRuntimeError::Forbidden
                         | ReviewRuntimeError::NotFound
-                        | ReviewRuntimeError::SourceProfileRequired
                         | ReviewRuntimeError::SourceProfileNotApplicable,
                     )) => {}
                     Ok(Err(error)) => return Err(error),
@@ -480,6 +483,12 @@ impl CaseworkService {
             }
             scan_cursor = Some(next_cursor);
             continuation = Some(next_cursor);
+        }
+        // An empty page caused only by the absent Registry-Source-Profile
+        // header is refused, so a first-time caller learns which header to
+        // send. A page that lists anything keeps its submitted-context tasks.
+        if items.is_empty() && skipped_without_source_profile {
+            return Err(ReviewRuntimeError::SourceProfileRequired);
         }
         let full = items.len() > limit;
         let next_cursor = if full {

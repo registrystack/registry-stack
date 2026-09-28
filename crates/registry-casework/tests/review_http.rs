@@ -611,14 +611,22 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("task list response without source profile");
-    assert_eq!(tasks_without_source_profile.status(), StatusCode::OK);
-    let tasks_without_source_profile: ReviewTaskPage = serde_json::from_slice(
+    // Only source-backed candidates exist, so the absent header is named
+    // rather than answered with a silent empty page.
+    assert_eq!(
+        tasks_without_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let tasks_without_source_profile: Value = serde_json::from_slice(
         &to_bytes(tasks_without_source_profile.into_body(), 32 * 1024)
             .await
             .expect("bounded task list without source profile"),
     )
     .expect("task list without source profile JSON");
-    assert!(tasks_without_source_profile.items.is_empty());
+    assert_eq!(
+        tasks_without_source_profile["code"],
+        "source-profile.required"
+    );
 
     let visible_tasks = app
         .clone()
@@ -2747,5 +2755,69 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
             }
         }
     }
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn an_inbox_emptied_only_by_the_missing_source_profile_says_so() {
+    let idp = MockIdp::start().await;
+    let (app, ..) = app(&idp).await;
+    let created = app
+        .clone()
+        .oneshot(create_http_request(
+            &review_request("source-only-ref", &idp.issuer()),
+            Some(&token(&idp)),
+        ))
+        .await
+        .expect("create source-context review");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let reviewer_token = reviewer_token(&idp);
+    let list = |source_profile: Option<&str>| {
+        let mut request = Request::builder()
+            .uri("/v1/review-tasks")
+            .header("authorization", format!("Bearer {reviewer_token}"))
+            .header(CASEWORK_PROFILE_HEADER, "staff");
+        if let Some(source_profile) = source_profile {
+            request = request.header(SOURCE_PROFILE_HEADER, source_profile);
+        }
+        app.clone()
+            .oneshot(request.body(Body::empty()).expect("inbox request"))
+    };
+
+    // Every candidate is source-backed, so the page is empty only because
+    // the Registry-Source-Profile header is absent.
+    let refused = list(None).await.expect("profile-less inbox response");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let problem: Value = serde_json::from_slice(
+        &to_bytes(refused.into_body(), 32 * 1024)
+            .await
+            .expect("bounded problem"),
+    )
+    .expect("problem JSON");
+    assert_eq!(problem["code"], "source-profile.required");
+    assert_eq!(
+        problem.as_object().expect("problem object").len(),
+        6,
+        "the refusal names no task: {problem}"
+    );
+
+    let listed = list(Some("reviewer-source"))
+        .await
+        .expect("profiled inbox response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(listed.into_body(), 32 * 1024)
+            .await
+            .expect("bounded page"),
+    )
+    .expect("page JSON");
+    assert_eq!(listed.items.len(), 1);
+
+    // A source profile that hides the task from this caller still yields an
+    // ordinary empty page: only the absent header is refused.
+    let hidden = list(Some("other-source-profile"))
+        .await
+        .expect("mismatched profile inbox response");
+    assert_eq!(hidden.status(), StatusCode::OK);
     idp.stop().await;
 }
