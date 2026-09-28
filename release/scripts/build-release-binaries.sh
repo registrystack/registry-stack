@@ -47,6 +47,12 @@ include_scheduling=0
 if ((version_major > 0 || version_minor >= 33)); then
   include_scheduling=1
 fi
+# From 0.36.0 schedulingctl is a release binary and each stateful product
+# image carries its operator tool beside the runtime binary.
+include_operator_tools=0
+if ((version_major > 0 || version_minor >= 36)); then
+  include_operator_tools=1
+fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
 # the release floor. The builder carries a much newer glibc, and without this
@@ -215,6 +221,9 @@ build_payload() {
     cp target/release/breg "dist/bin/breg-${RELEASE_TAG}-linux-amd64"
     cp target/release/bregctl "dist/bin/bregctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/breg dist/image-bin/breg
+    if [[ "${include_operator_tools}" -eq 1 ]]; then
+      cp target/release/bregctl dist/image-bin/bregctl
+    fi
   fi
 
   if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq 1 ]]; then
@@ -225,6 +234,9 @@ build_payload() {
     cp target/release/casework "dist/bin/casework-${RELEASE_TAG}-linux-amd64"
     cp target/release/caseworkctl "dist/bin/caseworkctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/casework dist/image-bin/casework
+    if [[ "${include_operator_tools}" -eq 1 ]]; then
+      cp target/release/caseworkctl dist/image-bin/caseworkctl
+    fi
   fi
 
   if [[ ("${group}" == all || "${group}" == scheduling) && "${include_scheduling}" -eq 1 ]]; then
@@ -234,6 +246,13 @@ build_payload() {
     if [[ "${group}" == scheduling ]]; then
       cp target/release/scheduling \
         "dist/bin/scheduling-${RELEASE_TAG}-linux-amd64"
+    fi
+    if [[ "${include_operator_tools}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-schedulingctl --bin schedulingctl
+      cp target/release/schedulingctl \
+        "dist/bin/schedulingctl-${RELEASE_TAG}-linux-amd64"
+      cp target/release/schedulingctl dist/image-bin/schedulingctl
     fi
   fi
 
@@ -345,6 +364,7 @@ docker run --rm \
   --env RELEASE_INCLUDE_BREG="${include_breg}" \
   --env RELEASE_INCLUDE_CASEWORK="${include_casework}" \
   --env RELEASE_INCLUDE_SCHEDULING="${include_scheduling}" \
+  --env RELEASE_INCLUDE_OPERATOR_TOOLS="${include_operator_tools}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -381,6 +401,9 @@ if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; t
     "bregctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(breg)
+  if [[ "${include_operator_tools}" -eq 1 ]]; then
+    image_bin_binaries+=(bregctl)
+  fi
 fi
 if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq 1 ]]; then
   bin_assets+=(
@@ -388,12 +411,21 @@ if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq
     "caseworkctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(casework)
+  if [[ "${include_operator_tools}" -eq 1 ]]; then
+    image_bin_binaries+=(caseworkctl)
+  fi
 fi
 if [[ "${group}" == scheduling && "${include_scheduling}" -eq 1 ]]; then
   bin_assets+=("scheduling-${tag}-linux-amd64")
 fi
+if [[ ("${group}" == all || "${group}" == scheduling) && "${include_operator_tools}" -eq 1 ]]; then
+  bin_assets+=("schedulingctl-${tag}-linux-amd64")
+fi
 if [[ "${group}" == all && "${include_scheduling}" -eq 1 ]]; then
   image_bin_binaries+=(scheduling)
+  if [[ "${include_operator_tools}" -eq 1 ]]; then
+    image_bin_binaries+=(schedulingctl)
+  fi
 fi
 if [[ "${group}" == all || "${group}" == core ]]; then
   bin_assets+=(

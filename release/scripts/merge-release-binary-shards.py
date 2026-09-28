@@ -16,6 +16,9 @@ from pathlib import Path
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MINT_RETIREMENT_VERSION = (0, 31, 0)
+# From this version schedulingctl is published and each stateful product image
+# carries its operator tool beside the runtime binary.
+OPERATOR_TOOL_VERSION = (0, 36, 0)
 
 
 class ShardError(ValueError):
@@ -38,6 +41,8 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-linux-amd64", f"bregctl-{tag}-linux-amd64"]
         image_bins.append(("breg", breg[0]))
+        if parsed >= OPERATOR_TOOL_VERSION:
+            image_bins.append(("bregctl", breg[1]))
     casework: list[str] = []
     if parsed >= (0, 30, 0):
         casework = [
@@ -45,10 +50,15 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
             f"caseworkctl-{tag}-linux-amd64",
         ]
         image_bins.append(("casework", casework[0]))
+        if parsed >= OPERATOR_TOOL_VERSION:
+            image_bins.append(("caseworkctl", casework[1]))
     scheduling: list[str] = []
     if parsed >= (0, 33, 0):
         scheduling = [f"scheduling-{tag}-linux-amd64"]
         image_bins.append(("scheduling", scheduling[0]))
+        if parsed >= OPERATOR_TOOL_VERSION:
+            scheduling.append(f"schedulingctl-{tag}-linux-amd64")
+            image_bins.append(("schedulingctl", scheduling[1]))
     common = [
         f"evidence-{tag}-linux-amd64",
         f"evidencectl-{tag}-linux-amd64",
@@ -233,6 +243,11 @@ def merge(
         final_bin_roster.append(shard_rosters["core"][0])
     final_bin_roster.extend(shard_rosters["breg"])
     final_bin_roster.extend(shard_rosters["casework"])
+    # The Scheduling runtime ships only inside its image; its operator tool is
+    # a published binary.
+    final_bin_roster.extend(
+        asset for asset in shard_rosters["scheduling"] if asset.startswith("schedulingctl-")
+    )
     final_bin_roster.extend(
         asset for asset in shard_rosters["core"] if not asset.startswith("discovery-")
     )

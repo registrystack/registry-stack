@@ -9,7 +9,9 @@ ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623
 ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
 
 # The policy package, operator configuration, source bindings, and secrets are
-# deployment inputs. The image carries only the runtime binary and its licenses.
+# deployment inputs. The image carries the runtime binary, the caseworkctl
+# operator tool, and their licenses. The runtime stays the entrypoint; an
+# operator runs caseworkctl by overriding it.
 # Casework stores work and accountability records in PostgreSQL; only its local
 # append-only audit stream needs a writable persistent directory.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
@@ -23,6 +25,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
         /workspace/runtime-root/usr/local/bin \
         /workspace/runtime-root/var/lib/registry-casework/audit \
     && install -m 0755 /workspace/image-bin/casework /workspace/runtime-root/usr/local/bin/casework \
+    && install -m 0755 /workspace/image-bin/caseworkctl /workspace/runtime-root/usr/local/bin/caseworkctl \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/casework/LICENSE \
     && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/casework/THIRD_PARTY_NOTICES \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-casework \

@@ -388,6 +388,96 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
+    def test_stateful_images_carry_their_operator_tool_beside_the_runtime(
+        self,
+    ) -> None:
+        self.assertEqual(
+            {
+                Path("release/docker/Dockerfile.breg"): "bregctl",
+                Path("release/docker/Dockerfile.casework"): "caseworkctl",
+                Path("release/docker/Dockerfile.scheduling"): "schedulingctl",
+            },
+            {
+                relative: contract["tool"]
+                for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items()
+                if "tool" in contract
+            },
+        )
+        self.assertEqual([], POLICY.check_repository())
+
+    def test_operator_tool_install_is_required_and_normalized(self) -> None:
+        for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():
+            if "tool" not in contract:
+                continue
+            tool = contract["tool"]
+            install = (
+                f"    && install -m 0755 /workspace/image-bin/{tool} "
+                f"/workspace/runtime-root/usr/local/bin/{tool} \\\n"
+            )
+            normalization = f"    && {POLICY.RUNTIME_ROOT_NORMALIZATION}\n"
+            mutations = {
+                "missing": lambda text: text.replace(install, ""),
+                "after normalization": lambda text: text.replace(
+                    install, ""
+                ).replace(
+                    normalization,
+                    normalization.rstrip("\n")
+                    + " \\\n"
+                    + install.rstrip(" \\\n")
+                    + "\n",
+                ),
+            }
+            for case, mutate in mutations.items():
+                with self.subTest(relative=relative, case=case):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        self.repository_copy(root)
+                        dockerfile = root / relative
+                        text = dockerfile.read_text(encoding="utf-8")
+                        self.assertIn(install, text)
+                        mutated = mutate(text)
+                        self.assertNotEqual(text, mutated)
+                        dockerfile.write_text(mutated, encoding="utf-8")
+                        failures = POLICY.check_repository(root)
+                        self.assertTrue(
+                            any(
+                                str(relative) in failure and tool in failure
+                                for failure in failures
+                            ),
+                            failures,
+                        )
+
+    def test_operator_tool_never_becomes_the_image_entrypoint(self) -> None:
+        for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():
+            if "tool" not in contract:
+                continue
+            tool = contract["tool"]
+            for replacement in (
+                f'ENTRYPOINT ["/usr/local/bin/{tool}"]',
+                contract["entrypoint"] + f'\nENTRYPOINT ["/usr/local/bin/{tool}"]',
+            ):
+                with self.subTest(relative=relative, replacement=replacement):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        self.repository_copy(root)
+                        dockerfile = root / relative
+                        dockerfile.write_text(
+                            dockerfile.read_text(encoding="utf-8").replace(
+                                contract["entrypoint"], replacement
+                            ),
+                            encoding="utf-8",
+                        )
+                        failures = POLICY.check_repository(root)
+                        self.assertTrue(
+                            any(
+                                str(relative) in failure
+                                and "ENTRYPOINT" in failure
+                                or f"fixed {contract['binary']} entrypoint" in failure
+                                for failure in failures
+                            ),
+                            failures,
+                        )
+
     def test_image_without_an_environment_contract_declares_no_environment(
         self,
     ) -> None:

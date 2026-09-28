@@ -7,6 +7,8 @@ checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
 images=(relay evidence discovery breg casework scheduling)
+# The stateful product images carry their operator tool beside the runtime.
+operator_tools=(bregctl caseworkctl schedulingctl)
 relay_dockerfile="${repo_root}/release/docker/Dockerfile.relay"
 
 source_label="https://github.com/registrystack/registry-stack"
@@ -28,8 +30,12 @@ true_binary=/bin/true
 if [[ ! -x "${true_binary}" ]]; then
   true_binary="$(type -P true)"
 fi
-for image in "${images[@]}"; do
-  cp "${true_binary}" "${context_dir}/dist/image-bin/${image}"
+operator_tool_stand_ins=()
+for binary in "${images[@]}" "${operator_tools[@]}"; do
+  cp "${true_binary}" "${context_dir}/dist/image-bin/${binary}"
+done
+for tool in "${operator_tools[@]}"; do
+  operator_tool_stand_ins+=("${context_dir}/dist/image-bin/${tool}")
 done
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
 cp "${repo_root}/THIRD_PARTY_NOTICES" "${context_dir}/THIRD_PARTY_NOTICES"
@@ -102,6 +108,7 @@ for image in "${images[@]}"; do
   second_layout="${tmp_root}/correct-${image}-second"
   touch -t 200001010101 \
     "${context_dir}/dist/image-bin/${image}" \
+    "${operator_tool_stand_ins[@]}" \
     "${context_dir}/LICENSE" \
     "${context_dir}/THIRD_PARTY_NOTICES"
   build_layout "${image}" "${first_layout}" "${revision_label}" "${version_label}"
@@ -114,6 +121,7 @@ for image in "${images[@]}"; do
   # layers. The exporter also normalizes inherited layers to the fixed epoch.
   touch -t 203001010101 \
     "${context_dir}/dist/image-bin/${image}" \
+    "${operator_tool_stand_ins[@]}" \
     "${context_dir}/LICENSE" \
     "${context_dir}/THIRD_PARTY_NOTICES"
   build_layout "${image}" "${second_layout}" "${revision_label}" "${version_label}"

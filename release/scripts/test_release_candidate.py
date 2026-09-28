@@ -893,6 +893,67 @@ class ReleaseCandidateTest(TestCase):
             self.module._relay_v2_payload_inventory("0.33.0"),
         )
 
+    def test_schedulingctl_joins_only_the_v0_36_roster(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.35.0")
+        current = self.module._relay_v2_payload_inventory("0.36.0")
+
+        self.assertFalse(
+            [name for name in historical if name.startswith("schedulingctl-")]
+        )
+        self.assertEqual(
+            {
+                "schedulingctl-v0.36.0-linux-amd64": "binary",
+                "schedulingctl-v0.36.0-linux-arm64": "binary",
+                "schedulingctl-v0.36.0-macos-arm64.tar.gz": "binary",
+            },
+            {
+                name: kind
+                for name, kind in current.items()
+                if name.startswith("schedulingctl-")
+            },
+        )
+        self.assertFalse([name for name in current if name.startswith("scheduling-")])
+        self.assertEqual(
+            {name.replace("0.35.0", "0.36.0"): kind for name, kind in historical.items()},
+            {
+                name: kind
+                for name, kind in current.items()
+                if not name.startswith("schedulingctl-")
+            },
+        )
+
+    def test_image_operator_tools_join_only_the_v0_36_images(self) -> None:
+        for version in ("0.33.0", "0.35.0", "0.35.9"):
+            with self.subTest(version=version):
+                self.assertEqual({}, self.module.image_operator_tools(version))
+        for version in ("0.36.0", "1.0.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    {
+                        "breg": "bregctl",
+                        "casework": "caseworkctl",
+                        "scheduling": "schedulingctl",
+                    },
+                    self.module.image_operator_tools(version),
+                )
+
+    def test_image_operator_tools_cli_emits_image_and_tool_pairs(self) -> None:
+        for version, expected in (
+            ("0.35.0", ""),
+            (
+                "0.36.0",
+                "breg=bregctl casework=caseworkctl scheduling=schedulingctl\n",
+            ),
+        ):
+            with self.subTest(version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = self.module.main(
+                        ["image-operator-tools", "--version", version]
+                    )
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
+
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
             ("0.30.0", True),
@@ -988,6 +1049,45 @@ class ReleaseCandidateTest(TestCase):
             self.module.check_image_onboarding(
                 root, "0.33.0", allow_missing_baseline=True
             )
+
+    def test_v0_36_onboarding_requires_each_operator_tool_staged_in_its_image(
+        self,
+    ) -> None:
+        root = self.onboarding_repository()
+        shutil.copy2(
+            ROOT / "release/docker/Dockerfile.scheduling",
+            root / "release/docker/Dockerfile.scheduling",
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.36.0"),
+            self.module.check_image_onboarding(
+                root, "0.36.0", allow_missing_baseline=True
+            ),
+        )
+        recipe = root / "release/scripts/build-release-binaries.sh"
+        original = recipe.read_text(encoding="utf-8")
+        for tool in ("bregctl", "caseworkctl", "schedulingctl"):
+            with self.subTest(tool=tool):
+                recipe.write_text(
+                    original.replace(
+                        f"cp target/release/{tool} dist/image-bin/{tool}",
+                        f"cp target/release/{tool} dist/image-bin/wrong-{tool}",
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    self.module.CandidateError,
+                    f"canonical binary recipe must stage dist/image-bin/{tool}",
+                ):
+                    self.module.check_image_onboarding(
+                        root, "0.36.0", allow_missing_baseline=True
+                    )
+                self.assertEqual(
+                    self.module._candidate_image_names("0.35.0"),
+                    self.module.check_image_onboarding(
+                        root, "0.35.0", allow_missing_baseline=True
+                    ),
+                )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
         with self.assertRaisesRegex(
