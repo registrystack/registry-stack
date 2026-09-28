@@ -320,6 +320,34 @@ mod tests {
     }
 
     #[test]
+    fn the_schema_states_the_database_identity_grammar_the_runtime_enforces() {
+        let schema = runtime_schema();
+        let instance = runtime_instance("secret:env/CASEWORK_JWKS", "both");
+        let with_id = |database_id: &str| {
+            let mut document = instance.clone();
+            document["identity"]["databaseId"] = Value::from(database_id);
+            schema.is_valid(&document)
+        };
+        for accepted in ["casework-production", "a", "two words", "caf\u{e9}"] {
+            assert!(with_id(accepted), "{accepted:?} must be accepted");
+        }
+        for refused in [
+            "",
+            " ",
+            " leading",
+            "trailing ",
+            "\u{a0}no-break",
+            "ideographic\u{3000}",
+            "line\u{2028}",
+            "bell\u{7}inside",
+            "next-line\u{85}inside",
+            "tab\tinside",
+        ] {
+            assert!(!with_id(refused), "{refused:?} must be refused");
+        }
+    }
+
+    #[test]
     fn runtime_schema_is_deterministic_and_versioned() {
         let first = runtime_documents().unwrap();
         let second = runtime_documents().unwrap();
