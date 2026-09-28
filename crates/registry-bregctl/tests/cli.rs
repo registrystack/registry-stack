@@ -5194,6 +5194,14 @@ fn retired_package_flags_are_usage_errors_that_name_their_replacement() {
         let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
         assert!(stderr.contains(&format!("`{flag}` is removed")), "{stderr}");
         assert!(stderr.contains(replacement), "{flag}: {stderr}");
+
+        // A retired flag passed without its value reads the same replacement,
+        // not a generic missing-value error.
+        let output = bregctl(&[command, PACKAGE_VALUE_CANARY, flag]);
+        assert_eq!(output.status.code(), Some(2), "bare {flag}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+        assert!(stderr.contains(&format!("`{flag}` is removed")), "{stderr}");
+        assert!(stderr.contains(replacement), "bare {flag}: {stderr}");
     }
     let output = bregctl(&[
         "package",

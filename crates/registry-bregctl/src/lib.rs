@@ -517,12 +517,20 @@ struct PackageCandidateArgs {
     #[arg(long, value_name = "DIRECTORY", requires = "baseline_package")]
     reviewed_migrations: Option<PathBuf>,
 
-    #[arg(long = "database-id", hide = true, value_parser = refuse_database_id_flag)]
+    #[arg(
+        long = "database-id",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_database_id_flag
+    )]
     _database_id: Option<String>,
 
     #[arg(
         long = "baseline-runtime-config",
         hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
         value_parser = refuse_baseline_runtime_config_flag
     )]
     _baseline_runtime_config: Option<String>,
@@ -530,6 +538,8 @@ struct PackageCandidateArgs {
     #[arg(
         long = "signature-threshold",
         hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
         value_parser = refuse_signature_threshold_flag
     )]
     _signature_threshold: Option<String>,
@@ -538,6 +548,8 @@ struct PackageCandidateArgs {
         long = "signature-key-id",
         hide = true,
         allow_hyphen_values = true,
+        num_args = 0..=1,
+        default_missing_value = "",
         value_parser = refuse_signature_key_id_flag
     )]
     _signature_key_id: Option<String>,
@@ -545,6 +557,8 @@ struct PackageCandidateArgs {
 
 // Each retired package flag stays a hidden argument so an operator who still
 // passes it reads a usage error naming its replacement, not an unknown flag.
+// Its value is optional, so a bare flag reaches the same refusal instead of a
+// generic missing-value error.
 fn refuse_database_id_flag(_: &str) -> Result<String, String> {
     Err("`--database-id` is removed; a package names no database. Remove it: the runtime configuration's `identity.databaseId` names the database at apply".to_owned())
 }
@@ -579,7 +593,13 @@ struct PackageArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     test_receipt: PathBuf,
 
-    #[arg(long = "signatures", hide = true, value_parser = refuse_signatures_flag)]
+    #[arg(
+        long = "signatures",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = refuse_signatures_flag
+    )]
     _signatures: Option<String>,
 
     /// New build directory that receives the schema-test receipt and the published package/.
