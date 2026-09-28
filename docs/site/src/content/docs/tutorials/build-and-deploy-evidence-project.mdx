@@ -128,10 +128,10 @@ loopback or private address. `listener.networkExposure` declares which addresses
 defaults to `private-address`, which accepts loopback, RFC 1918 private IPv4, or RFC 4193
 unique-local IPv6. A container listener that must bind the wildcard `0.0.0.0` inside an isolated
 network sets `networkExposure: container-private` instead, as
-[`runtime.docker.yaml`](https://github.com/registrystack/registry-stack/blob/main/docker/compose/runtime.docker.yaml)
-in the Registry Stack repository does; that value permits the wildcard bind for an operator-confined
-container network and authorizes no public or direct-TLS serving. The runtime cannot override the
-governed service, authentication, authority, source, disclosure, or signing fields.
+`docker/compose/runtime.docker.yaml` does in the Registry Stack repository at the release tag you
+install; that value permits the wildcard bind for an operator-confined container network and
+authorizes no public or direct-TLS serving. The runtime cannot override the governed service,
+authentication, authority, source, disclosure, or signing fields.
 
 `public-keys/` contains the exact active and published service JWKs named by `governance.yaml`.
 Production and evidence-grade targets bind the matching non-exportable provider key through the
