@@ -1653,6 +1653,91 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
     assert_eq!(state.identity, split);
 }
 
+/// A registry whose state row records no claim, as one upgraded from a release
+/// before the claim does, is claimed by its next activation, so an in-place
+/// upgrade starts without an operator adopting the database.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_an_activation_records_the_claim_a_database_has_never_recorded() {
+    let (database, active, _, package) = successor_over_an_open_import_authority().await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET system_identifier = NULL, database_oid = NULL,
+                    claimed_at = NULL, epoch = 0
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the administrator removes the claim");
+    apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the successor activates");
+    assert_eq!(
+        recorded_claim(&database).await,
+        (Some(live_database_oid(&database).await), 1),
+        "the activation records the database it ran in as the claim"
+    );
+}
+
+/// A claim that names another database is kept by every activation: a
+/// restored copy stays a copy until an operator adopts it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_an_activation_keeps_a_claim_that_names_another_database() {
+    let (database, active, _, package) = successor_over_an_open_import_authority().await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET database_oid = 1, epoch = 3
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the administrator points the claim at another database");
+    apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the successor activates");
+    assert_eq!(
+        recorded_claim(&database).await,
+        (Some(1), 3),
+        "the activation leaves the recorded claim in place"
+    );
+}
+
+async fn recorded_claim(database: &TestDatabase) -> (Option<i64>, i64) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT database_oid::bigint, epoch::bigint
+               FROM registry_internal.registry_state WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the claim reads");
+    (row.get(0), row.get(1))
+}
+
+async fn live_database_oid(database: &TestDatabase) -> i64 {
+    database
+        .admin
+        .query_one(
+            "SELECT oid::bigint FROM pg_catalog.pg_database WHERE datname = current_database()",
+            &[],
+        )
+        .await
+        .expect("the live database reads")
+        .get(0)
+}
+
 async fn ledger_roles(
     database: &TestDatabase,
 ) -> Vec<(String, String, String, Option<String>, String, String)> {

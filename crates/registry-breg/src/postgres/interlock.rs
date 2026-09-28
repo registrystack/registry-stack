@@ -1817,6 +1817,11 @@ impl DedicatedApplyConnection {
             verify_complete_history_coverage(&transaction).await?;
         }
         record_applied(&transaction, ledger).await?;
+        // A registry that has never recorded a claim, as one upgraded from a
+        // release before the claim, is claimed by the activation that runs in
+        // it. A recorded claim is kept, so a restored copy stays a copy until
+        // an operator adopts it.
+        crate::instance_claim::record_if_unclaimed(&transaction).await?;
         let changed = if let Some(current) = current {
             current.validate()?;
             transaction
