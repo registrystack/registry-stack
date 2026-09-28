@@ -1621,11 +1621,20 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
 
 fn check_source_descriptions(project: &Path) -> Result<()> {
     let policy = load_and_check_policy(project)?;
-    for source in &policy.sources {
+    for (index, source) in policy.sources.iter().enumerate() {
         let path = project_input_path(project, &source.description)?;
         let bytes = read_package_input(&path)?;
-        validate_breg_source_description(source, &bytes).map_err(|_| {
-            anyhow::anyhow!("source description {} does not match the exact BReg adapter contract bound to this source; repeat source add", path.display())
+        validate_breg_source_description(source, &bytes).map_err(|refusal| match refusal {
+            // The description is current; the policy names a field its
+            // source never published, so repeating source add cannot help.
+            registry_casework_breg::DescriptionRefusal::UnpublishedPolicyField {
+                path: key_path,
+                field,
+            } => anyhow::anyhow!(
+                "casework.yaml sources[{index}].{key_path} names source field {field}, which source description {} does not publish; name a field listed in that description's fields, or remove it from the policy",
+                path.display()
+            ),
+            _ => anyhow::anyhow!("source description {} does not match the exact BReg adapter contract bound to this source; repeat source add", path.display()),
         })?;
         check_source_review_binding(&policy, source, &path, &bytes)?;
     }
@@ -2908,6 +2917,82 @@ mod tests {
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
         assert!(error.contains("missing-review-kind"), "{error}");
         assert!(error.contains("sha256:source-revision"), "{error}");
+    }
+
+    // registrystack/registry-stack#1467 (CASE-32): a policy that names a
+    // field the source description does not publish is a policy mistake, not
+    // a stale binding, so repeating source add cannot fix it and the refusal
+    // must not suggest it.
+    fn assert_names_unpublished_policy_field(error: &str, key_path: &str) {
+        assert!(error.contains(key_path), "{error}");
+        assert!(error.contains("priority"), "{error}");
+        assert!(error.contains("does not publish"), "{error}");
+        assert!(!error.contains("source add"), "{error}");
+        assert!(!error.contains("adapter contract"), "{error}");
+    }
+
+    #[test]
+    fn check_source_descriptions_names_a_context_projection_field_the_source_does_not_publish() {
+        let yaml = CASEWORK_YAML.replace(
+            "          - supporting-reference\n",
+            "          - supporting-reference\n          - priority\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert_names_unpublished_policy_field(
+            &error,
+            "sources[0].requests[0].contextProjection[4]",
+        );
+    }
+
+    #[test]
+    fn check_source_descriptions_names_a_display_reference_field_the_source_does_not_publish() {
+        let yaml = CASEWORK_YAML.replace(
+            "        queue: corrections\n        contextProjection:\n",
+            "        queue: corrections\n        displayReference: {field: priority}\n        contextProjection:\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert_names_unpublished_policy_field(
+            &error,
+            "sources[0].requests[0].displayReference.field",
+        );
+    }
+
+    #[test]
+    fn check_source_descriptions_names_a_routing_projection_field_the_source_does_not_publish() {
+        let yaml = CASEWORK_YAML.replace(
+            "        queue: corrections\n        contextProjection:\n",
+            "        queue: corrections\n        projection: [record, priority]\n        contextProjection:\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert_names_unpublished_policy_field(&error, "sources[0].requests[0].projection[1]");
+    }
+
+    #[test]
+    fn check_source_descriptions_keeps_the_contract_refusal_for_a_description_that_drifted() {
+        let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        description["request"]
+            .as_object_mut()
+            .unwrap()
+            .remove("contractFingerprint");
+        let description = serde_json::to_string(&description).unwrap();
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(
+            error.contains("does not match the exact BReg adapter contract bound to this source"),
+            "{error}"
+        );
+        assert!(error.contains("repeat source add"), "{error}");
+        assert!(!error.contains("does not publish"), "{error}");
     }
 
     #[test]

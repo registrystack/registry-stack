@@ -207,15 +207,17 @@ fn capture_verified_file(
 
 /// Validate one imported BReg description through the adapter's owning strict
 /// decoder without resolving runtime bindings or secrets. Returns each request
-/// entity's routing metadata, keyed by entity.
+/// entity's routing metadata, keyed by entity. A refusal distinguishes a
+/// policy that names a field the description does not publish from a
+/// description that does not meet the adapter contract.
 pub fn validate_breg_source_description(
     source: &registry_casework_core::SourcePolicy,
     bytes: &[u8],
 ) -> Result<
     BTreeMap<String, registry_casework_core::RoutingSourceMetadata>,
-    registry_casework_core::SourceAdapterError,
+    registry_casework_breg::DescriptionRefusal,
 > {
-    registry_casework_breg::validate_description_input(source, bytes)
+    registry_casework_breg::check_description_input(source, bytes)
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
