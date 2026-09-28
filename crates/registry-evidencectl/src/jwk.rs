@@ -87,6 +87,10 @@ const MAX_PEM_BYTES: usize = MAX_JWK_JSON_BYTES;
 /// 2048-bit modulus.
 const MIN_RSA_MODULUS_BITS: usize = 2048;
 
+/// The widest RSA modulus the platform verifier accepts
+/// (`RSA_PKCS1_2048_8192_*`); a wider key would sign nothing it can verify.
+const MAX_RSA_MODULUS_BITS: usize = 8192;
+
 const RSA_ENCRYPTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 const EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 const PRIME256V1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
@@ -314,6 +318,11 @@ fn rsa_jwk(key: pkcs1::RsaPublicKey<'_>, alg: Option<JwkAlgorithm>) -> Result<Pu
             "the RSA modulus has {modulus_bits} bits; at least {MIN_RSA_MODULUS_BITS} are required"
         );
     }
+    if modulus_bits > MAX_RSA_MODULUS_BITS {
+        bail!(
+            "the RSA modulus has {modulus_bits} bits; at most {MAX_RSA_MODULUS_BITS} can be verified"
+        );
+    }
     validate(
         PublicJwk {
             kty: "RSA".to_owned(),
@@ -379,5 +388,27 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("2 PEM blocks"), "{error}");
+    }
+
+    /// The platform verifier accepts RSA moduli from 2048 through 8192 bits,
+    /// so a key outside that range converts into a JWK nothing can verify.
+    #[test]
+    fn rsa_moduli_are_held_to_the_verifier_range() {
+        let exponent = [0x01, 0x00, 0x01];
+        let convert = |bytes: usize| {
+            let mut modulus = vec![0xff; bytes];
+            modulus[bytes - 1] = 0x01;
+            let key = pkcs1::RsaPublicKey {
+                modulus: pkcs8::der::asn1::UintRef::new(&modulus).expect("modulus"),
+                public_exponent: pkcs8::der::asn1::UintRef::new(&exponent).expect("exponent"),
+            };
+            rsa_jwk(key, Some(JwkAlgorithm::Rs256)).map_err(|error| error.to_string())
+        };
+        assert!(convert(256).is_ok(), "2048 bits is the floor");
+        assert!(convert(1024).is_ok(), "8192 bits is the ceiling");
+        let short = convert(255).unwrap_err();
+        assert!(short.contains("at least 2048"), "{short}");
+        let long = convert(1025).unwrap_err();
+        assert!(long.contains("at most 8192"), "{long}");
     }
 }
