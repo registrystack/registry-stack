@@ -16,12 +16,20 @@
 //! route, method, status category, and public problem code, and neither the
 //! log record's field set nor the metric series' label set can widen without
 //! a review of this module.
+//!
+//! Source-boundary diagnostics are the one exception to route-keyed series.
+//! [`SourceDiagnostics`] holds one entry per source the governed bundle
+//! declares, fixed at startup, so its `source` label is bundle text drawn from
+//! a closed set that no request can extend. It counts responses whose shape
+//! drifted from the declared projection and emits rate-limited operator WARN
+//! records that name the source, declared JSON pointers, and closed reasons,
+//! never a response value, an undeclared member name, a selector, or a subject.
 
 use std::{
     collections::BTreeMap,
     ops::Deref,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -50,6 +58,20 @@ pub(crate) const CORRELATION_HEADER: &str = "traceparent";
 
 /// Target of the per-request operational record.
 pub(crate) const REQUEST_LOG_TARGET: &str = "registry_evidence::request";
+
+/// Target of source-boundary operator diagnostics, shared with the response
+/// shape rejection the kernel reports.
+pub(crate) const SOURCE_LOG_TARGET: &str = "registry_evidence::source";
+
+/// The shortest interval between two WARN records of one kind for one source.
+///
+/// A source that changed shape fails every request, so one record per request
+/// would let traffic decide how much the operator log holds. The counter still
+/// sees every event, and the next record says how many were not logged.
+const SOURCE_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How many distinct drift findings one WARN record reports.
+const REPORTED_DRIFT_FINDINGS: usize = 5;
 
 /// Route label used when no route template matched the request.
 const UNMATCHED_ROUTE: &str = "unmatched";
@@ -251,6 +273,9 @@ pub(crate) struct Metrics {
     /// each render. `None` for registries that are never served on the
     /// metrics listener (for example, an unrelated middleware test).
     rate_limiter: Option<Arc<EvidenceRateLimiter>>,
+    /// The per-source counters the runtime's source executors increment.
+    /// `None` for registries built without a runtime.
+    source_diagnostics: Option<Arc<SourceDiagnostics>>,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -271,10 +296,14 @@ struct Series {
 impl Metrics {
     /// A registry that serves the metrics listener: it samples `rate_limiter`
     /// on every scrape to publish the `evidence_rate_limiter_tracked_keys`
-    /// gauge.
-    pub(crate) fn new(rate_limiter: Arc<EvidenceRateLimiter>) -> Self {
+    /// gauge, and renders the per-source counters `source_diagnostics` holds.
+    pub(crate) fn new(
+        rate_limiter: Arc<EvidenceRateLimiter>,
+        source_diagnostics: Arc<SourceDiagnostics>,
+    ) -> Self {
         Self {
             rate_limiter: Some(rate_limiter),
+            source_diagnostics: Some(source_diagnostics),
             ..Self::default()
         }
     }
@@ -374,7 +403,191 @@ impl Metrics {
             "evidence_rate_limiter_tracked_keys {}\n",
             self.rate_limiter_tracked_keys.load(Ordering::Relaxed)
         ));
+        if let Some(source_diagnostics) = &self.source_diagnostics {
+            source_diagnostics.render(&mut body);
+        }
         body
+    }
+}
+
+/// Why a source's 404 was not the declared unresolved outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UndeclaredNotFound {
+    /// The source declares no `unresolvedProblem`.
+    NotDeclared,
+    /// The source declares one and this response was not exactly it.
+    NotMatched,
+}
+
+impl UndeclaredNotFound {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotDeclared => "not declared",
+            Self::NotMatched => "not matched",
+        }
+    }
+}
+
+/// Value-free operator diagnostics for every governed source.
+///
+/// The entry set is fixed when the runtime starts, from the bundle's own
+/// source identifiers, so neither the log nor the `source` label can grow with
+/// traffic. A report for an identifier outside that set is dropped.
+pub(crate) struct SourceDiagnostics {
+    sources: BTreeMap<String, SourceSignals>,
+}
+
+#[derive(Default)]
+struct SourceSignals {
+    shape_drift_total: AtomicU64,
+    shape_drift_warning: Mutex<WarningWindow>,
+    undeclared_not_found_warning: Mutex<WarningWindow>,
+}
+
+/// One kind of WARN for one source, admitted at most once per interval.
+#[derive(Default)]
+struct WarningWindow {
+    last_logged: Option<Instant>,
+    suppressed: u64,
+}
+
+impl WarningWindow {
+    /// Whether an event at `now` is logged. When it is, the answer is how many
+    /// events of the same kind were not logged since the previous record.
+    fn admit(&mut self, now: Instant) -> Option<u64> {
+        if self
+            .last_logged
+            .is_some_and(|last| now.saturating_duration_since(last) < SOURCE_WARNING_INTERVAL)
+        {
+            self.suppressed = self.suppressed.saturating_add(1);
+            return None;
+        }
+        self.last_logged = Some(now);
+        Some(std::mem::take(&mut self.suppressed))
+    }
+}
+
+impl SourceDiagnostics {
+    pub(crate) fn new<'a>(source_ids: impl IntoIterator<Item = &'a str>) -> Self {
+        Self {
+            sources: source_ids
+                .into_iter()
+                .map(|source_id| (source_id.to_owned(), SourceSignals::default()))
+                .collect(),
+        }
+    }
+
+    /// The reporting handle one source executor holds, if `source_id` is one
+    /// of the governed sources.
+    pub(crate) fn observer(self: &Arc<Self>, source_id: &str) -> Option<SourceObserver> {
+        self.sources
+            .contains_key(source_id)
+            .then(|| SourceObserver {
+                diagnostics: Arc::clone(self),
+                source_id: source_id.to_owned(),
+            })
+    }
+
+    fn shape_drift(&self, source_id: &str, findings: &[String], now: Instant) {
+        let Some(signals) = self.sources.get(source_id) else {
+            return;
+        };
+        signals.shape_drift_total.fetch_add(1, Ordering::Relaxed);
+        let admitted = signals
+            .shape_drift_warning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .admit(now);
+        let Some(suppressed) = admitted else {
+            return;
+        };
+        let reported = findings
+            .iter()
+            .take(REPORTED_DRIFT_FINDINGS)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        tracing::warn!(
+            target: SOURCE_LOG_TARGET,
+            source = source_id,
+            violations = reported.join("; "),
+            total_violations = findings.len(),
+            suppressed,
+            "the source response does not match its declared projection"
+        );
+    }
+
+    fn undeclared_not_found(&self, source_id: &str, reason: UndeclaredNotFound, now: Instant) {
+        let Some(signals) = self.sources.get(source_id) else {
+            return;
+        };
+        let admitted = signals
+            .undeclared_not_found_warning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .admit(now);
+        let Some(suppressed) = admitted else {
+            return;
+        };
+        tracing::warn!(
+            target: SOURCE_LOG_TARGET,
+            source = source_id,
+            unresolved_problem = reason.as_str(),
+            suppressed,
+            "source answered 404 with an undeclared shape"
+        );
+    }
+
+    fn render(&self, body: &mut String) {
+        body.push_str(
+            "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n",
+        );
+        body.push_str("# TYPE evidence_source_shape_drift_total counter\n");
+        for (source_id, signals) in &self.sources {
+            body.push_str(&format!(
+                "evidence_source_shape_drift_total{{source=\"{}\"}} {}\n",
+                escape_label_value(source_id),
+                signals.shape_drift_total.load(Ordering::Relaxed)
+            ));
+        }
+    }
+}
+
+/// Escape a label value under the Prometheus text exposition rules. Source
+/// identifiers are governed bundle text, but the exposition must stay
+/// well-formed whatever that text holds.
+fn escape_label_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// The handle one source executor reports its diagnostics through.
+#[derive(Clone)]
+pub(crate) struct SourceObserver {
+    diagnostics: Arc<SourceDiagnostics>,
+    source_id: String,
+}
+
+impl SourceObserver {
+    /// Count one response whose shape drifted and, at most once per interval,
+    /// log the declared pointers it drifted at.
+    pub(crate) fn shape_drift(&self, findings: &[String]) {
+        self.diagnostics
+            .shape_drift(&self.source_id, findings, Instant::now());
+    }
+
+    /// Log, at most once per interval, that a 404 was not the declared
+    /// unresolved outcome.
+    pub(crate) fn undeclared_not_found(&self, reason: UndeclaredNotFound) {
+        self.diagnostics
+            .undeclared_not_found(&self.source_id, reason, Instant::now());
     }
 }
 
@@ -570,7 +783,10 @@ mod tests {
             "three distinct tracked keys precede the scrape"
         );
 
-        let metrics = Arc::new(Metrics::new(Arc::clone(&limiter)));
+        let metrics = Arc::new(Metrics::new(
+            Arc::clone(&limiter),
+            Arc::new(SourceDiagnostics::new(["source-a"])),
+        ));
         let server = axum_test::TestServer::new(metrics_app(metrics));
 
         let response = server.get("/metrics").await;
@@ -595,6 +811,79 @@ mod tests {
         response.assert_status_ok();
         let body = response.text();
         assert!(body.contains("\nevidence_rate_limiter_tracked_keys 4\n"));
+    }
+
+    /// One WARN per interval per kind: the first event is logged, the rest
+    /// inside the interval are counted, and the next logged record carries
+    /// that count so the log still says how often it happened.
+    #[test]
+    fn a_warning_window_logs_once_per_interval_and_reports_what_it_suppressed() {
+        let mut window = WarningWindow::default();
+        let start = Instant::now();
+        assert_eq!(window.admit(start), Some(0));
+        assert_eq!(window.admit(start + Duration::from_secs(1)), None);
+        assert_eq!(
+            window.admit(start + SOURCE_WARNING_INTERVAL - Duration::from_millis(1)),
+            None
+        );
+        assert_eq!(window.admit(start + SOURCE_WARNING_INTERVAL), Some(2));
+        assert_eq!(
+            window.admit(start + SOURCE_WARNING_INTERVAL + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(window.admit(start + SOURCE_WARNING_INTERVAL * 3), Some(1));
+    }
+
+    /// The `source` label is drawn from the governed source set fixed at
+    /// startup. A report for any other identifier creates no series, and the
+    /// counter counts every drifted response even when its WARN is suppressed.
+    #[test]
+    fn shape_drift_series_stay_bounded_by_the_governed_sources() {
+        let diagnostics = Arc::new(SourceDiagnostics::new(["source-a", "source-b"]));
+        assert!(diagnostics.observer("not-governed").is_none());
+        let findings = vec!["/total is absent".to_owned()];
+        let now = Instant::now();
+        diagnostics.shape_drift("source-a", &findings, now);
+        diagnostics.shape_drift("source-a", &findings, now);
+        diagnostics.shape_drift("not-governed", &findings, now);
+        diagnostics.undeclared_not_found("source-b", UndeclaredNotFound::NotDeclared, now);
+
+        let mut body = String::new();
+        diagnostics.render(&mut body);
+        assert_eq!(
+            body,
+            "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n\
+             # TYPE evidence_source_shape_drift_total counter\n\
+             evidence_source_shape_drift_total{source=\"source-a\"} 2\n\
+             evidence_source_shape_drift_total{source=\"source-b\"} 0\n"
+        );
+    }
+
+    #[test]
+    fn source_label_values_are_escaped_for_the_text_exposition() {
+        assert_eq!(escape_label_value("plain-id"), "plain-id");
+        assert_eq!(escape_label_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
+    }
+
+    #[test]
+    fn a_registry_built_with_source_diagnostics_renders_them_after_the_request_series() {
+        let limiter = Arc::new(
+            EvidenceRateLimiter::new(crate::rate_limit::RateLimitConfig {
+                requests_per_principal_per_minute: 60,
+                burst_per_principal: 2,
+                failed_selector_attempts_per_principal_authority_per_minute: 2,
+            })
+            .expect("limiter builds"),
+        );
+        let metrics = Metrics::new(limiter, Arc::new(SourceDiagnostics::new(["source-a"])));
+        let rendered = metrics.render();
+        assert!(rendered.contains("\nevidence_source_shape_drift_total{source=\"source-a\"} 0\n"));
+        assert!(
+            !Metrics::default()
+                .render()
+                .contains("evidence_source_shape_drift_total"),
+            "a registry without a runtime publishes no source series"
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ use crate::config::{
     RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
+use crate::observability::{SourceObserver, UndeclaredNotFound};
 use crate::rhai_runtime::{RequestParts, StatementParameters};
 use crate::secrets::{ProtectedSecret, SecretResolver};
 use crate::source_sqlite::{
@@ -248,6 +249,9 @@ fn map_statement_error(error: SqliteSourceError) -> SourceError {
 /// ambient proxies, pagination, cookies, and caller-controlled headers absent.
 pub struct SourceExecutor {
     transport: SourceTransport,
+    /// Where this source reports value-free operator diagnostics. Absent for
+    /// an executor that is never served, such as one built for fixtures.
+    observer: Option<SourceObserver>,
 }
 
 /// The transports this build has an executor for.
@@ -851,7 +855,16 @@ impl SourceExecutor {
                 )?))
             }
         };
-        Ok(Self { transport })
+        Ok(Self {
+            transport,
+            observer: None,
+        })
+    }
+
+    /// Report this source's operator diagnostics through `observer`.
+    pub(crate) fn observed_by(mut self, observer: SourceObserver) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// Make exactly one evidence-data acquisition using validated Rhai
@@ -886,7 +899,8 @@ impl SourceExecutor {
             return Err(SourceError::InvalidPlan);
         };
         let materialized = http.materialize_batch_request(request.parts())?;
-        http.execute_batch(&materialized).await
+        http.execute_batch(&materialized, self.observer.as_ref())
+            .await
     }
 
     pub async fn execute_with_prior_facts(
@@ -899,7 +913,9 @@ impl SourceExecutor {
         let materialized =
             self.materialize_request_with_prior_facts(selectors, prior_facts, request)?;
         match &self.transport {
-            SourceTransport::Http(http) => http.execute(&materialized).await,
+            SourceTransport::Http(http) => {
+                http.execute(&materialized, self.observer.as_ref()).await
+            }
             SourceTransport::Statement(statement) => statement
                 .execute(&materialized, evaluation_instant)
                 .await
@@ -1071,26 +1087,30 @@ impl HttpTransport {
     async fn execute(
         &self,
         materialized: &MaterializedSourceRequest,
+        observer: Option<&SourceObserver>,
     ) -> Result<SourceResponse, SourceError> {
-        self.execute_with_projection(materialized, &self.request.projection)
+        self.execute_with_projection(materialized, &self.request.projection, observer)
             .await
     }
 
     async fn execute_batch(
         &self,
         materialized: &MaterializedSourceRequest,
+        observer: Option<&SourceObserver>,
     ) -> Result<SourceResponse, SourceError> {
         let projection = self
             .batch_projection
             .as_ref()
             .ok_or(SourceError::InvalidPlan)?;
-        self.execute_with_projection(materialized, projection).await
+        self.execute_with_projection(materialized, projection, observer)
+            .await
     }
 
     async fn execute_with_projection(
         &self,
         materialized: &MaterializedSourceRequest,
         projection: &ProjectionNode,
+        observer: Option<&SourceObserver>,
     ) -> Result<SourceResponse, SourceError> {
         let MaterializedSourceRequest::Http { url, .. } = materialized else {
             return Err(SourceError::InvalidPlan);
@@ -1128,6 +1148,7 @@ impl HttpTransport {
             self.request.posture,
             projection,
             self.unresolved_problem.as_ref(),
+            observer,
         )
         .await
     }
@@ -1341,7 +1362,11 @@ impl StatementTransport {
         {
             return Err(SourceError::ResponseTooLarge);
         }
-        project_bounded_response(&response, &self.request.projection)
+        project_bounded_response(
+            &response,
+            &self.request.projection,
+            &mut ProjectionDrift::default(),
+        )
     }
 
     fn materialize_request(
@@ -1487,7 +1512,7 @@ pub fn project_fixture_response(
         return Err(SourceError::ResponseTooLarge);
     }
     let projection = compile_projection(source.projection())?;
-    project_bounded_response(response, &projection)
+    project_bounded_response(response, &projection, &mut ProjectionDrift::default())
 }
 
 /// Refuse an error envelope, apply the acquisition projection, and hold the
@@ -1500,6 +1525,7 @@ pub fn project_fixture_response(
 fn project_bounded_response(
     response: &JsonValue,
     projection: &ProjectionNode,
+    drift: &mut ProjectionDrift,
 ) -> Result<JsonValue, SourceError> {
     if response
         .as_object()
@@ -1507,7 +1533,7 @@ fn project_bounded_response(
     {
         return Err(SourceError::ErrorEnvelope);
     }
-    let projected = project_value(response, projection)?;
+    let projected = project_value_with_drift(response, projection, drift)?;
     if serde_json::to_vec(&projected)
         .map_err(|_| SourceError::ProjectionViolation)?
         .len()
@@ -2409,27 +2435,132 @@ fn parse_projection_pointer(pointer: &str) -> Result<Vec<ProjectionSegment>, Sou
         .collect()
 }
 
+#[cfg(test)]
 fn project_value(value: &JsonValue, node: &ProjectionNode) -> Result<JsonValue, SourceError> {
+    project_value_with_drift(value, node, &mut ProjectionDrift::default())
+}
+
+/// Where a response departed from the shape its projection declares.
+///
+/// A source that renames a member, drops one, or changes its JSON type fails
+/// every request the same way a subject with no data does, and without this
+/// the operator has nothing that points at the source. Every finding is built
+/// from the projection's own declared pointers, with `*` in place of an array
+/// index, so none carries a response value, a member name the bundle did not
+/// declare, or how many items an array held.
+#[derive(Debug, Default)]
+pub(crate) struct ProjectionDrift {
+    findings: BTreeSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum DriftFinding {
+    /// The projection descends into an object here and the member is not one.
+    ExpectedObject,
+    /// The projection iterates an array here and the member is not one.
+    ExpectedArray,
+    /// A member the projection descends through is missing.
+    Absent,
+    /// A declared leaf is missing while its object carries a member the
+    /// projection does not declare: the signature a rename leaves.
+    AbsentBesideUndeclared,
+}
+
+impl ProjectionDrift {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.findings.is_empty()
+    }
+
+    /// The distinct findings, in a stable order.
+    pub(crate) fn findings(&self) -> Vec<String> {
+        self.findings.iter().cloned().collect()
+    }
+
+    fn record(&mut self, path: &[&str], finding: DriftFinding) {
+        let pointer = if path.is_empty() {
+            "the response root".to_owned()
+        } else {
+            path.iter().fold(String::new(), |mut pointer, segment| {
+                pointer.push('/');
+                pointer.push_str(&segment.replace('~', "~0").replace('/', "~1"));
+                pointer
+            })
+        };
+        let cause = match finding {
+            DriftFinding::ExpectedObject => "is not the declared object",
+            DriftFinding::ExpectedArray => "is not the declared array",
+            DriftFinding::Absent => "is absent",
+            DriftFinding::AbsentBesideUndeclared => "is absent beside an undeclared member",
+        };
+        self.findings.insert(format!("{pointer} {cause}"));
+    }
+}
+
+/// Project `value` through `node`, recording in `drift` where it departed
+/// from the declared shape. The projected result, and every refusal, are
+/// exactly what the projection alone would produce.
+fn project_value_with_drift(
+    value: &JsonValue,
+    node: &ProjectionNode,
+    drift: &mut ProjectionDrift,
+) -> Result<JsonValue, SourceError> {
+    project_value_at(value, node, &mut Vec::new(), drift)
+}
+
+fn project_value_at<'a>(
+    value: &JsonValue,
+    node: &'a ProjectionNode,
+    path: &mut Vec<&'a str>,
+    drift: &mut ProjectionDrift,
+) -> Result<JsonValue, SourceError> {
     if node.terminal {
         return Ok(value.clone());
     }
     if let Some(wildcard) = &node.wildcard {
-        let array = value.as_array().ok_or(SourceError::ProjectionViolation)?;
-        return array
+        let Some(array) = value.as_array() else {
+            drift.record(path, DriftFinding::ExpectedArray);
+            return Err(SourceError::ProjectionViolation);
+        };
+        path.push("*");
+        let projected = array
             .iter()
-            .map(|item| project_value(item, wildcard))
-            .collect::<Result<Vec<_>, _>>()
-            .map(JsonValue::Array);
+            .map(|item| project_value_at(item, wildcard, path, drift))
+            .collect::<Result<Vec<_>, _>>();
+        path.pop();
+        return projected.map(JsonValue::Array);
     }
-    let object = value.as_object().ok_or(SourceError::ProjectionViolation)?;
+    let Some(object) = value.as_object() else {
+        drift.record(path, DriftFinding::ExpectedObject);
+        return Err(SourceError::ProjectionViolation);
+    };
     let mut projected = JsonMap::new();
+    let mut absent_leaves = Vec::new();
     for (key, child) in &node.keys {
-        match object.get(key) {
-            Some(value) => {
-                projected.insert(key.clone(), project_value(value, child)?);
+        path.push(key);
+        let outcome = match object.get(key) {
+            Some(value) => project_value_at(value, child, path, drift).map(|value| {
+                projected.insert(key.clone(), value);
+            }),
+            None if child.terminal => {
+                absent_leaves.push(key.as_str());
+                Ok(())
             }
-            None if child.terminal => {}
-            None => return Err(SourceError::ProjectionViolation),
+            None => {
+                drift.record(path, DriftFinding::Absent);
+                Err(SourceError::ProjectionViolation)
+            }
+        };
+        path.pop();
+        outcome?;
+    }
+    // An absent leaf alone is a subject with no value for an optional member,
+    // and an undeclared member alone is a source sending more than was
+    // selected. Only the two together look like a member that moved.
+    if !absent_leaves.is_empty() && object.keys().any(|key| !node.keys.contains_key(key)) {
+        for key in absent_leaves {
+            path.push(key);
+            drift.record(path, DriftFinding::AbsentBesideUndeclared);
+            path.pop();
         }
     }
     Ok(JsonValue::Object(projected))
@@ -2501,25 +2632,24 @@ async fn parse_data_response(
     _posture: AcquisitionPosture,
     projection: &ProjectionNode,
     unresolved_problem: Option<&DeclaredUnresolvedProblem>,
+    observer: Option<&SourceObserver>,
 ) -> Result<SourceResponse, SourceError> {
     if response.status().as_u16() == 404 {
-        let Some(declared) = unresolved_problem else {
-            return Err(SourceError::Status(SourceStatus::Other));
-        };
-        if !has_exact_media_type(&response, PROBLEM_JSON_MEDIA_TYPE) {
-            return Err(SourceError::WrongMediaType);
+        let outcome = parse_not_found_response(response, maximum_bytes, unresolved_problem).await;
+        // The caller's answer stays the dependency failure it always was: a
+        // distinct code would disclose subject absence the operator never
+        // declared. The operator is told why, by a closed reason and nothing
+        // from the response.
+        if outcome.is_err() {
+            if let Some(observer) = observer {
+                observer.undeclared_not_found(if unresolved_problem.is_some() {
+                    UndeclaredNotFound::NotMatched
+                } else {
+                    UndeclaredNotFound::NotDeclared
+                });
+            }
         }
-        let bytes = Zeroizing::new(
-            read_bounded(response, maximum_bytes)
-                .await
-                .map_err(map_bounded_read_error)?,
-        );
-        let value = parse_strict_json(&bytes)?;
-        drop(bytes);
-        if exact_declared_unresolved_problem(&value, declared) {
-            return Ok(SourceResponse::DeclaredUnresolved);
-        }
-        return Err(SourceError::ProblemMismatch);
+        return outcome;
     }
     reject_response_status(&response)?;
     let media_type = response_media_type(&response)?;
@@ -2533,21 +2663,39 @@ async fn parse_data_response(
     );
     let value = parse_strict_json(&bytes)?;
     drop(bytes);
-    if value
-        .as_object()
-        .is_some_and(|object| object.contains_key("errors"))
-    {
-        return Err(SourceError::ErrorEnvelope);
+    let mut drift = ProjectionDrift::default();
+    let projected = project_bounded_response(&value, projection, &mut drift);
+    if !drift.is_empty() {
+        if let Some(observer) = observer {
+            observer.shape_drift(&drift.findings());
+        }
     }
-    let projected = project_value(&value, projection)?;
-    if serde_json::to_vec(&projected)
-        .map_err(|_| SourceError::ProjectionViolation)?
-        .len()
-        > PROJECTED_RESPONSE_MAXIMUM_BYTES
-    {
-        return Err(SourceError::ResponseTooLarge);
+    projected.map(SourceResponse::Data)
+}
+
+/// Accept a 404 only as the exact unresolved problem the bundle declares.
+async fn parse_not_found_response(
+    response: reqwest::Response,
+    maximum_bytes: u64,
+    unresolved_problem: Option<&DeclaredUnresolvedProblem>,
+) -> Result<SourceResponse, SourceError> {
+    let Some(declared) = unresolved_problem else {
+        return Err(SourceError::Status(SourceStatus::Other));
+    };
+    if !has_exact_media_type(&response, PROBLEM_JSON_MEDIA_TYPE) {
+        return Err(SourceError::WrongMediaType);
     }
-    Ok(SourceResponse::Data(projected))
+    let bytes = Zeroizing::new(
+        read_bounded(response, maximum_bytes)
+            .await
+            .map_err(map_bounded_read_error)?,
+    );
+    let value = parse_strict_json(&bytes)?;
+    drop(bytes);
+    if exact_declared_unresolved_problem(&value, declared) {
+        return Ok(SourceResponse::DeclaredUnresolved);
+    }
+    Err(SourceError::ProblemMismatch)
 }
 
 fn has_exact_media_type(response: &reqwest::Response, expected: &str) -> bool {
@@ -2882,6 +3030,112 @@ mod tests {
         assert_eq!(
             project_value(&json!({"results": {}}), &plan),
             Err(SourceError::ProjectionViolation)
+        );
+    }
+
+    fn drift_of(
+        input: &JsonValue,
+        plan: &ProjectionNode,
+    ) -> (Result<JsonValue, SourceError>, Vec<String>) {
+        let mut drift = ProjectionDrift::default();
+        let projected = project_value_with_drift(input, plan, &mut drift);
+        (projected, drift.findings())
+    }
+
+    /// A renamed member leaves its declared name absent and an undeclared name
+    /// beside it. The projection still drops the undeclared member and omits
+    /// the absent leaf, exactly as before, but it now says where the shape
+    /// moved, naming only the declared pointer.
+    #[test]
+    fn projection_reports_a_declared_leaf_absent_beside_an_undeclared_member() {
+        let plan = compile_projection(&["/total".into(), "/records/*/region".into()])
+            .expect("projection compiles");
+        let canary = "renamed-member-value-canary";
+        let (projected, findings) = drift_of(
+            &json!({"total": 1, "records": [{"region_code": canary}]}),
+            &plan,
+        );
+        assert_eq!(projected, Ok(json!({"total": 1, "records": [{}]})));
+        assert_eq!(
+            findings,
+            vec!["/records/*/region is absent beside an undeclared member".to_owned()]
+        );
+        let rendered = findings.join(" ");
+        assert!(!rendered.contains(canary), "no response value is reported");
+        assert!(
+            !rendered.contains("region_code"),
+            "no undeclared member name is reported: {rendered}"
+        );
+    }
+
+    /// Neither an optional leaf that is simply absent nor a source that sends
+    /// more than the projection selects is drift on its own. Only the two
+    /// together look like a rename, so a superset source whose declared members
+    /// are all present, and a subject with no value for an optional member,
+    /// stay silent.
+    #[test]
+    fn projection_does_not_report_an_absent_leaf_alone_or_extra_members_alone() {
+        let plan = compile_projection(&["/total".into(), "/records/*/region".into()])
+            .expect("projection compiles");
+        for input in [
+            json!({"total": 1, "records": [{}]}),
+            json!({"total": 1, "records": [{"region": "x", "extra": true}], "page": 1}),
+        ] {
+            let (projected, findings) = drift_of(&input, &plan);
+            assert!(projected.is_ok());
+            assert!(findings.is_empty(), "{input}: {findings:?}");
+        }
+    }
+
+    /// A member whose JSON type changed, and an intermediate member that is
+    /// missing, were already refused. They are now also described, by declared
+    /// pointer and expected container, never by the value that arrived.
+    #[test]
+    fn projection_reports_type_mismatches_and_missing_intermediates_by_declared_pointer() {
+        let plan = compile_projection(&["/records/*/residence/region".into(), "/a~1b/~0c".into()])
+            .expect("projection compiles");
+        let canary = "type-changed-value-canary";
+        for (input, expected) in [
+            (
+                json!({"records": canary, "a/b": {"~c": 1}}),
+                "/records is not the declared array",
+            ),
+            (
+                json!({"records": [{"residence": canary}], "a/b": {"~c": 1}}),
+                "/records/*/residence is not the declared object",
+            ),
+            (
+                json!({"records": [{"address": {}}], "a/b": {"~c": 1}}),
+                "/records/*/residence is absent",
+            ),
+            (
+                json!({"records": [], "a/b": canary}),
+                "/a~1b is not the declared object",
+            ),
+            (
+                json!([canary]),
+                "the response root is not the declared object",
+            ),
+        ] {
+            let (projected, findings) = drift_of(&input, &plan);
+            assert_eq!(projected, Err(SourceError::ProjectionViolation), "{input}");
+            assert_eq!(findings, vec![expected.to_owned()], "{input}");
+            assert!(!findings.join(" ").contains(canary));
+        }
+    }
+
+    /// Items of one array drift the same way, so the finding is reported once
+    /// under the wildcard rather than once per index, and never names an index.
+    #[test]
+    fn projection_drift_is_reported_once_per_declared_pointer() {
+        let plan = compile_projection(&["/records/*/region".into()]).expect("projection compiles");
+        let (_, findings) = drift_of(
+            &json!({"records": [{"code": 1}, {"code": 2}, {"code": 3}]}),
+            &plan,
+        );
+        assert_eq!(
+            findings,
+            vec!["/records/*/region is absent beside an undeclared member".to_owned()]
         );
     }
 

@@ -928,6 +928,311 @@ fn operational_logs_carry_the_runtime_failure_category_and_still_collapse_unreso
     );
 }
 
+/// The operator log records emitted at the source boundary with `message`.
+fn source_records<'a>(emitted: &'a [Value], message: &str) -> Vec<&'a Value> {
+    emitted
+        .iter()
+        .filter(|record| {
+            record["target"] == json!("registry_evidence::source")
+                && record["fields"]["message"] == json!(message)
+        })
+        .collect()
+}
+
+const UNDECLARED_NOT_FOUND: &str = "source answered 404 with an undeclared shape";
+const PROJECTION_DRIFT: &str = "the source response does not match its declared projection";
+
+/// A 404 whose shape the operator never declared stays `source.unavailable`
+/// for the caller: a distinct code would reveal subject absence the operator
+/// never chose to disclose. The operator log is where the cause is named, by
+/// source identifier and a closed reason, and nothing from the response body,
+/// the request, or the subject reaches it.
+#[test]
+fn an_undeclared_source_404_stays_source_unavailable_and_logs_a_value_free_cause() {
+    const BODY_CANARY: &str = "undeclared-not-found-body-canary";
+    let emitted = capture_evidence_logs(|| async {
+        let fixture = acceptance_runtime().await;
+        let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+        let parent_token = access_token(Some(parent_grant_claims()));
+        Mock::given(method("POST"))
+            .and(path("/v1/child-relationships"))
+            .respond_with(ResponseTemplate::new(404).set_body_raw(
+                format!(r#"{{"status":404,"detail":"{BODY_CANARY}"}}"#),
+                "application/problem+json",
+            ))
+            .expect(1)
+            .mount(&fixture.server)
+            .await;
+        let failed = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {parent_token}"))
+            .json(&parent_request())
+            .await;
+        assert_eq!(
+            failed.status_code(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(failed.json::<Value>()["code"], "source.unavailable");
+    });
+
+    let causes = source_records(&emitted, UNDECLARED_NOT_FOUND);
+    assert_eq!(causes.len(), 1, "one cause per undeclared 404: {emitted:?}");
+    assert_eq!(causes[0]["level"], json!("WARN"));
+    let fields = causes[0]["fields"]
+        .as_object()
+        .expect("the cause carries fields");
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(["message", "source", "unresolved_problem", "suppressed"])
+    );
+    assert_eq!(fields["source"], json!("source-d"));
+    assert_eq!(fields["unresolved_problem"], json!("not declared"));
+    assert_eq!(fields["suppressed"], json!(0));
+
+    // The served request keeps its reviewed category; the cause is extra
+    // operator material beside it, not a new caller-visible distinction.
+    let served: Vec<&Value> = emitted
+        .iter()
+        .filter(|record| record["target"] == json!(REQUEST_LOG_TARGET))
+        .collect();
+    assert_eq!(served.len(), 1);
+    assert_eq!(served[0]["fields"]["error"], json!("source.unavailable"));
+    assert_eq!(served[0]["fields"]["category"], json!("source-status"));
+
+    let raw = serde_json::to_string(&emitted).expect("captured records serialize");
+    for canary in privacy_canaries().iter().chain([&BODY_CANARY]) {
+        assert!(!raw.contains(canary), "an operator log disclosed {canary}");
+    }
+}
+
+/// A declared unresolved problem is the operator's statement of what the
+/// source's "not found" looks like. A 404 that is exactly that is an ordinary
+/// outcome and logs nothing; a 404 outside it stays `source.unavailable` and
+/// names the closed reason, never the body the source sent.
+#[test]
+fn a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it() {
+    const TRACE_CANARY: &str = "mismatched-unresolved-trace-canary";
+    let emitted = capture_evidence_logs(|| async {
+        let server = MockServer::start().await;
+        let origin = server.uri();
+        let prepared = prepare_fixture_with_mutation(
+            "subject-binding-secret-canary-32-bytes-minimum",
+            &origin,
+            &FixtureCeilings::deployment_defaults(),
+            |bundle_root| declare_unresolved_problem(bundle_root, "source-a"),
+        );
+        let runtime = Arc::new(
+            EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+                .await
+                .expect("declared unresolved runtime initializes"),
+        );
+        let http = TestServer::new(build_app(runtime));
+
+        Mock::given(method("POST"))
+            .and(path("/v1/facts"))
+            .respond_with(declared_unresolved_response(TRACE_CANARY))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let declared = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .json(&adult_request())
+            .await;
+        assert_eq!(
+            declared.status_code(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        server.reset().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/facts"))
+            .respond_with(ResponseTemplate::new(404).set_body_raw(
+                format!(
+                    r#"{{"type":"https://id.example.invalid/problems/other","title":"Other","status":404,"detail":"not resolved","code":"consultation.other","traceId":"{TRACE_CANARY}"}}"#
+                ),
+                "application/problem+json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mismatched = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .json(&adult_request())
+            .await;
+        assert_eq!(
+            mismatched.status_code(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(mismatched.json::<Value>()["code"], "source.unavailable");
+    });
+
+    let causes = source_records(&emitted, UNDECLARED_NOT_FOUND);
+    assert_eq!(
+        causes.len(),
+        1,
+        "only the mismatched 404 is a cause: {causes:?}"
+    );
+    assert_eq!(causes[0]["fields"]["source"], json!("source-a"));
+    assert_eq!(
+        causes[0]["fields"]["unresolved_problem"],
+        json!("not matched")
+    );
+    let raw = serde_json::to_string(&emitted).expect("captured records serialize");
+    for canary in privacy_canaries()
+        .iter()
+        .chain([&TRACE_CANARY, &"consultation.other"])
+    {
+        assert!(!raw.contains(canary), "an operator log disclosed {canary}");
+    }
+}
+
+/// A source that renames a declared member used to fail every request with
+/// no signal pointing at the source. The projection now names the declared
+/// pointer that moved, at most once per interval per source in the log and on
+/// every drifted response in the counter, and a source that merely sends more
+/// than the projection selects is not drift.
+#[test]
+fn a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_response() {
+    const VALUE_CANARY: &str = "renamed-member-value-canary";
+    let exposition = Arc::new(std::sync::Mutex::new(String::new()));
+    let rendered = Arc::clone(&exposition);
+    let emitted = capture_evidence_logs(|| async move {
+        let fixture = acceptance_runtime().await;
+        let (app, metrics) = build_app_with_metrics(Arc::clone(&fixture.runtime));
+        let http = TestServer::new(app);
+        let parent_token = access_token(Some(parent_grant_claims()));
+
+        let mut renamed = parent_source_response(vec!["synthetic-parent-reference-001"]);
+        let record = renamed["records"][0]
+            .as_object_mut()
+            .expect("the record is an object");
+        record.remove("parent_references");
+        record.insert("parent_reference_ids".to_owned(), json!([VALUE_CANARY]));
+        mount_parent_source_expecting(&fixture.server, renamed, 2).await;
+        for _ in 0..2 {
+            let failed = http
+                .post("/v1/evidence")
+                .add_header("authorization", format!("Bearer {parent_token}"))
+                .json(&parent_request())
+                .await;
+            assert!(!failed.status_code().is_success());
+        }
+        fixture.server.reset().await;
+
+        // More members than the projection selects, every declared one present.
+        let mut superset = parent_source_response(vec!["synthetic-parent-reference-001"]);
+        superset["records"][0]["undeclared_extra"] = json!(VALUE_CANARY);
+        superset["page"] = json!(1);
+        mount_parent_source(&fixture.server, superset).await;
+        http.post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {parent_token}"))
+            .json(&parent_request())
+            .await;
+
+        let scraped = TestServer::new(metrics_app(Arc::clone(&metrics)))
+            .get("/metrics")
+            .await;
+        scraped.assert_status_ok();
+        *rendered.lock().expect("exposition lock") = scraped.text();
+    });
+
+    let drift = source_records(&emitted, PROJECTION_DRIFT);
+    assert_eq!(
+        drift.len(),
+        1,
+        "one WARN per interval per source: {drift:?}"
+    );
+    assert_eq!(drift[0]["level"], json!("WARN"));
+    let fields = drift[0]["fields"]
+        .as_object()
+        .expect("the WARN carries fields");
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "message",
+            "source",
+            "violations",
+            "total_violations",
+            "suppressed"
+        ])
+    );
+    assert_eq!(fields["source"], json!("source-d"));
+    assert_eq!(
+        fields["violations"],
+        json!("/records/*/parent_references is absent beside an undeclared member")
+    );
+    assert_eq!(fields["total_violations"], json!(1));
+    assert_eq!(fields["suppressed"], json!(0));
+
+    let body = exposition.lock().expect("exposition lock").clone();
+    assert!(body.contains("# TYPE evidence_source_shape_drift_total counter\n"));
+    assert!(
+        body.contains("\nevidence_source_shape_drift_total{source=\"source-d\"} 2\n"),
+        "every drifted response is counted, and the superset response is not: {body}"
+    );
+    assert!(
+        body.contains("\nevidence_source_shape_drift_total{source=\"source-a\"} 0\n"),
+        "every governed source has a series from startup"
+    );
+
+    let raw = serde_json::to_string(&emitted).expect("captured records serialize") + body.as_str();
+    for canary in privacy_canaries().iter().chain([
+        &VALUE_CANARY,
+        &"parent_reference_ids",
+        &"undeclared_extra",
+    ]) {
+        assert!(
+            !raw.contains(canary),
+            "operator material disclosed {canary}"
+        );
+    }
+}
+
+/// A member whose JSON type changed was refused as a protocol failure with no
+/// WARN. It is now reported by the declared pointer and the container the
+/// projection expected, never by the value that arrived.
+#[test]
+fn a_retyped_source_member_warns_with_the_declared_pointer_and_no_value() {
+    const VALUE_CANARY: &str = "retyped-member-value-canary";
+    let emitted = capture_evidence_logs(|| async {
+        let fixture = acceptance_runtime().await;
+        let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+        let parent_token = access_token(Some(parent_grant_claims()));
+        mount_parent_source(
+            &fixture.server,
+            json!({"total": 1, "records": {"retyped_member_key": VALUE_CANARY}}),
+        )
+        .await;
+        let failed = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {parent_token}"))
+            .json(&parent_request())
+            .await;
+        assert_eq!(
+            failed.status_code(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(failed.json::<Value>()["code"], "source.unavailable");
+    });
+
+    let drift = source_records(&emitted, PROJECTION_DRIFT);
+    assert_eq!(drift.len(), 1, "{emitted:?}");
+    assert_eq!(drift[0]["fields"]["source"], json!("source-d"));
+    assert_eq!(
+        drift[0]["fields"]["violations"],
+        json!("/records is not the declared array")
+    );
+    let raw = serde_json::to_string(&emitted).expect("captured records serialize");
+    for canary in privacy_canaries()
+        .iter()
+        .chain([&VALUE_CANARY, &"retyped_member_key"])
+    {
+        assert!(!raw.contains(canary), "an operator log disclosed {canary}");
+    }
+}
+
 /// Counters describe traffic. They must say how the boundary behaved without
 /// naming what any request asked for, and their label set must stay bounded by
 /// the route table rather than by anything a caller can send.
