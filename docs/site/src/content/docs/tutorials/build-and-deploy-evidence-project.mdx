@@ -46,7 +46,9 @@ target is complete. Provision it with
 The build itself never contacts Transit; the workload-local proxy is what the target-host ceremony
 and the running service reach.
 
-Confirm the released binaries before changing the project:
+Confirm the released binaries before changing the project. Replace `<released-tag>` with the tag of
+the [latest release](https://github.com/registrystack/registry-stack/releases/latest) unless you
+target an earlier one:
 
 ```sh
 curl -fsSL "https://github.com/registrystack/registry-stack/releases/download/<released-tag>/evidencectl-<released-tag>-install.sh" | bash
