@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A read path answers when the caller's profile holds no permission entry
+  for the path's target entity. It returns the records the path grant and
+  the generated target policy authorize, the same answer as a target
+  permission without `get` or `list`, where it answered
+  `503 source.unavailable` before. A profile that does not declare the path
+  is still refused as `404 resource.not_found`, like an unknown path.
+
 - BREAKING: package signing is removed. Upgrade to v0.35.0 before this
   release: a deployment on v0.34.0 or earlier must pass through v0.35.0,
   because this release no longer reads a predecessor package that has no
