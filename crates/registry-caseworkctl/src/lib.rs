@@ -884,7 +884,7 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
                 AttemptSettlementError::NotFound
                     | AttemptSettlementError::NotPending(_)
                     | AttemptSettlementError::LeaseLive
-                    | AttemptSettlementError::ItemNotSynchronizing(_)
+                    | AttemptSettlementError::ItemCannotBecomeUncertain(_)
                     | AttemptSettlementError::Invalid { .. }
             ) {
                 return None;
@@ -2440,6 +2440,37 @@ mod tests {
         assert_eq!(
             diagnostic["suggestedAction"],
             "Confirm the attempt and source outcome, then preview the settlement again."
+        );
+    }
+
+    #[test]
+    fn settling_and_marking_uncertain_name_their_own_action_for_an_item_in_the_wrong_state() {
+        let settle = anyhow::Error::new(AttemptSettlementError::ItemNotSynchronizing("open"))
+            .context("settling the Casework source attempt");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptSettlement, &settle);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.attempt-settlement.refused");
+        assert_eq!(
+            diagnostic["message"],
+            "the work item is open; only a work item awaiting its source outcome can be settled"
+        );
+
+        let mark = anyhow::Error::new(AttemptSettlementError::ItemCannotBecomeUncertain("open"))
+            .context("marking the Casework source attempt uncertain");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptUncertainMarking, &mark);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.attempt-mark-uncertain.refused"
+        );
+        assert_eq!(
+            diagnostic["message"],
+            "the work item is open; only a work item awaiting its source outcome can have its \
+             attempt marked uncertain"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Confirm the attempt, then preview the marking again."
         );
     }
 
