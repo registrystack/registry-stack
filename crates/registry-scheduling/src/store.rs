@@ -1017,6 +1017,16 @@ impl PostgresStore {
         replace_facts_in_transaction(&transaction, scheduling_id, facts).await?;
         // The swap takes every supply anchor, so its commit is read back
         // like a capacity commit when its acknowledgment is lost.
+        self.commit_publication(transaction).await
+    }
+
+    /// Commit a transaction that holds every supply anchor and no task
+    /// grant, reading its status back like a capacity commit when the
+    /// acknowledgment is lost.
+    async fn commit_publication(
+        &self,
+        transaction: deadpool_postgres::Transaction<'_>,
+    ) -> Result<(), StoreError> {
         match self.commit_capacity(transaction, None).await {
             Ok(()) => Ok(()),
             Err(CommitError::Store(error)) => Err(error),

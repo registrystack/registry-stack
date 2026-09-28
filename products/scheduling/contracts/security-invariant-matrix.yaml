@@ -647,7 +647,9 @@ invariants:
     refusal: >-
       Apply nothing when the audit destination cannot be opened or the
       request entry is refused; record a refused or failed activation as a
-      response entry with its closed reason; report a response entry refused
+      response entry with its closed reason, and one whose commit was not
+      acknowledged and could not be read back as unfinished with
+      schedulingctl.activation.unacknowledged; report a response entry refused
       after the commit as schedulingctl.activation.applied-unaudited, exit 3,
       naming schedulingctl status --runtime-config FILE.
     negativeTest:

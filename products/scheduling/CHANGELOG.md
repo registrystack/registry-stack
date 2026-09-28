@@ -33,11 +33,14 @@
     operator reference is kept only as a keyed hash scoped by the activation
     id. Apply writes a `scheduling-activation-audit/v1` request entry to
     `audit.schedulingctl.ndjson` before the transaction and a response entry
-    after it, and applies nothing when the request entry is refused. A
-    response entry refused after the commit exits 3 with
-    `schedulingctl.activation.applied-unaudited`, naming `schedulingctl
-    status`; an audit destination that cannot be written exits 3 with
-    `schedulingctl.audit-unavailable`.
+    after it, and applies nothing when the request entry is refused. An
+    activation whose commit was not acknowledged is read back, and one whose
+    outcome cannot be read is answered `unfinished` with reason
+    `schedulingctl.activation.unacknowledged`, naming `schedulingctl status`,
+    since it may have taken effect. A response entry refused after the
+    commit exits 3 with `schedulingctl.activation.applied-unaudited`, naming
+    `schedulingctl status`; an audit destination that cannot be written
+    exits 3 with `schedulingctl.audit-unavailable`.
   - `schedulingctl plan` refuses a runtime role that cannot read an existing
     activation ledger with `schedulingctl.activation.ledger-unreadable`, exit
     1, naming `schedulingctl apply --runtime-config FILE` with the migration
