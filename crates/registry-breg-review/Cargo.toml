@@ -29,7 +29,9 @@ base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
 jsonwebtoken.workspace = true
-minijinja.workspace = true
+# Server-rendered pages only. Templates are compiled in, so no loader; the
+# builtin filters and a shared layout are wanted, debug and macros are not.
+minijinja = { workspace = true, features = ["builtins", "multi_template", "serde"] }
 registry-breg-client.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true

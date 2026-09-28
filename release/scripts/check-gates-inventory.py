@@ -19,6 +19,9 @@ CASEWORK_CHECKPOINT_RUNNER = (
 SCHEDULING_CHECKPOINT_RUNNER = (
     ROOT / "products" / "scheduling" / "scripts" / "check-checkpoint.sh"
 )
+MESSAGING_CHECKPOINT_RUNNER = (
+    ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
+)
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -336,6 +339,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
     ),
     (
+        "Messaging Python client binding coverage",
+        "registry-casework-client-py registry-messaging-client-py",
+    ),
+    (
         "Scheduling contract path filter",
         "scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}",
     ),
@@ -400,6 +407,64 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling package activation suite",
         "cargo test --locked -p registry-schedulingctl --features postgres-test --test activation_postgres",
+    ),
+    (
+        "Messaging contract path filter",
+        "messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}",
+    ),
+    (
+        "Messaging contract gate",
+        "messaging-contracts:\n    name: Messaging product contracts",
+    ),
+    (
+        "Messaging contract reproduction",
+        "run: products/messaging/scripts/check-contracts.sh",
+    ),
+    (
+        "Messaging PostgreSQL path filter",
+        "messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}",
+    ),
+    (
+        "Messaging PostgreSQL gate",
+        "messaging-postgres:\n    name: Messaging PostgreSQL runtime",
+    ),
+    (
+        "Messaging PostgreSQL 17 image pin",
+        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "        env:\n"
+        "          POSTGRES_DB: messaging",
+    ),
+    (
+        "Messaging product checkpoint wrapper",
+        "run: products/messaging/scripts/check-checkpoint.sh",
+    ),
+    (
+        "Messaging dependency-direction guard",
+        "python3 products/messaging/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Messaging database test isolation guard",
+        "python3 products/messaging/scripts/check_database_test_isolation.py",
+    ),
+    (
+        "Messaging product script tests",
+        "python3 -m unittest discover -s products/messaging/scripts -p 'test_*.py'",
+    ),
+    (
+        "Messaging security contract validation",
+        "python3 products/messaging/scripts/validate_contracts.py",
+    ),
+    (
+        "Messaging generated document drift check",
+        "cargo test --locked --quiet -p registry-messaging --features schema",
+    ),
+    (
+        "Messaging configuration refusal journeys",
+        "expect_refusal unknown-key listener.port",
+    ),
+    (
+        "Messaging runtime PostgreSQL suite",
+        "cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate",
     ),
     (
         "Release Linux Node client path filter",
@@ -576,6 +641,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Registry Casework tutorial path filter",
         '"docs/site/src/content/docs/tutorials/first-casework.mdx",',
+    ),
+    (
+        "Registry Messaging tutorial replay",
+        "bash docs/site/scripts/check-messaging-tutorial.sh",
+    ),
+    (
+        "Registry Messaging tutorial command drift",
+        "run: npm run check:tutorial:messaging:dry-run",
+    ),
+    (
+        "Registry Messaging tutorial path filter",
+        '"docs/site/scripts/check-messaging-tutorial.sh",',
     ),
 )
 
@@ -934,7 +1011,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "build-canonical-binaries:\n    name: Build canonical Linux ${{ matrix.group }} binary shard",
             "fail-fast: false",
-            "group: [core, breg, casework, scheduling]",
+            "group: [core, breg, casework, scheduling, messaging]",
             "build-canonical:\n    name: Build Linux payload and private images once",
             "name: Restore reusable Cargo cache",
             "restore-keys:",
@@ -1011,6 +1088,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             '    "breg",\n',
             '    "casework",\n',
             '    "scheduling",\n',
+            '    "messaging",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",
@@ -1256,6 +1334,7 @@ def missing_gates(
     platform_fuzz_runner_text: str | None = None,
     casework_checkpoint_runner_text: str | None = None,
     scheduling_checkpoint_runner_text: str | None = None,
+    messaging_checkpoint_runner_text: str | None = None,
 ) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
@@ -1277,9 +1356,16 @@ def missing_gates(
             if SCHEDULING_CHECKPOINT_RUNNER.is_file()
             else ""
         )
+    if messaging_checkpoint_runner_text is None:
+        messaging_checkpoint_runner_text = (
+            MESSAGING_CHECKPOINT_RUNNER.read_text(encoding="utf-8")
+            if MESSAGING_CHECKPOINT_RUNNER.is_file()
+            else ""
+        )
     inventory_text = (
         f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}\n"
-        f"{casework_checkpoint_runner_text}\n{scheduling_checkpoint_runner_text}"
+        f"{casework_checkpoint_runner_text}\n{scheduling_checkpoint_runner_text}\n"
+        f"{messaging_checkpoint_runner_text}"
     )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 
@@ -1478,7 +1564,7 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
         or "actions/upload-artifact@" not in staging_step
         or "retention-days: 1" not in staging_step
         or "needs:\n      - changes\n      - platform-coverage" not in upload
-        or f"    if: {protected_push} && needs.changes.outputs.platform_coverage == 'true'\n"
+        or f"    if: {protected_push} && needs.changes.outputs.platform == 'true'\n"
         not in upload
         or upload_permissions not in upload
         or upload_permission_lines
@@ -1495,9 +1581,7 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
         or "actions/checkout@" in upload
         or "        run:" in upload
         or workflow.count("id-token: write") != upload.count("id-token: write")
-        # Coverage publishes from main and the nightly sweep, outside the
-        # merge verdict.
-        or "      - platform-coverage-upload" in aggregate
+        or "      - platform-coverage-upload" not in aggregate
     ):
         return [gate]
     return []
@@ -1514,7 +1598,7 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
     if (
         "needs: validate" not in shards
         or "actions/cache@" not in shards
-        or "group: [core, breg, casework, scheduling]" not in shards
+        or "group: [core, breg, casework, scheduling, messaging]" not in shards
         or "fail-fast: false" not in shards
         or shards.count("name: Build canonical Linux binary shard") != 1
         or shards.count("actions/upload-artifact@") != 1
@@ -1523,7 +1607,7 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
         or "      - build-canonical-binaries" not in build_a
         or "actions/cache@" in build_a
         or "release/scripts/build-release-binaries.sh" in build_a
-        or build_a.count("actions/download-artifact@") != 4
+        or build_a.count("actions/download-artifact@") != 5
         or build_a.count("name: Merge and smoke the canonical Linux payload") != 1
         or build_a.count("name: Build private candidate image layouts once") != 1
     ):

@@ -1,0 +1,26 @@
+[package]
+name = "registry-messaging-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source-neutral model, wire documents, problem vocabulary, and pure access decisions for Registry Messaging."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+hex.workspace = true
+jsonschema.workspace = true
+# No loader, includes, macros, or built-in filters and globals, so a template
+# reaches nothing but the closed filters and tests the renderer registers.
+# `fuel` bounds execution.
+minijinja = { workspace = true, features = ["fuel"] }
+registry-platform-crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true

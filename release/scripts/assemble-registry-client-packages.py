@@ -16,7 +16,7 @@ It produces, into `--output-dir`:
 Prerequisites this script does not perform:
 
   * the Node bindings selected for this version, built for this platform from
-    `crates/registry-{discovery,evidence,relay,breg,casework}-client-node`:
+    `crates/registry-{discovery,evidence,relay,breg,casework,messaging}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
     For a release at version 0.33.0 or later on macOS, set the package's
     compatibility floor before every native build:
@@ -32,7 +32,7 @@ readable form of the recipe.
 
 Python wheels use the release profile by default. `--python-profile ci` opts
 into the workspace's cheaper CI profile for installed-package tutorial checks;
-it still assembles all five bindings with the same platform and package layout.
+it still assembles all six bindings with the same platform and package layout.
 
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
@@ -41,6 +41,10 @@ the version they name only exists at pack time.
 Casework joins the automatic public client roster at 0.30.0. The explicit
 `--include-casework` option permits integration checks against a local 0.29
 candidate; it does not change the roster used to validate published 0.29 bytes.
+
+Messaging joins the automatic public client roster at 0.35.0 in the same way:
+`--include-messaging` permits integration checks against an earlier local
+candidate without changing the roster used to validate published bytes.
 """
 
 from __future__ import annotations
@@ -65,17 +69,19 @@ import client_registry
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework", "messaging")
 NODE_PRODUCTS = PRODUCTS
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
-# BReg and Casework publish no standalone wheel, so their internal wheels use
-# explicit native stems. The other product wheels retain their historical stems.
+# BReg, Casework, and Messaging publish no standalone wheel, so their internal
+# wheels use explicit native stems. The other product wheels retain their
+# historical stems.
 WHEEL_STEMS = {
     "discovery": "registry_discovery_client",
     "evidence": "registry_evidence_client",
     "relay": "registry_relay_client",
     "breg": "registry_breg_client_native",
     "casework": "registry_casework_client_native",
+    "messaging": "registry_messaging_client_native",
 }
 # The platform, wheel tag, and maturin flags each release matrix entry uses.
 PLATFORMS = {
@@ -260,6 +266,7 @@ def python_steps(
     python_profile: str = "release",
     include_casework: bool = False,
     macos_library_roots: tuple[Path, ...] = (),
+    include_messaging: bool = False,
 ) -> list[Step]:
     if python_profile not in ("release", "ci"):
         raise ValueError(f"unsupported Python build profile: {python_profile}")
@@ -320,6 +327,8 @@ def python_steps(
     ]
     if include_casework:
         assemble.append("--include-casework")
+    if include_messaging:
+        assemble.append("--include-messaging")
     for product in PRODUCTS:
         assemble += [
             f"--{product}-wheel",
@@ -350,6 +359,7 @@ def plan(
     python_profile: str = "release",
     include_casework: bool = False,
     macos_library_roots: tuple[Path, ...] = (),
+    include_messaging: bool = False,
 ) -> list[Step]:
     if not client_registry.includes_casework(
         version, include_casework=include_casework
@@ -357,6 +367,13 @@ def plan(
         raise ValueError(
             "this checkout contains the Casework client; versions before 0.30.0 "
             "require the explicit --include-casework local-candidate option"
+        )
+    if not client_registry.includes_messaging(
+        version, include_messaging=include_messaging
+    ):
+        raise ValueError(
+            "this checkout contains the Messaging client; versions before 0.35.0 "
+            "require the explicit --include-messaging local-candidate option"
         )
     steps: list[Step] = []
     if artifacts in ("all", "node"):
@@ -380,6 +397,7 @@ def plan(
             python_profile,
             include_casework,
             macos_library_roots,
+            include_messaging,
         )
     return steps
 
@@ -418,6 +436,11 @@ def main() -> int:
         "--include-casework",
         action="store_true",
         help="include Casework in an explicit local candidate before version 0.30.0",
+    )
+    parser.add_argument(
+        "--include-messaging",
+        action="store_true",
+        help="include Messaging in an explicit local candidate before version 0.35.0",
     )
     parser.add_argument(
         "--macos-library-root",
@@ -464,6 +487,7 @@ def main() -> int:
             args.python_profile,
             args.include_casework,
             macos_library_roots,
+            args.include_messaging,
         )
     except (ValueError, client_registry.ClientRegistryError) as exc:
         parser.error(str(exc))

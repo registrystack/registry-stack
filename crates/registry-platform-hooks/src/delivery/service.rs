@@ -4,30 +4,41 @@
 //! operator status and replay surface.
 //!
 //! This is the moved delivery core. Claim, lease/CAS, lease reaping, retry
-//! scheduling, dead-lettering, payload expiry, attempt-budget accounting,
-//! idempotency-key construction, and transport-vs-deadline classification
-//! keep the behavior they had while the worker lived in the owning product's
-//! runtime; every product-owned input arrives through the seams, and the
-//! worker sends the captured envelope bytes unchanged, with the delivery
-//! attributes the transport carries beside them.
+//! scheduling, dead-lettering, payload expiry, and operator replay run in
+//! [`registry_platform_dispatch::postgres::Dispatcher`] over the delivery
+//! state table, through the hook store in `store.rs`; attempt-budget
+//! accounting, idempotency-key construction, and transport-vs-deadline
+//! classification keep the behavior they had while the worker lived in the
+//! owning product's runtime. Every product-owned input arrives through the
+//! seams, and the worker sends the captured envelope bytes unchanged, with the
+//! delivery attributes the transport carries beside them.
 
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use async_trait::async_trait;
+use registry_platform_dispatch::postgres::{
+    DispatchConfig, DispatchOutcome, DispatchTransport, Dispatcher, Fence, JobKey, JobTable,
+    LeasedJob, LeasedReadError, SelectSql,
+};
+use registry_platform_dispatch::{
+    idempotency_key, remaining_attempt_budget, DispatchError, FailureCode, SendOutcome, Sent,
+};
 use registry_platform_httputil::destination::{DestinationSendError, EventDeliveryHeaders};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::watch;
 use tokio::time::Instant;
-use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use super::seams::{
-    DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
-    DeliveryError, DeliveryOperationalEvent, DeliverySeams, DeliverySignatureFields,
-    DeliveryTransitionCode, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
+    DeliveryAuditOutcome, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
+    DeliverySignatureFields, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
     ProposalApplication, ProposalOutcome, ProposalReceiptRecovery,
+};
+use super::store::{
+    attempt_timeout_bound, binding_is_activated, HookJob, HookStore, DISPATCH_SQL, ID_COLUMN,
+    PART_COLUMN, REPLAYABLE, STATE_TABLE,
 };
 use crate::delivery_schema;
 use crate::envelope::{EnvelopeLimits, HookEnvelope};
@@ -39,12 +50,34 @@ impl From<tokio_postgres::Error> for DeliveryError {
     }
 }
 
-const LEASE_FINALIZATION_ALLOWANCE: Duration = Duration::from_secs(5);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// The waits between the read-backs of a transition whose commit returned an
-/// error: one fewer than the read-backs, and short, since a caller is failing
-/// while they run.
-const READ_BACK_BACKOFF: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(100)];
+
+/// The columns one attempt reloads under its live lease: the stored
+/// envelope and the delivery row it must agree with.
+const MATERIAL_SELECT: SelectSql = SelectSql {
+    columns: "outbox.event_type, outbox.payload,
+              outbox.package_revision, outbox.schema_fingerprint,
+              delivery.destination_binding_digest,
+              delivery.logical_destination_id,
+              delivery.maximum_payload_bytes,
+              delivery.payload_digest,
+              delivery.deployed_attempt_timeout_ms,
+              delivery.deployed_maximum_attempts,
+              delivery.authentication_profile,
+              delivery.delivery_mode,
+              delivery.dead_letter,
+              delivery.data_schema,
+              outbox.created_at",
+    joins: "JOIN {schema}.registry_webhook_deliveries AS delivery
+              ON delivery.event_id = state.event_id
+             AND delivery.compiled_delivery_id = state.compiled_delivery_id
+            JOIN {schema}.registry_outbox AS outbox
+              ON outbox.event_id = delivery.event_id
+             AND outbox.package_revision = delivery.package_revision
+             AND outbox.schema_fingerprint = delivery.schema_fingerprint",
+    predicate: "outbox.payload IS NOT NULL
+                AND outbox.payload_expires_at > transaction_timestamp()",
+};
 pub const MAX_DELIVERY_STATUS_RESULTS: u16 = 100;
 
 /// The product-supplied constants the worker cannot derive.
@@ -66,52 +99,13 @@ pub struct DeliveryConfig {
     pub delivery_source: String,
 }
 
-/// A delivery-audit event held by the worker until it is recorded, such as
-/// one whose transition must commit first.
-#[derive(Clone)]
-struct PendingAudit {
-    event_id: Uuid,
-    compiled_delivery_id: String,
-    package_revision: String,
-    generation: i64,
-    attempt: i16,
-    phase: DeliveryAuditPhase,
-    outcome: DeliveryAuditOutcome,
-    disposition: DeliveryAuditDisposition,
-}
-
-impl PendingAudit {
-    fn record(&self) -> DeliveryAuditRecord<'_> {
-        DeliveryAuditRecord {
-            event_id: self.event_id,
-            compiled_delivery_id: &self.compiled_delivery_id,
-            package_revision: &self.package_revision,
-            generation: self.generation,
-            attempt: self.attempt,
-            phase: self.phase,
-            outcome: self.outcome,
-            disposition: self.disposition,
-        }
-    }
-}
-
 /// The delivery worker over one product's seams.
+#[derive(Clone)]
 pub struct DeliveryService<S: DeliverySeams> {
-    seams: Arc<S>,
+    dispatcher: Dispatcher<HookStore<S>>,
     schema: String,
     idempotency_domain: Vec<u8>,
     delivery_source: String,
-}
-
-impl<S: DeliverySeams> Clone for DeliveryService<S> {
-    fn clone(&self) -> Self {
-        Self {
-            seams: Arc::clone(&self.seams),
-            schema: self.schema.clone(),
-            idempotency_domain: self.idempotency_domain.clone(),
-            delivery_source: self.delivery_source.clone(),
-        }
-    }
 }
 
 impl<S: DeliverySeams> DeliveryService<S> {
@@ -124,12 +118,31 @@ impl<S: DeliverySeams> DeliveryService<S> {
     #[must_use]
     pub fn new(seams: S, config: DeliveryConfig) -> Self {
         let schema = delivery_schema::require_plain_identifier(&config.schema).to_owned();
+        let table = JobTable::new(&schema, STATE_TABLE, ID_COLUMN, PART_COLUMN)
+            .expect("the delivery state table is a plain identifier in a plain schema");
+        let dispatcher = Dispatcher::new(
+            HookStore {
+                seams,
+                schema: schema.clone(),
+            },
+            DispatchConfig {
+                table,
+                sql: DISPATCH_SQL,
+                attempt_timeout: attempt_timeout_bound(),
+                replayable: REPLAYABLE,
+            },
+        )
+        .expect("the hook delivery statements are contained and well formed");
         Self {
-            seams: Arc::new(seams),
+            dispatcher,
             schema,
             idempotency_domain: config.idempotency_domain,
             delivery_source: config.delivery_source,
         }
+    }
+
+    fn seams(&self) -> &S {
+        &self.dispatcher.store().seams
     }
 
     /// Claim, audit, send, settle, and finalize at most one due delivery.
@@ -142,19 +155,27 @@ impl<S: DeliverySeams> DeliveryService<S> {
     /// finalization; an uncertain apply leaves the lease for expiry
     /// recovery rather than recording a disposition.
     pub async fn deliver_once(&self) -> Result<DeliveryOutcome, DeliveryError> {
-        let Some(claim) = self.claim().await? else {
-            return Ok(DeliveryOutcome::Idle);
-        };
-        let attempt = self.reload_and_send(&claim).await?;
-        self.finalize(claim, attempt).await
+        match self
+            .dispatcher
+            .dispatch_once(&HookTransport { service: self })
+            .await?
+        {
+            DispatchOutcome::Idle => Ok(DeliveryOutcome::Idle),
+            DispatchOutcome::Delivered => Ok(DeliveryOutcome::Delivered),
+            DispatchOutcome::RetryScheduled => Ok(DeliveryOutcome::RetryScheduled),
+            DispatchOutcome::DeadLettered => Ok(DeliveryOutcome::DeadLettered),
+            // Hook policies retry an uncertain attempt and carry no job
+            // expiry, so the core never ends a hook attempt in either.
+            DispatchOutcome::Unknown | DispatchOutcome::Expired => Err(DeliveryError::Unavailable),
+        }
     }
 
     /// Refuse startup or operator use if retained work cannot use its exact
     /// captured destination under the active deployment bindings.
     pub async fn verify_retained_bindings(&self) -> Result<(), DeliveryError> {
-        let mut client = self.seams.connection().await?;
+        let mut client = self.seams().connection().await?;
         let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
+        self.seams().verify_transaction(&transaction).await?;
         let rows = transaction
             .query(
                 &self.sql(
@@ -196,29 +217,14 @@ impl<S: DeliverySeams> DeliveryService<S> {
             // written against: for the `url` kind that is the activated
             // destination, and for a local kind it is the reviewed program
             // the deployed package holds under the same digest.
-            let binding_activated = match handler_kind {
-                Some(HookHandlerKind::Url) => logical_destination_id
-                    .as_deref()
-                    .and_then(|id| self.seams.destination(id))
-                    .is_some_and(|destination| {
-                        destination.binding_digest() == destination_binding_digest
-                    }),
-                Some(kind @ (HookHandlerKind::Rhai | HookHandlerKind::Wasm)) => {
-                    logical_destination_id.is_none()
-                        && self
-                            .seams
-                            .handler(HookHandlerBinding {
-                                kind,
-                                compiled_delivery_id: &compiled_delivery_id,
-                                package_revision: &package_revision,
-                                handler_digest: &destination_binding_digest,
-                            })
-                            .is_some_and(|handler| {
-                                handler.handler_digest() == destination_binding_digest
-                            })
-                }
-                None => false,
-            };
+            let binding_activated = binding_is_activated(
+                self.seams(),
+                handler_kind,
+                logical_destination_id.as_deref(),
+                &compiled_delivery_id,
+                &package_revision,
+                &destination_binding_digest,
+            );
             if !binding_activated {
                 return Err(DeliveryError::Unavailable);
             }
@@ -232,9 +238,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if limit == 0 || limit > MAX_DELIVERY_STATUS_RESULTS {
             return Err(DeliveryError::Unavailable);
         }
-        let mut client = self.seams.connection().await?;
+        let mut client = self.seams().connection().await?;
         let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
+        self.seams().verify_transaction(&transaction).await?;
         let rows = transaction
             .query(
                 &self.sql(
@@ -291,664 +297,17 @@ impl<S: DeliverySeams> DeliveryService<S> {
         compiled_delivery_id: &str,
         expected_generation: i64,
     ) -> Result<i64, DeliveryError> {
-        // The replay runs to its response in a task of its own: once its
-        // request entry is accepted, a caller that stops waiting (a timeout
-        // or a disconnect) cannot leave that request unanswered while the
-        // process keeps running. A task does not outlive the runtime, so a
-        // process that exits first leaves the request unanswered.
-        let service = self.clone();
-        let compiled_delivery_id = compiled_delivery_id.to_owned();
-        tokio::spawn(async move {
-            service
-                .replay_in(event_id, &compiled_delivery_id, expected_generation)
-                .await
-        })
-        .await
-        .map_err(|_| DeliveryError::Unavailable)?
-    }
-
-    async fn replay_in(
-        &self,
-        event_id: Uuid,
-        compiled_delivery_id: &str,
-        expected_generation: i64,
-    ) -> Result<i64, DeliveryError> {
         if compiled_delivery_id.is_empty()
             || compiled_delivery_id.len() > 256
             || expected_generation <= 0
         {
             return Err(DeliveryError::Unavailable);
         }
-        let mut client = self.seams.connection().await?;
-        let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.generation, state.state, delivery.operator_replay,
-                        delivery.package_revision, delivery.logical_destination_id,
-                        delivery.destination_binding_digest, delivery.handler_kind
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 JOIN {schema}.registry_outbox AS outbox
-                   ON outbox.event_id = delivery.event_id
-                 WHERE state.event_id = $1
-                   AND state.compiled_delivery_id = $2
-                   AND outbox.payload IS NOT NULL
-                   AND outbox.payload_expires_at > transaction_timestamp()
-                 FOR UPDATE OF state",
-                ),
-                &[&event_id, &compiled_delivery_id],
-            )
-            .await?
-            .ok_or(DeliveryError::Unavailable)?;
-        let generation = row.try_get::<_, i64>(0)?;
-        let state = row.try_get::<_, String>(1)?;
-        let operator_replay = row.try_get::<_, bool>(2)?;
-        let package_revision = bounded_text(&row, 3, 256)?;
-        let logical_destination_id = row
-            .try_get::<_, Option<String>>(4)?
-            .filter(|id| id.len() <= 64);
-        let destination_binding_digest = bounded_text(&row, 5, 71)?;
-        let handler_kind = bounded_text(&row, 6, 8)
-            .ok()
-            .and_then(|kind| HookHandlerKind::from_spelling(&kind));
         // The binding a replay re-opens must still be the one the row was
-        // written against: for the `url` kind that is the activated
-        // destination, and for a local kind it is the reviewed program the
-        // deployed package holds under the same digest.
-        let binding_activated = match handler_kind {
-            Some(HookHandlerKind::Url) => logical_destination_id
-                .as_deref()
-                .and_then(|id| self.seams.destination(id))
-                .is_some_and(|destination| {
-                    destination.binding_digest() == destination_binding_digest
-                }),
-            Some(kind @ (HookHandlerKind::Rhai | HookHandlerKind::Wasm)) => {
-                logical_destination_id.is_none()
-                    && self
-                        .seams
-                        .handler(HookHandlerBinding {
-                            kind,
-                            compiled_delivery_id,
-                            package_revision: &package_revision,
-                            handler_digest: &destination_binding_digest,
-                        })
-                        .is_some_and(|handler| {
-                            handler.handler_digest() == destination_binding_digest
-                        })
-            }
-            None => false,
-        };
-        if generation != expected_generation
-            || !operator_replay
-            || state != "dead_lettered"
-            || !binding_activated
-        {
-            return Err(DeliveryError::Unavailable);
-        }
-        let next_generation = generation
-            .checked_add(1)
-            .ok_or(DeliveryError::Unavailable)?;
-        // The replay's request is on record before the reset, and its
-        // response records whether the reset committed.
-        let replay = PendingAudit {
-            event_id,
-            compiled_delivery_id: compiled_delivery_id.to_owned(),
-            package_revision: package_revision.clone(),
-            generation: next_generation,
-            attempt: 0,
-            phase: DeliveryAuditPhase::Replay,
-            outcome: DeliveryAuditOutcome::ReplayRequested,
-            disposition: DeliveryAuditDisposition::ReplayPending,
-        };
-        self.seams.record_audit(replay.record()).await?;
-        let refused = (
-            DeliveryAuditOutcome::ReplayRefused,
-            DeliveryAuditDisposition::DeadLettered,
-        );
-        let committed = (
-            DeliveryAuditOutcome::ReplayCommitted,
-            DeliveryAuditDisposition::ReplayPending,
-        );
-        let (reset, (outcome, disposition)) = match self
-            .reset_for_replay(&transaction, event_id, compiled_delivery_id, generation)
-            .await
-        {
-            // A reset that failed or changed no row did not commit.
-            Err(error) => (Err(error), refused),
-            Ok(()) => match transaction.commit().await {
-                Ok(()) => (Ok(()), committed),
-                Err(error) => {
-                    // The commit's acknowledgement may be all that was lost.
-                    match self
-                        .transition_committed(
-                            &PendingAudit {
-                                outcome: DeliveryAuditOutcome::ReplayCommitted,
-                                ..replay.clone()
-                            },
-                            None,
-                        )
-                        .await
-                    {
-                        Some(true) => (Ok(()), committed),
-                        Some(false) => (Err(error.into()), refused),
-                        // A reset of unknown fate may have committed, so it
-                        // is answered as unfinished rather than refused.
-                        None => (
-                            Err(error.into()),
-                            (
-                                DeliveryAuditOutcome::ReplayUnfinished,
-                                DeliveryAuditDisposition::ReplayPending,
-                            ),
-                        ),
-                    }
-                }
-            },
-        };
-        let recorded = self
-            .seams
-            .record_audit(
-                PendingAudit {
-                    outcome,
-                    disposition,
-                    ..replay
-                }
-                .record(),
-            )
-            .await;
-        reset?;
-        recorded?;
-        Ok(next_generation)
-    }
-
-    /// Reset one dead-lettered delivery to pending under its next generation,
-    /// leaving the commit to the caller.
-    async fn reset_for_replay(
-        &self,
-        transaction: &Transaction<'_>,
-        event_id: Uuid,
-        compiled_delivery_id: &str,
-        generation: i64,
-    ) -> Result<(), DeliveryError> {
-        let next_generation = generation
-            .checked_add(1)
-            .ok_or(DeliveryError::Unavailable)?;
-        let changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                 SET generation = $4,
-                     state = 'pending',
-                     attempt = 0,
-                     next_attempt_at = transaction_timestamp(),
-                     attempt_started_at = NULL,
-                     lease_expires_at = NULL,
-                     lease_token = NULL,
-                     delivered_at = NULL,
-                     dead_lettered_at = NULL,
-                     expired_at = NULL,
-                     updated_at = transaction_timestamp()
-                 WHERE event_id = $1
-                   AND compiled_delivery_id = $2
-                   AND generation = $3
-                   AND state = 'dead_lettered'",
-                ),
-                &[
-                    &event_id,
-                    &compiled_delivery_id,
-                    &generation,
-                    &next_generation,
-                ],
-            )
-            .await?;
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        Ok(())
-    }
-
-    async fn claim(&self) -> Result<Option<DeliveryClaim>, DeliveryError> {
-        // The claim runs to its commit in a task of its own: once its
-        // attempt entry is accepted, a caller that stops waiting (a worker
-        // aborted at shutdown) cannot roll the lease back and leave that
-        // attempt with no lease for expiry recovery to answer, as long as
-        // the process keeps running; a task does not outlive the runtime.
-        let service = self.clone();
-        tokio::spawn(async move { service.claim_in().await })
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?
-    }
-
-    async fn claim_in(&self) -> Result<Option<DeliveryClaim>, DeliveryError> {
-        let mut client = self.seams.connection().await?;
-        let transaction = client.transaction().await?;
-        if self.seams.verify_transaction(&transaction).await.is_err() {
-            self.refused(DeliveryTransitionCode::ClaimIdentityRefused);
-            return Err(DeliveryError::Unavailable);
-        }
-        // Recovered and expired deliveries are recorded once this
-        // transaction commits.
-        let mut committed = Vec::new();
-        if self
-            .reap_expired_leases(&transaction, &mut committed)
-            .await
-            .is_err()
-        {
-            self.refused(DeliveryTransitionCode::ClaimRecoveryFailed);
-            return Err(DeliveryError::Unavailable);
-        }
-        self.expire_retained_payload(&transaction, &mut committed)
-            .await?;
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.event_id, state.compiled_delivery_id,
-                        state.generation, state.attempt,
-                        delivery.deployed_attempt_timeout_ms,
-                        delivery.deployed_maximum_attempts,
-                        delivery.retry_delays_ms,
-                        delivery.package_revision,
-                        delivery.handler_kind
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 JOIN {schema}.registry_outbox AS outbox
-                   ON outbox.event_id = delivery.event_id
-                 WHERE state.state = 'pending'
-                   AND state.next_attempt_at <= transaction_timestamp()
-                   AND state.attempt < delivery.deployed_maximum_attempts
-                   AND outbox.payload IS NOT NULL
-                   AND outbox.payload_expires_at > transaction_timestamp()
-                 ORDER BY state.next_attempt_at, state.event_id, state.compiled_delivery_id
-                 FOR UPDATE OF state SKIP LOCKED
-                 LIMIT 1",
-                ),
-                &[],
-            )
-            .await
-            .map_err(|_| {
-                self.refused(DeliveryTransitionCode::ClaimSelectFailed);
-                DeliveryError::Unavailable
-            })?;
-        let Some(row) = row else {
-            if let Err(error) = transaction.commit().await {
-                self.record_resolved(committed).await;
-                return Err(error.into());
-            }
-            self.record_committed(committed).await?;
-            return Ok(None);
-        };
-        let event_id = row.try_get::<_, Uuid>(0)?;
-        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let prior_attempt = row.try_get::<_, i16>(3)?;
-        let deployed_attempt_timeout_ms = row.try_get::<_, i64>(4)?;
-        let deployed_maximum_attempts = row.try_get::<_, i16>(5)?;
-        let retry_delays_ms = row.try_get::<_, Vec<i64>>(6)?;
-        let package_revision =
-            bounded_text(&row, 7, 256).map_err(|_| DeliveryError::Unavailable)?;
-        let Some(handler_kind) = bounded_text(&row, 8, 8)
-            .ok()
-            .and_then(|kind| HookHandlerKind::from_spelling(&kind))
-        else {
-            self.refused(DeliveryTransitionCode::ClaimPolicyRefused);
-            return Err(DeliveryError::Unavailable);
-        };
-        let attempt = prior_attempt
-            .checked_add(1)
-            .filter(|attempt| *attempt <= deployed_maximum_attempts)
-            .ok_or(DeliveryError::Unavailable)?;
-        if validate_captured_policy(
-            deployed_attempt_timeout_ms,
-            deployed_maximum_attempts,
-            &retry_delays_ms,
-        )
-        .is_err()
-        {
-            self.refused(DeliveryTransitionCode::ClaimPolicyRefused);
-            return Err(DeliveryError::Unavailable);
-        }
-        let lease_token = Uuid::new_v4();
-        let allowance_ms = i64::try_from(LEASE_FINALIZATION_ALLOWANCE.as_millis())
-            .map_err(|_| DeliveryError::Unavailable)?;
-        let changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                 SET state = 'leased',
-                     attempt = $5,
-                     next_attempt_at = NULL,
-                     attempt_started_at = transaction_timestamp(),
-                     lease_expires_at = transaction_timestamp()
-                         + ($6::bigint + $7::bigint) * interval '1 millisecond',
-                     lease_token = $8,
-                     updated_at = transaction_timestamp()
-                 WHERE event_id = $1
-                   AND compiled_delivery_id = $2
-                   AND generation = $3
-                   AND state = 'pending'
-                   AND attempt = $4",
-                ),
-                &[
-                    &event_id,
-                    &compiled_delivery_id,
-                    &generation,
-                    &prior_attempt,
-                    &attempt,
-                    &deployed_attempt_timeout_ms,
-                    &allowance_ms,
-                    &lease_token,
-                ],
-            )
-            .await
-            .map_err(|_| {
-                self.refused(DeliveryTransitionCode::ClaimUpdateFailed);
-                DeliveryError::Unavailable
-            })?;
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        let attempt_started_at = transaction
-            .query_one("SELECT transaction_timestamp()", &[])
-            .await?
-            .try_get::<_, SystemTime>(0)?;
-        let started = PendingAudit {
-            event_id,
-            compiled_delivery_id: compiled_delivery_id.clone(),
-            package_revision: package_revision.clone(),
-            generation,
-            attempt,
-            phase: DeliveryAuditPhase::Attempt,
-            outcome: DeliveryAuditOutcome::AttemptStarted,
-            disposition: DeliveryAuditDisposition::Leased,
-        };
-        if self.seams.record_audit(started.record()).await.is_err() {
-            self.refused(DeliveryTransitionCode::ClaimAuditFailed);
-            return Err(DeliveryError::Unavailable);
-        }
-        if transaction.commit().await.is_err() {
-            self.refused(DeliveryTransitionCode::ClaimCommitFailed);
-            // A failed commit acknowledgement does not prove a rollback, so
-            // read what the database holds. Each recovered or expired
-            // delivery is recorded if it reads back as durable, whatever the
-            // lease's own fate. A lease that did commit sends nothing from
-            // here and is answered when it expires; one that rolled back, or
-            // one whose fate cannot be read, is answered now, since a second
-            // interrupted answer is harmless and none is not. A lease of
-            // unknown fate may still be held, so its answer claims no
-            // database state.
-            let lease_committed = self.transition_committed(&started, Some(lease_token)).await;
-            self.record_resolved(committed).await;
-            let disposition = match lease_committed {
-                Some(true) => None,
-                Some(false) => Some(DeliveryAuditDisposition::RetryPending),
-                None => Some(DeliveryAuditDisposition::Unknown),
-            };
-            if let Some(disposition) = disposition {
-                let interrupted = PendingAudit {
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                    disposition,
-                    ..started
-                };
-                // A refused entry has already stopped the product's writer,
-                // which reports it; the claim fails either way.
-                let _ = self.seams.record_audit(interrupted.record()).await;
-            }
-            return Err(DeliveryError::Unavailable);
-        }
-        self.record_committed(committed).await?;
-        Ok(Some(DeliveryClaim {
-            event_id,
-            compiled_delivery_id,
-            generation,
-            attempt,
-            attempt_started_at,
-            lease_token,
-            deployed_maximum_attempts,
-            retry_delays_ms,
-            package_revision,
-            handler_kind,
-        }))
-    }
-
-    async fn reap_expired_leases(
-        &self,
-        transaction: &Transaction<'_>,
-        committed: &mut Vec<PendingAudit>,
-    ) -> Result<(), DeliveryError> {
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.event_id, state.compiled_delivery_id,
-                        state.generation, state.attempt, state.lease_token,
-                        delivery.deployed_attempt_timeout_ms,
-                        delivery.deployed_maximum_attempts,
-                        delivery.retry_delays_ms,
-                        delivery.package_revision
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 WHERE state.state = 'leased'
-                   AND state.lease_expires_at <= transaction_timestamp()
-                 ORDER BY state.lease_expires_at, state.event_id, state.compiled_delivery_id
-                 FOR UPDATE OF state SKIP LOCKED
-                 LIMIT 1",
-                ),
-                &[],
-            )
-            .await?;
-        let Some(row) = row else {
-            return Ok(());
-        };
-        let event_id = row.try_get::<_, Uuid>(0)?;
-        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let attempt = row.try_get::<_, i16>(3)?;
-        let lease_token = row.try_get::<_, Uuid>(4)?;
-        let deployed_attempt_timeout_ms = row.try_get::<_, i64>(5)?;
-        let deployed_maximum_attempts = row.try_get::<_, i16>(6)?;
-        let retry_delays_ms = row.try_get::<_, Vec<i64>>(7)?;
-        let package_revision = bounded_text(&row, 8, 256)?;
-        validate_captured_policy(
-            deployed_attempt_timeout_ms,
-            deployed_maximum_attempts,
-            &retry_delays_ms,
-        )?;
-        let dead_lettered = attempt >= deployed_maximum_attempts;
-        // The final worker may have committed a proposal before dying or
-        // losing its lease. Recover under the same delivery-scoped boundary
-        // before the reaper makes that row terminal; otherwise this direct
-        // dead-letter path would hide the committed application behind an
-        // all-null proposal disposition.
-        let proposal = if dead_lettered {
-            self.seams
-                .recover_proposal_receipt_in_transaction(
-                    transaction,
-                    ProposalReceiptRecovery {
-                        event_id,
-                        compiled_delivery_id: &compiled_delivery_id,
-                    },
-                )
-                .await?
-        } else {
-            None
-        };
-        let changed = if dead_lettered {
-            let columns = proposal_columns("dead_lettered", proposal.as_ref())?;
-            transaction
-                .execute(
-                    &self.sql(
-                        "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'dead_lettered',
-                         next_attempt_at = NULL,
-                         attempt_started_at = NULL,
-                         lease_expires_at = NULL,
-                         lease_token = NULL,
-                         proposal_disposition = $6,
-                         proposal_resulting_revision = $7,
-                         proposal_code = $8,
-                         proposal_summary = $9,
-                         dead_lettered_at = transaction_timestamp(),
-                         updated_at = transaction_timestamp()
-                     WHERE event_id = $1
-                       AND compiled_delivery_id = $2
-                       AND generation = $3
-                       AND attempt = $4
-                       AND lease_token = $5
-                       AND state = 'leased'
-                       AND lease_expires_at <= transaction_timestamp()",
-                    ),
-                    &[
-                        &event_id,
-                        &compiled_delivery_id,
-                        &generation,
-                        &attempt,
-                        &lease_token,
-                        &columns.disposition,
-                        &columns.resulting_revision,
-                        &columns.code,
-                        &columns.summary,
-                    ],
-                )
-                .await
-        } else {
-            let delay_ms = scheduled_retry_delay(&retry_delays_ms, attempt)?;
-            transaction
-                .execute(
-                    &self.sql(
-                        "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'pending',
-                         next_attempt_at = transaction_timestamp()
-                             + $6::bigint * interval '1 millisecond',
-                         attempt_started_at = NULL,
-                         lease_expires_at = NULL,
-                         lease_token = NULL,
-                         updated_at = transaction_timestamp()
-                     WHERE event_id = $1
-                       AND compiled_delivery_id = $2
-                       AND generation = $3
-                       AND attempt = $4
-                       AND lease_token = $5
-                       AND state = 'leased'
-                       AND lease_expires_at <= transaction_timestamp()",
-                    ),
-                    &[
-                        &event_id,
-                        &compiled_delivery_id,
-                        &generation,
-                        &attempt,
-                        &lease_token,
-                        &delay_ms,
-                    ],
-                )
-                .await
-        }?;
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        committed.push(PendingAudit {
-            event_id,
-            compiled_delivery_id,
-            package_revision,
-            generation,
-            attempt,
-            phase: DeliveryAuditPhase::Terminal,
-            outcome: DeliveryAuditOutcome::WorkerInterrupted,
-            disposition: if dead_lettered {
-                DeliveryAuditDisposition::DeadLettered
-            } else {
-                DeliveryAuditDisposition::RetryPending
-            },
-        });
-        Ok(())
-    }
-
-    async fn expire_retained_payload(
-        &self,
-        transaction: &Transaction<'_>,
-        committed: &mut Vec<PendingAudit>,
-    ) -> Result<(), DeliveryError> {
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.event_id, state.compiled_delivery_id,
-                        state.generation, state.attempt, delivery.package_revision
-                   FROM {schema}.registry_webhook_delivery_state AS state
-                   JOIN {schema}.registry_webhook_deliveries AS delivery
-                     ON delivery.event_id = state.event_id
-                    AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                   JOIN {schema}.registry_outbox AS outbox
-                     ON outbox.event_id = delivery.event_id
-                  WHERE state.state IN ('pending', 'dead_lettered')
-                    AND outbox.payload IS NOT NULL
-                    AND outbox.payload_expires_at <= transaction_timestamp()
-                  ORDER BY outbox.payload_expires_at, state.event_id,
-                           state.compiled_delivery_id
-                  FOR UPDATE OF state, outbox SKIP LOCKED
-                  LIMIT 1",
-                ),
-                &[],
-            )
-            .await?;
-        let Some(row) = row else {
-            return Ok(());
-        };
-        let event_id = row.try_get::<_, Uuid>(0)?;
-        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let attempt = row.try_get::<_, i16>(3)?;
-        let package_revision = bounded_text(&row, 4, 256)?;
-        let state_changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                    SET state = CASE WHEN state = 'pending' THEN 'expired' ELSE state END,
-                        next_attempt_at = NULL,
-                        attempt_started_at = NULL,
-                        lease_expires_at = NULL,
-                        lease_token = NULL,
-                        expired_at = transaction_timestamp(),
-                        updated_at = transaction_timestamp()
-                  WHERE event_id = $1
-                    AND compiled_delivery_id = $2
-                    AND generation = $3
-                    AND state IN ('pending', 'dead_lettered')",
-                ),
-                &[&event_id, &compiled_delivery_id, &generation],
-            )
-            .await?;
-        let payload_changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_outbox
-                    SET payload = NULL
-                  WHERE event_id = $1
-                    AND payload IS NOT NULL
-                    AND payload_expires_at <= transaction_timestamp()",
-                ),
-                &[&event_id],
-            )
-            .await?;
-        if state_changed != 1 || payload_changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        committed.push(PendingAudit {
-            event_id,
-            compiled_delivery_id,
-            package_revision,
-            generation,
-            attempt,
-            phase: DeliveryAuditPhase::Terminal,
-            outcome: DeliveryAuditOutcome::PayloadExpired,
-            disposition: DeliveryAuditDisposition::Expired,
-        });
-        Ok(())
+        // written against; the hook store refuses the target otherwise.
+        let key =
+            JobKey::new(event_id, compiled_delivery_id).map_err(|_| DeliveryError::Unavailable)?;
+        Ok(self.dispatcher.replay(&key, expected_generation).await?)
     }
 
     async fn reload_and_send(&self, claim: &DeliveryClaim) -> Result<AttemptResult, DeliveryError> {
@@ -968,7 +327,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let Some(destination_id) = material.logical_destination_id.as_deref() else {
             return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         };
-        let Some(destination) = self.seams.destination(destination_id) else {
+        let Some(destination) = self.seams().destination(destination_id) else {
             return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         };
         let deployed_timeout_ms = i64::try_from(destination.attempt_timeout().as_millis())
@@ -1084,7 +443,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         claim: &DeliveryClaim,
         material: DeliveryMaterial,
     ) -> Result<AttemptResult, DeliveryError> {
-        let Some(handler) = self.seams.handler(HookHandlerBinding {
+        let Some(handler) = self.seams().handler(HookHandlerBinding {
             kind: claim.handler_kind,
             compiled_delivery_id: &claim.compiled_delivery_id,
             package_revision: &claim.package_revision,
@@ -1141,7 +500,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         };
         if !matches!(answer.message, HookMessage::Proposal { .. }) {
             result.proposal = self
-                .seams
+                .seams()
                 .recover_proposal_receipt(ProposalReceiptRecovery {
                     event_id: claim.event_id,
                     compiled_delivery_id: &claim.compiled_delivery_id,
@@ -1150,7 +509,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             return Ok(result);
         }
         let outcome = self
-            .seams
+            .seams()
             .apply_proposal(ProposalApplication {
                 event_id: claim.event_id,
                 compiled_delivery_id: &claim.compiled_delivery_id,
@@ -1171,488 +530,51 @@ impl<S: DeliverySeams> DeliveryService<S> {
         &self,
         claim: &DeliveryClaim,
     ) -> Result<DeliveryMaterial, MaterialLoadError> {
-        let mut client = self
-            .seams
-            .connection()
+        let fence = Fence {
+            id: claim.event_id,
+            part: &claim.compiled_delivery_id,
+            generation: claim.generation,
+            attempt: claim.attempt,
+            lease_token: claim.lease_token,
+        };
+        let (material, binding) = self
+            .dispatcher
+            .read_leased(fence, &MATERIAL_SELECT, decode_material)
             .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
-        self.seams
-            .verify_transaction(&transaction)
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT outbox.event_type, outbox.payload,
-                        outbox.package_revision, outbox.schema_fingerprint,
-                        delivery.destination_binding_digest,
-                        delivery.logical_destination_id,
-                        delivery.maximum_payload_bytes,
-                        delivery.payload_digest,
-                        delivery.deployed_attempt_timeout_ms,
-                        delivery.deployed_maximum_attempts,
-                        delivery.authentication_profile,
-                        delivery.delivery_mode,
-                        delivery.dead_letter,
-                        delivery.data_schema,
-                        outbox.created_at
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 JOIN {schema}.registry_outbox AS outbox
-                   ON outbox.event_id = delivery.event_id
-                  AND outbox.package_revision = delivery.package_revision
-                  AND outbox.schema_fingerprint = delivery.schema_fingerprint
-                 WHERE state.event_id = $1
-                   AND state.compiled_delivery_id = $2
-                   AND state.generation = $3
-                   AND state.attempt = $4
-                   AND state.lease_token = $5
-                   AND state.state = 'leased'
-                   AND state.lease_expires_at > transaction_timestamp()
-                   AND outbox.payload IS NOT NULL
-                   AND outbox.payload_expires_at > transaction_timestamp()
-                 FOR SHARE OF state",
-                ),
-                &[
-                    &claim.event_id,
-                    &claim.compiled_delivery_id,
-                    &claim.generation,
-                    &claim.attempt,
-                    &claim.lease_token,
-                ],
-            )
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?
-            .ok_or(MaterialLoadError::Unavailable)?;
-        let event_type =
-            bounded_text(&row, 0, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let body = row
-            .try_get::<_, Option<Vec<u8>>>(1)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let body = body.ok_or(MaterialLoadError::PayloadRefused)?;
-        let outbox_package_revision =
-            bounded_text(&row, 2, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let outbox_schema_fingerprint =
-            bounded_text(&row, 3, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let destination_binding_digest =
-            bounded_text(&row, 4, 71).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let logical_destination_id = row
-            .try_get::<_, Option<String>>(5)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?
-            .map(|id| {
-                (id.len() <= 64)
-                    .then_some(id)
-                    .ok_or(MaterialLoadError::PayloadRefused)
-            })
-            .transpose()?;
-        let maximum_payload_bytes = row
-            .try_get::<_, i64>(6)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let payload_digest = row
-            .try_get::<_, Vec<u8>>(7)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let deployed_attempt_timeout_ms = row
-            .try_get::<_, i64>(8)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let deployed_maximum_attempts = row
-            .try_get::<_, i16>(9)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let authentication_profile =
-            bounded_text(&row, 10, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let delivery_mode =
-            bounded_text(&row, 11, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let dead_letter =
-            bounded_text(&row, 12, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let data_schema =
-            bounded_text(&row, 13, 2_048).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let event_time = row
-            .try_get::<_, SystemTime>(14)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
+            .map_err(|error| match error {
+                LeasedReadError::Unavailable => MaterialLoadError::Unavailable,
+                LeasedReadError::Refused(refusal) => refusal,
+            })?;
         // A row carries a destination when, and only when, it binds the
         // `url` kind: a local kind runs the engine's own reviewed program
         // and has nowhere to send.
-        if logical_destination_id.is_some() != (claim.handler_kind == HookHandlerKind::Url) {
+        if material.logical_destination_id.is_some() != (claim.handler_kind == HookHandlerKind::Url)
+        {
             return Err(MaterialLoadError::BindingRefused);
         }
-        if outbox_package_revision != claim.package_revision
-            || outbox_schema_fingerprint.is_empty()
-            || authentication_profile != "hmac_sha256_v1"
-            || delivery_mode != "after_commit"
-            || dead_letter != "required"
-            || !(100..=10_000).contains(&deployed_attempt_timeout_ms)
-            || !(1..=20).contains(&deployed_maximum_attempts)
+        if binding.outbox_package_revision != claim.package_revision
+            || binding.outbox_schema_fingerprint.is_empty()
+            || binding.authentication_profile != "hmac_sha256_v1"
+            || binding.delivery_mode != "after_commit"
+            || binding.dead_letter != "required"
+            || !(100..=10_000).contains(&material.deployed_attempt_timeout_ms)
+            || !(1..=20).contains(&material.deployed_maximum_attempts)
         {
             return Err(MaterialLoadError::BindingRefused);
         }
         accept_stored_envelope(
-            &body,
+            &material.body,
             &StoredEnvelope {
                 event_id: claim.event_id,
-                event_type: &event_type,
+                event_type: &material.event_type,
                 source: &self.delivery_source,
-                data_schema: &data_schema,
-                event_time,
-                maximum_payload_bytes,
-                payload_digest: &payload_digest,
+                data_schema: &material.data_schema,
+                event_time: material.event_time,
+                maximum_payload_bytes: binding.maximum_payload_bytes,
+                payload_digest: &material.payload_digest,
             },
         )?;
-        Ok(DeliveryMaterial {
-            event_type,
-            body,
-            payload_digest,
-            destination_binding_digest,
-            logical_destination_id,
-            deployed_attempt_timeout_ms,
-            deployed_maximum_attempts,
-            data_schema,
-            event_time,
-        })
-    }
-
-    async fn finalize(
-        &self,
-        claim: DeliveryClaim,
-        attempt: AttemptResult,
-    ) -> Result<DeliveryOutcome, DeliveryError> {
-        // Finalize runs to its terminal entry in a task of its own: once its
-        // disposition commits, a caller that stops waiting (a worker aborted
-        // at shutdown) cannot leave that committed disposition without its
-        // entry while the process keeps running, since a terminal row is
-        // never reaped and nothing else answers the attempt. A task does not
-        // outlive the runtime.
-        let service = self.clone();
-        tokio::spawn(async move { service.finalize_in(&claim, attempt).await })
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?
-    }
-
-    async fn finalize_in(
-        &self,
-        claim: &DeliveryClaim,
-        attempt: AttemptResult,
-    ) -> Result<DeliveryOutcome, DeliveryError> {
-        let AttemptResult {
-            outcome,
-            answer,
-            mut proposal,
-        } = attempt;
-        // A proposal may have committed before an earlier worker lost its
-        // lease or failed to finalize. If every later attempt fails before
-        // accepting an answer, recover that receipt before the last attempt
-        // becomes an all-null dead letter. Nonterminal failures keep the
-        // ordinary retry path and avoid an extra database lookup.
-        if proposal.is_none()
-            && answer.is_none()
-            && claim.attempt >= claim.deployed_maximum_attempts
-        {
-            proposal = self
-                .seams
-                .recover_proposal_receipt(ProposalReceiptRecovery {
-                    event_id: claim.event_id,
-                    compiled_delivery_id: &claim.compiled_delivery_id,
-                })
-                .await?;
-        }
-        let mut client = self.seams.connection().await?;
-        let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
-        let (disposition, work_outcome) = if proposal
-            .as_ref()
-            .is_some_and(|proposal| matches!(proposal, ProposalOutcome::DeadLettered { .. }))
-        {
-            // A dead-lettered proposal is deterministic: retrying the
-            // delivery cannot apply it, so the row is terminal now regardless
-            // of the attempts it has left.
-            (
-                DeliveryAuditDisposition::DeadLettered,
-                DeliveryOutcome::DeadLettered,
-            )
-        } else if outcome == DeliveryAuditOutcome::Delivered {
-            (
-                DeliveryAuditDisposition::Delivered,
-                DeliveryOutcome::Delivered,
-            )
-        } else if claim.attempt >= claim.deployed_maximum_attempts {
-            (
-                DeliveryAuditDisposition::DeadLettered,
-                DeliveryOutcome::DeadLettered,
-            )
-        } else {
-            (
-                DeliveryAuditDisposition::RetryPending,
-                DeliveryOutcome::RetryScheduled,
-            )
-        };
-        let changed = match work_outcome {
-            DeliveryOutcome::Delivered => {
-                self.update_terminal_state(
-                    &transaction,
-                    claim,
-                    "delivered",
-                    answer.as_ref(),
-                    proposal.as_ref(),
-                )
-                .await?
-            }
-            DeliveryOutcome::DeadLettered => {
-                self.update_terminal_state(
-                    &transaction,
-                    claim,
-                    "dead_lettered",
-                    None,
-                    proposal.as_ref(),
-                )
-                .await?
-            }
-            DeliveryOutcome::RetryScheduled => {
-                let delay_ms = scheduled_retry_delay(&claim.retry_delays_ms, claim.attempt)?;
-                transaction
-                    .execute(
-                        &self.sql(
-                            "UPDATE {schema}.registry_webhook_delivery_state
-                         SET state = 'pending',
-                             next_attempt_at = transaction_timestamp()
-                                 + $6::bigint * interval '1 millisecond',
-                             attempt_started_at = NULL,
-                             lease_expires_at = NULL,
-                             lease_token = NULL,
-                             updated_at = transaction_timestamp()
-                         WHERE event_id = $1
-                           AND compiled_delivery_id = $2
-                           AND generation = $3
-                           AND attempt = $4
-                           AND lease_token = $5
-                           AND state = 'leased'",
-                        ),
-                        &[
-                            &claim.event_id,
-                            &claim.compiled_delivery_id,
-                            &claim.generation,
-                            &claim.attempt,
-                            &claim.lease_token,
-                            &delay_ms,
-                        ],
-                    )
-                    .await?
-            }
-            DeliveryOutcome::Idle => return Err(DeliveryError::Unavailable),
-        };
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        if work_outcome == DeliveryOutcome::Delivered {
-            let erased = transaction
-                .execute(
-                    &self.sql(
-                        "UPDATE {schema}.registry_outbox
-                        SET payload = NULL
-                      WHERE event_id = $1 AND payload IS NOT NULL",
-                    ),
-                    &[&claim.event_id],
-                )
-                .await?;
-            if erased != 1 {
-                return Err(DeliveryError::Unavailable);
-            }
-        }
-        let terminal = PendingAudit {
-            event_id: claim.event_id,
-            compiled_delivery_id: claim.compiled_delivery_id.clone(),
-            package_revision: claim.package_revision.clone(),
-            generation: claim.generation,
-            attempt: claim.attempt,
-            phase: DeliveryAuditPhase::Terminal,
-            outcome,
-            disposition,
-        };
-        if let Err(error) = transaction.commit().await {
-            // A lost acknowledgement does not prove a rollback, and a
-            // terminal row is never reaped, so a disposition that did commit
-            // is recorded here or never. One that rolled back leaves the
-            // lease for expiry recovery, which answers the attempt.
-            match self.transition_committed(&terminal, None).await {
-                Some(true) => {}
-                Some(false) => return Err(error.into()),
-                None => {
-                    // The disposition's fate cannot be read, and one that
-                    // did commit is never answered by expiry recovery, so the
-                    // attempt is answered now as interrupted, with a
-                    // disposition that claims no database state: a second
-                    // answer is harmless and none is not.
-                    let interrupted = PendingAudit {
-                        outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                        disposition: DeliveryAuditDisposition::Unknown,
-                        ..terminal
-                    };
-                    // A refused entry has already stopped the product's
-                    // writer, which reports it; finalize fails either way.
-                    let _ = self.seams.record_audit(interrupted.record()).await;
-                    return Err(error.into());
-                }
-            }
-        }
-        // Recorded once the disposition committed, so the journal never
-        // names a disposition the database does not hold.
-        self.seams.record_audit(terminal.record()).await?;
-        Ok(work_outcome)
-    }
-
-    /// Record the events of a transaction whose commit returned an error,
-    /// each only if the transition it names is durable.
-    async fn record_resolved(&self, events: Vec<PendingAudit>) {
-        for event in events {
-            // A refused entry has already stopped the product's writer,
-            // which reports it; the caller is failing either way.
-            if self.transition_committed(&event, None).await == Some(true) {
-                let _ = self.seams.record_audit(event.record()).await;
-            }
-        }
-    }
-
-    /// Whether the transition `event` records is durable, read on a fresh
-    /// connection after its commit returned an error, since a failed commit
-    /// acknowledgement does not prove the transaction rolled back. `None`
-    /// when the state cannot be read. An attempt's lease is matched on the
-    /// token this worker wrote.
-    async fn transition_committed(
-        &self,
-        event: &PendingAudit,
-        lease_token: Option<Uuid>,
-    ) -> Option<bool> {
-        for read_back in 0..=READ_BACK_BACKOFF.len() {
-            if let Some(wait) = read_back
-                .checked_sub(1)
-                .and_then(|index| READ_BACK_BACKOFF.get(index))
-            {
-                tokio::time::sleep(*wait).await;
-            }
-            let Ok(client) = self.seams.connection().await else {
-                continue;
-            };
-            let Ok(row) = client
-                .query_opt(
-                    &self.sql(
-                        "SELECT state, generation, attempt, lease_token, expired_at IS NOT NULL
-                           FROM {schema}.registry_webhook_delivery_state
-                          WHERE event_id = $1 AND compiled_delivery_id = $2",
-                    ),
-                    &[&event.event_id, &event.compiled_delivery_id],
-                )
-                .await
-            else {
-                continue;
-            };
-            let Some(row) = row else {
-                return Some(false);
-            };
-            let (Ok(state), Ok(generation), Ok(attempt), Ok(token), Ok(expired)) = (
-                row.try_get::<_, String>(0),
-                row.try_get::<_, i64>(1),
-                row.try_get::<_, i16>(2),
-                row.try_get::<_, Option<Uuid>>(3),
-                row.try_get::<_, bool>(4),
-            ) else {
-                return None;
-            };
-            return Some(transition_holds(
-                event,
-                &ObservedDelivery {
-                    state: &state,
-                    generation,
-                    attempt,
-                    lease_token: token,
-                    expired,
-                },
-                lease_token,
-            ));
-        }
-        None
-    }
-
-    /// Record the events of a transaction that has committed.
-    async fn record_committed(&self, committed: Vec<PendingAudit>) -> Result<(), DeliveryError> {
-        for event in committed {
-            self.seams.record_audit(event.record()).await?;
-        }
-        Ok(())
-    }
-
-    async fn update_terminal_state(
-        &self,
-        transaction: &Transaction<'_>,
-        claim: &DeliveryClaim,
-        state: &str,
-        answer: Option<&AcceptedAnswer>,
-        proposal: Option<&ProposalOutcome>,
-    ) -> Result<u64, DeliveryError> {
-        let timestamp_column = match state {
-            "delivered" => "delivered_at",
-            "dead_lettered" => "dead_lettered_at",
-            _ => return Err(DeliveryError::Unavailable),
-        };
-        let columns = proposal_columns(state, proposal)?;
-        // The raw answer is erased when delivery becomes terminal: the row
-        // retains the digest, disposition, code, and bounded summary, never
-        // the answer bytes, so nothing delivered stays readable as a payload.
-        let message: Option<Vec<u8>> = None;
-        let message_digest = answer.map(|answer| answer.digest.to_vec());
-        transaction
-            .execute(
-                &format!(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = '{state}',
-                         next_attempt_at = NULL,
-                         attempt_started_at = NULL,
-                         lease_expires_at = NULL,
-                         lease_token = NULL,
-                         handler_message = $6,
-                         handler_message_digest = $7,
-                         proposal_disposition = $8,
-                         proposal_resulting_revision = $9,
-                         proposal_code = $10,
-                         proposal_summary = $11,
-                         {timestamp_column} = transaction_timestamp(),
-                         updated_at = transaction_timestamp()
-                     WHERE event_id = $1
-                       AND compiled_delivery_id = $2
-                       AND generation = $3
-                       AND attempt = $4
-                       AND lease_token = $5
-                       AND state = 'leased'",
-                    schema = self.schema,
-                ),
-                &[
-                    &claim.event_id,
-                    &claim.compiled_delivery_id,
-                    &claim.generation,
-                    &claim.attempt,
-                    &claim.lease_token,
-                    &message,
-                    &message_digest,
-                    &columns.disposition,
-                    &columns.resulting_revision,
-                    &columns.code,
-                    &columns.summary,
-                ],
-            )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)
-    }
-
-    /// Report one refused claim-path transition through the operational seam.
-    fn refused(&self, code: DeliveryTransitionCode) {
-        self.seams
-            .operational_event(DeliveryOperationalEvent::TransitionFailed(code));
+        Ok(material)
     }
 
     /// Render one SQL template with this deployment's schema name. The
@@ -1660,64 +582,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
     /// interpolation is safe.
     fn sql(&self, template: &str) -> String {
         delivery_schema::render(&self.schema, template)
-    }
-}
-
-/// One delivery row as read back after a commit returned an error.
-struct ObservedDelivery<'a> {
-    state: &'a str,
-    generation: i64,
-    attempt: i16,
-    lease_token: Option<Uuid>,
-    expired: bool,
-}
-
-/// Whether `observed` shows the transition `event` records as durable. An
-/// attempt's lease is matched on the token this worker wrote.
-fn transition_holds(
-    event: &PendingAudit,
-    observed: &ObservedDelivery<'_>,
-    lease_token: Option<Uuid>,
-) -> bool {
-    let current = observed.generation == event.generation;
-    let at_attempt = current && observed.attempt == event.attempt;
-    let state = observed.state;
-    match (event.phase, event.disposition) {
-        (DeliveryAuditPhase::Attempt, _) => {
-            at_attempt
-                && state == "leased"
-                && observed.lease_token.is_some()
-                && observed.lease_token == lease_token
-        }
-        // Only a replay's reset writes a generation, and generations only
-        // grow, so the replacement generation or a later one proves the reset
-        // committed whatever state the worker or a later replay has since
-        // moved it to.
-        (DeliveryAuditPhase::Replay, _) => observed.generation >= event.generation,
-        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Expired) => {
-            current && observed.expired
-        }
-        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Delivered) => {
-            at_attempt && state == "delivered"
-        }
-        // A dead letter leaves that state only through a replay, which
-        // writes a later generation.
-        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::DeadLettered) => {
-            (at_attempt && state == "dead_lettered") || observed.generation > event.generation
-        }
-        // A scheduled retry is claimed again under a later attempt of the
-        // same generation, which a rolled-back retry reaches only after its
-        // lease expires and the reaper answers the attempt itself.
-        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::RetryPending) => {
-            (at_attempt && state == "pending" && observed.lease_token.is_none())
-                || (current && observed.attempt > event.attempt)
-        }
-        (
-            DeliveryAuditPhase::Terminal,
-            DeliveryAuditDisposition::Leased
-            | DeliveryAuditDisposition::ReplayPending
-            | DeliveryAuditDisposition::Unknown,
-        ) => false,
     }
 }
 
@@ -1741,7 +605,7 @@ impl<S: DeliverySeams> DeliveryWorker<S> {
             }
             if service.deliver_once().await.is_err() {
                 service
-                    .seams
+                    .seams()
                     .operational_event(DeliveryOperationalEvent::IterationFailed);
             }
             tokio::select! {
@@ -1765,7 +629,6 @@ struct DeliveryClaim {
     attempt_started_at: SystemTime,
     lease_token: Uuid,
     deployed_maximum_attempts: i16,
-    retry_delays_ms: Vec<i64>,
     package_revision: String,
     handler_kind: HookHandlerKind,
 }
@@ -1782,22 +645,175 @@ struct DeliveryMaterial {
     event_time: SystemTime,
 }
 
+/// The reloaded columns the material is checked against before it is
+/// accepted.
+struct MaterialBinding {
+    outbox_package_revision: String,
+    outbox_schema_fingerprint: String,
+    maximum_payload_bytes: i64,
+    authentication_profile: String,
+    delivery_mode: String,
+    dead_letter: String,
+}
+
 enum MaterialLoadError {
     Unavailable,
     BindingRefused,
     PayloadRefused,
 }
 
+/// Decode the [`MATERIAL_SELECT`] columns from index `first`.
+fn decode_material(
+    row: &tokio_postgres::Row,
+    first: usize,
+) -> Result<(DeliveryMaterial, MaterialBinding), MaterialLoadError> {
+    let column = |offset: usize| first + offset;
+    let event_type =
+        bounded_text(row, column(0), 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let body = row
+        .try_get::<_, Option<Vec<u8>>>(column(1))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let body = body.ok_or(MaterialLoadError::PayloadRefused)?;
+    let outbox_package_revision =
+        bounded_text(row, column(2), 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let outbox_schema_fingerprint =
+        bounded_text(row, column(3), 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let destination_binding_digest =
+        bounded_text(row, column(4), 71).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let logical_destination_id = row
+        .try_get::<_, Option<String>>(column(5))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?
+        .map(|id| {
+            (id.len() <= 64)
+                .then_some(id)
+                .ok_or(MaterialLoadError::PayloadRefused)
+        })
+        .transpose()?;
+    let maximum_payload_bytes = row
+        .try_get::<_, i64>(column(6))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let payload_digest = row
+        .try_get::<_, Vec<u8>>(column(7))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let deployed_attempt_timeout_ms = row
+        .try_get::<_, i64>(column(8))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let deployed_maximum_attempts = row
+        .try_get::<_, i16>(column(9))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let authentication_profile =
+        bounded_text(row, column(10), 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let delivery_mode =
+        bounded_text(row, column(11), 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let dead_letter =
+        bounded_text(row, column(12), 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let data_schema =
+        bounded_text(row, column(13), 2_048).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let event_time = row
+        .try_get::<_, SystemTime>(column(14))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    Ok((
+        DeliveryMaterial {
+            event_type,
+            body,
+            payload_digest,
+            destination_binding_digest,
+            logical_destination_id,
+            deployed_attempt_timeout_ms,
+            deployed_maximum_attempts,
+            data_schema,
+            event_time,
+        },
+        MaterialBinding {
+            outbox_package_revision,
+            outbox_schema_fingerprint,
+            maximum_payload_bytes,
+            authentication_profile,
+            delivery_mode,
+            dead_letter,
+        },
+    ))
+}
+
+/// One hook attempt as the dispatch core's send: reload the material under
+/// the lease, send or run it, settle any proposal, and classify the result.
+///
+/// Hook delivery retries every failure until its attempts are spent. The
+/// only failure that stops early is a dead-lettered proposal, which a retry
+/// cannot apply.
+struct HookTransport<'a, S: DeliverySeams> {
+    service: &'a DeliveryService<S>,
+}
+
+#[async_trait]
+impl<S: DeliverySeams> DispatchTransport for HookTransport<'_, S> {
+    type Job = HookJob;
+    type Detail = AttemptResult;
+
+    async fn send(&self, job: &LeasedJob<HookJob>) -> Result<Sent<AttemptResult>, DispatchError> {
+        let claim = DeliveryClaim {
+            event_id: job.key.id(),
+            compiled_delivery_id: job.key.part().to_owned(),
+            generation: job.generation,
+            attempt: job.attempt,
+            attempt_started_at: job.attempt_started_at,
+            lease_token: job.lease_token,
+            deployed_maximum_attempts: job.policy.maximum_attempts,
+            package_revision: job.job.package_revision.clone(),
+            handler_kind: job.job.handler_kind,
+        };
+        let mut result = self.service.reload_and_send(&claim).await?;
+        // A proposal may have committed before an earlier worker lost its
+        // lease or failed to finalize. If every later attempt fails before
+        // accepting an answer, recover that receipt before the last attempt
+        // becomes an all-null dead letter. Nonterminal failures keep the
+        // ordinary retry path and avoid an extra database lookup.
+        if result.proposal.is_none()
+            && result.answer.is_none()
+            && claim.attempt >= claim.deployed_maximum_attempts
+        {
+            result.proposal = self
+                .service
+                .seams()
+                .recover_proposal_receipt(ProposalReceiptRecovery {
+                    event_id: claim.event_id,
+                    compiled_delivery_id: &claim.compiled_delivery_id,
+                })
+                .await?;
+        }
+        let outcome = if matches!(result.proposal, Some(ProposalOutcome::DeadLettered { .. })) {
+            // A dead-lettered proposal is deterministic: retrying the
+            // delivery cannot apply it, so the row is terminal now regardless
+            // of the attempts it has left.
+            SendOutcome::Permanent {
+                code: FailureCode::new("proposal_dead_lettered")
+                    .map_err(|_| DispatchError::Unavailable)?,
+            }
+        } else if result.outcome == DeliveryAuditOutcome::Delivered {
+            SendOutcome::Accepted {
+                receiver_reference: None,
+            }
+        } else {
+            SendOutcome::Transient { retry_after: None }
+        };
+        Ok(Sent {
+            outcome,
+            detail: result,
+        })
+    }
+}
+
 /// What one attempt produced: its audited outcome, the accepted message to
 /// record with it when the handler answered, and, when that message carried
 /// a proposal, what became of it.
-struct AttemptResult {
-    outcome: DeliveryAuditOutcome,
-    answer: Option<AcceptedAnswer>,
+#[derive(Clone)]
+pub(super) struct AttemptResult {
+    pub(super) outcome: DeliveryAuditOutcome,
+    pub(super) answer: Option<AcceptedAnswer>,
     /// The settled outcome of the proposal the answer carried, set once the
     /// product's apply seam has answered. Always `None` for an answer that
     /// proposed nothing.
-    proposal: Option<ProposalOutcome>,
+    pub(super) proposal: Option<ProposalOutcome>,
 }
 
 impl From<DeliveryAuditOutcome> for AttemptResult {
@@ -1812,11 +828,11 @@ impl From<DeliveryAuditOutcome> for AttemptResult {
 
 /// One accepted handler message and the digest of exactly the bytes
 /// recorded for it.
-#[derive(Debug)]
-struct AcceptedAnswer {
+#[derive(Clone, Debug)]
+pub(super) struct AcceptedAnswer {
     message: HookMessage,
     bytes: Vec<u8>,
-    digest: [u8; 32],
+    pub(super) digest: [u8; 32],
 }
 
 /// The refusal recorded when the delivery row and its binding disagree,
@@ -1887,7 +903,7 @@ fn accept_handler_answer(body: &[u8]) -> Result<AcceptedAnswer, ErrorCategory> {
 /// row the proposal path dead-letters states `dead_lettered` with its
 /// reason. A row that dead-letters without accepting an answer keeps the
 /// all-null legacy shape: it never had a proposal to settle.
-fn proposal_columns<'a>(
+pub(super) fn proposal_columns<'a>(
     state: &str,
     proposal: Option<&'a ProposalOutcome>,
 ) -> Result<ProposalColumns<'a>, DeliveryError> {
@@ -1935,11 +951,11 @@ fn proposal_columns<'a>(
 
 /// The proposal columns one terminal UPDATE writes, borrowed from the
 /// settled outcome they record.
-struct ProposalColumns<'a> {
-    disposition: Option<&'a str>,
-    resulting_revision: Option<i64>,
-    code: Option<&'a str>,
-    summary: Option<&'a str>,
+pub(super) struct ProposalColumns<'a> {
+    pub(super) disposition: Option<&'a str>,
+    pub(super) resulting_revision: Option<i64>,
+    pub(super) code: Option<&'a str>,
+    pub(super) summary: Option<&'a str>,
 }
 
 /// What the delivery row and the worker's own configuration say the stored
@@ -2028,23 +1044,15 @@ fn delivery_status_kind(
     }
 }
 
-/// The retry delay owed after `attempt`, or a refusal when the captured
-/// profile has no positive delay for it.
-fn scheduled_retry_delay(retry_delays_ms: &[i64], attempt: i16) -> Result<i64, DeliveryError> {
-    let delay_index = usize::try_from(attempt - 1).map_err(|_| DeliveryError::Unavailable)?;
-    retry_delays_ms
-        .get(delay_index)
-        .filter(|delay| **delay > 0)
-        .copied()
-        .ok_or(DeliveryError::Unavailable)
-}
-
 fn classify_send_error(
     error: DestinationSendError,
     deadline_reached: bool,
 ) -> DeliveryAuditOutcome {
     match error {
-        DestinationSendError::DeadlineExceeded => DeliveryAuditOutcome::DestinationTimeout,
+        DestinationSendError::DeadlineExceeded
+        | DestinationSendError::DeadlineExceededAfterConnect => {
+            DeliveryAuditOutcome::DestinationTimeout
+        }
         DestinationSendError::ResolutionFailed
         | DestinationSendError::TooManyResolverAnswers
         | DestinationSendError::NoResolverAnswers
@@ -2065,10 +1073,14 @@ fn classify_send_error(
         | DestinationSendError::ResponseHeaderBytesExceeded => {
             DeliveryAuditOutcome::DestinationTransportUnavailable
         }
-        DestinationSendError::TransportFailed if deadline_reached => {
+        DestinationSendError::TransportFailed
+        | DestinationSendError::TransportFailedAfterConnect
+            if deadline_reached =>
+        {
             DeliveryAuditOutcome::DestinationTimeout
         }
-        DestinationSendError::TransportFailed => {
+        DestinationSendError::TransportFailed
+        | DestinationSendError::TransportFailedAfterConnect => {
             DeliveryAuditOutcome::DestinationTransportUnavailable
         }
         DestinationSendError::InvalidRemainingTimeout
@@ -2079,29 +1091,11 @@ fn classify_send_error(
     }
 }
 
-/// Attempt budget still available for the request, or `None` once the captured
-/// attempt timeout is spent.
-///
-/// The claim timestamp is the database clock and `now` is this process's clock,
-/// so the two disagree by whatever offset separates the two hosts. An attempt
-/// that appears to start in the local future has spent none of its budget, and
-/// the request that follows still gets at most the captured attempt timeout.
-fn remaining_attempt_budget(
-    attempt_timeout: Duration,
-    attempt_started_at: SystemTime,
-    now: SystemTime,
-) -> Option<Duration> {
-    let elapsed = now
-        .duration_since(attempt_started_at)
-        .unwrap_or(Duration::ZERO);
-    attempt_timeout.checked_sub(elapsed)
-}
-
 fn bounded_delivery_id(row: &tokio_postgres::Row, index: usize) -> Result<String, DeliveryError> {
     bounded_text(row, index, 256)
 }
 
-fn bounded_text(
+pub(super) fn bounded_text(
     row: &tokio_postgres::Row,
     index: usize,
     maximum: usize,
@@ -2115,7 +1109,7 @@ fn bounded_text(
     Ok(value)
 }
 
-fn validate_captured_policy(
+pub(super) fn validate_captured_policy(
     deployed_attempt_timeout_ms: i64,
     deployed_maximum_attempts: i16,
     retry_delays_ms: &[i64],
@@ -2145,19 +1139,16 @@ fn delivery_idempotency_key(
     payload_digest: &[u8],
     destination_binding_digest: &str,
 ) -> String {
-    let mut input = Vec::new();
-    input.extend_from_slice(idempotency_domain);
-    append_length_prefixed(&mut input, event_id.to_string().as_bytes());
-    append_length_prefixed(&mut input, compiled_delivery_id.as_bytes());
-    append_length_prefixed(&mut input, generation.to_string().as_bytes());
-    append_length_prefixed(&mut input, payload_digest);
-    append_length_prefixed(&mut input, destination_binding_digest.as_bytes());
-    format!("sha256:{}", hex::encode(Sha256::digest(input)))
-}
-
-fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
-    output.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    output.extend_from_slice(value);
+    idempotency_key(
+        idempotency_domain,
+        &[
+            event_id.to_string().as_bytes(),
+            compiled_delivery_id.as_bytes(),
+            generation.to_string().as_bytes(),
+            payload_digest,
+            destination_binding_digest.as_bytes(),
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -2168,9 +1159,12 @@ mod tests {
         DestinationRequestError, EventDestinationRequest,
     };
 
+    use tokio_postgres::Transaction;
+
     use super::*;
     use crate::delivery::{
-        insert_delivery, DeliveryCapture, DeliveryConnection, DeliverySignatureRefused,
+        insert_delivery, DeliveryAuditDisposition, DeliveryAuditPhase, DeliveryAuditRecord,
+        DeliveryCapture, DeliveryConnection, DeliverySignatureRefused, DeliveryTransitionCode,
     };
 
     // A destination the tests below never reach: it exists only so the seam
@@ -2339,98 +1333,6 @@ mod tests {
             maximum_payload_bytes: i64::try_from(body.len()).expect("bound"),
             payload_digest: digest,
         }
-    }
-
-    fn replay_of(generation: i64) -> PendingAudit {
-        PendingAudit {
-            event_id: Uuid::nil(),
-            compiled_delivery_id: "delivery".to_owned(),
-            package_revision: "revision".to_owned(),
-            generation,
-            attempt: 0,
-            phase: DeliveryAuditPhase::Replay,
-            outcome: DeliveryAuditOutcome::ReplayCommitted,
-            disposition: DeliveryAuditDisposition::ReplayPending,
-        }
-    }
-
-    fn observed(state: &str, generation: i64, attempt: i16) -> ObservedDelivery<'_> {
-        ObservedDelivery {
-            state,
-            generation,
-            attempt,
-            lease_token: None,
-            expired: false,
-        }
-    }
-
-    fn terminal_of(disposition: DeliveryAuditDisposition) -> PendingAudit {
-        PendingAudit {
-            attempt: 1,
-            phase: DeliveryAuditPhase::Terminal,
-            outcome: DeliveryAuditOutcome::WorkerInterrupted,
-            disposition,
-            ..replay_of(1)
-        }
-    }
-
-    #[test]
-    fn a_committed_retry_holds_after_its_next_attempt_is_claimed() {
-        let retry = terminal_of(DeliveryAuditDisposition::RetryPending);
-        assert!(transition_holds(&retry, &observed("pending", 1, 1), None));
-        assert!(
-            transition_holds(&retry, &observed("leased", 1, 2), None),
-            "the next attempt proves the retry committed"
-        );
-        assert!(
-            !transition_holds(
-                &retry,
-                &ObservedDelivery {
-                    lease_token: Some(Uuid::nil()),
-                    ..observed("leased", 1, 1)
-                },
-                None
-            ),
-            "a lease still at the attempt proves the retry rolled back"
-        );
-    }
-
-    #[test]
-    fn a_committed_dead_letter_holds_after_it_is_replayed() {
-        let dead_letter = terminal_of(DeliveryAuditDisposition::DeadLettered);
-        assert!(transition_holds(
-            &dead_letter,
-            &observed("dead_lettered", 1, 1),
-            None
-        ));
-        assert!(
-            transition_holds(&dead_letter, &observed("pending", 2, 0), None),
-            "a replay generation proves the dead letter committed"
-        );
-        assert!(!transition_holds(
-            &dead_letter,
-            &observed("leased", 1, 1),
-            None
-        ));
-    }
-
-    #[test]
-    fn a_replay_whose_reset_committed_holds_after_the_worker_moves_it() {
-        let replay = replay_of(2);
-        for state in ["pending", "leased", "delivered", "dead_lettered"] {
-            assert!(
-                transition_holds(&replay, &observed(state, 2, 1), None),
-                "the replacement generation proves the reset in state {state}"
-            );
-        }
-        assert!(
-            transition_holds(&replay, &observed("pending", 3, 0), None),
-            "a later replay's generation proves this reset committed before it"
-        );
-        assert!(
-            !transition_holds(&replay, &observed("dead_lettered", 1, 2), None),
-            "the prior generation proves the reset rolled back"
-        );
     }
 
     #[test]
@@ -2624,6 +1526,26 @@ mod tests {
     }
 
     #[test]
+    fn failures_after_connect_keep_the_outcome_of_their_pre_connect_counterpart() {
+        for deadline_reached in [false, true] {
+            assert_eq!(
+                classify_send_error(
+                    DestinationSendError::TransportFailedAfterConnect,
+                    deadline_reached
+                ),
+                classify_send_error(DestinationSendError::TransportFailed, deadline_reached)
+            );
+            assert_eq!(
+                classify_send_error(
+                    DestinationSendError::DeadlineExceededAfterConnect,
+                    deadline_reached
+                ),
+                classify_send_error(DestinationSendError::DeadlineExceeded, deadline_reached)
+            );
+        }
+    }
+
+    #[test]
     fn captured_policy_bounds_are_enforced_exactly() {
         let delays = [1_000, 2_000];
         assert!(validate_captured_policy(100, 1, &[]).is_ok());
@@ -2639,23 +1561,6 @@ mod tests {
         assert!(
             validate_captured_policy(100, 3, &[1_000]).is_err(),
             "a shortened delay list is refused"
-        );
-    }
-
-    #[test]
-    fn the_scheduled_retry_delay_comes_from_the_captured_profile() {
-        let delays = [500, 1_500];
-        assert_eq!(scheduled_retry_delay(&delays, 1), Ok(500));
-        assert_eq!(scheduled_retry_delay(&delays, 2), Ok(1_500));
-        assert_eq!(
-            scheduled_retry_delay(&delays, 3),
-            Err(DeliveryError::Unavailable),
-            "an attempt past the captured profile is refused"
-        );
-        assert_eq!(
-            scheduled_retry_delay(&[0], 1),
-            Err(DeliveryError::Unavailable),
-            "a non-positive delay is refused"
         );
     }
 
@@ -2910,7 +1815,6 @@ mod tests {
             attempt_started_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
             lease_token: Uuid::new_v4(),
             deployed_maximum_attempts: 2,
-            retry_delays_ms: vec![1_000],
             package_revision:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             handler_kind: HookHandlerKind::Rhai,
@@ -3143,8 +2047,6 @@ mod tests {
         assert_eq!(exhausted.summary, None);
     }
 
-    /// Wraps a plain connection as the `DeliveryConnection` the seam trait
-    /// requires, the way a product wraps its pooled client.
     struct DirectClient(tokio_postgres::Client);
 
     impl std::ops::Deref for DirectClient {
@@ -3166,9 +2068,7 @@ mod tests {
             .await
             .expect("connect to the local PostgreSQL test database");
         tokio::spawn(async move {
-            if let Err(error) = connection.await {
-                eprintln!("test database connection closed: {error}");
-            }
+            let _closed = connection.await;
         });
         client
     }
@@ -3179,18 +2079,16 @@ mod tests {
         DeliveryAuditDisposition,
     );
 
-    /// A local handler that only answers to its reviewed digest, so a replay
-    /// can find the binding its row was written against.
-    struct DigestHandler(String);
+    struct RealHandler(String);
 
     #[async_trait::async_trait]
-    impl HookHandler for DigestHandler {
+    impl HookHandler for RealHandler {
         fn handler_digest(&self) -> &str {
             &self.0
         }
 
         fn attempt_timeout(&self) -> Duration {
-            Duration::ZERO
+            Duration::from_secs(1)
         }
 
         fn maximum_attempts(&self) -> u8 {
@@ -3202,73 +2100,25 @@ mod tests {
             _envelope: &[u8],
             _remaining: Duration,
         ) -> Result<Vec<u8>, crate::delivery::HandlerRunFailure> {
-            unreachable!("no real-database test runs a handler")
+            Ok(Vec::new())
         }
     }
 
-    /// A seam set that opens its own connection against a real PostgreSQL
-    /// test database and records every audit record it is given, so a test can
-    /// prove which transitions were written. Connections are numbered from
-    /// one in the order they are opened: a test may refuse chosen ones, and
-    /// may run one statement on a chosen one before the service uses it, to
-    /// stand for another session acting at that moment.
     struct RealDbSeams {
         url: String,
+        handler_digest: String,
         audit: Arc<Mutex<Vec<RecordedAudit>>>,
-        connections: Mutex<u32>,
-        refused_connections: Vec<u32>,
-        interleave: Option<(u32, String)>,
-        handler_digest: Option<String>,
-        hold_attempt: Option<Arc<AttemptHold>>,
-        hold_terminal: Option<Arc<AttemptHold>>,
-    }
-
-    /// Holds the claim inside its accepted attempt entry, before the lease
-    /// commits, or finalize at its terminal entry, before that entry is
-    /// accepted, until the test releases it.
-    #[derive(Default)]
-    struct AttemptHold {
-        accepted: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-        release: tokio::sync::Notify,
-    }
-
-    impl RealDbSeams {
-        fn new(url: &str, audit: &Arc<Mutex<Vec<RecordedAudit>>>) -> Self {
-            Self {
-                url: url.to_owned(),
-                audit: Arc::clone(audit),
-                connections: Mutex::new(0),
-                refused_connections: Vec::new(),
-                interleave: None,
-                handler_digest: None,
-                hold_attempt: None,
-                hold_terminal: None,
-            }
-        }
     }
 
     #[async_trait::async_trait]
     impl DeliverySeams for RealDbSeams {
         type Destination = UnusedDestination;
-        type Handler = DigestHandler;
+        type Handler = RealHandler;
 
         async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
-            let number = {
-                let mut connections = self.connections.lock().expect("connections lock");
-                *connections += 1;
-                *connections
-            };
-            if self.refused_connections.contains(&number) {
-                return Err(DeliveryError::Unavailable);
-            }
-            let client = connect_test_database(&self.url).await;
-            if let Some((_, statement)) = self.interleave.as_ref().filter(|(at, _)| *at == number) {
-                client
-                    .batch_execute(statement)
-                    .await
-                    .expect("the interleaved statement runs");
-            }
-            Ok(Box::new(DirectClient(client)))
+            Ok(Box::new(DirectClient(
+                connect_test_database(&self.url).await,
+            )))
         }
 
         async fn verify_transaction(
@@ -3283,38 +2133,16 @@ mod tests {
         }
 
         fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
-            self.handler_digest
-                .as_deref()
-                .filter(|digest| *digest == binding.handler_digest)
-                .map(|digest| DigestHandler(digest.to_owned()))
+            (binding.handler_digest == self.handler_digest)
+                .then(|| RealHandler(self.handler_digest.clone()))
         }
 
         async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
-            if let Some(hold) = self
-                .hold_terminal
-                .as_ref()
-                .filter(|_| record.phase == DeliveryAuditPhase::Terminal)
-            {
-                if let Some(reached) = hold.accepted.lock().expect("hold lock").take() {
-                    let _ = reached.send(());
-                }
-                hold.release.notified().await;
-            }
             self.audit.lock().expect("audit lock").push((
                 record.phase,
                 record.outcome,
                 record.disposition,
             ));
-            if let Some(hold) = self
-                .hold_attempt
-                .as_ref()
-                .filter(|_| record.outcome == DeliveryAuditOutcome::AttemptStarted)
-            {
-                if let Some(accepted) = hold.accepted.lock().expect("hold lock").take() {
-                    let _ = accepted.send(());
-                }
-                hold.release.notified().await;
-            }
             Ok(())
         }
 
@@ -3331,7 +2159,7 @@ mod tests {
             &self,
             _recovery: ProposalReceiptRecovery<'_>,
         ) -> Result<Option<ProposalOutcome>, DeliveryError> {
-            Err(DeliveryError::Unavailable)
+            Ok(None)
         }
 
         async fn recover_proposal_receipt_in_transaction(
@@ -3339,20 +2167,16 @@ mod tests {
             _transaction: &Transaction<'_>,
             _recovery: ProposalReceiptRecovery<'_>,
         ) -> Result<Option<ProposalOutcome>, DeliveryError> {
-            Err(DeliveryError::Unavailable)
+            Ok(None)
         }
     }
 
-    // Requires a real PostgreSQL connection: `Transaction<'_>` cannot be
-    // faked, and the guarded update this test forces to zero rows is the
-    // real lease-vs-CAS statement running against a real table. Run with
-    // `--ignored` and `HOOKS_TEST_DATABASE_URL` set to a disposable database.
     #[tokio::test]
     #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn finalize_refuses_a_terminal_transition_when_the_lease_was_stolen() {
+    async fn the_real_hook_adapter_records_attempt_and_terminal_around_committed_delivery() {
         let url = std::env::var("HOOKS_TEST_DATABASE_URL")
-            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL finalize test");
-        let schema = "hooks_delivery_lease_test";
+            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL test");
+        let schema = "hooks_dispatch_adapter_test";
         let mut client = connect_test_database(&url).await;
         client
             .batch_execute(&format!(
@@ -3363,187 +2187,32 @@ mod tests {
         delivery_schema::install(&client, schema)
             .await
             .expect("install the delivery schema");
-
         let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
         let compiled_delivery_id = "events.permit.granted.webhook";
         let package_revision =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let handler_digest =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let schema_fingerprint =
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-
-        client
-            .execute(
-                &format!(
-                    "INSERT INTO {schema}.registry_outbox
-                     (event_id, event_type, trigger, entity_id, record_reference,
-                      record_revision, package_revision, schema_fingerprint, payload_expires_at)
-                     VALUES ($1, $2, 'test', 'permit', $3, 3, $4, $5,
-                             transaction_timestamp() + interval '1 day')",
-                ),
-                &[
-                    &event_id,
-                    &"permit.granted",
-                    &"8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
-                    &package_revision,
-                    &schema_fingerprint,
-                ],
-            )
-            .await
-            .expect("insert the outbox row");
-
-        {
-            let transaction = client.transaction().await.expect("insert transaction");
-            insert_delivery(
-                &transaction,
-                schema,
-                event_id,
-                DeliveryCapture {
-                    compiled_delivery_id,
-                    handler_kind: HookHandlerKind::Rhai,
-                    logical_destination_id: None,
-                    destination_binding_digest:
-                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    package_revision,
-                    schema_fingerprint,
-                    data_schema: STORED_DATA_SCHEMA,
-                    classification_ceiling: "public",
-                    authentication_profile: "hmac_sha256_v1",
-                    delivery_mode: "after_commit",
-                    attempt_timeout_ms: 5_000,
-                    initial_backoff_ms: 1_000,
-                    maximum_backoff_ms: 60_000,
-                    exponential_backoff_multiplier: 2,
-                    maximum_attempts: 3,
-                    retry_delays_ms: &[1_000, 2_000],
-                    maximum_payload_bytes: 1_024,
-                    payload: b"{}",
-                    deployed_attempt_timeout_ms: 5_000,
-                    deployed_maximum_attempts: 3,
-                    dead_letter: "required",
-                    operator_replay: false,
-                },
-            )
-            .await
-            .expect("insert the delivery row");
-            transaction.commit().await.expect("commit the insert");
-        }
-
-        // Simulate another worker stealing the lease: the row is `leased`
-        // under a lease token that is not the one the finalizing worker
-        // holds.
-        let stolen_lease_token = Uuid::new_v4();
-        let changed = client
-            .execute(
-                &format!(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'leased',
-                         attempt = 1,
-                         next_attempt_at = NULL,
-                         attempt_started_at = transaction_timestamp(),
-                         lease_expires_at = transaction_timestamp() + interval '30 seconds',
-                         lease_token = $1
-                     WHERE event_id = $2 AND compiled_delivery_id = $3",
-                ),
-                &[&stolen_lease_token, &event_id, &compiled_delivery_id],
-            )
-            .await
-            .expect("simulate an active lease");
-        assert_eq!(changed, 1, "the inserted delivery state row exists");
-
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let service = DeliveryService::new(
-            RealDbSeams::new(&url, &audit),
-            DeliveryConfig {
-                schema: schema.to_owned(),
-                idempotency_domain: b"hooks-delivery-lease-test-v1".to_vec(),
-                delivery_source: STORED_SOURCE.to_owned(),
-            },
-        );
-        let claim = DeliveryClaim {
-            event_id,
-            compiled_delivery_id: compiled_delivery_id.to_owned(),
-            generation: 1,
-            attempt: 1,
-            attempt_started_at: SystemTime::now(),
-            // The finalizing worker's own lease token: fresh, so it never
-            // matches the stolen token now stored on the row.
-            lease_token: Uuid::new_v4(),
-            deployed_maximum_attempts: 3,
-            retry_delays_ms: vec![1_000, 2_000],
-            package_revision: package_revision.to_owned(),
-            handler_kind: HookHandlerKind::Rhai,
-        };
-
-        let result = service
-            .finalize(claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
-            .await;
-
-        assert!(
-            matches!(result, Err(DeliveryError::Unavailable)),
-            "a lease-guarded update that changes zero rows must fail closed"
-        );
-        assert_eq!(
-            *audit.lock().expect("audit lock"),
-            Vec::<RecordedAudit>::new(),
-            "no audit entry for a transition that did not happen"
-        );
-    }
-
-    const REAL_DELIVERY_ID: &str = "events.permit.granted.webhook";
-    const REAL_PACKAGE_REVISION: &str =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const REAL_HANDLER_DIGEST: &str =
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const REAL_SCHEMA_FINGERPRINT: &str =
-        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    const OTHER_EVENT_ID: &str = "9b1c3a5e-2d4f-4e6a-8b0c-1d3e5f7a9b2c";
-
-    fn real_database_url() -> String {
-        std::env::var("HOOKS_TEST_DATABASE_URL")
-            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL tests")
-    }
-
-    /// Install the delivery schema afresh under `schema` and return an
-    /// administrative connection to the test database.
-    async fn fresh_delivery_schema(url: &str, schema: &str) -> tokio_postgres::Client {
-        let client = connect_test_database(url).await;
-        client
-            .batch_execute(&format!(
-                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"
-            ))
-            .await
-            .expect("reset the test schema");
-        delivery_schema::install(&client, schema)
-            .await
-            .expect("install the delivery schema");
-        client
-    }
-
-    /// Insert one pending local-handler delivery of `event_id` whose stored
-    /// payload expires after `payload_lifetime`, a PostgreSQL interval.
-    async fn insert_real_delivery(
-        client: &mut tokio_postgres::Client,
-        schema: &str,
-        event_id: Uuid,
-        payload_lifetime: &str,
-        operator_replay: bool,
-    ) {
+        let payload = stored_envelope_bytes();
         client
             .execute(
                 &format!(
                     "INSERT INTO {schema}.registry_outbox
                      (event_id, event_type, trigger, entity_id, record_reference,
                       record_revision, package_revision, schema_fingerprint, payload,
-                      payload_expires_at)
+                      payload_expires_at, created_at)
                      VALUES ($1, 'permit.granted', 'test', 'permit', $2, 3, $3, $4, $5,
-                             transaction_timestamp() + interval '{payload_lifetime}')",
+                             transaction_timestamp() + interval '1 day',
+                             to_timestamp(1767225600.123))"
                 ),
                 &[
                     &event_id,
                     &"8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
-                    &REAL_PACKAGE_REVISION,
-                    &REAL_SCHEMA_FINGERPRINT,
-                    &b"{}".as_slice(),
+                    &package_revision,
+                    &schema_fingerprint,
+                    &payload,
                 ],
             )
             .await
@@ -3554,511 +2223,62 @@ mod tests {
             schema,
             event_id,
             DeliveryCapture {
-                compiled_delivery_id: REAL_DELIVERY_ID,
+                compiled_delivery_id,
                 handler_kind: HookHandlerKind::Rhai,
                 logical_destination_id: None,
-                destination_binding_digest: REAL_HANDLER_DIGEST,
-                package_revision: REAL_PACKAGE_REVISION,
-                schema_fingerprint: REAL_SCHEMA_FINGERPRINT,
+                destination_binding_digest: handler_digest,
+                package_revision,
+                schema_fingerprint,
                 data_schema: STORED_DATA_SCHEMA,
                 classification_ceiling: "public",
                 authentication_profile: "hmac_sha256_v1",
                 delivery_mode: "after_commit",
-                attempt_timeout_ms: 5_000,
+                attempt_timeout_ms: 1_000,
                 initial_backoff_ms: 1_000,
-                maximum_backoff_ms: 60_000,
+                maximum_backoff_ms: 1_000,
                 exponential_backoff_multiplier: 2,
-                maximum_attempts: 3,
-                retry_delays_ms: &[1_000, 2_000],
-                maximum_payload_bytes: 1_024,
-                payload: b"{}",
-                deployed_attempt_timeout_ms: 5_000,
-                deployed_maximum_attempts: 3,
+                maximum_attempts: 1,
+                retry_delays_ms: &[],
+                maximum_payload_bytes: 65_536,
+                payload: &payload,
+                deployed_attempt_timeout_ms: 1_000,
+                deployed_maximum_attempts: 1,
                 dead_letter: "required",
-                operator_replay,
+                operator_replay: false,
             },
         )
         .await
         .expect("insert the delivery row");
-        transaction.commit().await.expect("commit the insert");
-    }
-
-    fn real_service(seams: RealDbSeams, schema: &str) -> DeliveryService<RealDbSeams> {
-        DeliveryService::new(
-            seams,
+        transaction.commit().await.expect("commit the delivery");
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let service = DeliveryService::new(
+            RealDbSeams {
+                url,
+                handler_digest: handler_digest.to_owned(),
+                audit: Arc::clone(&audit),
+            },
             DeliveryConfig {
                 schema: schema.to_owned(),
-                idempotency_domain: b"hooks-delivery-real-test-v1".to_vec(),
+                idempotency_domain: b"hooks-dispatch-adapter-test-v1".to_vec(),
                 delivery_source: STORED_SOURCE.to_owned(),
             },
-        )
-    }
-
-    /// A replay whose reset changed no row did not commit, so its response
-    /// is a refusal even when the row reads back under the generation the
-    /// replay would have written, here because another replay wrote it.
-    #[tokio::test]
-    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn a_replay_whose_reset_changed_no_row_is_refused() {
-        let url = real_database_url();
-        let schema = "hooks_delivery_replay_refused_test";
-        let mut client = fresh_delivery_schema(&url, schema).await;
-        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
-        insert_real_delivery(&mut client, schema, event_id, "1 day", true).await;
-        client
-            .batch_execute(&format!(
-                "UPDATE {schema}.registry_webhook_delivery_state
-                    SET state = 'dead_lettered', attempt = 3, next_attempt_at = NULL,
-                        dead_lettered_at = transaction_timestamp();
-                 CREATE FUNCTION {schema}.skip_reset() RETURNS trigger
-                 LANGUAGE plpgsql AS $$
-                 BEGIN
-                     IF current_setting('hooks_test.allow_reset', true) = 'on' THEN
-                         RETURN NEW;
-                     END IF;
-                     RETURN NULL;
-                 END $$;
-                 CREATE TRIGGER skip_reset
-                     BEFORE UPDATE ON {schema}.registry_webhook_delivery_state
-                     FOR EACH ROW WHEN (NEW.generation > OLD.generation)
-                     EXECUTE FUNCTION {schema}.skip_reset();"
-            ))
-            .await
-            .expect("make the reset change no row");
-
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let service = real_service(
-            RealDbSeams {
-                handler_digest: Some(REAL_HANDLER_DIGEST.to_owned()),
-                // The first connection after the replay's own stands for a
-                // concurrent replay that commits the next generation.
-                interleave: Some((
-                    2,
-                    format!(
-                        "SET hooks_test.allow_reset = 'on';
-                         UPDATE {schema}.registry_webhook_delivery_state
-                            SET generation = 2, state = 'pending', attempt = 0,
-                                next_attempt_at = transaction_timestamp(),
-                                dead_lettered_at = NULL"
-                    ),
-                )),
-                ..RealDbSeams::new(&url, &audit)
-            },
-            schema,
         );
 
-        let result = service.replay_in(event_id, REAL_DELIVERY_ID, 1).await;
-
-        assert!(
-            matches!(result, Err(DeliveryError::Unavailable)),
-            "a reset that changed no row fails: {result:?}"
-        );
+        assert_eq!(service.deliver_once().await, Ok(DeliveryOutcome::Delivered));
         assert_eq!(
             *audit.lock().expect("audit lock"),
             vec![
                 (
-                    DeliveryAuditPhase::Replay,
-                    DeliveryAuditOutcome::ReplayRequested,
-                    DeliveryAuditDisposition::ReplayPending,
+                    DeliveryAuditPhase::Attempt,
+                    DeliveryAuditOutcome::AttemptStarted,
+                    DeliveryAuditDisposition::Leased,
                 ),
                 (
-                    DeliveryAuditPhase::Replay,
-                    DeliveryAuditOutcome::ReplayRefused,
-                    DeliveryAuditDisposition::DeadLettered,
+                    DeliveryAuditPhase::Terminal,
+                    DeliveryAuditOutcome::Delivered,
+                    DeliveryAuditDisposition::Delivered,
                 ),
             ]
-        );
-    }
-
-    /// A replay whose commit failed and whose fate cannot be read back is
-    /// answered as unfinished, never as refused, since the reset may have
-    /// committed.
-    #[tokio::test]
-    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn a_replay_whose_commit_cannot_be_read_back_is_unfinished() {
-        let url = real_database_url();
-        let schema = "hooks_delivery_replay_unknown_test";
-        let mut client = fresh_delivery_schema(&url, schema).await;
-        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
-        insert_real_delivery(&mut client, schema, event_id, "1 day", true).await;
-        client
-            .batch_execute(&format!(
-                "UPDATE {schema}.registry_webhook_delivery_state
-                    SET state = 'dead_lettered', attempt = 3, next_attempt_at = NULL,
-                        dead_lettered_at = transaction_timestamp();
-                 CREATE FUNCTION {schema}.refuse_reset() RETURNS trigger
-                 LANGUAGE plpgsql AS $$
-                 BEGIN
-                     RAISE EXCEPTION 'replay commit refused';
-                 END $$;
-                 CREATE CONSTRAINT TRIGGER refuse_reset
-                     AFTER UPDATE ON {schema}.registry_webhook_delivery_state
-                     DEFERRABLE INITIALLY DEFERRED
-                     FOR EACH ROW WHEN (NEW.generation > OLD.generation)
-                     EXECUTE FUNCTION {schema}.refuse_reset();"
-            ))
-            .await
-            .expect("make the replay commit fail");
-
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let service = real_service(
-            RealDbSeams {
-                handler_digest: Some(REAL_HANDLER_DIGEST.to_owned()),
-                // Every read-back of the reset fails, so its fate is unknown.
-                refused_connections: vec![2, 3, 4],
-                ..RealDbSeams::new(&url, &audit)
-            },
-            schema,
-        );
-
-        let result = service.replay_in(event_id, REAL_DELIVERY_ID, 1).await;
-
-        assert!(
-            matches!(result, Err(DeliveryError::Unavailable)),
-            "a replay whose commit failed fails: {result:?}"
-        );
-        assert_eq!(
-            *audit.lock().expect("audit lock"),
-            vec![
-                (
-                    DeliveryAuditPhase::Replay,
-                    DeliveryAuditOutcome::ReplayRequested,
-                    DeliveryAuditDisposition::ReplayPending,
-                ),
-                (
-                    DeliveryAuditPhase::Replay,
-                    DeliveryAuditOutcome::ReplayUnfinished,
-                    DeliveryAuditDisposition::ReplayPending,
-                ),
-            ]
-        );
-    }
-
-    /// A claim canceled after its attempt entry was accepted still commits
-    /// its lease, so expiry recovery answers that attempt.
-    #[tokio::test]
-    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn a_claim_canceled_after_its_attempt_entry_still_commits_its_lease() {
-        let url = real_database_url();
-        let schema = "hooks_delivery_claim_cancel_test";
-        let mut client = fresh_delivery_schema(&url, schema).await;
-        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
-        insert_real_delivery(&mut client, schema, event_id, "1 day", false).await;
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let (accepted, attempt_accepted) = tokio::sync::oneshot::channel();
-        let hold = Arc::new(AttemptHold {
-            accepted: Mutex::new(Some(accepted)),
-            ..AttemptHold::default()
-        });
-        let service = real_service(
-            RealDbSeams {
-                hold_attempt: Some(Arc::clone(&hold)),
-                ..RealDbSeams::new(&url, &audit)
-            },
-            schema,
-        );
-
-        let claim = tokio::spawn(async move { service.claim().await });
-        attempt_accepted
-            .await
-            .expect("the attempt entry was accepted");
-        claim.abort();
-        assert!(claim.await.is_err(), "the caller was canceled");
-        hold.release.notify_one();
-
-        let mut state = String::new();
-        for _ in 0..200 {
-            state = client
-                .query_one(
-                    &format!(
-                        "SELECT state FROM {schema}.registry_webhook_delivery_state
-                          WHERE event_id = $1"
-                    ),
-                    &[&event_id],
-                )
-                .await
-                .expect("read the delivery state")
-                .get(0);
-            if state == "leased" {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(state, "leased", "the lease committed after the cancel");
-    }
-
-    /// A finalize canceled after its disposition committed and before its
-    /// terminal entry was accepted still records that entry, since a
-    /// terminal row is never reaped and nothing else answers the attempt.
-    #[tokio::test]
-    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn a_finalize_canceled_after_its_commit_still_records_its_terminal_entry() {
-        let url = real_database_url();
-        let schema = "hooks_delivery_finalize_cancel_test";
-        let mut client = fresh_delivery_schema(&url, schema).await;
-        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
-        insert_real_delivery(&mut client, schema, event_id, "1 day", false).await;
-        let lease_token = Uuid::new_v4();
-        let changed = client
-            .execute(
-                &format!(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'leased',
-                         attempt = 1,
-                         next_attempt_at = NULL,
-                         attempt_started_at = transaction_timestamp(),
-                         lease_expires_at = transaction_timestamp() + interval '30 seconds',
-                         lease_token = $1
-                     WHERE event_id = $2",
-                ),
-                &[&lease_token, &event_id],
-            )
-            .await
-            .expect("lease the delivery");
-        assert_eq!(changed, 1);
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let (reached, terminal_reached) = tokio::sync::oneshot::channel();
-        let hold = Arc::new(AttemptHold {
-            accepted: Mutex::new(Some(reached)),
-            ..AttemptHold::default()
-        });
-        let service = real_service(
-            RealDbSeams {
-                hold_terminal: Some(Arc::clone(&hold)),
-                ..RealDbSeams::new(&url, &audit)
-            },
-            schema,
-        );
-        let claim = DeliveryClaim {
-            event_id,
-            compiled_delivery_id: REAL_DELIVERY_ID.to_owned(),
-            generation: 1,
-            attempt: 1,
-            attempt_started_at: SystemTime::now(),
-            lease_token,
-            deployed_maximum_attempts: 3,
-            retry_delays_ms: vec![1_000, 2_000],
-            package_revision: REAL_PACKAGE_REVISION.to_owned(),
-            handler_kind: HookHandlerKind::Rhai,
-        };
-
-        let finalize = tokio::spawn(async move {
-            service
-                .finalize(claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
-                .await
-        });
-        terminal_reached
-            .await
-            .expect("finalize reached its terminal entry");
-        finalize.abort();
-        assert!(finalize.await.is_err(), "the caller was canceled");
-        let state: String = client
-            .query_one(
-                &format!(
-                    "SELECT state FROM {schema}.registry_webhook_delivery_state
-                      WHERE event_id = $1"
-                ),
-                &[&event_id],
-            )
-            .await
-            .expect("read the delivery state")
-            .get(0);
-        assert_eq!(state, "delivered", "the disposition committed");
-        hold.release.notify_one();
-
-        let terminal = (
-            DeliveryAuditPhase::Terminal,
-            DeliveryAuditOutcome::Delivered,
-            DeliveryAuditDisposition::Delivered,
-        );
-        for _ in 0..200 {
-            if audit.lock().expect("audit lock").contains(&terminal) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(
-            *audit.lock().expect("audit lock"),
-            vec![terminal],
-            "the committed disposition is answered after the cancel"
-        );
-    }
-
-    /// A claim whose lease commit failed still records every transition of
-    /// that transaction that reads back as durable, even when the lease's
-    /// own fate cannot be read.
-    #[tokio::test]
-    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn a_claim_whose_lease_commit_failed_records_its_durable_transitions() {
-        let url = real_database_url();
-        let schema = "hooks_delivery_claim_commit_test";
-        let mut client = fresh_delivery_schema(&url, schema).await;
-        let expiring = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
-        let claimable = Uuid::parse_str(OTHER_EVENT_ID).expect("event id");
-        insert_real_delivery(&mut client, schema, expiring, "-1 second", false).await;
-        insert_real_delivery(&mut client, schema, claimable, "1 day", false).await;
-        client
-            .batch_execute(&format!(
-                "CREATE FUNCTION {schema}.refuse_lease() RETURNS trigger
-                 LANGUAGE plpgsql AS $$
-                 BEGIN
-                     RAISE EXCEPTION 'lease commit refused';
-                 END $$;
-                 CREATE CONSTRAINT TRIGGER refuse_lease
-                     AFTER UPDATE ON {schema}.registry_webhook_delivery_state
-                     DEFERRABLE INITIALLY DEFERRED
-                     FOR EACH ROW WHEN (NEW.state = 'leased')
-                     EXECUTE FUNCTION {schema}.refuse_lease();"
-            ))
-            .await
-            .expect("make the lease commit fail");
-
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let service = real_service(
-            RealDbSeams {
-                // Every read-back of the lease fails, so its fate is unknown.
-                refused_connections: vec![2, 3, 4],
-                // The next connection reads back the payload expiry, which
-                // this stands for having committed.
-                interleave: Some((
-                    5,
-                    format!(
-                        "UPDATE {schema}.registry_webhook_delivery_state
-                            SET state = 'expired', next_attempt_at = NULL,
-                                expired_at = transaction_timestamp()
-                          WHERE event_id = '{expiring}';
-                         UPDATE {schema}.registry_outbox SET payload = NULL
-                          WHERE event_id = '{expiring}'"
-                    ),
-                )),
-                ..RealDbSeams::new(&url, &audit)
-            },
-            schema,
-        );
-
-        let result = service.claim().await;
-
-        assert!(
-            matches!(result, Err(DeliveryError::Unavailable)),
-            "a claim whose commit failed fails"
-        );
-        let recorded = audit.lock().expect("audit lock").clone();
-        assert_eq!(
-            recorded.first(),
-            Some(&(
-                DeliveryAuditPhase::Attempt,
-                DeliveryAuditOutcome::AttemptStarted,
-                DeliveryAuditDisposition::Leased,
-            ))
-        );
-        assert!(
-            recorded.contains(&(
-                DeliveryAuditPhase::Terminal,
-                DeliveryAuditOutcome::PayloadExpired,
-                DeliveryAuditDisposition::Expired,
-            )),
-            "the durable expiry is recorded: {recorded:?}"
-        );
-        assert!(
-            recorded.contains(&(
-                DeliveryAuditPhase::Terminal,
-                DeliveryAuditOutcome::WorkerInterrupted,
-                DeliveryAuditDisposition::Unknown,
-            )),
-            "the attempt of unknown fate is answered without claiming a retry: {recorded:?}"
-        );
-        assert_eq!(recorded.len(), 3, "{recorded:?}");
-    }
-
-    /// A terminal transition whose commit failed and whose fate cannot be
-    /// read back still answers the attempt, after a bounded backoff between
-    /// the read-backs.
-    #[tokio::test]
-    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn finalize_answers_an_attempt_whose_commit_cannot_be_read_back() {
-        let url = real_database_url();
-        let schema = "hooks_delivery_finalize_unknown_test";
-        let mut client = fresh_delivery_schema(&url, schema).await;
-        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
-        insert_real_delivery(&mut client, schema, event_id, "1 day", false).await;
-        let lease_token = Uuid::new_v4();
-        let changed = client
-            .execute(
-                &format!(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'leased',
-                         attempt = 1,
-                         next_attempt_at = NULL,
-                         attempt_started_at = transaction_timestamp(),
-                         lease_expires_at = transaction_timestamp() + interval '30 seconds',
-                         lease_token = $1
-                     WHERE event_id = $2",
-                ),
-                &[&lease_token, &event_id],
-            )
-            .await
-            .expect("lease the delivery");
-        assert_eq!(changed, 1);
-        client
-            .batch_execute(&format!(
-                "CREATE FUNCTION {schema}.refuse_delivered() RETURNS trigger
-                 LANGUAGE plpgsql AS $$
-                 BEGIN
-                     RAISE EXCEPTION 'terminal commit refused';
-                 END $$;
-                 CREATE CONSTRAINT TRIGGER refuse_delivered
-                     AFTER UPDATE ON {schema}.registry_webhook_delivery_state
-                     DEFERRABLE INITIALLY DEFERRED
-                     FOR EACH ROW WHEN (NEW.state = 'delivered')
-                     EXECUTE FUNCTION {schema}.refuse_delivered();"
-            ))
-            .await
-            .expect("make the terminal commit fail");
-
-        let audit = Arc::new(Mutex::new(Vec::new()));
-        let service = real_service(
-            RealDbSeams {
-                refused_connections: vec![2, 3, 4],
-                ..RealDbSeams::new(&url, &audit)
-            },
-            schema,
-        );
-        let claim = DeliveryClaim {
-            event_id,
-            compiled_delivery_id: REAL_DELIVERY_ID.to_owned(),
-            generation: 1,
-            attempt: 1,
-            attempt_started_at: SystemTime::now(),
-            lease_token,
-            deployed_maximum_attempts: 3,
-            retry_delays_ms: vec![1_000, 2_000],
-            package_revision: REAL_PACKAGE_REVISION.to_owned(),
-            handler_kind: HookHandlerKind::Rhai,
-        };
-
-        let started = Instant::now();
-        let result = service
-            .finalize(claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
-            .await;
-        let elapsed = started.elapsed();
-
-        assert!(
-            matches!(result, Err(DeliveryError::Unavailable)),
-            "a terminal commit that failed fails: {result:?}"
-        );
-        assert_eq!(
-            *audit.lock().expect("audit lock"),
-            vec![(
-                DeliveryAuditPhase::Terminal,
-                DeliveryAuditOutcome::WorkerInterrupted,
-                DeliveryAuditDisposition::Unknown,
-            )],
-            "the answer claims neither a retry nor the refused delivery"
-        );
-        let backoff: Duration = READ_BACK_BACKOFF.iter().sum();
-        assert!(
-            elapsed >= backoff,
-            "the read-backs wait {backoff:?} between them, took {elapsed:?}"
         );
     }
 }

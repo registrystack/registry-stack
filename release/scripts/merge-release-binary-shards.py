@@ -72,6 +72,13 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
         if parsed >= OPERATOR_TOOL_VERSION:
             scheduling.append(f"schedulingctl-{tag}-linux-amd64")
             image_bins.append(("schedulingctl", scheduling[1]))
+    messaging: list[str] = []
+    if parsed >= (0, 35, 0):
+        messaging = [
+            f"messaging-{tag}-linux-amd64",
+            f"messagingctl-{tag}-linux-amd64",
+        ]
+        image_bins.append(("messaging", messaging[0]))
     common = [
         f"evidence-{tag}-linux-amd64",
         f"evidencectl-{tag}-linux-amd64",
@@ -92,6 +99,7 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
         "breg": breg,
         "casework": casework,
         "scheduling": scheduling,
+        "messaging": messaging,
     }, image_bins
 
 
@@ -200,6 +208,7 @@ def merge(
     breg: Path,
     casework: Path | None,
     scheduling: Path | None,
+    messaging: Path | None,
     output: Path,
     builder_image: str,
 ) -> None:
@@ -245,11 +254,25 @@ def merge(
             version,
             source_sha,
         )
+    if messaging is None:
+        if shard_rosters["messaging"]:
+            raise ShardError("messaging shard is required from version 0.35.0")
+        inputs["messaging"] = {}
+    else:
+        inputs["messaging"] = validate_shard(
+            "messaging",
+            messaging,
+            shard_rosters["messaging"],
+            builder_image,
+            version,
+            source_sha,
+        )
     sources = (
         inputs["core"]
         | inputs["breg"]
         | inputs["casework"]
         | inputs["scheduling"]
+        | inputs["messaging"]
     )
     final_bin_roster: list[str] = []
     if shard_rosters["core"] and shard_rosters["core"][0].startswith("discovery-"):
@@ -261,6 +284,7 @@ def merge(
     final_bin_roster.extend(
         asset for asset in shard_rosters["scheduling"] if asset.startswith("schedulingctl-")
     )
+    final_bin_roster.extend(shard_rosters["messaging"])
     final_bin_roster.extend(
         asset for asset in shard_rosters["core"] if not asset.startswith("discovery-")
     )
@@ -301,6 +325,7 @@ def main() -> int:
     parser.add_argument("--breg", required=True, type=Path)
     parser.add_argument("--casework", type=Path)
     parser.add_argument("--scheduling", type=Path)
+    parser.add_argument("--messaging", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--builder-image", required=True)
     args = parser.parse_args()
@@ -312,6 +337,7 @@ def main() -> int:
             breg=args.breg,
             casework=args.casework,
             scheduling=args.scheduling,
+            messaging=args.messaging,
             output=args.output,
             builder_image=args.builder_image,
         )

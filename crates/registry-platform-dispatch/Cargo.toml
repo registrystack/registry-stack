@@ -1,0 +1,44 @@
+[package]
+name = "registry-platform-dispatch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Generic at-least-once dispatch core for Registry Stack: fenced PostgreSQL job leases, retry and expiry policy, and operator replay over a product-owned job table."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+postgres = [
+    "dep:async-trait",
+    "dep:getrandom",
+    "dep:tokio",
+    "dep:tokio-postgres",
+    "dep:uuid",
+]
+# Enables the PostgreSQL test consumer. Its tests require
+# `DISPATCH_TEST_DATABASE_URL` and fail when it is absent.
+postgres-test = ["postgres"]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"], optional = true }
+tokio-postgres = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+[[test]]
+name = "postgres_dispatch"
+path = "tests/postgres_dispatch.rs"
+required-features = ["postgres-test"]

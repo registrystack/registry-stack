@@ -2,16 +2,18 @@
 import bregTables from '../data/generated/breg-api.json';
 import caseworkTables from '../data/generated/casework-api.json';
 import schedulingTables from '../data/generated/scheduling-api.json';
+import messagingTables from '../data/generated/messaging-api.json';
 
 interface Props {
   id: string;
-  source?: 'breg-api' | 'casework-api' | 'scheduling-api';
+  source?: 'breg-api' | 'casework-api' | 'scheduling-api' | 'messaging-api';
 }
 
 const sources = {
   'breg-api': bregTables,
   'casework-api': caseworkTables,
   'scheduling-api': schedulingTables,
+  'messaging-api': messagingTables,
 };
 const source = Astro.props.source ?? 'breg-api';
 const table = sources[source].find((entry) => entry.id === Astro.props.id);

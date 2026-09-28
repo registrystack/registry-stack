@@ -1,0 +1,51 @@
+apiVersion: registry.registrystack.org/messaging-package/v1alpha1
+kind: MessagingPackage
+# The transports this deployment sends through. The kind and, for an http
+# provider, its scripts under providers/<id>/ are package; each provider's
+# endpoint and credentials are runtime configuration. `idempotentSubmit`
+# declares that the provider drops a repeat carrying the same idempotency key.
+providers:
+  - id: mail-relay
+    kind: smtp
+  - id: sms-gateway
+    kind: http
+    idempotentSubmit: true
+# What a caller selects: a channel, the provider carrying it, the sender
+# identity, and for SMS the most segments one message may use.
+senderProfiles:
+  - id: transactional
+    channel: email
+    provider: mail-relay
+    sender: notices@example.org
+  - id: reminders-sms
+    channel: sms
+    provider: sms-gateway
+    sender: Registry
+    maximumSegments: 2
+# Every template version the package ships, each under
+# templates/<id>/<version>/. A version is a label, so quote a numeric one.
+templates:
+  - id: appointment-reminder
+    version: "1"
+  - id: appointment-reminder-sms
+    version: "1"
+# Who may call this deployment and what each caller may do. A client appears
+# in exactly one profile.
+accessProfiles:
+  - id: case-notices
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [case-system]
+    actorKind: service
+    role: sender
+    senderProfiles: [transactional, reminders-sms]
+    templates: [appointment-reminder, appointment-reminder-sms]
+    requestsPerMinute: 60
+    burst: 10
+  - id: operations
+    principalClaim: sub
+    requiredScopes: [messaging:operate]
+    requesterClients: [operations-console]
+    role: operator
+    requestsPerMinute: 60
+    burst: 10

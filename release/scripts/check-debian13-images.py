@@ -87,6 +87,7 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.casework"),
     Path("release/docker/Dockerfile.relay"),
     Path("release/docker/Dockerfile.scheduling"),
+    Path("release/docker/Dockerfile.messaging"),
 )
 
 # Adopter and development images. They build from source like the per-product
@@ -197,6 +198,11 @@ HTTP_PROBE_DOCKERFILES = {
         "tool": "schedulingctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/scheduling"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-scheduling/runtime.yaml", "serve"]',
+    },
+    Path("release/docker/Dockerfile.messaging"): {
+        "binary": "messaging",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/messaging"]',
+        "command": 'CMD ["--runtime-config", "/etc/registry-messaging/runtime.yaml", "serve"]',
     },
 }
 

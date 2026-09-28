@@ -40,6 +40,7 @@ class NightlyCoverageTests(unittest.TestCase):
             "breg": "breg",
             "casework": "casework",
             "scheduling": "scheduling",
+            "messaging": "messaging",
             "stack-client": "stack-client",
             "evidence": "evidence",
             "developer-tools": "developer-tools",

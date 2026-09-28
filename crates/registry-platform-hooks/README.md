@@ -83,7 +83,12 @@ that inventories its database. Installing them installs no ACL; the product owns
 the `GRANT` and `REVOKE` on those objects. The notification delivery worker lives
 here too, behind the same feature (`delivery`): it runs on the product's seams,
 so the audit journal, operational vocabulary, identity preflight, and destination
-signing stay with the product. Nothing above this section is behind the feature:
+signing stay with the product. The lease state machine under it (claim, fencing,
+lease-expiry recovery, retry, dead letter, payload expiry, and replay) is
+`registry-platform-dispatch`, run over the delivery state table: the worker keeps
+the frozen retry delays the delivery was captured with, retries every failed or
+interrupted attempt until its attempts are spent, and accepts attempt timeouts
+from 100 milliseconds to 10 seconds. Nothing above this section is behind the feature:
 the contract half has no database dependency, so a product that only declares and
 validates hooks takes the crate with default features and links no PostgreSQL
 client. No executor lives in this crate: running a Rhai or WASM handler is a

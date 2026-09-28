@@ -1,0 +1,20 @@
+# Example HTTP provider package: an SMS provider that takes a form POST to
+# Messages.json, answers 201 with a message sid, and reports delivery through
+# a signed form callback. It follows Twilio's Programmable Messaging API
+# (https://www.twilio.com/docs/messaging/api/message-resource) and its
+# request validation (https://www.twilio.com/docs/usage/security), which is
+# the hmac-sha1-url-form callback verifier. The package names no endpoint and
+# no credential; connection.example.yaml carries those for one environment.
+# Provider error codes are kept as gateway.<code> failure codes.
+prepareScript: scripts/prepare.rhai
+interpretScript: scripts/interpret.rhai
+receiptScript: scripts/receipt.rhai
+request:
+  method: post
+# The provider does not deduplicate submissions, so its entry in
+# messaging.yaml leaves `idempotentSubmit` unset and an uncertain send is
+# never retried unless the sender profile accepts duplicates.
+capabilities:
+  receipts: callback
+  concurrencyLimit: 16
+  ratePerSecond: 1

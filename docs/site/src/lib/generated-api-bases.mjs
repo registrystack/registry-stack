@@ -9,13 +9,15 @@
  * place that has to learn about it.
  *
  * These are the generated bases, not the hand-authored narrative pages
- * reference/apis/registry-evidence, reference/apis/registry-casework, and
- * reference/apis/registry-scheduling, which keep their .md.
+ * reference/apis/registry-evidence, reference/apis/registry-casework,
+ * reference/apis/registry-scheduling, and reference/apis/registry-messaging,
+ * which keep their .md.
  */
 export const GENERATED_API_BASES = [
   'reference/apis/evidence',
   'reference/apis/casework',
   'reference/apis/scheduling',
+  'reference/apis/messaging',
 ];
 
 /** True when a dist-relative page directory is a generated API route. */

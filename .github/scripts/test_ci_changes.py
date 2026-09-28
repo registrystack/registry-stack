@@ -16,7 +16,6 @@ from typing import Any
 import yaml
 
 from ci_changes import (
-    BREG_CONTRACTS_LANES,
     BREG_TUTORIAL_INPUTS,
     CASEWORK_TUTORIAL_INPUTS,
     CLI_REFERENCE_INPUTS,
@@ -29,6 +28,8 @@ from ci_changes import (
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
+    MESSAGING_PACKAGES,
+    MESSAGING_TUTORIAL_INPUTS,
     RELAY_CLIENT_PACKAGES,
     RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
@@ -241,19 +242,9 @@ class CiChangesTest(unittest.TestCase):
         if "include" in matrix:
             return len(matrix["include"])
 
-        # A classifier-selected axis counts at its widest selection.
-        dynamic_axes = {
-            "${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}": len(
-                BREG_CONTRACTS_LANES
-            ),
-        }
         slots = 1
         for name, values in matrix.items():
-            if name == "exclude":
-                continue
-            if isinstance(values, str):
-                slots *= dynamic_axes[values]
-            elif isinstance(values, list):
+            if name != "exclude" and isinstance(values, list):
                 slots *= len(values)
         return slots
 
@@ -296,9 +287,18 @@ class CiChangesTest(unittest.TestCase):
             "scheduling-contracts": (
                 "needs.changes.outputs.scheduling_contracts == 'true'"
             ),
+            "messaging-postgres": (
+                "needs.changes.outputs.messaging_postgres == 'true'"
+            ),
+            "messaging-contracts": (
+                "needs.changes.outputs.messaging_contracts == 'true'"
+            ),
+            "messaging-smtp": (
+                "needs.changes.outputs.messaging_postgres == 'true'"
+            ),
             "platform-fuzz": "needs.changes.outputs.platform_assurance == 'true'",
             "platform-coverage": (
-                "needs.changes.outputs.platform_coverage == 'true'"
+                "needs.changes.outputs.platform_assurance == 'true'"
             ),
             "rust-quality": "needs.changes.outputs.rust == 'true'",
             "rust-tests": "needs.changes.outputs.rust == 'true'",
@@ -313,6 +313,9 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial": "needs.changes.outputs.breg_tutorial == 'true'",
             "casework-tutorial": (
                 "needs.changes.outputs.casework_tutorial == 'true'"
+            ),
+            "messaging-tutorial": (
+                "needs.changes.outputs.messaging_tutorial == 'true'"
             ),
             "breg-evidence-composition": (
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
@@ -343,48 +346,6 @@ class CiChangesTest(unittest.TestCase):
                     self.workflow_jobs[name]["if"],
                 )
 
-    def test_event_tiers_reach_the_workflow(self) -> None:
-        workflow = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
-        # PyYAML reads the bare `on` key as a boolean.
-        pull_request = workflow[True]["pull_request"]
-        # Adding the ci:full label has to start a run of its own.
-        self.assertEqual(
-            ["opened", "synchronize", "reopened", "labeled"], pull_request["types"]
-        )
-        outputs = self.workflow_jobs["changes"]["outputs"]
-        for name in (
-            "platform_coverage",
-            "breg_integration",
-            "breg_contracts_lanes",
-            "full_sweep",
-        ):
-            with self.subTest(output=name):
-                self.assertEqual(
-                    f"${{{{ steps.filter.outputs.{name} }}}}", outputs[name]
-                )
-
-        breg = self.workflow_jobs["breg-contracts"]
-        self.assertEqual(
-            "${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}",
-            breg["strategy"]["matrix"]["lane"],
-        )
-        self.assertEqual(
-            "needs.changes.outputs.breg_integration == 'true'",
-            self.workflow_jobs["breg-wasm"]["if"],
-        )
-        self.assertEqual(
-            "github.event_name == 'push' && github.ref == 'refs/heads/main' && "
-            "needs.changes.outputs.platform_coverage == 'true'",
-            self.workflow_jobs["platform-coverage-upload"]["if"],
-        )
-
-        review_examples = next(
-            step
-            for step in self.workflow_jobs["casework-tutorial"]["steps"]
-            if step.get("name") == "Verify BReg, payment, and standalone review examples"
-        )
-        self.assertEqual("needs.changes.outputs.full_sweep == 'true'", review_examples["if"])
-
     def test_ci_scheduling_graph_retains_every_job_and_aggregate_dependency(
         self,
     ) -> None:
@@ -411,6 +372,9 @@ class CiChangesTest(unittest.TestCase):
             "casework-postgres",
             "scheduling-contracts",
             "scheduling-postgres",
+            "messaging-contracts",
+            "messaging-postgres",
+            "messaging-smtp",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -418,6 +382,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "breg-tutorial",
             "casework-tutorial",
+            "messaging-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -446,6 +411,9 @@ class CiChangesTest(unittest.TestCase):
                 "casework-postgres",
                 "scheduling-postgres",
                 "scheduling-contracts",
+                "messaging-postgres",
+                "messaging-contracts",
+                "messaging-smtp",
                 "config-conformance",
             ),
             "release-tool-required": ("changes", "release-tool"),
@@ -455,6 +423,8 @@ class CiChangesTest(unittest.TestCase):
                 "changes",
                 "secrets",
                 "platform-quality",
+                "platform-coverage",
+                "platform-coverage-upload",
                 "platform-hygiene",
                 "platform-fuzz",
                 "rust-policy",
@@ -470,12 +440,16 @@ class CiChangesTest(unittest.TestCase):
                 "casework-postgres",
                 "scheduling-postgres",
                 "scheduling-contracts",
+                "messaging-postgres",
+                "messaging-contracts",
+                "messaging-smtp",
                 "config-conformance",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
                 "breg-tutorial",
                 "casework-tutorial",
+                "messaging-tutorial",
                 "breg-evidence-composition",
                 "evidence-anchors",
                 "docs",
@@ -505,6 +479,8 @@ class CiChangesTest(unittest.TestCase):
             "changes",
             "secrets",
             "platform-quality",
+            "platform-coverage",
+            "platform-coverage-upload",
             "platform-hygiene",
             "platform-fuzz",
             "rust-result",
@@ -513,6 +489,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "breg-tutorial",
             "casework-tutorial",
+            "messaging-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -524,11 +501,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(30, len(final_needs))
-        # Platform line coverage publishes from main and the nightly sweep;
-        # it does not hold the merge queue.
-        self.assertNotIn("platform-coverage", final_needs)
-        self.assertNotIn("platform-coverage-upload", final_needs)
+        self.assertEqual(36, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -579,50 +552,6 @@ class CiChangesTest(unittest.TestCase):
                     expected_status = 0 if accepted else 1
                     self.assertEqual(expected_status, rust_status)
                     self.assertEqual(rust_status, final_status)
-
-    def test_final_aggregate_refuses_a_selected_integration_job_that_skipped(
-        self,
-    ) -> None:
-        # Review skips the heavy integration tier by design, so a skip passes
-        # only where the classifier did not select the job; in the merge
-        # queue a selected job has to succeed.
-        final_job = self.workflow_jobs["ci-result"]
-        run = final_job["steps"][0]["run"]
-        script = run.removeprefix("python3 - <<'PY'\n").rsplit("\nPY", 1)[0]
-        needs = self.normalized_needs(final_job)
-        heavy = {
-            "breg-contracts": "breg_contracts",
-            "breg-wasm": "breg_integration",
-            "casework-postgres": "casework_postgres",
-            "scheduling-postgres": "scheduling_postgres",
-            "evidence-tutorials": "evidence_tutorial",
-            "breg-tutorial": "breg_tutorial",
-            "casework-tutorial": "casework_tutorial",
-            "breg-evidence-composition": "breg_evidence_composition",
-        }
-
-        def status(job: str, selected: str, result: str) -> int:
-            results = {name: {"result": "success"} for name in needs}
-            results["changes"]["outputs"] = {heavy[job]: selected}
-            results[job]["result"] = result
-            return subprocess.run(
-                (sys.executable, "-c", script),
-                env={"CI_JOB_RESULTS": json.dumps(results)},
-                check=False,
-                capture_output=True,
-                text=True,
-            ).returncode
-
-        for job in heavy:
-            for selected, result, expected in (
-                ("false", "skipped", 0),
-                ("true", "success", 0),
-                ("true", "skipped", 1),
-                ("true", "failure", 1),
-                ("false", "failure", 1),
-            ):
-                with self.subTest(job=job, selected=selected, result=result):
-                    self.assertEqual(expected, status(job, selected, result))
 
     def test_config_conformance_inputs_select_the_conformance_gate(self) -> None:
         for path in (
@@ -1044,6 +973,21 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-casework-client-py", python["rust_packages"])
         self.assertTrue(python["casework_postgres"])
+
+    def test_messaging_product_and_core_select_the_checkpoint_crates(self) -> None:
+        product = classify(self.workspace, ("products/messaging/README.md",))
+        self.assertLessEqual(set(MESSAGING_PACKAGES), set(product["rust_packages"]))
+        selected = {row["name"] for row in product["rust_matrix"]["include"]}
+        self.assertIn("messaging", selected)
+        self.assertTrue(product["messaging_contracts"])
+        self.assertTrue(product["messaging_postgres"])
+        core = classify(self.workspace, ("crates/registry-messaging-core/src/access.rs",))
+        self.assertLessEqual(set(MESSAGING_PACKAGES), set(core["rust_packages"]))
+        self.assertTrue(core["messaging_contracts"])
+        self.assertTrue(core["messaging_postgres"])
+        unrelated = classify(self.workspace, ("crates/registry-scheduling/src/lib.rs",))
+        self.assertFalse(unrelated["messaging_contracts"])
+        self.assertFalse(unrelated["messaging_postgres"])
 
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(
@@ -1472,6 +1416,68 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["casework_tutorial"])
 
+    def test_messaging_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials it
+        # replays. A tutorial missing here would not trigger the job that
+        # replays it, so it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-messaging-tutorial.sh"
+        )
+        registry = re.search(
+            r"^MESSAGING_TUTORIALS=\((.*?)^\)",
+            gate.read_text(),
+            re.DOTALL | re.MULTILINE,
+        )
+        if registry is None:
+            self.fail("the gate must declare MESSAGING_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in MESSAGING_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_messaging_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/check-messaging-tutorial.sh",
+            "docs/site/scripts/check-messaging-tutorial.test.mjs",
+            "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The replay builds and runs messagingctl, which links the runtime in
+        # process for its local session.
+        for path in (
+            "crates/registry-messaging/src/runtime.rs",
+            "crates/registry-messagingctl/src/dev/mod.rs",
+            "crates/registry-messagingctl/src/starter.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The source-neutral core is linked by the runtime, so a change to it
+        # reaches the replay through reverse dependencies.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-messaging-core/src/lib.rs",))[
+                "messaging_tutorial"
+            ]
+        )
+        # Pages that share the tutorials directory and reach none of the
+        # Registry Messaging replay.
+        for path in (
+            "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/scripts/check-casework-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["messaging_tutorial"])
+
     def test_breg_evidence_composition_routing(self) -> None:
         # The proof drives bregctl, evidencectl and the Evidence runtime over
         # the reviewed teaching inputs, so a change to any of those three, to a
@@ -1529,6 +1535,20 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["platform"])
                 self.assertTrue(outputs["platform_hygiene"])
 
+    def test_dispatch_changes_select_the_job_running_its_postgres_suite(self) -> None:
+        # The dispatch core's PostgreSQL suite runs in the Scheduling
+        # PostgreSQL job, whose service database it borrows. A dispatch
+        # change must schedule that job whether or not a Scheduling crate
+        # happens to depend on dispatch.
+        for path in (
+            "crates/registry-platform-dispatch/src/postgres/dispatcher.rs",
+            "crates/registry-platform-dispatch/tests/postgres_dispatch.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn("registry-platform-dispatch", outputs["rust_packages"])
+                self.assertTrue(outputs["scheduling_postgres"])
+
     def test_platform_changes_select_relay_client_reverse_dependents(self) -> None:
         # The Relay SDK deliberately reuses the shared bounded outbound and
         # OAuth primitives. A platform change can therefore alter its wire
@@ -1568,6 +1588,22 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(
                     Path("crates/registry-casework/tests", f"{target}.rs").is_file(),
                     f"casework-postgres invokes missing test target {target}",
+                )
+
+    def test_messaging_postgres_job_names_existing_integration_test_targets(
+        self,
+    ) -> None:
+        commands = "\n".join(
+            str(step.get("run", ""))
+            for step in self.workflow_jobs["messaging-postgres"]["steps"]
+        )
+        targets = set(re.findall(r"--test\s+([a-zA-Z0-9_-]+)", commands))
+        self.assertTrue(targets)
+        for target in targets:
+            with self.subTest(target=target):
+                self.assertTrue(
+                    Path("crates/registry-messaging/tests", f"{target}.rs").is_file(),
+                    f"messaging-postgres invokes missing test target {target}",
                 )
 
     def test_docs_only_change_skips_rust(self) -> None:
@@ -1916,6 +1952,42 @@ class CiChangesTest(unittest.TestCase):
             )["evidence_tutorial"]
         )
 
+    def test_messaging_bindings_run_the_native_client_job(self) -> None:
+        # The Messaging bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-messaging-client-node/src/lib.rs",
+            "crates/registry-messaging-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertTrue(outputs["messaging_contracts"])
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-messaging-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_messaging_node_sources_run_the_linux_release_addon_proof(self) -> None:
+        for path in (
+            "crates/registry-messaging-client/src/client.rs",
+            "crates/registry-messaging-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["release_linux_node_clients"])
+
+    def test_casework_node_sources_run_the_linux_release_addon_proof(self) -> None:
+        for path in (
+            "crates/registry-casework-client/src/client.rs",
+            "crates/registry-casework-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["release_linux_node_clients"])
+
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
         # so either can change the native surface or the error envelope the
@@ -1942,6 +2014,89 @@ class CiChangesTest(unittest.TestCase):
                     "registry-evidence-client-node", outputs["rust_packages"]
                 )
                 self.assertIn("registry-evidence-client-py", outputs["rust_packages"])
+
+    def test_linux_node_release_recipe_proof_follows_binding_dependency_closure(
+        self,
+    ) -> None:
+        for path in (
+            "crates/registry-discovery-client-node/src/lib.rs",
+            "crates/registry-evidence-client-node/src/lib.rs",
+            "crates/registry-relay-client-node/src/lib.rs",
+            "crates/registry-discovery-client/src/client.rs",
+            "crates/registry-evidence-client/src/client.rs",
+            "crates/registry-relay-client/src/client.rs",
+            "crates/registry-platform-httputil/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+
+    def test_evidence_python_change_runs_its_linux_release_wheel_proof(self) -> None:
+        for path in (
+            "crates/registry-evidence-client-py/build.rs",
+            "crates/registry-evidence-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+
+    def test_linux_node_release_recipe_inputs_select_the_proof(self) -> None:
+        for path in (
+            "Cargo.lock",
+            "Cargo.toml",
+            ".cargo/config.toml",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            "release/glibc-floor.env",
+            "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/build-linux-python-client",
+            "release/scripts/build-linux-node-client",
+            "release/scripts/smoke-discovery-client-package.js",
+            "release/scripts/smoke-evidence-client-package.js",
+            "release/scripts/smoke-relay-client-package.js",
+            "release/scripts/test_build_linux_node_client.py",
+            "release/scripts/test_build_linux_python_client.py",
+            "release/scripts/test_zig_glibc_compiler.py",
+            "release/scripts/zig-glibc-compiler",
+            "release/scripts/assemble-registry-client-wheel.py",
+            "release/scripts/smoke-registry-client-package.js",
+            "release/scripts/smoke-registry-client-package.mjs",
+            "release/scripts/sync-registry-client-node.py",
+            "crates/registry-stack-client-node/native.js",
+            "crates/registry-stack-client-node/npm/linux-x64-gnu/index.js",
+            ".github/scripts/ci_changes.py",
+            ".github/workflows/ci.yml",
+            ".github/workflows/release-candidate.yml",
+            ".github/workflows/release-rehearsal.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+
+    def test_complete_matrix_alone_does_not_select_linux_node_release_recipe(
+        self,
+    ) -> None:
+        for paths in (
+            (),
+            ("release/notes/v0.22.0.md",),
+            ("docs/site/src/content/docs/reference/glossary.mdx",),
+            (".github/workflows/unrelated.yml",),
+        ):
+            with self.subTest(paths=paths):
+                outputs = classify(self.workspace, paths, run_all=True)
+                self.assertTrue(outputs["rust"])
+                self.assertFalse(outputs["release_linux_node_clients"])
+
+    def test_run_all_preserves_a_real_linux_node_recipe_trigger(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client/src/client.rs",),
+            run_all=True,
+        )
+        self.assertTrue(outputs["release_linux_node_clients"])
 
     def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -2220,6 +2375,19 @@ on:
                 self.assertTrue(outputs["casework_postgres"])
                 selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
                 self.assertIn("casework", selected)
+
+    def test_messaging_command_changes_select_docs_and_product_checks(self) -> None:
+        for path in (
+            "crates/registry-messaging/src/runtime.rs",
+            "crates/registry-messagingctl/src/lib.rs",
+            "crates/registry-messagingctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["messaging_postgres"])
+                selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
+                self.assertIn("messaging", selected)
 
     def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
         for path in (
@@ -2586,7 +2754,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self,
     ) -> None:
         # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
-        # pure-Rust companion rhai reaches five members through normal edges.
+        # pure-Rust companion rhai reaches six members through normal edges.
         change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
         self.assertEqual(
             change.members,
@@ -2596,6 +2764,7 @@ class LockfileSelectionTest(unittest.TestCase):
                     "registry-evidence",
                     "registry-evidence-authoring",
                     "registry-evidencectl",
+                    "registry-messaging",
                     "registry-platform-script",
                 }
             ),
@@ -2604,6 +2773,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self.assertTrue(outputs["platform"])
         self.assertTrue(outputs["breg_contracts"])
         self.assertTrue(outputs["evidence_contracts"])
+        self.assertTrue(outputs["messaging_contracts"])
 
     def test_sys_bump_forces_full(self) -> None:
         change = self.change(bump_lock_package(self.lock, "libsqlite3-sys", "0.38.3"))
@@ -2704,8 +2874,24 @@ class LockfileSelectionTest(unittest.TestCase):
     def test_lock_without_an_analysis_stays_full(self) -> None:
         self.assert_full(classify(self.workspace, ("Cargo.lock",)))
 
+    def test_pull_request_native_lock_change_selects_linux_release_proof(
+        self,
+    ) -> None:
+        native = self.change(bump_lock_package(self.lock, "libsqlite3-sys", "0.38.3"))
+        leaf = self.change(bump_lock_package(self.lock, "pdf-writer", "0.15.1"))
+        for change, expected in ((native, True), (leaf, False), (None, True)):
+            with self.subTest(change=None if change is None else change.reason):
+                outputs = classify(
+                    self.workspace,
+                    ("Cargo.lock",),
+                    pull_request=True,
+                    lock_change=change,
+                )
+                self.assertEqual(outputs["release_linux_node_clients"], expected)
+
+
 class EventScopedSelectionTest(unittest.TestCase):
-    """Broad assurance and heavy integration wait for the merge queue."""
+    """Broad assurance runs on the merge queue, main, and the nightly sweep."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -2735,83 +2921,83 @@ class EventScopedSelectionTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("README.md",))
         self.assertFalse(unrelated["platform_assurance"])
 
-    def test_platform_coverage_runs_on_main_and_the_full_sweep_only(self) -> None:
-        path = ("crates/registry-platform-crypto/src/lib.rs",)
-        self.assertFalse(classify(self.workspace, path, pull_request=True)["platform_coverage"])
-        self.assertFalse(classify(self.workspace, path)["platform_coverage"])
-        self.assertTrue(classify(self.workspace, path, main_push=True)["platform_coverage"])
-        self.assertTrue(classify(self.workspace, (), full_sweep=True)["platform_coverage"])
-        self.assertFalse(
-            classify(self.workspace, ("README.md",), main_push=True)["platform_coverage"]
-        )
-
-    def test_heavy_integration_waits_for_the_merge_queue_or_ci_full(self) -> None:
-        heavy = (
-            "breg_integration",
-            "casework_postgres",
-            "scheduling_postgres",
-            "evidence_tutorial",
-            "breg_tutorial",
-            "casework_tutorial",
-            "breg_evidence_composition",
-        )
-        # Each heavy selector keeps its own path gate; this change reaches all.
-        paths = (
-            "crates/registry-breg/src/lib.rs",
-            "crates/registry-evidence/src/lib.rs",
-            "crates/registry-casework/src/lib.rs",
-            "crates/registry-scheduling/src/lib.rs",
-        )
-        reviewed = classify(self.workspace, paths, pull_request=True)
-        for name in heavy:
-            with self.subTest(event="pull_request", output=name):
-                self.assertFalse(reviewed[name])
-        # Review keeps the plain Base Registry Engine contracts lane.
-        self.assertTrue(reviewed["breg_contracts"])
-        self.assertEqual(["contracts"], reviewed["breg_contracts_lanes"])
-        self.assertTrue(reviewed["rust"])
-
-        for event, outputs in (
-            ("ci:full", classify(self.workspace, paths, pull_request=True, ci_full=True)),
-            ("merge_group", classify(self.workspace, paths)),
-            ("full sweep", classify(self.workspace, (), pull_request=True, full_sweep=True)),
+    def test_pull_request_linux_release_proof_follows_recipe_inputs(self) -> None:
+        for path in (
+            ".cargo/config.toml",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            "release/glibc-floor.env",
+            "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/build-linux-node-client",
+            "release/scripts/build-linux-python-client",
+            "release/scripts/zig-glibc-compiler",
+            "release/scripts/smoke-discovery-client-package.js",
+            "release/scripts/smoke-evidence-client-package.js",
+            "release/scripts/smoke-relay-client-package.js",
+            "release/scripts/smoke-registry-client-package.js",
+            "release/scripts/smoke-registry-client-package.mjs",
+            "crates/registry-discovery-client-node/Cargo.toml",
+            "crates/registry-discovery-client-node/build.rs",
+            "crates/registry-discovery-client-node/index.js",
+            "crates/registry-discovery-client-node/package.json",
+            "crates/registry-discovery-client-node/package-lock.json",
+            "crates/registry-discovery-client-node/scripts/normalize-napi-loader.js",
+            "crates/registry-evidence-client-node/npm/linux-x64-gnu/package.json",
+            "crates/registry-relay-client-node/build.rs",
+            "crates/registry-breg-client-node/Cargo.toml",
+            "crates/registry-casework-client-node/package-lock.json",
+            "crates/registry-evidence-client-py/Cargo.toml",
+            "crates/registry-evidence-client-py/build.rs",
+            "crates/registry-evidence-client-py/pyproject.toml",
+            "crates/registry-stack-client-node/native.js",
+            "crates/registry-stack-client-node/package.json",
+            "crates/registry-stack-client-node/package-lock.json",
+            "crates/registry-stack-client-node/npm/linux-arm64-gnu/index.js",
         ):
-            for name in heavy:
-                with self.subTest(event=event, output=name):
-                    self.assertTrue(outputs[name])
-            self.assertEqual(list(BREG_CONTRACTS_LANES), outputs["breg_contracts_lanes"])
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,), pull_request=True)[
+                        "release_linux_node_clients"
+                    ]
+                )
 
-        # Path gating still applies in the merge queue.
-        unrelated = classify(self.workspace, ("README.md",))
-        for name in heavy:
-            with self.subTest(event="unrelated", output=name):
-                self.assertFalse(unrelated[name])
-
-    def test_linux_release_recipe_runs_only_in_the_full_sweep(self) -> None:
-        for paths in (
-            ("release/scripts/build-linux-node-client",),
-            ("crates/registry-evidence-client-py/build.rs",),
-            ("crates/registry-casework-client-node/src/lib.rs",),
-            ("rust-toolchain.toml",),
-            (".github/workflows/ci.yml",),
-            ("Cargo.lock",),
+    def test_pull_request_skips_linux_release_proof_for_non_recipe_inputs(
+        self,
+    ) -> None:
+        # Each of these still selects the proof on the merge queue and main,
+        # and the native binding job still builds and tests every affected
+        # binding on the pull request.
+        for path in (
+            ".github/workflows/ci.yml",
+            ".github/scripts/ci_changes.py",
+            ".github/scripts/ci_event_routing.py",
+            ".github/workflows/release-candidate.yml",
+            ".github/workflows/release-rehearsal.yml",
+            "Cargo.toml",
+            "release/scripts/assemble-registry-client-wheel.py",
+            "release/scripts/sync-registry-client-node.py",
+            "release/scripts/test_build_linux_node_client.py",
+            "release/scripts/test_build_linux_python_client.py",
+            "release/scripts/test_zig_glibc_compiler.py",
+            "crates/registry-discovery-client-node/src/lib.rs",
+            "crates/registry-evidence-client/src/client.rs",
+            "crates/registry-evidence-client-py/src/lib.rs",
+            "crates/registry-platform-httputil/src/lib.rs",
+            "crates/registry-stack-client-node/index.js",
         ):
-            for pull_request in (True, False):
-                with self.subTest(paths=paths, pull_request=pull_request):
-                    self.assertFalse(
-                        classify(self.workspace, paths, pull_request=pull_request)[
-                            "release_linux_node_clients"
-                        ]
-                    )
+            with self.subTest(path=path):
+                self.assertFalse(
+                    classify(self.workspace, (path,), pull_request=True)[
+                        "release_linux_node_clients"
+                    ]
+                )
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
         self.assertTrue(
-            classify(self.workspace, (), full_sweep=True)["release_linux_node_clients"]
-        )
-
-    def test_full_sweep_output_names_the_nightly_and_manual_sweep(self) -> None:
-        self.assertTrue(classify(self.workspace, (), full_sweep=True)["full_sweep"])
-        self.assertFalse(classify(self.workspace, (), run_all=True)["full_sweep"])
-        self.assertFalse(
-            classify(self.workspace, (".github/workflows/ci.yml",))["full_sweep"]
+            classify(self.workspace, (), pull_request=True, full_sweep=True)[
+                "release_linux_node_clients"
+            ]
         )
 
     def test_archives_ignore_the_workflow_and_cargo_manifests(self) -> None:
@@ -2864,15 +3050,14 @@ class EventScopedSelectionTest(unittest.TestCase):
         self.assertGreater(len(seen), len(entries))
         for path in sorted(seen):
             with self.subTest(path=path.as_posix()):
-                self.assertTrue(
-                    classify(self.workspace, (path.as_posix(),))["docs_archives"]
-                )
-                # The archive comparison needs the merge queue's base.
-                self.assertFalse(
-                    classify(
-                        self.workspace, (path.as_posix(),), pull_request=True
-                    )["docs_archives"]
-                )
+                for pull_request in (True, False):
+                    self.assertTrue(
+                        classify(
+                            self.workspace,
+                            (path.as_posix(),),
+                            pull_request=pull_request,
+                        )["docs_archives"]
+                    )
         # check-llms reads this module's source text rather than importing it.
         self.assertTrue(
             classify(self.workspace, ("docs/site/src/lib/page-markdown.ts",))[

@@ -61,6 +61,16 @@
       "exporterPath": "crates/registry-scheduling-core/examples/problem-catalog.rs",
       "cargoPackage": "registry-scheduling-core",
       "cargoExample": "problem-catalog"
+    },
+    {
+      "owner": "messaging",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-messaging/",
+      "sourcePath": "crates/registry-messaging-core/src/problem.rs",
+      "exporterPath": "crates/registry-messaging-core/examples/problem-catalog.rs",
+      "cargoPackage": "registry-messaging-core",
+      "cargoExample": "problem-catalog"
     }
   ],
   "referenceExclusions": [
@@ -176,6 +186,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Scheduling runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/messaging/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-messaging/src/schema.rs",
+      "owner": "messaging",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Messaging runtime configuration JSON Schema."
     }
   ],
   "records": [

@@ -15,6 +15,16 @@ repos:
     local: ../..
     openapi: products/scheduling/generated/registry-scheduling.openapi.json
 
+  # Messaging is unreleased work. Only its product-owned OpenAPI artifact is
+  # pulled; the start, configure, operate, and API reference pages are
+  # hand-authored, so the product README is not synced beside them.
+  registry-messaging:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: main source (unreleased)
+    local: ../..
+    openapi: products/messaging/generated/registry-messaging.openapi.json
+
   # Casework first enters an archived docset at v0.30.0. Its product-owned
   # OpenAPI artifact is rendered directly; adopter prose remains hand-authored
   # in the Casework product lane rather than duplicating the long product README.

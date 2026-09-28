@@ -62,6 +62,19 @@ pub mod casework {
     };
 }
 
+pub mod messaging {
+    pub use registry_messaging_client::{
+        type_uri, AttemptOutcome, AttemptSummary, BearerToken, Channel, DirectContent,
+        MessageDispatch, MessageLinks, MessageReceipt, MessageReport, MessageStatus, MessageView,
+        MessagingClient, MessagingClientConfig, MessagingClientError, MessagingComplete,
+        MessagingProtocolFailure, ProblemCode, Recipient, RenderedParts, SegmentCount, SmsEncoding,
+        SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, TemplateReference,
+        TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+        MAXIMUM_RETRY_AFTER_SECONDS, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
+        MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
+    };
+}
+
 pub mod relay {
     pub use registry_relay_client::{
         BoundingBox, CollectionContinuation, CollectionContinuationProjection, CollectionPage,

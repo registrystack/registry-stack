@@ -87,7 +87,12 @@ allow = [
     "Unlicense",
     "Zlib",
 ]
-exceptions = []
+exceptions = [
+    # 0BSD is the BSD licence with its attribution condition removed, like
+    # MIT-0 above. It is scoped to `quoted_printable`, which `lettre` needs to
+    # encode Messaging's SMTP message bodies.
+    { crate = "quoted_printable", allow = ["0BSD"] },
+]
 
 [[licenses.clarify]]
 name = "ring"

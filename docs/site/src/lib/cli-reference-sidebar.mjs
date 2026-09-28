@@ -16,6 +16,8 @@ const binaries = [
   'caseworkctl',
   'scheduling',
   'schedulingctl',
+  'messaging',
+  'messagingctl',
   'relay',
   'relayctl',
   'evidence',

@@ -166,7 +166,7 @@ impl NativeClients {
             unified_package.join("__init__.py"),
         )
         .expect("the exact unified Python facade is copied");
-        for sibling in ["breg", "discovery", "evidence", "relay"] {
+        for sibling in ["breg", "discovery", "evidence", "messaging", "relay"] {
             let package = unified_package.join(sibling);
             fs::create_dir_all(&package).expect("the Python sibling stub is writable");
             fs::write(package.join("__init__.py"), "")
