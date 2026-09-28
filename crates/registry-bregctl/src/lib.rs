@@ -1231,7 +1231,7 @@ struct DiffArgs {
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Absolute runtime configuration whose package bindings and trust apply.
+    /// Absolute runtime configuration whose configured package is the baseline.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
 
