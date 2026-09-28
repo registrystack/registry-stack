@@ -4910,6 +4910,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::RuntimeConfiguration,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
+            registry_breg::migration::MigrationError::ActivationAuditUnavailable => (
+                "apply.audit.unavailable",
+                "audit",
+                "the audit destination refused the activation's request entry, so the activation did not start: check the audit path and its directory permissions, then run the same `bregctl apply` again. Nothing was changed",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
             registry_breg::migration::MigrationError::OperatorReference => (
                 "apply.operator_reference.refused",
                 "operatorReference",

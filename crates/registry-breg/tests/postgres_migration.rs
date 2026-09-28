@@ -132,6 +132,12 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_non_ready_target(&database, &active, &required_package, "applying").await;
     let interrupted_activation = activation_at(&database, 2).await;
     assert_ne!(interrupted_activation, active.activation_id);
+    // The durable state shows the target still applying, so the attempt's
+    // audit request is answered unfinished rather than failed.
+    let interrupted_audit = activation_audit_records(&database, &interrupted_activation);
+    assert_eq!(interrupted_audit.len(), 2, "{interrupted_audit:?}");
+    assert_eq!(interrupted_audit[1].0, "response");
+    assert_eq!(interrupted_audit[1].1["outcome"], "unfinished");
 
     let wrong_source = backfill_source(BackfillSourceRequest {
         id: "wrong-recovery-target",
@@ -1498,10 +1504,6 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
     database.cleanup().await;
 }
 
-/// A successor activation supersedes every open import authority in the
-/// transaction that makes it active, and each supersession is recorded
-/// under the successor's activation id once that transaction commits. The
-/// authority keeps the activation id it was opened under.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash() {
     const REFERENCE: &str = "change ticket that must not reach the ledger";
@@ -1581,6 +1583,240 @@ async fn real_postgres_a_refused_operator_reference_leaves_the_database_unactiva
         "no refused apply creates the ledger"
     );
     assert!(database.activation_audit_entries().is_empty());
+}
+
+/// Each activation records its request before the terminal work and its
+/// applied response once the activation commits, both under its activation
+/// id. The operator's reference appears only as its keyed hash.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_each_activation_audits_its_request_and_its_applied_response() {
+    const REFERENCE: &str = "change ticket that must not reach the activation audit";
+    let (database, package) = initial_package_database().await;
+    let initial = apply_verified_package(
+        request(&database, &package, ApplyPrecondition::InitialActivation)
+            .with_operator_reference(REFERENCE),
+    )
+    .await
+    .expect("the initial package activates with an operator reference");
+    let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::RoleChange { current: &initial },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("serving with one role is its own activation");
+
+    let reference_hash = AuditProfile::production_from_secret_bytes(vec![7; 32].into())
+        .expect("the activation audit key is valid")
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-activation-operator-reference-v1",
+            &initial.activation_id,
+            REFERENCE,
+        )
+        .expect("the reference hashes");
+    let initial_record = serde_json::json!({
+        "operationId": "breg.activation",
+        "activationId": initial.activation_id,
+        "priorActivationId": null,
+        "packageDigest": package.package_digest(),
+        "predecessorPackageDigest": null,
+        "registryRevision": package.registry().revision(),
+        "planKind": "initial",
+        "databaseId": DATABASE,
+        "environment": ENVIRONMENT,
+        "instanceId": INSTANCE,
+        "roleMode": "split",
+        "operatorReference": reference_hash,
+    });
+    assert_eq!(
+        activation_audit_records(&database, &initial.activation_id),
+        vec![
+            (
+                "request".to_owned(),
+                with_outcome(&initial_record, "attempt", "started")
+            ),
+            (
+                "response".to_owned(),
+                with_outcome(&initial_record, "terminal", "applied")
+            ),
+        ]
+    );
+    let single_record = serde_json::json!({
+        "operationId": "breg.activation",
+        "activationId": single.activation_id,
+        "priorActivationId": initial.activation_id,
+        "packageDigest": package.package_digest(),
+        "predecessorPackageDigest": package.package_digest(),
+        "registryRevision": package.registry().revision(),
+        "planKind": "successor",
+        "databaseId": DATABASE,
+        "environment": ENVIRONMENT,
+        "instanceId": INSTANCE,
+        "roleMode": "single",
+        "operatorReference": null,
+    });
+    assert_eq!(
+        activation_audit_records(&database, &single.activation_id),
+        vec![
+            (
+                "request".to_owned(),
+                with_outcome(&single_record, "attempt", "started")
+            ),
+            (
+                "response".to_owned(),
+                with_outcome(&single_record, "terminal", "applied")
+            ),
+        ]
+    );
+    let journal = serde_json::to_string(&database.activation_audit_entries())
+        .expect("the journal serializes");
+    assert!(!journal.contains(REFERENCE));
+    database.cleanup().await;
+}
+
+/// An activation that fails after its request was recorded answers it with
+/// the failed outcome once the durable state shows the target failed, and
+/// one interrupted mid-plan leaves it unfinished.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_failed_activation_audits_its_failed_response() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "audited-failure",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+
+    let failed = activation_at(&database, 2).await;
+    let records = activation_audit_records(&database, &failed);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0].0, "request");
+    assert_eq!(records[0].1["outcome"], "started");
+    assert_eq!(records[0].1["priorActivationId"], active.activation_id);
+    assert_eq!(records[0].1["packageDigest"], package.package_digest());
+    assert_eq!(
+        records[0].1["predecessorPackageDigest"],
+        active.package_digest
+    );
+    assert_eq!(records[1].0, "response");
+    assert_eq!(
+        records[1].1,
+        with_outcome(&records[0].1, "terminal", "failed")
+    );
+    database.cleanup().await;
+}
+
+/// The request entry is written before any activation state: an audit that
+/// refuses it leaves the database exactly as the apply found it and names
+/// the refusal, not a failed activation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_refused_activation_request_entry_changes_nothing() {
+    let (database, package) = initial_package_database().await;
+    database.activation_audit_capture().fail_after(0);
+    let refused = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect_err("the refused request entry stops the initial activation");
+    assert_eq!(refused, MigrationError::ActivationAuditUnavailable);
+    let ledger = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_state') IS NULL",
+            &[],
+        )
+        .await
+        .expect("the catalog reads");
+    assert!(ledger.get::<_, bool>(0), "no registry state was created");
+    assert!(database.activation_audit_entries().is_empty());
+
+    database.activation_audit_capture().restore();
+    let active = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("a later writer activates the same package");
+    let before = durable_snapshot(&database).await;
+    database.activation_audit_capture().fail_after(0);
+    let refused = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::RoleChange { current: &active },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect_err("the refused request entry stops the role change");
+    assert_eq!(refused, MigrationError::ActivationAuditUnavailable);
+    assert_eq!(durable_snapshot(&database).await, before);
+    assert_ready_target(&database, &active).await;
+    database.cleanup().await;
+}
+
+/// The activation audit entries recorded under one activation id, oldest
+/// first, as their envelope phase and record.
+fn activation_audit_records(
+    database: &TestDatabase,
+    activation_id: &str,
+) -> Vec<(String, serde_json::Value)> {
+    database
+        .activation_audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == "breg-activation-audit/v1" && entry["correlation"] == activation_id
+        })
+        .map(|mut entry| {
+            let phase = entry["phase"]
+                .as_str()
+                .expect("an entry has a phase")
+                .to_owned();
+            (phase, entry["record"].take())
+        })
+        .collect()
+}
+
+fn with_outcome(record: &serde_json::Value, phase: &str, outcome: &str) -> serde_json::Value {
+    let mut record = record.clone();
+    record["phase"] = phase.into();
+    record["outcome"] = outcome.into();
+    record
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2071,6 +2307,17 @@ async fn real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activ
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0]["transition"], "superseded");
     assert_eq!(records[0]["activationId"], adopted.activation_id);
+    let adoption_audit = activation_audit_records(&database, &adopted.activation_id);
+    assert_eq!(adoption_audit.len(), 2, "{adoption_audit:?}");
+    assert_eq!(adoption_audit[0].1["planKind"], "adopted");
+    assert_eq!(
+        adoption_audit[0].1["priorActivationId"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        adoption_audit[1].1,
+        with_outcome(&adoption_audit[0].1, "terminal", "applied")
+    );
     assert_eq!(
         model_table_oids(&database).await,
         model_tables,
@@ -2129,6 +2376,22 @@ async fn real_postgres_adoption_refuses_a_package_whose_fingerprint_differs_and_
     assert_eq!(
         import_authority_status(&database, authority_id).await,
         ("open".to_owned(), false)
+    );
+    let adoption_audit = database
+        .activation_audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == "breg-activation-audit/v1"
+                && entry["record"]["planKind"] == "adopted"
+        })
+        .map(|entry| (entry["phase"].clone(), entry["record"]["outcome"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        adoption_audit,
+        vec![
+            ("request".into(), "started".into()),
+            ("response".into(), "failed".into()),
+        ]
     );
     database.cleanup().await;
 }
@@ -2435,6 +2698,10 @@ async fn initial_package_database() -> (TestDatabase, VerifiedPackage) {
     (database, initial)
 }
 
+/// A successor activation supersedes every open import authority in the
+/// transaction that makes it active, and each supersession is recorded
+/// under the successor's activation id once that transaction commits. The
+/// authority keeps the activation id it was opened under.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_successor_activation_supersedes_every_open_import_authority() {
     let (database, active, authority_id, package) = successor_over_an_open_import_authority().await;
@@ -2465,9 +2732,9 @@ async fn real_postgres_a_successor_activation_supersedes_every_open_import_autho
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_refused_supersession_record_reports_the_activation_audit_incomplete() {
     let (database, active, authority_id, package) = successor_over_an_open_import_authority().await;
-    // The audit refuses the next entry, the supersession record this
-    // activation owes it.
-    database.activation_audit_capture().fail_after(0);
+    // The audit accepts the activation's request and applied response,
+    // then refuses the supersession record this activation owes it.
+    database.activation_audit_capture().fail_after(2);
     let refused = apply(
         &database,
         &package,

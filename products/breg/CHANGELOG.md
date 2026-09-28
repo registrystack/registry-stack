@@ -100,6 +100,18 @@
   characters, and the audit profile must be keyed: the ledger row records only
   its keyed hash, scoped to the activation id, never the text.
 
+- Every activation, adoption included, is audited as
+  `breg-activation-audit/v1`, correlated by its activation id. The request
+  entry is written before the activation changes any state and names the
+  activation and prior activation ids, the package and predecessor digests,
+  the `registryRevision`, the plan kind, the database id, environment,
+  instance id, role mode, and the operator reference's keyed hash. The
+  response follows the commit as `applied`, or durable state that shows the
+  target did not become active as `failed`; an attempt whose end that state
+  cannot show is answered `unfinished`. An audit destination that refuses
+  the request entry refuses the apply as `apply.audit.unavailable`, and
+  nothing changes.
+
 - An activation records the instance claim when the database has never
   recorded one, as a registry upgraded from a release before the claim, so an
   in-place upgrade starts after `bregctl apply` without `bregctl
