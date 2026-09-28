@@ -23,6 +23,7 @@ SPEC.loader.exec_module(MODULE)
 
 VERSION = "0.31.0"
 ARCHIVE_VERSION = "0.33.0"
+OPERATOR_TOOL_VERSION = "0.36.0"
 SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"],
     cwd=ROOT,
@@ -90,6 +91,17 @@ CASEWORKCTL_ARGS = [
     "--target",
     TARGET,
 ]
+SCHEDULINGCTL_ARGS = [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "registry-schedulingctl",
+    "--bin",
+    "schedulingctl",
+    "--target",
+    TARGET,
+]
 
 
 def digest(path: Path) -> str:
@@ -147,6 +159,7 @@ binaries = {
     "registry-bregctl": "bregctl",
     "registry-casework": "casework",
     "registry-caseworkctl": "caseworkctl",
+    "registry-schedulingctl": "schedulingctl",
 }
 for package in packages:
     name = binaries[package]
@@ -425,6 +438,119 @@ if path.suffix != ".dylib":
             sorted(MODULE.rosters(version)["core"]),
             sorted(path.name for path in (merged / "platform").iterdir()),
         )
+
+    def test_scheduling_group_builds_schedulingctl_only_from_v0_36_0(self) -> None:
+        old_result, old, old_calls = self.build(
+            "scheduling", version="0.35.0", name="old-scheduling"
+        )
+        self.assertEqual(0, old_result.returncode, old_result.stderr)
+        self.assertEqual([], old_calls)
+        self.assertEqual([], MODULE.rosters("0.35.0")["scheduling"])
+        self.assertEqual([], list((old / "platform").iterdir()))
+        self.assertEqual("", (old / "SHA256SUMS").read_text())
+        old_all, old_all_output, old_all_calls = self.build(
+            "all", version="0.35.0", name="old-all"
+        )
+        self.assertEqual(0, old_all.returncode, old_all.stderr)
+        self.assertNotIn(SCHEDULINGCTL_ARGS, old_all_calls)
+
+        result, output, calls = self.build(
+            "scheduling", version=OPERATOR_TOOL_VERSION, name="new-scheduling"
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([SCHEDULINGCTL_ARGS], calls)
+        self.assertEqual(
+            [f"schedulingctl-v{OPERATOR_TOOL_VERSION}-macos-arm64.tar.gz"],
+            MODULE.rosters(OPERATOR_TOOL_VERSION)["scheduling"],
+        )
+        self.assertEqual(
+            MODULE.rosters(OPERATOR_TOOL_VERSION)["scheduling"],
+            [
+                line.split("  ", 1)[1]
+                for line in (output / "SHA256SUMS").read_text().splitlines()
+            ],
+        )
+        self.assertEqual(
+            "schedulingctl\n", (self.root / "new-scheduling-smoke.log").read_text()
+        )
+
+    def test_v0_36_merged_groups_match_all_mode_with_schedulingctl(self) -> None:
+        all_result, all_output, all_calls = self.build(
+            "all", version=OPERATOR_TOOL_VERSION, name="tools-all"
+        )
+        self.assertEqual(0, all_result.returncode, all_result.stderr)
+        self.assertEqual(
+            [
+                CORE_ARGS,
+                BREG_ARGS,
+                BREGCTL_ARGS,
+                CASEWORK_RUNTIME_ARGS,
+                CASEWORKCTL_ARGS,
+                SCHEDULINGCTL_ARGS,
+            ],
+            all_calls,
+        )
+        rosters = MODULE.rosters(OPERATOR_TOOL_VERSION)
+        expected = [
+            *rosters["core"],
+            *rosters["breg"],
+            *rosters["bregctl"],
+            *rosters["casework"],
+            *rosters["scheduling"],
+        ]
+        self.assertEqual(
+            expected,
+            [
+                line.split("  ", 1)[1]
+                for line in (all_output / "SHA256SUMS").read_text().splitlines()
+            ],
+        )
+        shards = {}
+        for group in ("core", "breg", "bregctl", "casework", "scheduling"):
+            result, shard, _ = self.build(
+                group, version=OPERATOR_TOOL_VERSION, name=f"tools-{group}"
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            shards[group] = shard
+        without_scheduling = self.root / "tools-merged-without-scheduling"
+        with self.assertRaisesRegex(
+            MODULE.ShardError, "scheduling shard is required from version 0.36.0"
+        ):
+            MODULE.merge(
+                version=OPERATOR_TOOL_VERSION,
+                source_sha=SOURCE_SHA,
+                purpose="review_only",
+                core=shards["core"],
+                breg=shards["breg"],
+                bregctl=shards["bregctl"],
+                casework=shards["casework"],
+                output=without_scheduling,
+            )
+        self.assertFalse(without_scheduling.exists())
+        merged = self.root / "tools-merged"
+        MODULE.merge(
+            version=OPERATOR_TOOL_VERSION,
+            source_sha=SOURCE_SHA,
+            purpose="review_only",
+            core=shards["core"],
+            breg=shards["breg"],
+            bregctl=shards["bregctl"],
+            casework=shards["casework"],
+            scheduling=shards["scheduling"],
+            output=merged,
+        )
+        self.assertEqual(
+            sorted(expected),
+            sorted(path.name for path in (merged / "platform").iterdir()),
+        )
+        for name in expected:
+            self.assertEqual(
+                (all_output / "platform" / name).read_bytes(),
+                (merged / "platform" / name).read_bytes(),
+            )
+            self.assertEqual(
+                0o644, stat.S_IMODE((merged / "platform" / name).stat().st_mode)
+            )
 
     def test_build_failure_or_bad_version_smoke_exposes_no_shard(self) -> None:
         failed, failed_output, calls = self.build(

@@ -29,6 +29,12 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGE_NAMES = frozenset(
     {"breg", "casework", "discovery", "evidence", "relay", "scheduling"}
 )
+# The operator tool each stateful product image may carry beside its runtime.
+OPERATOR_TOOLS = {
+    "breg": "bregctl",
+    "casework": "caseworkctl",
+    "scheduling": "schedulingctl",
+}
 SEMVER_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 REVISION_RE = re.compile(r"[0-9a-f]{40}")
@@ -91,6 +97,27 @@ def parse_roster(output: str) -> tuple[str, ...]:
             f"release image roster contains unsupported names: {unsupported}"
         )
     return names
+
+
+def parse_operator_tools(output: str, names: Sequence[str]) -> dict[str, str]:
+    tools: dict[str, str] = {}
+    for pair in output.split():
+        image, separator, tool = pair.partition("=")
+        if not separator or OPERATOR_TOOLS.get(image) != tool:
+            raise EvidenceError(
+                f"release operator tool roster contains an unsupported pair: {pair!r}"
+            )
+        if image in tools:
+            raise EvidenceError(
+                f"release operator tool roster names {image} more than once"
+            )
+        if image not in names:
+            raise EvidenceError(
+                f"release operator tool roster names {image}, which is not a "
+                "release image"
+            )
+        tools[image] = tool
+    return tools
 
 
 def load_json_object(path: Path, description: str) -> dict[str, Any]:
@@ -174,13 +201,16 @@ def write_exposure_report(
     executable: str,
     temporary: Path,
     output: Path,
+    subject: str | None = None,
 ) -> None:
     try:
         report = image_exposure.report_archive_executable(
             rootfs_tar, executable, image=name, temporary=temporary
         )
     except image_exposure.ExposureError as error:
-        raise EvidenceError(f"ELF exposure report for {name} failed: {error}") from error
+        raise EvidenceError(
+            f"ELF exposure report for {subject or name} failed: {error}"
+        ) from error
     output.write_text(image_exposure.render_report(report), encoding="utf-8")
 
 
@@ -334,6 +364,16 @@ def collect(args: argparse.Namespace) -> None:
         ]
     )
     names = parse_roster(roster_result.stdout)
+    operator_tools_result = run_command(
+        [
+            sys.executable,
+            str(ROOT / "release/scripts/release_candidate.py"),
+            "image-operator-tools",
+            "--version",
+            args.version,
+        ]
+    )
+    operator_tools = parse_operator_tools(operator_tools_result.stdout, names)
 
     args.output.mkdir(parents=True)
     for directory in ("exposure", "grype", "oci-config", "rootfs", "syft"):
@@ -513,6 +553,18 @@ def collect(args: argparse.Namespace) -> None:
                     temporary=temporary_path,
                     output=args.output / f"exposure/{name}.json",
                 )
+                # The runtime stays the Entrypoint, so the image's operator
+                # tool gets a report of its own for the renewal review.
+                if name in operator_tools:
+                    tool = operator_tools[name]
+                    write_exposure_report(
+                        name=name,
+                        rootfs_tar=rootfs_tar,
+                        executable=f"/usr/local/bin/{tool}",
+                        temporary=temporary_path,
+                        output=args.output / f"exposure/{name}.{tool}.json",
+                        subject=f"{name} operator tool {tool}",
+                    )
                 images.append({"name": name, "digest": digest})
 
             manifest = {
