@@ -5135,6 +5135,110 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
 }
 
 #[test]
+fn field_encryption_preflight_refuses_a_package_that_does_not_succeed_the_active_package() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let preflight = |package: &Path| {
+        bregctl(&[
+            "--format",
+            "json",
+            "field-encryption",
+            "preflight",
+            "--runtime-config",
+            path(&fixture.runtime_config),
+            "--package",
+            path(package),
+        ])
+    };
+
+    // The counts describe the state an apply starts from, so a package built
+    // from any other predecessor is refused before its plan is read.
+    let unbound = publish_unchanged_successor(
+        &fixture,
+        "unbound-successor",
+        "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    );
+    let output = preflight(&unbound);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "field_encryption.preflight.package.refused"
+    );
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "verified_package",
+        "verify_package_binding",
+    );
+
+    // The active package is never its own successor.
+    let output = preflight(&fixture.package);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "field_encryption.preflight.package.refused"
+    );
+
+    // The same package built from the active package passes the binding and
+    // stops only because it plans no backfill.
+    let bound = publish_unchanged_successor(&fixture, "bound-successor", &fixture.package_digest);
+    let output = preflight(&bound);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "field_encryption.preflight.plan.no_backfill"
+    );
+}
+
+/// Publishes the fixture's registry again as a successor that names
+/// `from_package_digest` as its predecessor and changes nothing else.
+fn publish_unchanged_successor(
+    fixture: &RuntimePackageFixture,
+    name: &str,
+    from_package_digest: &str,
+) -> PathBuf {
+    let module_bytes = package_module_bytes();
+    let module = parse_module_json(&module_bytes).expect("package module parses");
+    let project_bytes = package_project_bytes(&module_digest(&module));
+    let request = |from_package_digest: Option<String>, migration_plan| PackageBuildRequest {
+        from_package_digest,
+        compiler_source_revision: PACKAGE_SOURCE_REVISION.to_owned(),
+        schema_fingerprint:
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes: project_bytes.clone(),
+        },
+        modules: vec![PackageModuleSource {
+            id: "core".to_owned(),
+            path: "source/modules/core/module.yaml".to_owned(),
+            bytes: module_bytes.clone(),
+            assets: Vec::new(),
+        }],
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: PACKAGE_FIXTURE_JOURNEYS.to_vec(),
+        },
+        migration_plan,
+    };
+    let prior_registry =
+        prepare_package(request(None, PackageMigrationPlanInput::InitialCompiledDdl))
+            .expect("prior package prepares")
+            .registry()
+            .clone();
+    let package = fixture.directory.path().join(name);
+    prepare_package(request(
+        Some(from_package_digest.to_owned()),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(prior_registry),
+        },
+    ))
+    .expect("successor package prepares")
+    .publish_to_directory(&package)
+    .expect("successor package publishes");
+    package
+}
+
+#[test]
 fn verify_is_runtime_bound_deterministic_and_listener_free() {
     let occupied = TcpListener::bind("127.0.0.1:0").expect("listener proof binds one local port");
     let fixture = RuntimePackageFixture::production(
