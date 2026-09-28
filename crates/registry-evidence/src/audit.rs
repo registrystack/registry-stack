@@ -1130,6 +1130,49 @@ struct PendingLocalOperation {
     from_oldest_file: bool,
 }
 
+/// What a request batch's later entries must agree with: the latest entry
+/// read, and the authority and subjects each item was accessed under.
+struct PendingRequestBatch {
+    last: EvidenceRequestBatchAuditEvent,
+    items: BTreeMap<u8, (AuditAuthority, Vec<AuditSubject>)>,
+}
+
+impl PendingRequestBatch {
+    /// Accept `event` as the batch's next entry if it shares the batch's
+    /// context, follows the latest entry in time, and names every item under
+    /// the authority and subjects it was accessed under.
+    fn follow(&mut self, event: &EvidenceRequestBatchAuditEvent) -> Result<(), AuditError> {
+        if !coherent_request_batch_entries(&self.last, event) {
+            return Err(invalid_audit_data());
+        }
+        bind_request_batch_items(&mut self.items, event)
+    }
+}
+
+/// Record the authority and subjects each item group of `event` names,
+/// refusing an item already bound to different ones.
+fn bind_request_batch_items(
+    items: &mut BTreeMap<u8, (AuditAuthority, Vec<AuditSubject>)>,
+    event: &EvidenceRequestBatchAuditEvent,
+) -> Result<(), AuditError> {
+    for group in event.item_groups.iter().flatten() {
+        for index in &group.item_indices {
+            match items.entry(*index) {
+                std::collections::btree_map::Entry::Occupied(bound) => {
+                    let (authority, subjects) = bound.get();
+                    if *authority != group.authority || *subjects != group.subjects {
+                        return Err(invalid_audit_data());
+                    }
+                }
+                std::collections::btree_map::Entry::Vacant(unbound) => {
+                    unbound.insert((group.authority.clone(), group.subjects.clone()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct LocalAuditCollector {
     bounds: Option<LocalAuditInspectionBounds>,
@@ -1146,7 +1189,7 @@ struct LocalAuditCollector {
     /// Every request-batch operation read. The local view does not show one.
     request_batches: BTreeSet<String>,
     /// Request-batch operations with an access entry and no terminal entry.
-    pending_request_batches: BTreeSet<String>,
+    pending_request_batches: BTreeMap<String, PendingRequestBatch>,
     last_completed: Option<LocalAuditOperationView>,
     /// Whether the entries read come from the oldest retained file, where a
     /// terminal entry may follow an access entry retention deleted.
@@ -1211,8 +1254,9 @@ impl LocalAuditCollector {
     }
 
     /// Check a request-batch entry and record its operation. A batch is
-    /// never the operation the view shows, so its entries are checked for
-    /// shape and order only and never abort the read of another operation.
+    /// never the operation the view shows, but its entries are held to the
+    /// same shape, order, and coherence as a single request's, so a batch
+    /// whose entries disagree fails the read like any incoherent history.
     fn collect_request_batch(
         &mut self,
         event: EvidenceRequestBatchAuditEvent,
@@ -1220,7 +1264,7 @@ impl LocalAuditCollector {
         event
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
-        let operation = event.operation;
+        let operation = event.operation.clone();
         // One operation identifier belongs to one record family.
         if self.pending.contains_key(&operation)
             || (self.completed.contains(&operation) && !self.request_batches.contains(&operation))
@@ -1235,12 +1279,25 @@ impl LocalAuditCollector {
             if self.completed.contains(&operation) {
                 return Err(invalid_audit_data());
             }
-            self.pending_request_batches.insert(operation);
+            match self.pending_request_batches.entry(operation) {
+                std::collections::btree_map::Entry::Occupied(mut pending) => {
+                    let pending = pending.get_mut();
+                    pending.follow(&event)?;
+                    pending.last = event;
+                }
+                std::collections::btree_map::Entry::Vacant(unopened) => {
+                    let mut items = BTreeMap::new();
+                    bind_request_batch_items(&mut items, &event)?;
+                    unopened.insert(PendingRequestBatch { last: event, items });
+                }
+            }
             return Ok(());
         }
         // A batch may end before any source call, so a terminal entry needs
         // no access entry before it, but an operation ends once.
-        self.pending_request_batches.remove(&operation);
+        if let Some(mut pending) = self.pending_request_batches.remove(&operation) {
+            pending.follow(&event)?;
+        }
         if !self.completed.insert(operation) {
             return Err(invalid_audit_data());
         }
@@ -1476,10 +1533,35 @@ fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAudit
 }
 
 fn occurred_in_order(earlier: &EvidenceAuditEvent, later: &EvidenceAuditEvent) -> bool {
-    chrono::DateTime::parse_from_rfc3339(&earlier.occurred_at)
+    timestamps_in_order(&earlier.occurred_at, &later.occurred_at)
+}
+
+fn timestamps_in_order(earlier: &str, later: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(earlier)
         .ok()
-        .zip(chrono::DateTime::parse_from_rfc3339(&later.occurred_at).ok())
+        .zip(chrono::DateTime::parse_from_rfc3339(later).ok())
         .is_some_and(|(earlier, later)| earlier <= later)
+}
+
+/// Whether `later` follows `earlier` in time and shares everything every
+/// entry of one request batch carries. The source, adapter, and item fields
+/// are per physical call or per phase, and are held apart by item instead.
+fn coherent_request_batch_entries(
+    earlier: &EvidenceRequestBatchAuditEvent,
+    later: &EvidenceRequestBatchAuditEvent,
+) -> bool {
+    timestamps_in_order(&earlier.occurred_at, &later.occurred_at)
+        && earlier.operation == later.operation
+        && earlier.assurance_profile == later.assurance_profile
+        && earlier.requirement == later.requirement
+        && earlier.bundle_revision == later.bundle_revision
+        && earlier.purpose == later.purpose
+        && earlier.requester_pseudonym == later.requester_pseudonym
+        && earlier.actor_kind == later.actor_kind
+        && earlier.client_pseudonym == later.client_pseudonym
+        && earlier.actor_pseudonym == later.actor_pseudonym
+        && earlier.reason == later.reason
+        && earlier.response_protection == later.response_protection
 }
 
 /// Everything two entries of one operation share, whichever source stage
@@ -3221,6 +3303,125 @@ mod tests {
         append_local_operation(&log, "local-operation-0000000000000002").await;
         drop(log);
         assert!(last_local_audit_operation(&path).is_err());
+    }
+
+    /// A two-item request batch as the sequential batch route writes it: one
+    /// access entry per item, then one release entry naming both items.
+    fn local_two_item_request_batch(operation: &str) -> Vec<EvidenceRequestBatchAuditEvent> {
+        let (mut first, mut release) = local_request_batch(operation);
+        let mut second = first.clone();
+        second.event_id = format!("urn:ulid:{}", ulid::Ulid::generate());
+        second.source_id = Some("source-b".to_owned());
+        second.adapter_id = Some("adapter-b".to_owned());
+        second.item_indices = Some(vec![1]);
+        second.item_groups = Some(vec![request_batch_item_group(vec![1], '3')]);
+        release.item_groups = Some(vec![
+            request_batch_item_group(vec![0], '2'),
+            request_batch_item_group(vec![1], '3'),
+        ]);
+        release.outcomes = Some(vec![
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 0,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 1,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+        ]);
+        // Millisecond timestamps, strictly in the order the route writes.
+        let start = chrono::Utc::now();
+        for (offset, event) in [&mut first, &mut second, &mut release]
+            .into_iter()
+            .enumerate()
+        {
+            event.occurred_at = start
+                .checked_add_signed(chrono::Duration::milliseconds(
+                    i64::try_from(offset).expect("offset"),
+                ))
+                .expect("timestamp advances")
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        }
+        vec![first, second, release]
+    }
+
+    async fn read_after_request_batch(
+        batch: Vec<EvidenceRequestBatchAuditEvent>,
+    ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        for event in batch {
+            log.append_request_batch(event)
+                .await
+                .expect("batch entry appends");
+        }
+        append_local_operation(&log, "local-operation-0000000000000002").await;
+        drop(log);
+        last_local_audit_operation(&path)
+    }
+
+    #[tokio::test]
+    async fn local_inspection_accepts_a_coherent_multi_entry_request_batch() {
+        let batch = local_two_item_request_batch("batch-operation-00000000001");
+        let view = read_after_request_batch(batch)
+            .await
+            .expect("a coherent batch does not abort the read");
+        assert_eq!(view.operation, "local-operation-0000000000000002");
+        assert_eq!(view.unmatched_earlier_operations, 0);
+    }
+
+    #[tokio::test]
+    async fn local_inspection_refuses_a_request_batch_whose_entries_disagree() {
+        type Mutation = fn(&mut [EvidenceRequestBatchAuditEvent]);
+        let incoherent: [(&str, Mutation); 10] = [
+            ("requirement", |batch| {
+                batch[2].requirement = "urn:example:requirement:other:v1".to_owned();
+            }),
+            ("requester", |batch| {
+                batch[1].requester_pseudonym = format!("hmac-sha256:v1:{}", "9".repeat(64));
+            }),
+            ("assurance-profile", |batch| {
+                batch[2].assurance_profile = AssuranceProfile::EvidenceGrade;
+            }),
+            ("bundle-revision", |batch| {
+                batch[1].bundle_revision = format!("sha256:{}", "f".repeat(64));
+            }),
+            ("purpose", |batch| batch[2].purpose = "other".to_owned()),
+            ("actor", |batch| {
+                batch[1].actor_pseudonym = Some(format!("hmac-sha256:v1:{}", "8".repeat(64)));
+            }),
+            ("client", |batch| {
+                batch[2].client_pseudonym = Some(format!("hmac-sha256:v1:{}", "7".repeat(64)));
+            }),
+            ("reversed-access-timestamps", |batch| {
+                batch[1].occurred_at = "2000-01-01T00:00:00.000Z".to_owned();
+            }),
+            ("terminal-before-access", |batch| {
+                batch[2].occurred_at = "2000-01-01T00:00:00.000Z".to_owned();
+            }),
+            ("item-subjects", |batch| {
+                batch[2].item_groups = Some(vec![
+                    request_batch_item_group(vec![0], '2'),
+                    request_batch_item_group(vec![1], '4'),
+                ]);
+            }),
+        ];
+        for (name, mutate) in incoherent {
+            let mut batch = local_two_item_request_batch("batch-operation-00000000001");
+            mutate(&mut batch);
+            let refused = read_after_request_batch(batch).await;
+            assert!(
+                matches!(
+                    &refused,
+                    Err(EvidenceAuditError::Audit(AuditError::Io(error)))
+                        if error.kind() == ErrorKind::InvalidData
+                ),
+                "a batch whose {name} disagrees must fail the read: {refused:?}"
+            );
+        }
     }
 
     #[tokio::test]
