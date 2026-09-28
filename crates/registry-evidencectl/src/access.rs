@@ -978,12 +978,34 @@ fn ensure_directory(path: &Path, mode: u32) -> Result<()> {
             // an operator under `umask 077` gets a 0700 public directory. Set
             // the intended mode explicitly on the directory this call created,
             // then prove it, rather than refusing a directory we just made.
-            fs::set_permissions(path, fs::Permissions::from_mode(mode))
-                .with_context(|| format!("setting the mode of {}", path.display()))?;
+            set_directory_mode_without_following(path, mode)?;
             validate_path_mode(path, true, mode)
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// Set `mode` on the directory at `path` through a descriptor opened without
+/// following a final symlink.
+///
+/// A path-based chmod follows a symlink, so a directory swapped for one
+/// between its creation and the chmod would lend this process's authority to
+/// whatever the link names. Opening with `NOFOLLOW` and `DIRECTORY` refuses
+/// anything but the plain directory, and the mode is applied to that very
+/// directory rather than to a name resolved a second time.
+fn set_directory_mode_without_following(path: &Path, mode: u32) -> Result<()> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::DIRECTORY,
+        rustix::fs::Mode::empty(),
+    )
+    .with_context(|| format!("opening {} as a plain directory", path.display()))?;
+    File::from(descriptor)
+        .set_permissions(fs::Permissions::from_mode(mode))
+        .with_context(|| format!("setting the mode of {}", path.display()))
 }
 
 fn validate_path_mode(path: &Path, directory: bool, mode: u32) -> Result<()> {
@@ -1082,5 +1104,48 @@ fn joined_policies(policies: &[String]) -> String {
         format!("policy {}", policies[0])
     } else {
         format!("policies {}", policies.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    /// A directory swapped for a symlink before its mode is set must not lend
+    /// the chmod to the link's target.
+    #[test]
+    fn setting_a_directory_mode_refuses_a_symlink_and_leaves_its_target_alone() {
+        let fixture = tempfile::tempdir().expect("tempdir");
+        let target = fixture.path().join("private-target");
+        fs::create_dir(&target).expect("target directory");
+        fs::set_permissions(&target, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE))
+            .expect("private target mode");
+        let swapped = fixture.path().join("public");
+        symlink(&target, &swapped).expect("swapped symlink");
+
+        assert!(set_directory_mode_without_following(&swapped, PUBLIC_DIRECTORY_MODE).is_err());
+        assert_eq!(
+            fs::metadata(&target)
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            PRIVATE_DIRECTORY_MODE
+        );
+
+        let plain = fixture.path().join("plain");
+        fs::create_dir(&plain).expect("plain directory");
+        set_directory_mode_without_following(&plain, PUBLIC_DIRECTORY_MODE)
+            .expect("a plain directory takes the mode");
+        assert_eq!(
+            fs::metadata(&plain)
+                .expect("plain metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            PUBLIC_DIRECTORY_MODE
+        );
     }
 }
