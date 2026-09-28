@@ -145,6 +145,87 @@ fn overlapping_policy_membership_is_rejected_before_key_generation() {
     assert!(!project.join(".evidence/clients/ambiguous-client").exists());
 }
 
+/// Run one `evidencectl` invocation under a strict file-creation mask.
+///
+/// The mask is set by a shell in the child alone, so no other test in this
+/// binary runs under it.
+fn evidencectl_under_umask_077(project: &Path, arguments: &[&str]) -> Output {
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg("umask 077 && exec \"$0\" \"$@\"")
+        .arg(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(arguments)
+        .arg("--project")
+        .arg(project)
+        .output()
+        .expect("run evidencectl under umask 077")
+}
+
+/// An operator whose shell masks group and other bits still gets the public
+/// access tree at its published modes. The mode check that follows each
+/// creation refuses anything else, so a directory created at whatever the mask
+/// left behind would fail the very command that created it.
+#[test]
+fn access_commands_create_their_directories_at_the_intended_modes_under_umask_077() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fixture.path();
+    write_question(project, "adult-status");
+
+    assert_eq!(
+        success(&evidencectl_under_umask_077(
+            project,
+            &[
+                "access",
+                "policy",
+                "add",
+                "age-checks",
+                "--question",
+                "adult-status"
+            ],
+        )),
+        "Added access policy age-checks for adult-status.\n"
+    );
+    assert_eq!(mode(&project.join("access")), 0o755);
+    assert_eq!(mode(&project.join("access/policies")), 0o755);
+    assert_eq!(
+        mode(&project.join("access/policies/age-checks.yaml")),
+        0o644
+    );
+
+    assert_eq!(
+        success(&evidencectl_under_umask_077(
+            project,
+            &[
+                "access",
+                "client",
+                "add",
+                "age-checker",
+                "--policy",
+                "age-checks",
+                "--generate-local-key"
+            ],
+        )),
+        "Added client age-checker with policy age-checks.\n"
+    );
+    assert_eq!(mode(&project.join("access/clients")), 0o755);
+    assert_eq!(
+        mode(&project.join("access/clients/age-checker.yaml")),
+        0o644
+    );
+    assert_eq!(mode(&project.join(".evidence")), 0o700);
+    assert_eq!(mode(&project.join(".evidence/clients")), 0o700);
+    assert_eq!(
+        mode(&project.join(".evidence/clients/age-checker/private.jwk")),
+        0o600
+    );
+
+    let policies = success(&evidencectl_under_umask_077(
+        project,
+        &["access", "policy", "list"],
+    ));
+    assert!(policies.contains("age-checks\tadult-status"));
+}
+
 #[test]
 fn unsafe_identifiers_and_unknown_questions_change_nothing() {
     let fixture = tempfile::tempdir().expect("tempdir");

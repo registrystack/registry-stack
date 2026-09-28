@@ -974,6 +974,12 @@ fn ensure_directory(path: &Path, mode: u32) -> Result<()> {
                 .mode(mode)
                 .create(path)
                 .with_context(|| format!("creating {}", path.display()))?;
+            // The kernel masks the requested mode with the process umask, so
+            // an operator under `umask 077` gets a 0700 public directory. Set
+            // the intended mode explicitly on the directory this call created,
+            // then prove it, rather than refusing a directory we just made.
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))
+                .with_context(|| format!("setting the mode of {}", path.display()))?;
             validate_path_mode(path, true, mode)
         }
         Err(error) => Err(error.into()),

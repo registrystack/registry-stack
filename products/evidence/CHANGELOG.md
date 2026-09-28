@@ -58,6 +58,11 @@
     `3` as an unavailable dependency, and replace `--project <dir>` with
     `<dir>` in scripts for the commands that now take a positional project.
 
+- Fix: `evidencectl access policy add` and `access client add` set their
+  directories to the intended modes after creating them, so they no longer
+  refuse the directory they just created when the operator's shell runs under
+  a strict umask such as `077`.
+
 ## v0.35.0 - 2026-09-28
 
 - BREAKING: write audit through the shared platform audit writer instead of
