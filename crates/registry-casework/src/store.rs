@@ -4476,6 +4476,10 @@ pub enum StoreError {
     )]
     SchemaNewer { found: i64, supported: i64 },
     #[error(
+        "the Casework runtime role cannot read the activation ledger in schema {schema}; run `caseworkctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `caseworkctl plan --runtime-config FILE`"
+    )]
+    LedgerUnreadable { schema: String },
+    #[error(
         "the Casework database schema is not current: {}, and this binary requires version {required}; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`",
         applied_schema(*.applied)
     )]

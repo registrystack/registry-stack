@@ -465,6 +465,9 @@ impl PostgresStore {
     ) -> Result<ActivationPlan, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.build_transaction().read_only(true).start().await?;
+        if let Some(schema) = unreadable_ledger(&transaction).await? {
+            return Err(StoreError::LedgerUnreadable { schema });
+        }
         let observation = observe_role(&transaction, None).await?;
         // A runtime role that lost SELECT on a Casework table, as reassigning
         // the table to the migration role takes it, cannot read the effects;
@@ -1243,6 +1246,36 @@ async fn lock_runtime_order(transaction: &Transaction<'_>) -> Result<(), StoreEr
             .await?;
     }
     Ok(())
+}
+
+/// The schema holding the activation ledger this connection's search path
+/// reaches first, when this connection's role cannot read that ledger: it
+/// lacks USAGE on the schema, which hides the ledger so the database would
+/// read as empty, or SELECT on `casework_activations` or
+/// `casework_schema_migrations`, as a rotated runtime role does before apply
+/// grants it. `pg_class` names the ledger whatever the role may use.
+async fn unreadable_ledger(transaction: &Transaction<'_>) -> Result<Option<String>, StoreError> {
+    let row = transaction
+        .query_opt(
+            "SELECT n.nspname::text,
+               has_schema_privilege(n.oid, 'USAGE')
+               AND has_table_privilege(a.oid, 'SELECT')
+               AND (m.oid IS NULL OR has_table_privilege(m.oid, 'SELECT'))
+             FROM unnest(string_to_array(current_setting('search_path'), ','))
+               WITH ORDINALITY AS p(entry, position)
+             JOIN pg_namespace n ON n.nspname = CASE btrim(btrim(p.entry), '\"')
+               WHEN '$user' THEN current_user::text ELSE btrim(btrim(p.entry), '\"') END
+             JOIN pg_class a ON a.relnamespace = n.oid AND a.relname = 'casework_activations'
+             LEFT JOIN pg_class m
+               ON m.relnamespace = n.oid AND m.relname = 'casework_schema_migrations'
+             ORDER BY p.position
+             LIMIT 1",
+            &[],
+        )
+        .await?;
+    Ok(row
+        .filter(|row| !row.get::<_, bool>(1))
+        .map(|row| row.get(0)))
 }
 
 /// The authority of `role`, or of this connection's role when none is
