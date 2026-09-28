@@ -4,7 +4,7 @@
 
 The rehearsal downloads the previous release's published Base Registry
 Engine, Casework, and Evidence binaries, authenticates them the way
-release/VERIFY.md describes, and uses them to write real state: a signed,
+release/VERIFY.md describes, and uses them to write real state: an
 activated registry package with records and revisions, a Casework review
 queue with answered and in-flight work, and an Evidence audit stream with a
 signed response. It then points the binaries built from this source at that
@@ -249,13 +249,20 @@ def install_asset(asset: Path, binary: str, destination: Path) -> None:
 
 
 def row_count_losses(before: dict[str, int], after: dict[str, int],
-                     archived: dict[str, int] | None = None) -> list[str]:
-    """Name every row loss, allowing only checked archives of retired audit tables."""
+                     archived: dict[str, int] | None = None,
+                     relocated: set[str] | frozenset[str] = frozenset()) -> list[str]:
+    """Name every row loss, allowing only checked archives of retired audit tables.
+
+    A `relocated` table is one whose rows the upgrade moves into another table
+    and the caller checks there, so it alone may disappear.
+    """
 
     losses = []
     for table, count in sorted(before.items()):
         if (table not in after and (archived or {}).get(table) == count
                 and any(table in tables for tables in RETIRED_AUDIT_TABLES.values())):
+            continue
+        if table not in after and table in relocated:
             continue
         if table not in after:
             losses.append(f"{table} disappeared (held {count} rows)")
@@ -851,6 +858,72 @@ BREG_KID = "upgrade-rehearsal-issuer"
 BREG_SIGNER = "upgrade-rehearsal-signer"
 BREG_DATABASE_ID = "upgrade-rehearsal-db"
 BREG_ENVIRONMENT = "staging"
+# A release with the activation ledger takes the instance from the runtime
+# file alone; an earlier one wrote it into the starter project.
+BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
+# Project keys a release with the activation ledger refuses: the deployment
+# identity moved to the runtime file, and the ledger orders activations.
+RETIRED_PACKAGE_KEYS = ("environment", "instanceId", "sequence")
+
+
+def signs_packages(side: Side) -> bool:
+    """Whether one side's `bregctl` still builds signed, sequenced packages."""
+
+    return "--signatures" in side.run("bregctl", "package", "--help").stdout
+
+
+def retire_package_identity(registry: dict[str, Any]) -> list[str]:
+    """Remove the project keys a ledger release refuses; name the ones removed."""
+
+    package = registry["package"]
+    removed = [key for key in RETIRED_PACKAGE_KEYS if key in package]
+    for key in removed:
+        del package[key]
+    return removed
+
+
+def instance_claim(side: Side, runtime: Path) -> dict[str, Any] | None:
+    return side.run_json("bregctl", "--format", "json", "instance-claim", "status",
+                         "--runtime-config", str(runtime))["status"]["claim"]
+
+
+def claim_differences(before: dict[str, Any] | None,
+                      after: dict[str, Any] | None) -> list[str]:
+    """Adoption carries a recorded instance claim over, or records one."""
+
+    if after is None:
+        return ["the adopted database records no instance claim"]
+    if before is not None and before != after:
+        return ["adoption changed the instance claim the database recorded"]
+    return []
+
+
+def expect_plan(plan: dict[str, Any], activation: str, digest: str) -> None:
+    if (plan.get("pending") is not True or plan.get("activation") != activation
+            or plan.get("packageDigest") != digest):
+        raise RehearsalError(f"bregctl plan did not report a pending {activation} "
+                             "activation of the package")
+
+
+def expect_ledger(status: dict[str, Any], active: str) -> list[str]:
+    """Check the active package is the last applied, chained ledger entry.
+
+    Returns the ledger as planKind:outcome pairs in apply order.
+    """
+
+    entries = sorted(status["ledger"], key=lambda entry: entry["applyOrder"])
+    if status["activePackageDigest"] != active or status["maintenanceStatus"] != "ready":
+        raise RehearsalError("bregctl status did not report the applied package as "
+                             "active and ready")
+    applied = [entry for entry in entries if entry["outcome"] == "applied"]
+    if (not applied or applied[-1]["packageDigest"] != active
+            or applied[-1]["activationId"] != status["activationId"]):
+        raise RehearsalError("the active package is not the last applied ledger entry")
+    for previous, current in zip(applied, applied[1:]):
+        if current["predecessorPackageDigest"] != previous["packageDigest"]:
+            raise RehearsalError("an applied successor does not chain from the package "
+                                 "it replaced in the ledger")
+    return [f"{entry['planKind']}:{entry['outcome']}" for entry in entries]
 
 
 class Breg:
@@ -904,22 +977,24 @@ class Breg:
     def author(self, side: Side) -> None:
         side.run("bregctl", "init", str(self.project))
         registry = load_yaml(self.project / "registry.yaml")
-        registry["package"]["environment"] = BREG_ENVIRONMENT
-        dump_yaml(self.project / "registry.yaml", registry)
-        self.identity = registry["package"]
-        trust_anchor = {
-            "apiVersion": "registry.registrystack.org/package-trust/v1",
-            "databaseId": BREG_DATABASE_ID,
-            "environment": BREG_ENVIRONMENT,
-            "instanceId": self.identity["instanceId"],
-            "keys": [{"jwk": {"alg": "EdDSA", "crv": "Ed25519", "kid": BREG_SIGNER,
-                              "kty": "OKP",
-                              "x": Keys.ed25519_x(self.keys.package_signer)},
-                      "keyId": BREG_SIGNER}],
-            "threshold": 1,
-        }
-        (self.work / "trust-anchor.json").write_text(
-            json.dumps(trust_anchor, sort_keys=True, separators=(",", ":")))
+        self.identity = dict(registry["package"])
+        self.instance_id = self.identity.get("instanceId", BREG_INSTANCE_ID)
+        if signs_packages(side):
+            registry["package"]["environment"] = BREG_ENVIRONMENT
+            dump_yaml(self.project / "registry.yaml", registry)
+            trust_anchor = {
+                "apiVersion": "registry.registrystack.org/package-trust/v1",
+                "databaseId": BREG_DATABASE_ID,
+                "environment": BREG_ENVIRONMENT,
+                "instanceId": self.instance_id,
+                "keys": [{"jwk": {"alg": "EdDSA", "crv": "Ed25519", "kid": BREG_SIGNER,
+                                  "kty": "OKP",
+                                  "x": Keys.ed25519_x(self.keys.package_signer)},
+                          "keyId": BREG_SIGNER}],
+                "threshold": 1,
+            }
+            (self.work / "trust-anchor.json").write_text(
+                json.dumps(trust_anchor, sort_keys=True, separators=(",", ":")))
         journeys = load_yaml(self.project / "tests" / "journeys.yaml")
         for journey in journeys["journeys"]:
             for step in journey["steps"]:
@@ -950,15 +1025,23 @@ class Breg:
         token.update(claims.get("directClaims", {}))
         return token
 
-    def write_runtime(self, path: Path, database: str, package_root: Path,
-                      revision: str, sequence: int, port: int, *, file_audit: bool = True) -> None:
+    def write_runtime(self, path: Path, database: str, package_root: Path, port: int, *,
+                      file_audit: bool = True,
+                      signed: tuple[str, int] | None = None) -> None:
+        """Write the runtime file; `signed` is a signing release's revision and sequence."""
+
+        package: dict[str, Any] = {"root": str(package_root)}
+        if signed is not None:
+            package.update({"trustAnchorPath": str(self.work / "trust-anchor.json"),
+                            "compilerSourceRevision": self.identity["sourceRevision"],
+                            "activeRevision": signed[0], "activeSequence": signed[1]})
         dump_yaml(path, {
             "apiVersion": "registry.registrystack.org/breg-runtime/v1alpha1",
             "kind": "BRegRuntimeConfig",
             "listener": {"bind": f"127.0.0.1:{port}",
                          "publicOrigin": f"http://127.0.0.1:{port}"},
             "identity": {"environment": BREG_ENVIRONMENT,
-                         "instanceId": self.identity["instanceId"],
+                         "instanceId": self.instance_id,
                          "databaseId": BREG_DATABASE_ID,
                          "databaseInitializationEnvironment": BREG_ENVIRONMENT},
             "secretProviders": {"file": {"root": str(self.secrets)}},
@@ -967,10 +1050,7 @@ class Breg:
                          "pool": {"maxSize": 8},
                          "roles": {"migration": "registry_migration",
                                    "runtime": "registry_runtime"}},
-            "package": {"root": str(package_root),
-                        "trustAnchorPath": str(self.work / "trust-anchor.json"),
-                        "compilerSourceRevision": self.identity["sourceRevision"],
-                        "activeRevision": revision, "activeSequence": sequence},
+            "package": package,
             "authentication": {
                 "oidc": {"issuer": BREG_ISSUER, "audience": BREG_AUDIENCE,
                          "allowedAlgorithm": "EdDSA", "accessTokenType": "at+jwt",
@@ -1006,19 +1086,50 @@ class Breg:
             "apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
             "kind": "SchemaTestCredentials", "bindings": bindings}, indent=1))
 
-    def package(self, side: Side, build: Path, baseline: Path | None = None) -> tuple[Path, str]:
-        """Test, package, and sign the project; return the package and its revision."""
+    def test_runtime(self, side: Side, build: Path, *,
+                     signed: tuple[str, int] | None = None) -> tuple[Path, Path]:
+        """Prepare an empty schema-test database; return its runtime and credentials."""
 
         private_directory(build)
         self.create_database("schematest")
         empty = private_directory(build / "empty-package-root")
         test_runtime = build / "runtime-test.yaml"
-        self.write_runtime(test_runtime, "schematest", empty, "sha256:" + "0" * 64, 1,
-                           free_port(), file_audit=not side.has_legacy_breg_audit())
+        self.write_runtime(test_runtime, "schematest", empty, free_port(),
+                           file_audit=not side.has_legacy_breg_audit(), signed=signed)
         credentials = build / "credentials.json"
         self.credentials(credentials)
-        baseline_args = ["--baseline-runtime-config", str(baseline)] if baseline else []
-        signing = ["--database-id", BREG_DATABASE_ID, *baseline_args,
+        return test_runtime, credentials
+
+    def package(self, side: Side, build: Path, baseline: Path | None = None) -> tuple[Path, str]:
+        """Test and package the project; return the package and its digest.
+
+        `baseline` is the active package this one succeeds.
+        """
+
+        test_runtime, credentials = self.test_runtime(side, build)
+        baseline_args = ["--baseline-package", str(baseline)] if baseline else []
+        side.run_json("bregctl", "--format", "json", "test", str(self.project),
+                      "--runtime-config", str(test_runtime), "--credentials",
+                      str(credentials), *baseline_args, "--output",
+                      str(build / "receipt.json"))
+        output = build / "out"
+        report = side.run_json("bregctl", "--format", "json", "package", str(self.project),
+                               *baseline_args, "--test-receipt", str(build / "receipt.json"),
+                               "--output", str(output))
+        digest = report.get("packageDigest")
+        if not isinstance(digest, str):
+            raise RehearsalError("bregctl package reported no packageDigest")
+        return output / "package", digest
+
+    def package_signed(self, side: Side, build: Path) -> tuple[Path, str]:
+        """Test, package, and sign the first package with a signing release.
+
+        Returns the package and its revision.
+        """
+
+        test_runtime, credentials = self.test_runtime(side, build,
+                                                      signed=("sha256:" + "0" * 64, 1))
+        signing = ["--database-id", BREG_DATABASE_ID,
                    "--signature-threshold", "1", "--signature-key-id", BREG_SIGNER]
         tested = side.run_json("bregctl", "--format", "json", "test", str(self.project),
                                "--runtime-config", str(test_runtime), "--credentials",
@@ -1107,9 +1218,14 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     breg = Breg(work, keys, postgres)
     breg.provision()
     breg.author(old)
-    package, revision = breg.package(old, work / "build-1")
-    breg.write_runtime(breg.runtime, "registry", package, revision, 1, breg.port,
-                       file_audit=not old.has_legacy_breg_audit())
+    signed = None
+    if signs_packages(old):
+        package, revision = breg.package_signed(old, work / "build-1")
+        signed = (revision, 1)
+    else:
+        package, digest = breg.package(old, work / "build-1")
+    breg.write_runtime(breg.runtime, "registry", package, breg.port,
+                       file_audit=not old.has_legacy_breg_audit(), signed=signed)
     old.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
                  str(breg.runtime), "--package", str(package), "--initial")
     ready = f"http://127.0.0.1:{breg.port}/ready"
@@ -1121,54 +1237,91 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     finally:
         service.stop()
     before_counts = postgres.row_counts("registry")
-
     archived = archive_audit_tables(postgres, "registry", before_counts, work / "audit-table-archive")
-    # The new catalog removes audit tables, so rebuild and apply a successor
-    # before verifying or serving with the new runtime. The optional field
-    # gives future releases an additive successor even after this transition.
-    breg.write_runtime(breg.runtime, "registry", package, revision, 1, breg.port)
+    claim_before = instance_claim(old, breg.runtime)
+
+    # This release refuses the retired project keys and runtime package keys,
+    # so the operator deletes them before running any command of it.
     registry = load_yaml(breg.project / "registry.yaml")
-    registry["package"]["sequence"] = int(registry["package"]["sequence"]) + 1
+    retired = retire_package_identity(registry)
+    dump_yaml(breg.project / "registry.yaml", registry)
+
+    def apply(target: Path, digest: str, activation: str, *extra: str) -> None:
+        plan = new.run_json("bregctl", "--format", "json", "plan", "--runtime-config",
+                            str(breg.runtime), "--package", str(target))
+        expect_plan(plan, activation, digest)
+        new.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
+                     str(breg.runtime), "--package", str(target), *extra)
+        breg.write_runtime(breg.runtime, "registry", target, breg.port)
+
+    def serve(log: str) -> dict[str, Any]:
+        new.run_json("bregctl", "--format", "json", "verify", "--runtime-config",
+                     str(breg.runtime))
+        service = Service(new, "breg",
+                          breg_arguments(breg_reads_runtime_config(new), breg.runtime),
+                          work / log, ready)
+        try:
+            return breg.views(seeded)
+        finally:
+            service.stop()
+
+    counts_before_upgrade = postgres.row_counts("registry")
+    if signed is not None:
+        # A database a signing release activated has no activation ledger, and
+        # the runtime refuses to serve it until the first apply adopts it. That
+        # apply takes a package this release builds from the deployed project,
+        # and it compares the live catalog with the package instead of
+        # migrating. The configured active package is the one that adopts, so
+        # package.root names the rebuilt package before `plan` reads it.
+        package, digest = breg.package(new, work / "build-adopted")
+    breg.write_runtime(breg.runtime, "registry", package, breg.port)
+    if signed is not None:
+        # The retired tables are already archived and row-counted above, so
+        # this apply may acknowledge dropping them.
+        apply(package, digest, "adopted", "--acknowledge-retired-audit-discard")
+    claim_after = instance_claim(new, breg.runtime)
+    adopted_views = serve("breg-adopted.log")
+
+    # An additive successor proves the upgraded ledger moves forward.
+    registry = load_yaml(breg.project / "registry.yaml")
     group = next(entity for entity in registry["entities"] if entity["id"] == "record-group")
     group["fields"].append({"id": "rehearsal-note", "type": "string", "maxLength": 200,
                             "classification": "public"})
     dump_yaml(breg.project / "registry.yaml", registry)
-    successor, successor_revision = breg.package(new, work / "build-2", baseline=breg.runtime)
-    counts_before_successor = postgres.row_counts("registry")
-    # The retired tables are already archived and row-counted above, so this
-    # apply may acknowledge dropping them along with the rest of the old schema.
-    new.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
-                 str(breg.runtime), "--package", str(successor),
-                 "--acknowledge-retired-audit-discard")
-    breg.write_runtime(breg.runtime, "registry", successor, successor_revision,
-                       registry["package"]["sequence"], breg.port)
-    # A registry activated before the instance claim records none, and the
-    # runtime refuses to serve it until the operator adopts it once, the
-    # documented step after its first apply on a release that has the claim.
-    claim = new.run_json("bregctl", "--format", "json", "instance-claim", "status",
-                         "--runtime-config", str(breg.runtime))["status"]["claim"]
-    if claim is None:
-        new.run_json("bregctl", "--format", "json", "instance-claim", "adopt",
-                     "--runtime-config", str(breg.runtime), "--acknowledge-original-retired")
-    new.run_json("bregctl", "--format", "json", "verify", "--runtime-config", str(breg.runtime))
+    successor, successor_digest = breg.package(new, work / "build-successor", baseline=package)
+    apply(successor, successor_digest, "successor")
+    ledger = expect_ledger(
+        new.run_json("bregctl", "--format", "json", "status", "--runtime-config",
+                     str(breg.runtime)), successor_digest)
+    expected = ["adopted:applied" if signed is not None else "initial:applied",
+                "successor:applied"]
+    if ledger[-2:] != expected:
+        raise RehearsalError(f"the activation ledger recorded {ledger}, expected it to end "
+                             f"with {expected}")
+    successor_views = serve("breg-successor.log")
     service = Service(new, "breg", breg_arguments(breg_reads_runtime_config(new), breg.runtime),
-                      work / "breg-successor.log", ready)
+                      work / "breg-written.log", ready)
     try:
-        successor_views = breg.views(seeded)
         written = breg.seed("after")
         breg.views(written)
     finally:
         service.stop()
     new.run_json("bregctl", "--format", "json", "doctor", "--runtime-config", str(breg.runtime))
-    losses = row_count_losses(counts_before_successor, postgres.row_counts("registry"), archived)
-    differences = breg_view_differences(before_views, successor_views)
+    # Adoption moves the instance claim into the registry state it rebuilds;
+    # the claim itself is compared above, not its table's row count.
+    losses = row_count_losses(counts_before_upgrade, postgres.row_counts("registry"), archived,
+                              relocated={"registry_internal.registry_instance_claim"})
+    differences = (breg_view_differences(before_views, adopted_views)
+                   + breg_view_differences(before_views, successor_views)
+                   + claim_differences(claim_before, claim_after))
 
     report["breg"] = {
         "records": sum(len(value) for value in seeded.values()),
         "tables": len(before_counts),
-        "successorSequence": registry["package"]["sequence"],
+        "retiredProjectKeys": retired,
         "archivedAuditTables": archived,
-        "adoptedInstanceClaim": claim is None,
+        "ledger": ledger,
+        "instanceClaimRecordedBeforeUpgrade": claim_before is not None,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
