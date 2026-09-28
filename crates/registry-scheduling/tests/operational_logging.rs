@@ -37,6 +37,7 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
         "apiVersion": "registry.registrystack.org/scheduling-runtime/v1alpha1",
         "kind": "SchedulingRuntimeConfig",
         "package": {"root": package},
+        "identity": {"databaseId": "scheduling-operational-logging"},
         "listener": {"bind": "127.0.0.1:0", "tlsTermination": "development-loopback"},
         "secretProviders": {"environment": {}},
         "database": {
