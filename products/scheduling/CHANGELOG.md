@@ -103,6 +103,10 @@
     `usage-error`, `domain-refusal`, or `operational-failure` by exit class.
   - `records apply` reports `command: "records apply"` instead of
     `records-apply`.
+- A command line `schedulingctl` refuses is described by the kind of error
+  and the argument name only, such as `invalid value for
+  --operator-reference`, and names `schedulingctl --help` as the next step.
+  The refused value is never repeated on standard output or standard error.
 
 ## v0.35.0 - 2026-09-28
 
