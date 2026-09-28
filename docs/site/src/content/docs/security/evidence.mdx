@@ -22,10 +22,13 @@ guarantee or drops its test fails that job rather than merging unnoticed.
 
 ## What the invariant matrix guarantees
 
-The matrix pins 40 numbered invariants, `V1-I01` through `V1-I40`, each with a
-rule, the threat it closes, its enforcement, and one `negative_test` id. This
-section groups them by theme and cites each id in backticks; the matrix itself
-is the complete, normative text.
+The matrix pins numbered invariants, `V1-I01` onward, each with a rule, the
+threat it closes, its enforcement, and one `negative_test` id. The set grows as
+the contract does, so this page states no count. This section summarizes the
+invariants by theme and cites each id in backticks; the
+[matrix itself](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-invariant-matrix.yaml)
+is the complete, normative text, and an invariant it adds is binding from the
+change that adds it, whether or not this summary has caught up.
 
 ### Closed request and requirement scope
 
@@ -50,6 +53,19 @@ caller-supplied consent, approval, or grant reference cannot create authority
 on its own (`V1-I07`). Callers cannot choose selector fields, operators,
 weights, thresholds, normalization, or query plans; named profiles close the
 exact field set (`V1-I08`).
+
+When authentication states `allowedClients` or `requiredScopes`, admission is
+that explicit client list and the verified token's required scope set; an
+audience plus static issuer-governed attributes never establishes resource
+permission on its own, and a missing scope is never inferred from tags,
+principal, roles, `sub`, or request fields (`V1-I54`). When authentication
+states `assertionIssuers`, a token carrying the platform verifier's
+`registry_assertion_issuer` claim is admitted only when the client it names is
+listed and the claim value is one of that client's listed authorities
+(`V1-I55`). Every authorization refusal after successful authentication is
+durably recorded as one minimal native audit event before the generic 403 is
+returned; if that audit fails, the caller receives the generic 503 instead
+(`V1-I39`).
 
 ### Source access and the Rhai boundary
 
@@ -103,7 +119,10 @@ integrity; it does not assert legal-signature status or source truth
 
 Evidence Gateway definition discovery is authenticated and requester-scoped; it never
 creates authority or exposes deployment internals such as selectors, source
-plans, or credentials (`V1-I26`). Every request carries one canonical
+plans, or credentials (`V1-I26`). Provider discovery is a deterministic,
+closed projection of governed public service identity, endpoint, roles,
+conformance, compatible capabilities, jurisdictions, and Evidence Type
+identifiers, and reaches no Evidence data path (`V1-I53`). Every request carries one canonical
 32-byte random nonce that is echoed into the evidence payload but never
 stored, uniqueness-checked, or exposed to authorization, rate limits, Rhai,
 source requests, logs, metrics, traces, or native audit (`V1-I27`). The
@@ -139,7 +158,44 @@ distinct token members and cannot reuse registered JWT claims, except that the p
 (`V1-I37`). Every authority selector set must fill each selector-bound path template it can activate
 (`V1-I38`). A search-then-fetch acquisition is one fixed search and, only after a unique schema-valid
 match, one fixed fetch; only validated prior facts cross the stage boundary and no response or script
-can create another call (`V1-I40`).
+can create another call (`V1-I40`). A search-then-fetch-set acquisition extends that shape to the two
+to four fetch stages the bundle declares, run in declared order: each stage receives only its declared
+projection of the validated search facts, and one declared ceiling bounds the whole acquisition
+(`V1-I41`). A gated acquisition kind serves only where the bundle declares it and the operator
+separately enabled it in the runtime configuration (`V1-I42`). A `sqlite-extract` source executes
+exactly one bundle-fixed, reviewed statement against one read-only extract file the runtime bound,
+under declared row, cell, statement-step, time, and concurrency bounds that no caller, response, or
+script can change (`V1-I43`). A selector value that a source would bind into a request path segment
+the value cannot occupy is refused as `request.selector_invalid` during selector resolution, before
+any access audit event, credential acquisition, or source contact (`V1-I56`).
+
+### Holder-bound assertions
+
+Under the holder-bound subject binding, every subject binding derives from the presented holder key's
+RFC 7638 thumbprint, under a domain separate from the audience-scoped one, and from nothing about the
+requester: one holder receives one binding however many relying parties collect on its behalf, and two
+holders never receive the same binding for the same subject (`V1-I44`). The mode is reached only when
+the requirement declares it and the one complete matched grant permits it, through the serializations
+the mode allows, and every refusal across those layers is one indistinguishable denial (`V1-I45`). A
+holder batch is bounded before anything is acquired, its presented keys are pairwise distinct, one
+acquisition serves the whole batch, and a failure on any member releases nothing (`V1-I46`). A
+holder-bound credential is accepted only on presentation with a valid key-binding JWT made by the key
+the signed confirmation names, over the pinned audience and nonce; an authentic issuer signature with
+a failed proof is rejected, never downgraded to issuer-only acceptance (`V1-I47`). Audience-scoped and
+presentation verification are two closed policy documents and two entry points, and each refuses the
+other's input (`V1-I48`).
+
+### Request batches
+
+A multi-subject request batch authenticates once, uses one evaluation instant, charges its complete
+item count against the request rate atomically, and validates and authorizes every item before any
+source credential or I/O (`V1-I49`). It returns one ordered result per item and releases the complete
+envelope or nothing: a condition a single request would collapse to `evidence_not_available` becomes
+that item's outcome, and every other failure aborts through the ordinary problem contract
+(`V1-I50`). Optional source batching is one fixed-path HTTP call, selected before I/O only when the
+bundle, the runtime, the source, and the requirement all allow it, and it never retries or fans out
+(`V1-I51`). The batch emits one durably accepted access event per physical source call and exactly
+one terminal event, which carries no nonce, selector, fact, body, or signed material (`V1-I52`).
 
 ### Telemetry
 
@@ -157,7 +213,7 @@ cannot become a response or audit channel.
 
 ### Cross-cutting controls
 
-The matrix also pins 23 cross-cutting controls, keyed by name rather than a
+The matrix also pins cross-cutting controls, keyed by name rather than a
 `V1-I` id, each with its own negative test. They cover bundle and secret
 trust (`config_trust`, `secret_parsing`), durable audit ordering
 (`audit_order`), listener exposure and outbound transport
@@ -170,7 +226,14 @@ file identity (`secret_file_identity`), the closed runtime file
 `entity_reference_projection`), signing and audit key governance
 (`signing_key_governance`, `audit_key_epoch`), and the SD-JWT VC serialization
 (`sd_jwt_vc_projection_integrity`, `sd_jwt_vc_format_authorization`,
-`sd_jwt_vc_holder_key_closed`, `sd_jwt_vc_claims_closed`).
+`sd_jwt_vc_holder_key_closed`, `sd_jwt_vc_claims_closed`), holder-bound
+issuance (`holder_bound_entity_reference_prohibited`,
+`holder_bound_issuance_purpose`, `holder_key_confinement`), trace correlation
+(`trace_context`), and the OID4VCI delivery front end
+(`oid4vci_offer_authorization`, `oid4vci_single_use_code`,
+`oid4vci_transaction_code_bounded`, `oid4vci_proof_closed`,
+`oid4vci_holder_bound_only`, `oid4vci_no_signing_key`,
+`oid4vci_telemetry_private`).
 
 ## How test traceability works
 
