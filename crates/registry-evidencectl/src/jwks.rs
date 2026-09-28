@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
     io::Write as _,
-    os::unix::fs::OpenOptionsExt as _,
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
     process::ExitCode,
 };
@@ -94,11 +94,11 @@ pub fn run(args: JwksArgs, format: OutputFormat) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Writes `contents` to `path` at `OUTPUT_FILE_MODE`, set atomically at file
-/// creation. A force overwrite first removes anything already at `path`,
-/// including a symlink, so the create that follows always creates a fresh
-/// file and `OUTPUT_FILE_MODE` is always the one `O_CREAT` applies, never a
-/// later chmod that could instead land on whatever a symlink now points at.
+/// Writes `contents` to `path` at `OUTPUT_FILE_MODE`. A force overwrite first
+/// removes anything already at `path`, including a symlink, so the create that
+/// follows always creates a fresh file. The mode is then set through that
+/// file's own descriptor, never by path, so the umask cannot narrow it and no
+/// chmod can land on whatever a symlink now points at.
 pub(crate) fn write_owner_file(path: &std::path::Path, contents: &[u8], force: bool) -> Result<()> {
     if force {
         match fs::symlink_metadata(path) {
@@ -115,6 +115,12 @@ pub(crate) fn write_owner_file(path: &std::path::Path, contents: &[u8], force: b
     let mut file = options
         .open(path)
         .with_context(|| format!("failed to create {}", path.display()))?;
+    // `O_CREAT` applies the process umask, which a hardened operator shell
+    // may set to 077; setting the mode again through the open descriptor
+    // publishes the file as readable whatever the umask, and cannot land on
+    // anything but the file just created.
+    file.set_permissions(fs::Permissions::from_mode(OUTPUT_FILE_MODE))
+        .with_context(|| format!("failed to set the mode of {}", path.display()))?;
     file.write_all(contents)
         .with_context(|| format!("failed to write {}", path.display()))?;
     file.sync_all()
