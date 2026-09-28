@@ -139,8 +139,11 @@ sample response, leaving an explicit `TODO` wherever a bound cannot be derived
 so `evidence check` rejects the draft until a human resolves it.
 
 ```bash
-evidencectl source suggest --openapi ./api.yaml --project ./deployment-project
+evidencectl source suggest --openapi ./api.yaml
 ```
+
+Inside an authoring project, `evidencectl source suggest ./deployment-project`
+drafts from the project's retained `source.openapi.yaml` instead.
 
 `--openapi` also takes the URL a description is published at, which is read
 under the same rule the runtime applies to the source URLs it will itself call:

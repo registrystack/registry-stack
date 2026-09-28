@@ -82,8 +82,7 @@ Draft a separate source so the certificate question cannot inherit the parent-id
 projection:
 
 ```sh
-evidencectl source suggest \
-  --project . \
+evidencectl source suggest . \
   --source-id opencrvs-birth-certificate \
   --operation 'POST /events/search' \
   --select /total \

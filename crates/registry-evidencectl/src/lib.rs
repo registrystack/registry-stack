@@ -1743,7 +1743,7 @@ mod tests {
         );
 
         // A hidden `--project` beside a positional PROJECT is the retired
-        // spelling of that same argument, kept parseable for one release.
+        // spelling of that same argument, still parseable.
         for (path, argument) in &projects {
             if argument.get_id() == "legacy_project" {
                 assert!(

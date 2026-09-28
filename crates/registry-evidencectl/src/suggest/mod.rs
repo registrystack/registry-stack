@@ -50,7 +50,7 @@ pub enum SourceCommand {
         .args(["openapi", "project", "legacy_project"])
 ))]
 pub struct SuggestArgs {
-    /// OpenAPI 3.0 or 3.1 document for a print-only draft. With --project,
+    /// OpenAPI 3.0 or 3.1 document for a print-only draft. With a project,
     /// the retained source.openapi.yaml is used instead.
     #[arg(long)]
     pub openapi: Option<String>,
@@ -96,7 +96,7 @@ pub struct SuggestArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT")]
     pub project: Option<std::path::PathBuf>,
-    /// Retired spelling of the project directory argument, accepted for one release.
+    /// Retired spelling of the project directory argument, still accepted.
     #[arg(long = "project", value_name = "PROJECT", hide = true)]
     pub legacy_project: Option<std::path::PathBuf>,
 }

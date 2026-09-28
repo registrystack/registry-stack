@@ -156,7 +156,7 @@ deleted. Unrelated authored artifacts are preserved byte for byte.
 To take over maintenance of an imported source:
 
 ```sh
-evidencectl source detach registry-status --project ./evidence
+evidencectl source detach registry-status ./evidence
 ```
 
 Detachment keeps every file, upstream provenance, and the accepted authored

@@ -123,7 +123,7 @@ pub struct EditorArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, accepted for one release.
+    /// Retired spelling of the project directory argument, still accepted.
     #[arg(
         long = "project",
         value_name = "PROJECT",

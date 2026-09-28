@@ -141,8 +141,7 @@ Select only the fields needed to establish cardinality, validate the birth, and 
 registered parents:
 
 ```sh
-evidencectl source suggest \
-  --project . \
+evidencectl source suggest . \
   --source-id opencrvs-birth-parents \
   --operation 'POST /events/search' \
   --select /total \

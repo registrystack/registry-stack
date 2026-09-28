@@ -18,6 +18,27 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: `evidencectl` follows the shared ctl report and exit contract.
+  Under `--format json` each command writes one object on standard output
+  opening with `ok`, `command`, and `status`, all keys camelCase, and nothing
+  on standard error; `command` replaces the former `operation` member, and
+  fixture reports use `evaluatedCases`, `failingCase`, `expectedClass`, and
+  `observedClass`. An unreadable file or a missing local dev session exits
+  `3` instead of `1`. Commands that read one project take it as a positional
+  `<project>`; the former `--project` flag stays accepted but hidden. `test`
+  and `fixtures run` accept `--format junit`, and `dev start --name-prefix`
+  sets the local issuer container name prefix. Update scripts that read
+  `operation` or snake_case fixture keys. See
+  [evidencectl](../reference/evidencectl/#project-workflow).
+
+{/* Evidence: crates/registry-evidencectl/src/report.rs, the exit constants, success(), refused(), and failure();
+    crates/registry-evidencectl/src/junit.rs, render();
+    crates/registry-evidencectl/src/dev.rs, StartArgs and issuer_label();
+    crates/registry-evidencectl/tests/ctl_convention.rs, usage_errors_use_the_envelope_and_exit_two;
+    crates/registry-evidencectl/tests/ctl_convention.rs, refusals_name_the_command_that_refused;
+    crates/registry-evidencectl/tests/ctl_convention.rs, the_retired_project_flag_still_selects_the_project;
+    crates/registry-evidencectl/tests/fixtures.rs, junit_output_carries_one_testcase_per_traced_case_on_stdout. */}
+
 ## v0.35.0 beta-47
 
 - BREAKING: Base Registry Engine (BReg) gives every `reference` field a btree

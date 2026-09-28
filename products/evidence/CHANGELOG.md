@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- BREAKING: `evidencectl` follows the shared ctl report and exit contract.
+  - Under `--format json` every command writes one object on standard output
+    and nothing on standard error. It opens with `ok`, `command`, and
+    `status`, then the command's own members, and every key is camelCase.
+    The former `operation` member is replaced by `command`. Refusals use the
+    same object with `ok: false` and diagnostics that name the next command.
+    A command-line error reports `command: "usage"` and `status:
+    "usage-error"`.
+  - `fixtures run` and `test` reports rename `evaluated_cases`,
+    `failing_case`, `expected_class`, and `observed_class` to
+    `evaluatedCases`, `failingCase`, `expectedClass`, and `observedClass`.
+    A run that evaluated no case carries the diagnostic
+    `evidencectl.fixtures.no-case`.
+  - `source suggest` notes move from standard error into the report's
+    `notes` member, and its equivalent command names the project
+    positionally.
+  - Exit classes are `0` success, `1` domain refusal or failing fixture, `2`
+    usage, and `3` operational failure. A file that cannot be read or a
+    missing local dev session now exits `3` instead of `1`.
+  - Every command that reads one project takes it as a positional
+    `<project>`. The former `--project` flag stays accepted but hidden on
+    those commands; `source import`, `source diff`, `source update`, and
+    `target new` still document it.
+  - `test` and `fixtures run` accept `--format junit`: one JUnit XML document
+    on standard output, one test case per traced case, and the human summary
+    on standard error. Other commands refuse it as a usage error.
+  - `dev start --name-prefix <prefix>` sets the local issuer container name
+    prefix, `evidence-dev` by default, so parallel jobs on one host keep
+    their containers apart. The session keeps it until `dev clean`.
+  - To migrate, read `command` instead of `operation`, read the camelCase
+    fixture keys, parse JSON reports from standard output alone, treat exit
+    `3` as an unavailable dependency, and replace `--project <dir>` with
+    `<dir>` in scripts.
+
 ## v0.35.0 - 2026-09-28
 
 - BREAKING: write audit through the shared platform audit writer instead of
