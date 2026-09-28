@@ -66,7 +66,9 @@ mod test_lifecycle;
 mod webhook_lifecycle;
 
 use active_registry::ActiveRegistryError;
-use apply_lifecycle::{ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest};
+use apply_lifecycle::{
+    ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest, PlanLifecycleRequest,
+};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
 };
@@ -168,6 +170,17 @@ enum Command {
     Test(TestArgs),
     /// Apply one built package using the configured migration authority.
     Apply(ApplyArgs),
+    /// Report what `bregctl apply` would activate for one package, running its checks without changing the database.
+    ///
+    /// A plan uses the migration credential, because apply's checks read what only the migration
+    /// role may read. It rolls back every check it runs, appends no audit entry, and holds the
+    /// apply lock while it checks. Pending changes exit 0; a refusal exits 1 and names the fix.
+    Plan(PlanArgs),
+    /// Report the active package and the activation ledger the database records.
+    ///
+    /// Status reads as the migration role in one read-only transaction and takes no apply lock,
+    /// so it answers while an apply runs.
+    Status(StatusArgs),
     /// Verify configured startup dependencies without binding a listener.
     Doctor(DoctorArgs),
     /// Verify one configured package without opening runtime dependencies.
@@ -657,6 +670,28 @@ struct ApplyArgs {
     /// Operator change reference, at most 512 bytes, recorded as a keyed hash in the activation ledger and audit.
     #[arg(long, value_name = "REFERENCE")]
     operator_reference: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct PlanArgs {
+    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute target package directory.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    package: PathBuf,
+
+    /// Reviewed backup binding to verify as apply would, as BINDING_PATH=BINDING_FILE; without it, the plan lists the bindings apply requires.
+    #[arg(long = "backup", value_name = "BINDING_PATH=BINDING_FILE")]
+    backups: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct StatusArgs {
+    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1648,6 +1683,70 @@ struct ApplySuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PlanSuccessReport {
+    ok: bool,
+    command: &'static str,
+    /// Whether `bregctl apply` would record an activation.
+    pending: bool,
+    activation: PlanActivation,
+    package_digest: String,
+    registry_revision: String,
+    active_package_digest: Option<String>,
+    role_mode: &'static str,
+    resumes_activation_id: Option<String>,
+    required_backups: Vec<String>,
+    checks: &'static [&'static str],
+    migration: MigrationInspectionSummary,
+}
+
+/// The activation `bregctl apply` would report, or `none` when the package is
+/// already active with the configured roles.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PlanActivation {
+    Initial,
+    Successor,
+    RoleChange,
+    Adopted,
+    None,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusSuccessReport {
+    ok: bool,
+    command: &'static str,
+    package_id: String,
+    database_id: String,
+    active_package_digest: String,
+    activation_id: String,
+    registry_revision: Option<String>,
+    role_mode: Option<String>,
+    schema_fingerprint: String,
+    maintenance_status: String,
+    maintenance_target_package_digest: Option<String>,
+    ledger: Vec<StatusLedgerEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusLedgerEntry {
+    activation_id: String,
+    apply_order: i64,
+    package_digest: String,
+    predecessor_package_digest: Option<String>,
+    registry_revision: String,
+    plan_kind: String,
+    migration_kind: String,
+    outcome: String,
+    role_mode: String,
+    started_at: String,
+    completed_at: Option<String>,
+    applied_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DataValidateSuccessReport {
     ok: bool,
     command: &'static str,
@@ -2117,6 +2216,18 @@ where
         Command::Apply(args) => {
             return match apply(&args) {
                 Ok(report) => write_apply_success(&report, format, stdout, stderr),
+                Err(failure) => write_failure(&failure, format, stdout, stderr),
+            };
+        }
+        Command::Plan(args) => {
+            return match plan(&args) {
+                Ok(report) => write_plan_success(&report, format, stdout, stderr),
+                Err(failure) => write_failure(&failure, format, stdout, stderr),
+            };
+        }
+        Command::Status(args) => {
+            return match status(&args) {
+                Ok(report) => write_status_success(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
@@ -4413,6 +4524,139 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
     })
 }
 
+fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, FailureReport> {
+    let outcome = apply_lifecycle::plan(PlanLifecycleRequest {
+        runtime_config: &args.runtime_config,
+        package: &args.package,
+        backups: &args.backups,
+    })
+    .map_err(|error| lifecycle_failure("plan", error))?;
+    Ok(PlanSuccessReport {
+        ok: true,
+        command: "plan",
+        pending: outcome.plan.activation.is_pending(),
+        activation: match outcome.plan.activation {
+            registry_breg::migration::PlannedActivation::Initial => PlanActivation::Initial,
+            registry_breg::migration::PlannedActivation::Successor => PlanActivation::Successor,
+            registry_breg::migration::PlannedActivation::RoleChange => PlanActivation::RoleChange,
+            registry_breg::migration::PlannedActivation::Adoption => PlanActivation::Adopted,
+            registry_breg::migration::PlannedActivation::AlreadyActive => PlanActivation::None,
+        },
+        package_digest: outcome.package_digest,
+        registry_revision: outcome.registry_revision,
+        active_package_digest: outcome.active_package_digest,
+        role_mode: outcome.plan.role_mode,
+        resumes_activation_id: outcome.plan.resumes_activation_id,
+        required_backups: outcome.plan.required_backups,
+        checks: outcome.plan.checks,
+        migration: outcome.migration,
+    })
+}
+
+fn status(args: &StatusArgs) -> Result<StatusSuccessReport, FailureReport> {
+    let status = apply_lifecycle::status(&args.runtime_config)
+        .map_err(status_lifecycle_failure)?
+        .ok_or_else(|| status_lifecycle_failure(ApplyLifecycleError::Uninitialized))?;
+    let active = status.active_entry().cloned();
+    Ok(StatusSuccessReport {
+        ok: true,
+        command: "status",
+        package_id: status.identity.package_id,
+        database_id: status.identity.database_id,
+        active_package_digest: status.identity.package_digest,
+        activation_id: status.identity.activation_id,
+        registry_revision: active.as_ref().map(|entry| entry.registry_revision.clone()),
+        role_mode: active.map(|entry| entry.role_mode),
+        schema_fingerprint: status.identity.schema_fingerprint,
+        maintenance_status: status.maintenance_status,
+        maintenance_target_package_digest: status.maintenance_target_package_digest,
+        ledger: status
+            .ledger
+            .into_iter()
+            .map(|entry| StatusLedgerEntry {
+                activation_id: entry.activation_id,
+                apply_order: entry.apply_order,
+                package_digest: entry.package_digest,
+                predecessor_package_digest: entry.predecessor_package_digest,
+                registry_revision: entry.registry_revision,
+                plan_kind: entry.plan_kind,
+                migration_kind: entry.migration_kind,
+                outcome: entry.outcome,
+                role_mode: entry.role_mode,
+                started_at: entry.started_at,
+                completed_at: entry.completed_at,
+                applied_at: entry.applied_at,
+            })
+            .collect(),
+    })
+}
+
+fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
+    let (code, path, message, artifact, action) = match error {
+        ApplyLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("status", "status", error);
+        }
+        ApplyLifecycleError::RuntimeConfigPath => (
+            "status.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ApplyLifecycleError::DatabaseConfiguration | ApplyLifecycleError::TimeoutConfiguration => (
+            "status.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused: correct database.migrationUrlRef, its secret, and the migration timeouts in the runtime configuration, then run `bregctl status` again",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ApplyLifecycleError::Uninitialized => (
+            "status.database.uninitialized",
+            "database",
+            "the database records no activated registry: run `bregctl plan --package DIR` to check the first package, then `bregctl apply --initial --package DIR` to activate it",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::PreLedgerDatabase) => (
+            "status.database.pre_ledger",
+            "database",
+            "the database was installed by a release before the activation ledger, so it records no activation this release reads: build the deployed project with this release's `bregctl package`, set package.root to that package directory, and run `bregctl apply --package DIR` without --initial once to adopt it",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::DatabaseUnavailable) => (
+            "status.database.unavailable",
+            "database",
+            "the migration database could not be reached: check database.migrationUrlRef and that the database accepts the migration role, then run `bregctl status` again",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ApplyLifecycleError::Runtime => (
+            "status.runtime.unavailable",
+            "runtime",
+            "the status runtime is unavailable",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        _ => (
+            "status.database.refused",
+            "database.roles.migration",
+            "the database refused the activation state read: the connection must use database.roles.migration, which must own the registry schemas and hold no superuser, CREATEDB, CREATEROLE, or BYPASSRLS authority; correct the role, then run `bregctl status` again",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command: "status",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
+}
+
 fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
     match error {
         PackageLifecycleError::Package(error) => {
@@ -4788,9 +5032,15 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
 }
 
 fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
+    lifecycle_failure("apply", error)
+}
+
+/// Maps an apply lifecycle refusal for `apply` or `plan`: a plan runs apply's
+/// checks, so it refuses with apply's codes and names the same next command.
+fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> FailureReport {
     let error = match error {
         ApplyLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("apply", "apply", error);
+            return runtime_config_failure(command, "apply", error);
         }
         error => error,
     };
@@ -4887,7 +5137,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 field_id,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field.pattern.syntax_invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
@@ -4902,7 +5152,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 field_id,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field.pattern.existing_rows_invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
@@ -4917,7 +5167,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 record_ids,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field_encryption.lookup.collision",
                         &format!("entities[{entity_id}]"),
@@ -4940,7 +5190,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 field_id,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "field_encryption.history.retained_request_snapshot",
                         &format!("entities[{entity_id}].fields[{field_id}].encryption"),
@@ -4981,7 +5231,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             registry_breg::migration::MigrationError::AlreadyActive => {
                 return FailureReport {
                     ok: false,
-                    command: "apply",
+                    command,
                     diagnostics: vec![tool_diagnostic(
                         diagnostic(
                             "apply.package.already_active",
@@ -5037,7 +5287,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             ),
             registry_breg::migration::MigrationError::StatementFailed(failure) => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "apply.migration.statement_failed",
                         "database",
@@ -5079,7 +5329,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             ),
             registry_breg::migration::MigrationError::RuntimeWriteAuthority(finding) => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "apply.runtime_role.can_write",
                         "database.roles.runtime",
@@ -5094,7 +5344,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 package,
             } => {
                 return source_failure(
-                    "apply",
+                    command,
                     diagnostic(
                         "apply.adoption.fingerprint_mismatch",
                         "package",
@@ -5117,7 +5367,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
     };
     FailureReport {
         ok: false,
-        command: "apply",
+        command,
         diagnostics: vec![tool_diagnostic(
             diagnostic(code, path, message),
             artifact,
@@ -11821,6 +12071,136 @@ fn write_apply_success(
     write_result(result, stderr)
 }
 
+fn write_plan_success(
+    report: &PlanSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let lead = match report.activation {
+            PlanActivation::Initial => "Planned the first activation on this registry; nothing was changed. Run `bregctl apply --initial --package DIR` to activate it.",
+            PlanActivation::Successor => "Planned a successor activation over the active package; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
+            PlanActivation::RoleChange => "Planned activating the active package again with the configured database roles; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
+            PlanActivation::Adopted => "Planned adopting the database into the activation ledger as it stands; nothing was changed. Run `bregctl apply --package DIR` to adopt it; the ledger history of the release that installed it is dropped.",
+            PlanActivation::None => "The database already runs this package with the configured database roles; there is nothing to apply.",
+        };
+        let mut lines = report::Lines::new();
+        lines.lead(lead);
+        let mut pairs = vec![
+            (
+                "activation",
+                match report.activation {
+                    PlanActivation::Initial => "initial",
+                    PlanActivation::Successor => "successor",
+                    PlanActivation::RoleChange => "role_change",
+                    PlanActivation::Adopted => "adopted",
+                    PlanActivation::None => "none",
+                }
+                .to_owned(),
+            ),
+            ("package digest", report.package_digest.clone()),
+            ("registry revision", report.registry_revision.clone()),
+        ];
+        if let Some(active) = &report.active_package_digest {
+            pairs.push(("active package digest", active.clone()));
+        }
+        pairs.push(("role mode", report.role_mode.to_owned()));
+        if let Some(resumed) = &report.resumes_activation_id {
+            pairs.push(("resumes activation", resumed.clone()));
+        }
+        pairs.push((
+            "plan kind",
+            plan_kind_name(report.migration.plan_kind()).to_owned(),
+        ));
+        pairs.push(("change count", report.migration.change_count().to_string()));
+        pairs.push((
+            "reviewed migration count",
+            report.migration.reviewed_migrations().len().to_string(),
+        ));
+        pairs.push(("checks passed", report.checks.join(", ")));
+        lines.pairs(&pairs);
+        if !report.required_backups.is_empty() {
+            lines.blank();
+            lines.item("apply requires --backup for");
+            for binding in &report.required_backups {
+                lines.item_at(1, binding);
+            }
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
+}
+
+fn write_status_success(
+    report: &StatusSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let lead = if report.maintenance_status == "ready" {
+            "The database runs its active package and is ready.".to_owned()
+        } else {
+            format!(
+                "The database is in maintenance: an activation it pinned is {}. Retry the same `bregctl apply --package DIR`, or assess it with `bregctl migration reconcile`.",
+                report.maintenance_status
+            )
+        };
+        let mut lines = report::Lines::new();
+        lines.lead(&lead);
+        let mut pairs = vec![
+            ("package id", report.package_id.clone()),
+            ("database id", report.database_id.clone()),
+            (
+                "active package digest",
+                report.active_package_digest.clone(),
+            ),
+            ("activation id", report.activation_id.clone()),
+        ];
+        if let Some(revision) = &report.registry_revision {
+            pairs.push(("registry revision", revision.clone()));
+        }
+        if let Some(role_mode) = &report.role_mode {
+            pairs.push(("role mode", role_mode.clone()));
+        }
+        pairs.push(("schema fingerprint", report.schema_fingerprint.clone()));
+        pairs.push(("maintenance status", report.maintenance_status.clone()));
+        if let Some(target) = &report.maintenance_target_package_digest {
+            pairs.push(("maintenance target", target.clone()));
+        }
+        lines.pairs(&pairs);
+        for entry in &report.ledger {
+            lines.blank();
+            lines.item(&format!("activation {}", entry.apply_order));
+            let mut fields = vec![
+                ("activation id", entry.activation_id.clone()),
+                ("package digest", entry.package_digest.clone()),
+                ("registry revision", entry.registry_revision.clone()),
+                ("plan kind", entry.plan_kind.clone()),
+                ("migration kind", entry.migration_kind.clone()),
+                ("outcome", entry.outcome.clone()),
+                ("role mode", entry.role_mode.clone()),
+                ("started at", entry.started_at.clone()),
+            ];
+            if let Some(applied) = &entry.applied_at {
+                fields.push(("applied at", applied.clone()));
+            }
+            lines.pairs_at(1, &fields);
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
+}
+
 fn write_result(result: io::Result<()>, stderr: &mut dyn Write) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -13871,6 +14251,8 @@ mod tests {
                 "package",
                 "test",
                 "apply",
+                "plan",
+                "status",
                 "doctor",
                 "verify",
                 "migration",

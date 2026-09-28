@@ -7,12 +7,16 @@ use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, operator_reference_is_well_formed,
-    read_recorded_registry_state, successor_plan_is_empty, ActivationDeployment,
+    plan_verified_package, read_activation_status, read_recorded_registry_state,
+    successor_plan_is_empty, ActivationDeployment, ActivationPlan, ActivationStatus,
     AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
-use registry_breg::package::{load_package, PackageError, VerifiedPredecessorPackage};
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+use registry_breg::package::{
+    load_package, MigrationInspectionSummary, PackageError, VerifiedPredecessorPackage,
+};
+use registry_breg::postgres::ConnectionConfig;
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 
 #[derive(Debug)]
 pub(crate) enum ApplyLifecycleError {
@@ -31,6 +35,14 @@ pub(crate) enum ApplyLifecycleError {
     Runtime,
     Audit,
     Apply(MigrationError),
+}
+
+/// Whether the lifecycle activates the package or only runs the checks an
+/// activation runs, writing nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LifecycleMode {
+    Apply,
+    Plan,
 }
 
 pub(crate) struct ApplyLifecycleRequest<'a> {
@@ -58,9 +70,112 @@ pub(crate) struct ApplyLifecycleOutcome {
     pub activation: ApplyLifecycleActivation,
 }
 
+/// What `bregctl plan` reports: the activation `bregctl apply` would make,
+/// after the checks it runs passed and were rolled back.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlanLifecycleOutcome {
+    pub package_digest: String,
+    pub registry_revision: String,
+    pub active_package_digest: Option<String>,
+    pub plan: ActivationPlan,
+    pub migration: MigrationInspectionSummary,
+}
+
+pub(crate) struct PlanLifecycleRequest<'a> {
+    pub runtime_config: &'a Path,
+    pub package: &'a Path,
+    pub backups: &'a [String],
+}
+
 pub(crate) fn run(
     request: ApplyLifecycleRequest<'_>,
 ) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
+    match execute(request, LifecycleMode::Apply)? {
+        Executed::Applied(outcome) => Ok(outcome),
+        Executed::Planned(_) => Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed)),
+    }
+}
+
+/// Runs every check `run` would for the same package and runtime
+/// configuration, including the database checks inside transactions it rolls
+/// back, and writes nothing: no ledger entry, no maintenance state, and no
+/// audit entry. It holds the apply lock while it checks, as an apply would.
+pub(crate) fn plan(
+    request: PlanLifecycleRequest<'_>,
+) -> Result<PlanLifecycleOutcome, ApplyLifecycleError> {
+    match execute(
+        ApplyLifecycleRequest {
+            runtime_config: request.runtime_config,
+            package: request.package,
+            initial: false,
+            backups: request.backups,
+            acknowledge_retired_audit_discard: false,
+            operator_reference: None,
+        },
+        LifecycleMode::Plan,
+    )? {
+        Executed::Planned(outcome) => Ok(outcome),
+        Executed::Applied(_) => Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed)),
+    }
+}
+
+/// Reads what the database records about its activations, as the migration
+/// role, without the apply lock. `None` means it was never activated.
+pub(crate) fn status(
+    runtime_config: &Path,
+) -> Result<Option<ActivationStatus>, ApplyLifecycleError> {
+    if !runtime_config.is_absolute() {
+        return Err(ApplyLifecycleError::RuntimeConfigPath);
+    }
+    let config = load_runtime_config(runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
+    let access = DatabaseAccess::resolve(&config)?;
+    access
+        .runtime
+        .block_on(read_activation_status(
+            &access.connection,
+            config.database().roles().migration(),
+            access.timeouts,
+        ))
+        .map_err(ApplyLifecycleError::Apply)
+}
+
+enum Executed {
+    Applied(ApplyLifecycleOutcome),
+    Planned(PlanLifecycleOutcome),
+}
+
+struct DatabaseAccess {
+    connection: ConnectionConfig,
+    timeouts: ApplyTimeouts,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl DatabaseAccess {
+    fn resolve(config: &RuntimeConfig) -> Result<Self, ApplyLifecycleError> {
+        let connection = config
+            .migration_database_connection_config()
+            .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
+        let timeouts = ApplyTimeouts::new(
+            config.operational_timeouts().migration_lock,
+            config.operational_timeouts().migration_statement,
+        )
+        .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| ApplyLifecycleError::Runtime)?;
+        Ok(Self {
+            connection,
+            timeouts,
+            runtime,
+        })
+    }
+}
+
+fn execute(
+    request: ApplyLifecycleRequest<'_>,
+    mode: LifecycleMode,
+) -> Result<Executed, ApplyLifecycleError> {
     if !request.runtime_config.is_absolute() {
         return Err(ApplyLifecycleError::RuntimeConfigPath);
     }
@@ -87,9 +202,31 @@ pub(crate) fn run(
         identity.instance_id(),
         identity.database_id(),
     );
-    // Everything the package and the runtime file decide is checked before
+    // A plan learns from the database whether the package would be the first,
+    // so it resolves database authority first; an apply is told by --initial
+    // and checks everything the package and the runtime file decide before
     // any database authority is resolved.
-    let current_package = if request.initial {
+    let mut access = None;
+    let initial = match mode {
+        LifecycleMode::Apply => request.initial,
+        LifecycleMode::Plan => {
+            let resolved = DatabaseAccess::resolve(&config)?;
+            let recorded = resolved.runtime.block_on(read_recorded_registry_state(
+                &resolved.connection,
+                &target.manifest().package_id,
+                config.database().roles().migration(),
+                resolved.timeouts,
+            ));
+            let initial = match recorded {
+                Ok(None) => true,
+                Ok(Some(_)) | Err(MigrationError::PreLedgerDatabase) => false,
+                Err(error) => return Err(ApplyLifecycleError::Apply(error)),
+            };
+            access = Some(resolved);
+            initial
+        }
+    };
+    let current_package = if initial {
         None
     } else {
         // An empty successor plan is a property of the package alone.
@@ -133,18 +270,14 @@ pub(crate) fn run(
         .map_err(|_| ApplyLifecycleError::EventDestinations)?;
     let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
-    let connection = config
-        .migration_database_connection_config()
-        .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
-    let timeouts = ApplyTimeouts::new(
-        config.operational_timeouts().migration_lock,
-        config.operational_timeouts().migration_statement,
-    )
-    .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| ApplyLifecycleError::Runtime)?;
+    let DatabaseAccess {
+        connection,
+        timeouts,
+        runtime,
+    } = match access {
+        Some(access) => access,
+        None => DatabaseAccess::resolve(&config)?,
+    };
 
     // A package carries no place in the apply order, so a successor is bound
     // to what the database records: the active package digest, and the
@@ -182,9 +315,15 @@ pub(crate) fn run(
         },
     };
 
-    let audit = runtime
-        .block_on(RegistryAudit::open_companion(&config))
-        .map_err(|_| ApplyLifecycleError::Audit)?;
+    // A plan appends no audit entry, so it never opens the audit destination.
+    let audit = match mode {
+        LifecycleMode::Apply => Some(
+            runtime
+                .block_on(RegistryAudit::open_companion(&config))
+                .map_err(|_| ApplyLifecycleError::Audit)?,
+        ),
+        LifecycleMode::Plan => None,
+    };
     let backup_evidence = backup_arguments
         .iter()
         .map(|backup| {
@@ -203,18 +342,29 @@ pub(crate) fn run(
         Some(current) if role_change => ApplyPrecondition::RoleChange { current },
         Some(current) => ApplyPrecondition::Successor { current },
     };
-    let mut apply = ApplyVerifiedPackageRequest::new(
-        &connection,
-        &target,
-        deployment,
-        precondition,
-        ApplyRoles::new(
-            config.database().roles().migration(),
-            config.database().roles().runtime(),
+    let roles = ApplyRoles::new(
+        config.database().roles().migration(),
+        config.database().roles().runtime(),
+    );
+    let mut apply = match audit {
+        Some(audit) => ApplyVerifiedPackageRequest::new(
+            &connection,
+            &target,
+            deployment,
+            precondition,
+            roles,
+            timeouts,
+            audit,
         ),
-        timeouts,
-        audit,
-    )
+        None => ApplyVerifiedPackageRequest::plan(
+            &connection,
+            &target,
+            deployment,
+            precondition,
+            roles,
+            timeouts,
+        ),
+    }
     .with_destructive_backup_evidence(&backup_evidence)
     .with_event_destination_compatibility_inventory(&event_destination_compatibility)
     .with_acknowledge_retired_audit_discard(request.acknowledge_retired_audit_discard);
@@ -234,14 +384,29 @@ pub(crate) fn run(
             provider, secrets,
         ));
     }
+    if mode == LifecycleMode::Plan {
+        let plan = runtime
+            .block_on(plan_verified_package(apply))
+            .map_err(ApplyLifecycleError::Apply)?;
+        let migration = target
+            .migration_summary()
+            .map_err(ApplyLifecycleError::TargetPackage)?;
+        return Ok(Executed::Planned(PlanLifecycleOutcome {
+            package_digest: target.package_digest().to_owned(),
+            registry_revision: target.registry().revision().to_owned(),
+            active_package_digest: current_identity.map(|current| current.package_digest),
+            plan,
+            migration,
+        }));
+    }
     let activated = runtime
         .block_on(apply_verified_package(apply))
         .map_err(ApplyLifecycleError::Apply)?;
-    Ok(ApplyLifecycleOutcome {
+    Ok(Executed::Applied(ApplyLifecycleOutcome {
         package_digest: activated.package_digest,
         schema_fingerprint: activated.schema_fingerprint,
         activation_id: activated.activation_id,
-        activation: if request.initial {
+        activation: if initial {
             ApplyLifecycleActivation::Initial
         } else if adoption {
             ApplyLifecycleActivation::Adopted
@@ -250,7 +415,7 @@ pub(crate) fn run(
         } else {
             ApplyLifecycleActivation::Successor
         },
-    })
+    }))
 }
 
 fn validate_field_encryption_custody(
