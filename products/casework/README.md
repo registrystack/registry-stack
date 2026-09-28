@@ -365,6 +365,15 @@ activate a package, provision an identity provider, or infer authority from the
 imported metadata. Existing authored content is retained and conflicting ids
 are refused.
 
+The imported description pins the registry's `sourceRevision`. Before
+deploying against a closed BReg package, `caseworkctl check ./casework
+--against-breg-package DIR [--source-id ID]` verifies that package through the
+same-version `bregctl`, compares the registry revision it rederives with the
+pin, and adds `bregPackage` to the report on a match. A mismatch is refused with
+`casework.source-revision.stale`, naming the `source add --apply` repin and the
+same check again. At startup the runtime refuses a BReg source that serves a
+revision other than its pin, naming the same commands.
+
 A source may declare up to 32 request entities from one register. `source add`
 pairs every declared entity in one pass: each gets its own lifecycle hook,
 `casework-lifecycle-v1-<entity>`, and its own permission on the shared
@@ -422,7 +431,9 @@ casework --runtime-config /etc/registry-casework/runtime.yaml serve
 transaction and reports the active activation, the candidate package digest,
 the pending schema versions, the source generations and task templates the
 activation would change, work still pinned to a policy the candidate drops, and
-`changesPending`. `caseworkctl apply` connects with the migration credential and,
+`changesPending`; a runtime role that cannot read an existing ledger is refused
+with `casework.activation.ledger-unreadable`, naming `caseworkctl apply` then
+`caseworkctl plan`. `caseworkctl apply` connects with the migration credential and,
 in one transaction under the migration advisory lock, applies pending schema
 migrations, registers source generations, activates task templates, refuses
 stranded pinned work, grants the runtime role its privileges when the two
