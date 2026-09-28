@@ -271,17 +271,14 @@ fn add_policy(args: &PolicyAddArgs, format: OutputFormat) -> Result<ExitCode> {
             document.id,
             document.questions.join(", ")
         ),
-        OutputFormat::Json => println!(
-            "{}",
-            crate::command_report(
-                "access policy add",
-                json!({
-                    "policy": document.id,
-                    "questions": document.questions,
-                    "files": [path.display().to_string()],
-                })
-            )
-        ),
+        OutputFormat::Json => crate::print_report(&crate::command_report(
+            "access policy add",
+            json!({
+                "policy": document.id,
+                "questions": document.questions,
+                "files": [path.display().to_string()],
+            }),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -292,10 +289,10 @@ fn list_policies(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     if policies.is_empty() {
         match format {
             OutputFormat::Human => println!("No access policies configured."),
-            OutputFormat::Json => println!(
-                "{}",
-                crate::command_report("access policy list", json!({"entries": []}))
-            ),
+            OutputFormat::Json => crate::print_report(&crate::command_report(
+                "access policy list",
+                json!({"entries": []}),
+            )),
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -306,21 +303,18 @@ fn list_policies(project: &Path, format: OutputFormat) -> Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    println!(
-        "{}",
-        crate::command_report(
-            "access policy list",
-            json!({
-                "entries": policies
-                    .values()
-                    .map(|policy| json!({
-                        "id": policy.id,
-                        "questions": policy.questions,
-                    }))
-                    .collect::<Vec<_>>(),
-            })
-        )
-    );
+    crate::print_report(&crate::command_report(
+        "access policy list",
+        json!({
+            "entries": policies
+                .values()
+                .map(|policy| json!({
+                    "id": policy.id,
+                    "questions": policy.questions,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    ));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -427,21 +421,18 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
                 .get("kid")
                 .and_then(Value::as_str)
                 .context("generated client public key carries no kid")?;
-            println!(
-                "{}",
-                crate::command_report(
-                    "access client add",
-                    json!({
-                        "client": document.client_id,
-                        "policies": document.policies,
-                        "kid": kid,
-                        "files": [
-                            private_client_path.join(PRIVATE_KEY_FILENAME).display().to_string(),
-                            public_path.display().to_string(),
-                        ],
-                    })
-                )
-            );
+            crate::print_report(&crate::command_report(
+                "access client add",
+                json!({
+                    "client": document.client_id,
+                    "policies": document.policies,
+                    "kid": kid,
+                    "files": [
+                        private_client_path.join(PRIVATE_KEY_FILENAME).display().to_string(),
+                        public_path.display().to_string(),
+                    ],
+                }),
+            ));
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -454,10 +445,10 @@ fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     if clients.is_empty() {
         match format {
             OutputFormat::Human => println!("No clients configured."),
-            OutputFormat::Json => println!(
-                "{}",
-                crate::command_report("access client list", json!({"entries": []}))
-            ),
+            OutputFormat::Json => crate::print_report(&crate::command_report(
+                "access client list",
+                json!({"entries": []}),
+            )),
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -491,10 +482,10 @@ fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
             "policies": client.policies,
         }));
     }
-    println!(
-        "{}",
-        crate::command_report("access client list", json!({"entries": entries}))
-    );
+    crate::print_report(&crate::command_report(
+        "access client list",
+        json!({"entries": entries}),
+    ));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -550,16 +541,13 @@ fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCo
             ),
             None => println!("Revoked client {}.", document.client_id),
         },
-        OutputFormat::Json => println!(
-            "{}",
-            crate::command_report(
-                "access client revoke",
-                json!({
-                    "client": document.client_id,
-                    "removed": removed,
-                })
-            )
-        ),
+        OutputFormat::Json => crate::print_report(&crate::command_report(
+            "access client revoke",
+            json!({
+                "client": document.client_id,
+                "removed": removed,
+            }),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }

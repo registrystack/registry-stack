@@ -227,11 +227,10 @@ fn run_inner(
     publish(staging, &args.output)?;
 
     if format == OutputFormat::Json {
-        println!(
-            "{}",
-            serde_json::to_string(&json!({
-                "operation": "package",
-                "status": "packaged",
+        crate::report::print(&crate::report::success(
+            "package",
+            "packaged",
+            json!({
                 "project": args.project,
                 "target": args.target,
                 "output": args.output,
@@ -239,8 +238,8 @@ fn run_inner(
                 "revision": args.revision,
                 "requiredSecrets": secret_references,
                 "proofBoundary": "offline deployment candidate compilation and fixture validation"
-            }))?
-        );
+            }),
+        ))?;
         return Ok(ExitCode::SUCCESS);
     }
     println!("Package digest: {package_digest}");

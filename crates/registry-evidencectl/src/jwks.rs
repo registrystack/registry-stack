@@ -85,13 +85,10 @@ pub fn run(args: JwksArgs, format: OutputFormat) -> Result<ExitCode> {
 
     match format {
         OutputFormat::Human => println!("wrote {}", args.output.display()),
-        OutputFormat::Json => println!(
-            "{}",
-            crate::command_report(
-                "jwks",
-                json!({"files": [args.output.display().to_string()]})
-            )
-        ),
+        OutputFormat::Json => crate::print_report(&crate::command_report(
+            "jwks",
+            json!({"files": [args.output.display().to_string()]}),
+        )),
     }
 
     Ok(ExitCode::SUCCESS)

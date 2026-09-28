@@ -172,8 +172,10 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "the report belongs on stdout: {stdout}"
     );
     assert!(
-        stdout.contains("evidencectl source suggest --operation")
-            && stdout.contains("--project")
+        stdout.contains(&format!(
+            "evidencectl source suggest {} --operation",
+            path_argument(&project)
+        )) && !stdout.contains("--project")
             && !stdout.contains("--openapi"),
         "a project reproduction uses its retained OpenAPI: {stdout}"
     );
@@ -569,8 +571,10 @@ fn list_pointers_prints_the_selectable_leaves_in_both_formats() {
         report,
         serde_json::json!({
             "command": "source suggest",
+            "notes": [],
             "ok": true,
             "pointers": EXPECTED,
+            "status": "complete",
         })
     );
 
@@ -690,14 +694,20 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
         stdout_of(&output),
         stderr_of(&output)
     );
-    // The pipeline still announces adopted bounds on stderr, as a human run
-    // does; what JSON mode owns is stdout, which carries only the report.
+    // The provenance announcements a human run prints on stderr travel in
+    // the report's notes, so JSON mode leaves stderr silent.
     assert!(
-        stderr_of(&output).contains("evidencectl: "),
-        "the provenance announcements stay on stderr: {}",
+        stderr_of(&output).is_empty(),
+        "JSON mode writes nothing to stderr: {}",
         stderr_of(&output)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert!(
+        report["notes"]
+            .as_array()
+            .is_some_and(|notes| !notes.is_empty()),
+        "the provenance announcements travel in the notes: {report}"
+    );
     assert_eq!(report["command"], "source suggest");
     assert_eq!(report["ok"], Value::Bool(true));
     assert_eq!(report["status"], "complete");
@@ -730,7 +740,10 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
     assert!(
         report["equivalentCommand"]
             .as_str()
-            .is_some_and(|command| command.starts_with("evidencectl source suggest --operation")),
+            .is_some_and(|command| command.starts_with(&format!(
+                "evidencectl source suggest {} --operation",
+                path_argument(&project)
+            ))),
         "the equivalent command reproduces the run: {}",
         report["equivalentCommand"]
     );

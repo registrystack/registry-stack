@@ -139,7 +139,7 @@ fn human_only_command_help_offers_only_human_output() {
     }
     let help = help_text(&["source", "suggest", "--help"]);
     assert!(
-        help.contains("[possible values: human, json]"),
+        help.contains("[possible values: human, json, junit]"),
         "a migrated command lost its JSON output: {help}"
     );
 }

@@ -79,8 +79,12 @@ pub struct NewArgs {
     pub _generate_keys: bool,
 }
 
-pub(crate) fn run_with_format(args: NewArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    create(args, true, format)
+pub(crate) fn run_with_format(
+    args: NewArgs,
+    command: &'static str,
+    format: OutputFormat,
+) -> anyhow::Result<ExitCode> {
+    create(args, Some(command), format)
 }
 
 /// Start source-first authoring through the same staged project and key setup
@@ -101,13 +105,19 @@ pub(crate) fn create_source_project(directory: &Path) -> Result<()> {
             profile: Some(AuthoringProfile::Local),
             _generate_keys: false,
         },
-        false,
+        None,
         OutputFormat::Human,
     )?;
     Ok(())
 }
 
-fn create(args: NewArgs, report: bool, format: OutputFormat) -> anyhow::Result<ExitCode> {
+/// Create the project; `report` names the command whose report is written,
+/// and is `None` when another command creates the project on its behalf.
+fn create(
+    args: NewArgs,
+    report: Option<&'static str>,
+    format: OutputFormat,
+) -> anyhow::Result<ExitCode> {
     let source = match (args.openapi.as_deref(), args.transport, args.starter.as_deref()) {
         (Some(openapi), None, None) => AuthoringSource::OpenApi(openapi),
         (None, Some(AuthoringTransport::SqliteExtract), None) => AuthoringSource::SqliteExtract,
@@ -215,20 +225,19 @@ fn create(args: NewArgs, report: bool, format: OutputFormat) -> anyhow::Result<E
         .with_context(|| format!("setting permissions on {}", staged_root.display()))?;
     publish(staging, &args.directory)?;
 
-    if !report {
+    let Some(command) = report else {
         return Ok(ExitCode::SUCCESS);
-    }
+    };
     if format == OutputFormat::Json {
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "operation": "init",
-                "status": "created",
+        crate::report::print(&crate::report::success(
+            command,
+            "created",
+            serde_json::json!({
                 "project": args.directory,
                 "profile": "local",
                 "proofBoundary": "project scaffold only; no authoring or deployment validation was performed"
-            }))?
-        );
+            }),
+        ))?;
         return Ok(ExitCode::SUCCESS);
     }
     println!(

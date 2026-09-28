@@ -1370,9 +1370,12 @@ fn render_equivalent_command(inputs: &EmitInputs) -> String {
         "suggest".to_owned(),
     ];
 
-    if inputs.project.is_none() {
-        parts.push("--openapi".to_owned());
-        parts.push(shell_quote(&inputs.openapi.display()));
+    match &inputs.project {
+        Some(project) => parts.push(shell_quote(&path_display(project))),
+        None => {
+            parts.push("--openapi".to_owned());
+            parts.push(shell_quote(&inputs.openapi.display()));
+        }
     }
     parts.push("--operation".to_owned());
     parts.push(shell_quote(&format!(
@@ -1392,10 +1395,6 @@ fn render_equivalent_command(inputs: &EmitInputs) -> String {
     if let Some(base_url) = &inputs.base_url {
         parts.push("--base-url".to_owned());
         parts.push(shell_quote(base_url));
-    }
-    if let Some(project) = &inputs.project {
-        parts.push("--project".to_owned());
-        parts.push(shell_quote(&path_display(project)));
     }
     for pointer in &inputs.selection {
         parts.push("--select".to_owned());

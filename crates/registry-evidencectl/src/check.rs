@@ -246,6 +246,62 @@ fn check_and_capture_target(
     })
 }
 
+/// The report a denied check writes: the passing report's members, with the
+/// findings that refused it and nothing claimed.
+pub(crate) fn refused_check_report(
+    project: &Path,
+    target: Option<&Path>,
+    findings: Vec<Value>,
+) -> Value {
+    crate::report::refused(
+        "check",
+        "refused",
+        json!({
+            "project": project,
+            "target": target,
+            "proof": "none",
+            "assuranceProfile": null,
+            "packageDigest": null,
+            "fixtureProof": false,
+            "findings": findings,
+            "offline": true,
+            "networkAccess": false,
+            "fixtureExecution": false,
+            "secretResolution": false,
+            "targetHostPathChecks": false,
+        }),
+    )
+}
+
+/// The report a denied explain writes: the passing report's members, with
+/// the findings that refused it and an empty inventory.
+pub(crate) fn refused_explain_report(
+    project: &Path,
+    target: Option<&Path>,
+    findings: Vec<Value>,
+) -> Value {
+    crate::report::refused(
+        "explain",
+        "refused",
+        json!({
+            "project": project,
+            "target": target,
+            "proof": "none",
+            "packageDigest": null,
+            "findings": findings,
+            "questions": [],
+            "sources": [],
+            "selectors": [],
+            "derivations": [],
+            "localAccess": null,
+            "targetGovernance": null,
+            "offline": true,
+            "networkAccess": false,
+            "secretResolution": false,
+        }),
+    )
+}
+
 /// Explain authored inventory and, when supplied, target-owned governance.
 pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Value> {
     let checked = check_and_capture_target(project, target, false, false)?;

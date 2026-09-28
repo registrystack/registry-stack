@@ -3,7 +3,7 @@
 //! implements Evidence semantics itself and shells out to the runtime binary
 //! for them.
 
-use std::{ffi::OsString, io::Write as _, path::PathBuf, process::ExitCode};
+use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
 use clap::{
     builder::{PossibleValuesParser, TypedValueParser as _},
@@ -20,8 +20,10 @@ mod dev;
 mod doctor;
 mod evidence_binary;
 mod fixtures;
+mod junit;
 mod jwks;
 mod keygen;
+mod report;
 mod request;
 mod runtime;
 mod scaffold;
@@ -42,15 +44,16 @@ mod verify;
     about = "Evidence adopter tooling: keys, source authoring, fixture runs"
 )]
 struct Cli {
-    /// Select human-readable or machine-readable output.
+    /// Select human-readable or machine-readable output. `junit` is accepted
+    /// only by fixture runs (`test` and `fixtures run`).
     #[arg(
         id = "output_format",
         long = "format",
         global = true,
         value_enum,
-        default_value_t = OutputFormat::Human
+        default_value_t = CliFormat::Human
     )]
-    output_format: OutputFormat,
+    output_format: CliFormat,
 
     #[command(subcommand)]
     command: Command,
@@ -120,6 +123,16 @@ pub(crate) enum OutputFormat {
     #[default]
     Human,
     Json,
+}
+
+/// The `--format` values the command line accepts. JUnit XML is a fixture-run
+/// report only; every other command renders human or JSON output.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum CliFormat {
+    #[default]
+    Human,
+    Json,
+    Junit,
 }
 
 #[derive(Debug, Args)]
@@ -212,6 +225,16 @@ impl std::fmt::Display for SafeCliFailure {
 
 impl std::error::Error for SafeCliFailure {}
 
+impl SafeCliFailure {
+    fn exit(&self) -> u8 {
+        if self.operational {
+            report::OPERATIONAL_FAILURE_EXIT
+        } else {
+            report::DOMAIN_REFUSAL_EXIT
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 struct ArtifactInspectArgs {
     /// Deployment target whose runtime.yaml names the installed package.
@@ -261,7 +284,7 @@ fn narrow_format(command: clap::Command, path: &[&str]) -> clap::Command {
                 .value_name("output_format")
                 .default_value("human")
                 .help("Select human-readable output; this command provides no JSON report")
-                .value_parser(PossibleValuesParser::new(["human"]).map(|_| OutputFormat::Human)),
+                .value_parser(PossibleValuesParser::new(["human"]).map(|_| CliFormat::Human)),
         ),
         Some((name, rest)) => command.mut_subcommand(*name, |sub| narrow_format(sub, rest)),
     }
@@ -348,8 +371,7 @@ pub fn main_entry() -> ExitCode {
     let arguments = normalized_process_args();
     let requested_format = requested_output_format(&arguments);
     if requested_format == OutputFormat::Json && help_requested(&arguments) {
-        write_json_help();
-        return ExitCode::SUCCESS;
+        return write_json_help();
     }
     let parsed = cli_command()
         .try_get_matches_from(&arguments)
@@ -368,30 +390,39 @@ pub fn main_entry() -> ExitCode {
         Err(error) => {
             if requested_format == OutputFormat::Json && format_value_refused(&error) {
                 if let Some(command) = human_only_command_named(&arguments) {
-                    println!("{}", unsupported_json_format_failure(&command));
-                    return ExitCode::from(2);
+                    print_report(&unsupported_json_format_failure(&command));
+                    return ExitCode::from(report::USAGE_EXIT);
                 }
             }
             write_usage_failure(requested_format);
-            return ExitCode::from(2);
+            return ExitCode::from(report::USAGE_EXIT);
         }
     };
-    let format = if legacy_json_requested(&cli.command) {
+    let command_path = command_path(&matches);
+    let junit = cli.output_format == CliFormat::Junit;
+    if junit
+        && (legacy_json_requested(&cli.command)
+            || !matches!(cli.command, Command::Test(_) | Command::Fixtures(_)))
+    {
+        eprint!("{}", unsupported_junit_failure_human(&command_path));
+        return ExitCode::from(report::USAGE_EXIT);
+    }
+    let format = if legacy_json_requested(&cli.command) || cli.output_format == CliFormat::Json {
         OutputFormat::Json
     } else {
-        cli.output_format
+        OutputFormat::Human
     };
     if format == OutputFormat::Json {
         if let Some(command) = human_only_command(&matches) {
-            println!("{}", unsupported_json_format_failure(&command));
-            return ExitCode::from(2);
+            print_report(&unsupported_json_format_failure(&command));
+            return ExitCode::from(report::USAGE_EXIT);
         }
     }
     let result = match cli.command {
         Command::Init(args) => {
             let artifact = args.directory.display().to_string();
             safe_command(
-                scaffold::run_with_format(args, format),
+                scaffold::run_with_format(args, "init", format),
                 "evidence.init.refused",
                 artifact,
                 "Evidence could not create the requested project destination.",
@@ -429,7 +460,10 @@ pub fn main_entry() -> ExitCode {
                     fixture: args.fixture,
                     case: args.case,
                     json: format == OutputFormat::Json,
+                    junit,
+                    command: "test",
                     explain: args.explain,
+                    legacy_project: None,
                 })),
                 "evidence.test.failed",
                 artifact,
@@ -459,7 +493,7 @@ pub fn main_entry() -> ExitCode {
         Command::Access(command) => access::run(command, format),
         Command::Keygen(command) => keygen::run(command, format),
         Command::Jwks(args) => jwks::run(args, format),
-        Command::New(args) => scaffold::run_with_format(args, format),
+        Command::New(args) => scaffold::run_with_format(args, "new", format),
         Command::Build(args) => Err(SafeCliFailure {
             operational: false,
             code: "evidence.build.retired".to_owned(),
@@ -474,6 +508,7 @@ pub fn main_entry() -> ExitCode {
         .into()),
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
             args.json |= format == OutputFormat::Json;
+            args.junit = junit;
             fixtures::run(fixtures::FixturesCommand::Run(args))
         }
         Command::Source(command) => source_cli::run(command, format),
@@ -489,10 +524,20 @@ pub fn main_entry() -> ExitCode {
             "Evidence could not inspect the selected runtime configuration.",
             "Correct the runtime configuration or unavailable startup dependency and rerun doctor.",
         ),
-        Command::Artifact(ArtifactCommand::Inspect(args)) => doctor::run(doctor::DoctorArgs {
-            project: args.project,
-            json: format == OutputFormat::Json,
-        }),
+        Command::Artifact(ArtifactCommand::Inspect(args)) => {
+            let artifact = args.project.display().to_string();
+            safe_command(
+                doctor::run(doctor::DoctorArgs {
+                    project: args.project,
+                    json: format == OutputFormat::Json,
+                    command: "artifact inspect",
+                }),
+                "evidence.artifact-inspect.failed",
+                artifact,
+                "Evidence could not inspect the selected deployment artifacts.",
+                "Correct the deployment target or package named by the command and rerun artifact inspect.",
+            )
+        }
         Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
@@ -504,24 +549,27 @@ pub fn main_entry() -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
-                write_safe_failure(failure, format);
-                return ExitCode::from(if failure.operational { 3 } else { 1 });
+                write_safe_failure(failure, &command_path, format);
+                return ExitCode::from(failure.exit());
             }
             if let Some(unknown) = error.downcast_ref::<suggest::UnknownSelectionPointer>() {
                 write_unknown_selection_failure(unknown, format);
-                return ExitCode::from(1);
+                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
             if let Some(mismatch) = error.downcast_ref::<source_add::BregctlVersionMismatch>() {
                 write_bregctl_version_mismatch(mismatch, format);
-                return ExitCode::from(1);
+                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
             let operational = error
                 .chain()
                 .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
-            let (status, code, exit) = if operational {
-                ("operational-failure", "evidencectl.operational-failure", 3)
+            let (code, exit) = if operational {
+                (
+                    "evidencectl.operational-failure",
+                    report::OPERATIONAL_FAILURE_EXIT,
+                )
             } else {
-                ("domain-refusal", "evidencectl.domain-refusal", 1)
+                ("evidencectl.domain-refusal", report::DOMAIN_REFUSAL_EXIT)
             };
             let detail = format!("{error:#}");
             let safe_message = if operational {
@@ -531,21 +579,21 @@ pub fn main_entry() -> ExitCode {
             };
             match format {
                 OutputFormat::Human => eprintln!("evidencectl: {detail}"),
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::json!({
-                        "status": status,
-                        "diagnostics": [{
-                            "severity": "error",
-                            "code": code,
-                            "artifact": "evidencectl",
-                            "path": "$",
-                            "message": safe_message,
-                            "cause": detail,
-                            "suggestedAction": "Correct the reported problem and retry the command."
-                        }]
-                    })
-                ),
+                OutputFormat::Json => print_report(&report::failure(
+                    &command_path,
+                    exit,
+                    vec![serde_json::json!({
+                        "severity": "error",
+                        "code": code,
+                        "artifact": "evidencectl",
+                        "path": "$",
+                        "message": safe_message,
+                        "cause": detail,
+                        "suggestedAction": format!(
+                            "Correct the cause reported above, then rerun evidencectl {command_path}."
+                        ),
+                    })],
+                )),
             }
             ExitCode::from(exit)
         }
@@ -588,16 +636,32 @@ fn help_requested(arguments: &[OsString]) -> bool {
 
 /// Render the machine-readable command tree `--format json` help publishes,
 /// using the same walker as the offline CLI reference catalog.
-fn write_json_help() {
+fn write_json_help() -> ExitCode {
     let catalog = registry_cli_reference::binary_catalog(
         command(),
         registry_platform_buildinfo::DISPLAY_VERSION,
         None,
     );
-    println!(
-        "{}",
-        serde_json::to_string(&catalog).expect("the command catalog serializes")
-    );
+    match serde_json::to_string(&catalog) {
+        Ok(catalog) => println!("{catalog}"),
+        Err(error) => {
+            print_report(&report::failure(
+                "help",
+                report::OPERATIONAL_FAILURE_EXIT,
+                vec![serde_json::json!({
+                    "severity": "error",
+                    "code": "evidencectl.help.unavailable",
+                    "artifact": "command catalog",
+                    "path": "$",
+                    "message": "The machine-readable command catalog could not be rendered.",
+                    "cause": error.to_string(),
+                    "suggestedAction": "Run evidencectl --help for the human command reference.",
+                })],
+            ));
+            return ExitCode::from(report::OPERATIONAL_FAILURE_EXIT);
+        }
+    }
+    ExitCode::from(report::SUCCESS_EXIT)
 }
 
 fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
@@ -629,31 +693,59 @@ fn legacy_json_requested(command: &Command) -> bool {
 }
 
 fn unsupported_json_format_failure(command: &str) -> serde_json::Value {
-    serde_json::json!({
-        "status": "usage-error",
-        "diagnostics": [{
+    report::failure(
+        command,
+        report::USAGE_EXIT,
+        vec![serde_json::json!({
             "severity": "error",
             "code": "evidencectl.format.unsupported",
             "artifact": command,
             "path": "$.format",
             "message": "The selected Evidence command does not provide a JSON report.",
-            "suggestedAction": "Rerun this command with --format human and do not parse its prose output."
-        }]
-    })
+            "suggestedAction": format!(
+                "Rerun evidencectl {command} with --format human and do not parse its prose output."
+            ),
+        })],
+    )
 }
 
+/// The usage refusal. Clap's own message is not echoed because it quotes the
+/// rejected argument, which may carry an operator value.
 fn usage_failure_json() -> serde_json::Value {
-    serde_json::json!({
-        "status": "usage-error",
-        "diagnostics": [{
+    report::failure(
+        "usage",
+        report::USAGE_EXIT,
+        vec![serde_json::json!({
             "severity": "error",
             "code": "evidencectl.usage",
             "artifact": "command line",
             "path": "$",
             "message": "The Evidence command line is incomplete or contains conflicting or unsupported arguments.",
             "suggestedAction": "Run evidencectl --help or the selected command with --help, then retry using the documented arguments."
-        }]
-    })
+        })],
+    )
+}
+
+/// Write one JSON report. A closed standard output leaves nothing to report
+/// to, so the exit code the caller returns is the only remaining signal.
+pub(crate) fn print_report(report: &serde_json::Value) {
+    if let Err(error) = report::print(report) {
+        // Standard error stays silent under --format json except when the
+        // report itself cannot be delivered.
+        eprintln!("evidencectl: could not write the JSON report: {error}");
+    }
+}
+
+/// The full subcommand path a parsed invocation selected, such as
+/// `source mock serve`.
+fn command_path(matches: &ArgMatches) -> String {
+    let mut path = Vec::new();
+    let mut matches = matches;
+    while let Some((name, sub)) = matches.subcommand() {
+        path.push(name);
+        matches = sub;
+    }
+    path.join(" ")
 }
 
 fn usage_failure_human() -> String {
@@ -673,10 +765,19 @@ fn usage_failure_human() -> String {
     )
 }
 
+/// The refusal for `--format junit` on a command that is not a fixture run.
+/// JUnit is not an error format, so the refusal is human prose on stderr and
+/// the exit code carries the usage class.
+fn unsupported_junit_failure_human(command: &str) -> String {
+    format!(
+        "error[evidencectl.format.unsupported] {command} $.format: The selected Evidence command does not provide a JUnit report.\n  next: Rerun evidencectl {command} with --format human or --format json; only evidencectl test and evidencectl fixtures run write JUnit.\n"
+    )
+}
+
 fn write_usage_failure(format: OutputFormat) {
     match format {
         OutputFormat::Human => eprint!("{}", usage_failure_human()),
-        OutputFormat::Json => println!("{}", usage_failure_json()),
+        OutputFormat::Json => print_report(&usage_failure_json()),
     }
 }
 
@@ -852,10 +953,10 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
     }
 }
 
-fn write_safe_failure(failure: &SafeCliFailure, format: OutputFormat) {
+fn write_safe_failure(failure: &SafeCliFailure, command: &str, format: OutputFormat) {
     match format {
         OutputFormat::Human => eprint!("{}", safe_failure_human(failure)),
-        OutputFormat::Json => println!("{}", safe_failure_json(failure)),
+        OutputFormat::Json => print_report(&safe_failure_json(failure, command)),
     }
 }
 
@@ -868,21 +969,19 @@ fn write_unknown_selection_failure(
 ) {
     match format {
         OutputFormat::Human => eprintln!("evidencectl: {unknown}"),
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::json!({
-                "status": "domain-refusal",
-                "diagnostics": [{
-                    "severity": "error",
-                    "code": "evidencectl.source.select-unknown",
-                    "artifact": "source suggest",
-                    "path": "$.select",
-                    "message": format!("`--select {}` names nothing in this response schema.", unknown.pointer()),
-                    "suggestedAction": "Rerun with one of the pointers in availablePointers, or pass --list-pointers to print them.",
-                    "availablePointers": unknown.available_pointers(),
-                }]
-            })
-        ),
+        OutputFormat::Json => print_report(&report::failure(
+            "source suggest",
+            report::DOMAIN_REFUSAL_EXIT,
+            vec![serde_json::json!({
+                "severity": "error",
+                "code": "evidencectl.source.select-unknown",
+                "artifact": "source suggest",
+                "path": "$.select",
+                "message": format!("`--select {}` names nothing in this response schema.", unknown.pointer()),
+                "suggestedAction": "Rerun with one of the pointers in availablePointers, or pass --list-pointers to print them.",
+                "availablePointers": unknown.available_pointers(),
+            })],
+        )),
     }
 }
 
@@ -896,39 +995,27 @@ fn write_bregctl_version_mismatch(
 ) {
     match format {
         OutputFormat::Human => eprintln!("evidencectl: {mismatch}"),
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::json!({
-                "status": "domain-refusal",
-                "diagnostics": [{
-                    "severity": "error",
-                    "code": "evidencectl.bregctl.version-mismatch",
-                    "artifact": "source add",
-                    "path": "$",
-                    "message": mismatch.to_string(),
-                    "suggestedAction": "Set --bregctl-bin or BREGCTL_BIN to a matching bregctl binary.",
-                    "foundVersion": mismatch.found,
-                    "requiredVersion": mismatch.required,
-                }]
-            })
-        ),
+        OutputFormat::Json => print_report(&report::failure(
+            "source add",
+            report::DOMAIN_REFUSAL_EXIT,
+            vec![serde_json::json!({
+                "severity": "error",
+                "code": "evidencectl.bregctl.version-mismatch",
+                "artifact": "source add",
+                "path": "$",
+                "message": mismatch.to_string(),
+                "suggestedAction": "Set --bregctl-bin or BREGCTL_BIN to a matching bregctl binary.",
+                "foundVersion": mismatch.found,
+                "requiredVersion": mismatch.required,
+            })],
+        )),
     }
 }
 
 /// The envelope every successful `--format json` command report shares, with
 /// the command's own members merged in.
 pub(crate) fn command_report(command: &str, members: serde_json::Value) -> serde_json::Value {
-    let mut report = serde_json::json!({
-        "command": command,
-        "ok": true,
-        "status": "complete",
-    });
-    if let (Some(envelope), Some(extra)) = (report.as_object_mut(), members.as_object()) {
-        for (key, value) in extra {
-            envelope.insert(key.clone(), value.clone());
-        }
-    }
-    report
+    report::success(command, "complete", members)
 }
 
 fn safe_failure_human(failure: &SafeCliFailure) -> String {
@@ -948,7 +1035,7 @@ fn safe_failure_human(failure: &SafeCliFailure) -> String {
     )
 }
 
-fn safe_failure_json(failure: &SafeCliFailure) -> serde_json::Value {
+fn safe_failure_json(failure: &SafeCliFailure, command: &str) -> serde_json::Value {
     let mut diagnostic = serde_json::json!({
         "severity": "error",
         "code": failure.code,
@@ -960,10 +1047,7 @@ fn safe_failure_json(failure: &SafeCliFailure) -> serde_json::Value {
     if let Some(cause) = &failure.cause {
         diagnostic["cause"] = serde_json::Value::String(cause.clone());
     }
-    serde_json::json!({
-        "status": if failure.operational { "operational-failure" } else { "domain-refusal" },
-        "diagnostics": [diagnostic],
-    })
+    report::failure(command, failure.exit(), vec![diagnostic])
 }
 
 /// Preserve the released request-response `--format` spelling now that the
@@ -1002,7 +1086,6 @@ fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    let project = args.project.display().to_string();
     match check::check(
         &args.project,
         args.target.as_deref(),
@@ -1015,16 +1098,10 @@ fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<Ex
         }
         Err(error) => match error.downcast::<check::DeniedFindings>() {
             Ok(denied) => {
-                let report = serde_json::json!({
-                    "command": "check",
-                    "ok": false,
-                    "status": "refused",
-                    "proof": "none",
-                    "project": project,
-                    "findings": denied.0,
-                });
+                let report =
+                    check::refused_check_report(&args.project, args.target.as_deref(), denied.0);
                 write_check_report(&report, format)?;
-                Ok(ExitCode::from(1))
+                Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
             }
             Err(error) => Err(error),
         },
@@ -1032,7 +1109,6 @@ fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<Ex
 }
 
 fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    let project = args.project.display().to_string();
     match check::explain(&args.project, args.target.as_deref()) {
         Ok(report) => {
             write_check_report(&report, format)?;
@@ -1040,16 +1116,10 @@ fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Resul
         }
         Err(error) => match error.downcast::<check::DeniedFindings>() {
             Ok(denied) => {
-                let report = serde_json::json!({
-                    "command": "explain",
-                    "ok": false,
-                    "status": "refused",
-                    "proof": "none",
-                    "project": project,
-                    "findings": denied.0,
-                });
+                let report =
+                    check::refused_explain_report(&args.project, args.target.as_deref(), denied.0);
                 write_check_report(&report, format)?;
-                Ok(ExitCode::from(1))
+                Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
             }
             Err(error) => Err(error),
         },
@@ -1059,7 +1129,7 @@ fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Resul
 fn write_check_report(report: &serde_json::Value, format: OutputFormat) -> anyhow::Result<()> {
     match format {
         OutputFormat::Human => check::render_human(report, &mut std::io::stdout())?,
-        OutputFormat::Json => writeln!(std::io::stdout(), "{}", serde_json::to_string(report)?)?,
+        OutputFormat::Json => report::print(report)?,
     }
     Ok(())
 }
@@ -1404,7 +1474,7 @@ mod tests {
             .downcast_ref::<SafeCliFailure>()
             .expect("safe failure");
         let human = safe_failure_human(failure);
-        let json = safe_failure_json(failure).to_string();
+        let json = safe_failure_json(failure, "check").to_string();
         assert!(!human.contains(CANARY));
         assert!(!json.contains(CANARY));
         for expected in [failure.message.as_str(), failure.suggested_action.as_str()] {
@@ -1433,11 +1503,11 @@ mod tests {
             .expect("safe failure");
         assert!(failure.operational);
         let human = safe_failure_human(failure);
-        let json = safe_failure_json(failure).to_string();
+        let json = safe_failure_json(failure, "check").to_string();
         for report in [&human, &json] {
             assert!(report.contains("inspecting target parent"), "{report}");
         }
-        let diagnostic = safe_failure_json(failure)["diagnostics"][0].clone();
+        let diagnostic = safe_failure_json(failure, "check")["diagnostics"][0].clone();
         assert_eq!(
             diagnostic["cause"].as_str(),
             Some("inspecting target parent: No such file or directory (os error 2)")
@@ -1501,7 +1571,7 @@ mod tests {
         assert_eq!(failure.code, "evidence.dev.port-unavailable");
         for report in [
             safe_failure_human(failure),
-            safe_failure_json(failure).to_string(),
+            safe_failure_json(failure, "check").to_string(),
         ] {
             assert!(report.contains("48123"), "{report}");
             assert!(report.contains("already in use"), "{report}");
@@ -1662,7 +1732,9 @@ mod tests {
         let arguments = tree_arguments(&command, command.get_name());
         let projects: Vec<_> = arguments
             .iter()
-            .filter(|(_, argument)| argument.get_long() == Some("project"))
+            .filter(|(_, argument)| {
+                argument.get_id() == "project" || argument.get_long() == Some("project")
+            })
             .collect();
         assert!(
             projects.len() >= 18,
@@ -1670,12 +1742,38 @@ mod tests {
             projects.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
 
+        // A hidden `--project` beside a positional PROJECT is the retired
+        // spelling of that same argument, kept parseable for one release.
+        for (path, argument) in &projects {
+            if argument.get_id() == "legacy_project" {
+                assert!(
+                    projects.iter().any(|(other, positional)| other == path
+                        && positional.get_id() == "project"
+                        && positional.is_positional()),
+                    "{path} keeps --project only as the retired spelling of its positional PROJECT"
+                );
+            }
+        }
+
+        // These commands name their own project shape in their help and are
+        // outside the shared phrase below.
+        let own_phrase = |path: &str| {
+            [
+                "evidencectl check",
+                "evidencectl explain",
+                "evidencectl test",
+                "evidencectl package",
+                "evidencectl artifact inspect",
+            ]
+            .contains(&path)
+                || path.starts_with("evidencectl dev ")
+        };
         let documented: Vec<_> = projects
             .iter()
             .filter(|(path, argument)| {
                 // Clap does not propagate a hidden command's state to its
                 // arguments. The retired build spelling is not public API.
-                path != "evidencectl build" && !argument.is_hide_set()
+                path != "evidencectl build" && !argument.is_hide_set() && !own_phrase(path)
             })
             .collect();
         assert_eq!(
@@ -1699,10 +1797,10 @@ mod tests {
                 "evidencectl doctor",
                 "evidencectl tooling editor",
             ]),
-            "every documented --project must be covered by this rule"
+            "every documented project argument must be covered by this rule"
         );
 
-        for (path, argument) in &projects {
+        for (path, argument) in projects.iter().filter(|(path, _)| !own_phrase(path)) {
             assert!(
                 !argument.is_required_set(),
                 "{path} --project must be optional so the current directory is always a valid answer"

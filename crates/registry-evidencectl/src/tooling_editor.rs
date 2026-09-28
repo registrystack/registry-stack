@@ -121,8 +121,16 @@ pub struct EditorArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(
+        long = "project",
+        value_name = "PROJECT",
+        hide = true,
+        conflicts_with = "project"
+    )]
+    pub legacy_project: Option<PathBuf>,
 
     /// Editor workspace directory containing the Evidence project.
     ///
@@ -211,7 +219,10 @@ std::thread_local! {
     };
 }
 
-pub fn run(args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
+pub fn run(mut args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
+    if let Some(project) = args.legacy_project.take() {
+        args.project = project;
+    }
     let report = setup_workspace_editor(
         &args.project,
         args.workspace.as_deref().unwrap_or(&args.project),
@@ -227,15 +238,9 @@ pub fn run(args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
             }
         }
         crate::OutputFormat::Json => {
-            let mut value =
+            let value =
                 serde_json::to_value(&report).context("rendering the editor setup report")?;
-            let members = value
-                .as_object_mut()
-                .expect("the editor report serializes as a JSON object");
-            members.insert("command".to_owned(), json!("tooling editor"));
-            members.insert("ok".to_owned(), json!(true));
-            members.insert("status".to_owned(), json!("complete"));
-            println!("{value}");
+            crate::print_report(&crate::command_report("tooling editor", value));
         }
     }
     Ok(ExitCode::SUCCESS)

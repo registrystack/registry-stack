@@ -47,7 +47,7 @@ pub enum SourceCommand {
     ArgGroup::new("source")
         .required(true)
         .multiple(false)
-        .args(["openapi", "project"])
+        .args(["openapi", "project", "legacy_project"])
 ))]
 pub struct SuggestArgs {
     /// OpenAPI 3.0 or 3.1 document for a print-only draft. With --project,
@@ -94,13 +94,19 @@ pub struct SuggestArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long)]
+    #[arg(value_name = "PROJECT")]
     pub project: Option<std::path::PathBuf>,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(long = "project", value_name = "PROJECT", hide = true)]
+    pub legacy_project: Option<std::path::PathBuf>,
 }
 
 pub fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        SourceCommand::Suggest(args) => suggest(args, format),
+        SourceCommand::Suggest(mut args) => {
+            args.project = args.legacy_project.take().or(args.project);
+            suggest(args, format)
+        }
         SourceCommand::Mock(command) => crate::source_mock::run(command),
     }
 }
@@ -111,6 +117,32 @@ const MAX_PROJECTED_ITEMS: i64 = 256;
 
 /// The identifier used when an operation's path yields no usable one.
 const FALLBACK_SOURCE_ID: &str = "source-a";
+
+/// The advisories one run announces: resolver notes, flattening warnings,
+/// bound advisories, and the suggestions a flag-driven run adopts. A human
+/// run writes each to standard error as it happens, beside any prompt it
+/// explains; a JSON run keeps them for the report's `notes` member, so
+/// standard error stays silent.
+pub(crate) struct Notes {
+    format: OutputFormat,
+    collected: Vec<String>,
+}
+
+impl Notes {
+    pub(crate) fn new(format: OutputFormat) -> Self {
+        Self {
+            format,
+            collected: Vec::new(),
+        }
+    }
+
+    fn note(&mut self, note: impl std::fmt::Display) {
+        match self.format {
+            OutputFormat::Human => eprintln!("evidencectl: {note}"),
+            OutputFormat::Json => self.collected.push(note.to_string()),
+        }
+    }
+}
 
 /// Run one drafting pass.
 ///
@@ -143,7 +175,7 @@ struct ResponseLeaves {
 /// Load the document, pick the operation, resolve its response schema, and
 /// flatten it into candidate leaves. Both a drafting run and a
 /// `--list-pointers` run start here; only the drafting run continues.
-fn resolve_response_leaves(args: &SuggestArgs) -> Result<ResponseLeaves> {
+fn resolve_response_leaves(args: &SuggestArgs, notes: &mut Notes) -> Result<ResponseLeaves> {
     let source = suggestion_openapi(args)?;
     let spec = load::open(&source)?;
     let operations = spec.operations();
@@ -192,12 +224,12 @@ fn resolve_response_leaves(args: &SuggestArgs) -> Result<ResponseLeaves> {
 
     let resolved = spec.response_schema(&operation, &args.status, &args.media_type)?;
     for note in &resolved.notes {
-        eprintln!("evidencectl: {note}");
+        notes.note(note);
     }
     let schema = resolved.schema;
     let (leaves, warnings) = flatten::candidate_leaves(&schema);
     for warning in &warnings {
-        eprintln!("evidencectl: {warning}");
+        notes.note(warning);
     }
     if leaves.is_empty() {
         bail!(
@@ -222,7 +254,7 @@ fn resolve_response_leaves(args: &SuggestArgs) -> Result<ResponseLeaves> {
 /// Run the shared OpenAPI interpretation pipeline without writing output.
 /// `source suggest` and `new --openapi` differ only in how they deliver this
 /// prepared draft.
-pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
+pub(crate) fn prepare(args: &SuggestArgs, notes: &mut Notes) -> Result<PreparedSuggestion> {
     let flag_driven = args.operation.is_some() && !args.selection.is_empty();
     let ResponseLeaves {
         source,
@@ -230,7 +262,7 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
         operation,
         schema,
         leaves,
-    } = resolve_response_leaves(args)?;
+    } = resolve_response_leaves(args, notes)?;
 
     let selection = if args.selection.is_empty() {
         if !interactive::is_interactive() {
@@ -255,12 +287,12 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
 
     let plan = narrow::plan_advisories(&schema, &selection, &observations)?;
     for advisory in &plan.advisories {
-        eprintln!("evidencectl: {}", advisory.message());
+        notes.note(advisory.message());
     }
     let mut needs = with_page_size_fallback(plan.needs, &spec, &operation)?;
 
     let resolutions = if flag_driven {
-        accept_suggestions(&needs)
+        accept_suggestions(&needs, notes)
     } else {
         interactive::resolve_bounds(&needs)?
     };
@@ -273,7 +305,9 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
         None => {
             let derived = default_source_id(&operation.path);
             if flag_driven {
-                eprintln!("evidencectl: naming this source `{derived}`, from the operation path");
+                notes.note(format!(
+                    "naming this source `{derived}`, from the operation path"
+                ));
                 derived
             } else {
                 interactive::choose_source_id(&derived)?
@@ -388,28 +422,36 @@ fn suggestion_openapi(args: &SuggestArgs) -> Result<types::SpecSource> {
             )
         }
         (Some(_), Some(_)) => bail!(
-            "--project uses its retained source.openapi.yaml; omit --openapi to avoid drafting from a different contract"
+            "the project uses its retained source.openapi.yaml; omit --openapi to avoid drafting from a different contract"
         ),
         (None, Some(openapi)) => fetch::spec_source(openapi),
-        (None, None) => bail!("pass --openapi <path-or-https-url>, or pass --project <authoring-project>"),
+        (None, None) => bail!("pass --openapi <path-or-https-url>, or name the authoring project: `evidencectl source suggest <project>`"),
     }
 }
 
 fn suggest(args: SuggestArgs, format: OutputFormat) -> Result<ExitCode> {
+    let mut notes = Notes::new(format);
     if args.list_pointers {
-        return list_pointers(&args, format);
+        return list_pointers(&args, &mut notes);
     }
-    let prepared = prepare(&args)?;
+    let prepared = prepare(&args, &mut notes)?;
     let artifacts = prepared.artifacts;
 
-    let written = match &args.project {
-        Some(project) => deliver_into_project(project, &artifacts, prepared.flag_driven, format)?,
+    let delivery = match &args.project {
+        Some(project) => {
+            deliver_into_project(project, &artifacts, prepared.flag_driven, &mut notes)?
+        }
         None => {
             if format == OutputFormat::Human {
                 print_draft(&artifacts);
             }
-            Vec::new()
+            Delivery::Printed
         }
+    };
+    let (status, written) = match delivery {
+        Delivery::Written(written) => ("complete", written),
+        Delivery::Printed => ("complete", Vec::new()),
+        Delivery::Declined => ("declined", Vec::new()),
     };
 
     match format {
@@ -418,38 +460,46 @@ fn suggest(args: SuggestArgs, format: OutputFormat) -> Result<ExitCode> {
             println!("Reproduce this run with:");
             println!("  {}", artifacts.equivalent_command);
         }
-        OutputFormat::Json => println!(
-            "{}",
-            crate::command_report(
-                "source suggest",
-                json!({
-                    "sourceId": artifacts.source_id,
-                    "files": written,
-                    "report": artifacts.report,
-                    "equivalentCommand": artifacts.equivalent_command,
-                })
-            )
-        ),
+        OutputFormat::Json => crate::print_report(&crate::report::success(
+            "source suggest",
+            status,
+            json!({
+                "sourceId": artifacts.source_id,
+                "files": written,
+                "report": artifacts.report,
+                "equivalentCommand": artifacts.equivalent_command,
+                "notes": notes.collected,
+            }),
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
 
 /// Print the candidate pointers of the selected operation and response, the
 /// same set `--select` accepts, and stop without drafting anything.
-fn list_pointers(args: &SuggestArgs, format: OutputFormat) -> Result<ExitCode> {
-    let leaves = resolve_response_leaves(args)?.leaves;
-    match format {
+fn list_pointers(args: &SuggestArgs, notes: &mut Notes) -> Result<ExitCode> {
+    let leaves = resolve_response_leaves(args, notes)?.leaves;
+    match notes.format {
         OutputFormat::Human => println!("{}", list_leaves(&leaves)),
-        OutputFormat::Json => println!(
-            "{}",
+        OutputFormat::Json => crate::print_report(&crate::command_report(
+            "source suggest",
             json!({
-                "command": "source suggest",
-                "ok": true,
                 "pointers": leaves.iter().map(|leaf| leaf.pointer.clone()).collect::<Vec<_>>(),
-            })
-        ),
+                "notes": notes.collected,
+            }),
+        )),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// What became of a drafted source.
+enum Delivery {
+    /// The draft was written into the authoring project; these paths.
+    Written(Vec<std::path::PathBuf>),
+    /// No project was named, so the draft was printed instead.
+    Printed,
+    /// The operator declined the write at the confirmation prompt.
+    Declined,
 }
 
 /// Write the draft into an OpenAPI authoring project, then report what happened.
@@ -462,8 +512,9 @@ fn deliver_into_project(
     project: &Path,
     artifacts: &DraftArtifacts,
     flag_driven: bool,
-    format: OutputFormat,
-) -> Result<Vec<std::path::PathBuf>> {
+    notes: &mut Notes,
+) -> Result<Delivery> {
+    let format = notes.format;
     if !project.is_dir() {
         bail!(
             "authoring project directory {} not found; create one with `evidencectl init` first",
@@ -473,11 +524,11 @@ fn deliver_into_project(
     if !flag_driven
         && !interactive::confirm_write(&project.display().to_string(), &artifacts.files)?
     {
-        eprintln!("evidencectl: nothing was written; the draft is printed below instead.");
+        notes.note("nothing was written; the draft is printed below instead.");
         if format == OutputFormat::Human {
             print_draft(artifacts);
         }
-        return Ok(Vec::new());
+        return Ok(Delivery::Declined);
     }
 
     let written = emit::write_into_authoring_project(project, artifacts)?;
@@ -498,7 +549,7 @@ fn deliver_into_project(
              delegates validation to Evidence."
         );
     }
-    Ok(written)
+    Ok(Delivery::Written(written))
 }
 
 /// Print every drafted file, and the pasteable source block, to stdout.
@@ -524,7 +575,10 @@ fn print_block(title: &str, body: &str) {
 /// Adopt every suggestion the pipeline derived, announcing each one with its
 /// provenance so a flag-driven run is auditable from its own output. A need
 /// with no suggestion stays unresolved: nothing here invents a bound.
-fn accept_suggestions(needs: &[BoundNeed]) -> BTreeMap<(String, BoundKind), BoundValues> {
+fn accept_suggestions(
+    needs: &[BoundNeed],
+    notes: &mut Notes,
+) -> BTreeMap<(String, BoundKind), BoundValues> {
     let mut resolutions = BTreeMap::new();
     for need in needs {
         match &need.suggestion {
@@ -533,21 +587,21 @@ fn accept_suggestions(needs: &[BoundNeed]) -> BTreeMap<(String, BoundKind), Boun
                     .map_or_else(String::new, |label| format!(", derived from {label}"));
                 let note = emit::review_note(&need.kind, &suggestion.provenance)
                     .map_or_else(String::new, |note| format!(" ({note})"));
-                eprintln!(
-                    "evidencectl: adopting {} for `{}`{derivation}{note}",
+                notes.note(format!(
+                    "adopting {} for `{}`{derivation}{note}",
                     describe_bound(&suggestion.values),
                     narrow::display_pointer(&need.pointer),
-                );
+                ));
                 resolutions.insert(
                     (need.pointer.clone(), need.kind.clone()),
                     suggestion.values.clone(),
                 );
             }
-            None => eprintln!(
-                "evidencectl: nothing implies {} for `{}`; left as a TODO in the draft",
+            None => notes.note(format!(
+                "nothing implies {} for `{}`; left as a TODO in the draft",
                 need.kind.label(),
                 narrow::display_pointer(&need.pointer)
-            ),
+            )),
         }
     }
     resolutions

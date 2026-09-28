@@ -78,8 +78,17 @@ pub(crate) struct ExplainArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
+
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(
+        long = "project",
+        value_name = "PROJECT",
+        hide = true,
+        conflicts_with = "project"
+    )]
+    pub legacy_project: Option<PathBuf>,
 
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
@@ -143,7 +152,12 @@ struct TargetReport {
 pub(crate) fn run(command: TargetCommand) -> Result<ExitCode> {
     match command {
         TargetCommand::New(args) => new(args),
-        TargetCommand::Explain(args) => explain(args),
+        TargetCommand::Explain(mut args) => {
+            if let Some(project) = args.legacy_project.take() {
+                args.project = project;
+            }
+            explain(args)
+        }
     }
 }
 
@@ -583,10 +597,16 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
         secret_references: secret_references.into_iter().collect(),
     };
     if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).context("encoding target explanation")?
-        );
+        let status = if report.missing_public_key_files.is_empty() {
+            "complete"
+        } else {
+            "incomplete"
+        };
+        crate::report::print(&crate::report::success(
+            "target explain",
+            status,
+            serde_json::to_value(&report).context("encoding target explanation")?,
+        ))?;
     } else {
         println!("Target: {}", report.target);
         for fixture in &report.fixture_paths {

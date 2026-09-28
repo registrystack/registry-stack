@@ -308,7 +308,7 @@ fn doctor_reports_a_secret_the_bundle_references_and_the_project_does_not_hold()
 }
 
 #[test]
-fn doctor_json_puts_one_document_on_stdout_and_the_report_on_stderr() {
+fn doctor_json_puts_one_envelope_on_stdout_and_nothing_on_stderr() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
     provision(&project);
@@ -330,6 +330,10 @@ fn doctor_json_puts_one_document_on_stdout_and_the_report_on_stderr() {
         1,
         "stdout must carry exactly one JSON document: {stdout}"
     );
+    assert!(
+        lines[0].starts_with(r#"{"ok":true,"command":"doctor","status":"passed","#),
+        "the report opens with the shared envelope: {stdout}"
+    );
     let report: serde_json::Value = serde_json::from_str(lines[0]).expect("parse the JSON report");
     assert_eq!(report["passed"], serde_json::Value::Bool(true));
     let checks = report["checks"].as_array().expect("checks array");
@@ -338,8 +342,9 @@ fn doctor_json_puts_one_document_on_stdout_and_the_report_on_stderr() {
         "a check failed in the JSON report: {stdout}"
     );
     assert!(
-        stderr_of(&output).contains("0 failed"),
-        "the human report did not reach stderr in JSON mode"
+        output.stderr.is_empty(),
+        "stderr stays silent in JSON mode: {}",
+        stderr_of(&output)
     );
 }
 
@@ -577,13 +582,15 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
     enable_acquisition_capability(&project);
 
     freeze(&project);
+    let human = doctor(&project, &[]);
     let output = doctor(&project, &["--json"]);
     unfreeze(&project);
 
-    let stderr = stderr_of(&output);
+    let rendered = stdout_of(&human);
     assert!(
-        output.status.success(),
-        "doctor --json failed on an enabled project:\n{stderr}"
+        human.status.success() && output.status.success(),
+        "doctor failed on an enabled project:\n{rendered}\n{}",
+        stderr_of(&output)
     );
     for line in [
         "PLAN: urn:example:doctor:requirement:one-call:v1 (single)",
@@ -597,8 +604,8 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
         "    3. death-register (member) reads civil_record_reference",
     ] {
         assert!(
-            stderr.contains(line),
-            "doctor did not render {line:?}:\n{stderr}"
+            rendered.contains(line),
+            "doctor did not render {line:?}:\n{rendered}"
         );
     }
 
@@ -642,7 +649,10 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
         ])
     );
     assert!(
-        !stdout.contains(CANARY) && !stderr.contains(CANARY),
+        !stdout.contains(CANARY)
+            && !rendered.contains(CANARY)
+            && !stderr_of(&human).contains(CANARY)
+            && output.stderr.is_empty(),
         "doctor echoed a document value"
     );
 }

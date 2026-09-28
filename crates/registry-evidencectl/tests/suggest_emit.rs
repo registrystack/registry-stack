@@ -827,13 +827,12 @@ fn equivalent_command_is_deterministic_with_the_documented_flag_order() {
     let second = emit::draft(&inputs).expect("draft").equivalent_command;
     assert_eq!(first, second, "equivalent_command must be deterministic");
 
-    let expected = "evidencectl source suggest \
+    let expected = "evidencectl source suggest /tmp/example-project \
 --operation 'GET /v1/records' \
 --status 200 \
 --media-type application/json \
 --sample tests/fixtures/samples/example.json \
 --source-id search-a \
---project /tmp/example-project \
 --select /total \
 --select /event_date \
 --select '/results/*/status'";

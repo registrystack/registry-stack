@@ -82,22 +82,14 @@ fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
         OutputFormat::Json => {
             let operation: serde_json::Value =
                 serde_json::from_slice(&output).map_err(|_| failed())?;
-            std::io::stdout()
-                .lock()
-                .write_all(
-                    format!(
-                        "{}\n",
-                        json!({
-                            "command": "audit show",
-                            "ok": true,
-                            "status": "complete",
-                            "operation": operation,
-                            "rendered": rendered.lines().collect::<Vec<_>>(),
-                        })
-                    )
-                    .as_bytes(),
-                )
-                .map_err(|_| failed())?;
+            let report = crate::command_report(
+                "audit show",
+                json!({
+                    "operation": operation,
+                    "rendered": rendered.lines().collect::<Vec<_>>(),
+                }),
+            );
+            crate::report::print(&report).map_err(|_| failed())?;
         }
     }
     Ok(ExitCode::SUCCESS)

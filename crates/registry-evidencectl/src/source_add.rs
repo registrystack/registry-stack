@@ -36,8 +36,16 @@ pub(crate) struct SourceAddArgs {
     ///
     /// This command extends an editable project or creates a source-first
     /// editable project when the directory is absent.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(
+        long = "project",
+        value_name = "PROJECT",
+        hide = true,
+        conflicts_with = "project"
+    )]
+    pub legacy_project: Option<PathBuf>,
     /// Existing registry entity; prompted when omitted in a terminal.
     #[arg(long)]
     pub entity: Option<String>,
@@ -142,7 +150,10 @@ struct RowScope {
     value_file: PathBuf,
 }
 
-pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
+pub(crate) fn run(mut args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
+    if let Some(project) = args.legacy_project.take() {
+        args.project = project;
+    }
     let binary = args
         .bregctl_bin
         .clone()
@@ -160,10 +171,7 @@ pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode>
         Ok(report)
     })?;
     match format {
-        OutputFormat::Json => {
-            serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
-            println!();
-        }
+        OutputFormat::Json => crate::print_report(&report),
         OutputFormat::Human => print_human_report(&report),
     }
     Ok(ExitCode::SUCCESS)
@@ -1072,7 +1080,6 @@ mod tests {
             "source".into(),
             "add".into(),
             registry.into(),
-            "--project".into(),
             project.into(),
             "--entity".into(),
             "record".into(),
@@ -1882,7 +1889,6 @@ mod tests {
             "source".into(),
             "add".into(),
             registry.as_os_str().into(),
-            "--project".into(),
             project.as_os_str().into(),
             "--entity".into(),
             "record".into(),

@@ -67,6 +67,10 @@ pub struct DoctorArgs {
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
     pub json: bool,
+
+    /// The command path the JSON report names.
+    #[arg(skip = "artifact inspect")]
+    pub command: &'static str,
 }
 
 #[derive(Debug)]
@@ -158,17 +162,21 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     };
 
     if args.json {
-        print_diagnostics(&report, true);
-        let encoded = serde_json::to_string(&report).context("failed to encode the JSON report")?;
-        println!("{encoded}");
+        let members = serde_json::to_value(&report).context("failed to encode the JSON report")?;
+        let report = if passed {
+            crate::report::success(args.command, "passed", members)
+        } else {
+            crate::report::refused(args.command, "failed", members)
+        };
+        crate::print_report(&report);
     } else {
-        print_diagnostics(&report, false);
+        print_diagnostics(&report);
     }
 
     Ok(if passed {
         ExitCode::SUCCESS
     } else {
-        ExitCode::FAILURE
+        ExitCode::from(crate::report::DOMAIN_REFUSAL_EXIT)
     })
 }
 
@@ -1045,11 +1053,11 @@ fn read_yaml(path: &Path) -> Result<YamlValue> {
 
 /// Print one line per check, every finding beneath it, and a summary line.
 ///
-/// In JSON mode this goes to stderr, keeping stdout reserved for the single
-/// JSON document; in human mode it is the entire report and goes to stdout.
-/// Findings are never elided: a walk that reports some of what is broken sends
-/// an operator back for a second restart, which is what this exists to avoid.
-fn print_diagnostics(report: &DoctorReport, to_stderr: bool) {
+/// This is the entire human report. Under `--format json` the same checks
+/// travel in the JSON report and nothing is printed here. Findings are never
+/// elided: a walk that reports some of what is broken sends an operator back
+/// for a second restart, which is what this exists to avoid.
+fn print_diagnostics(report: &DoctorReport) {
     let mut lines = Vec::new();
     for check in &report.checks {
         let status = if check.passed { "PASS" } else { "FAIL" };
@@ -1084,11 +1092,7 @@ fn print_diagnostics(report: &DoctorReport, to_stderr: bool) {
     ));
 
     for line in lines {
-        if to_stderr {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
-        }
+        println!("{line}");
     }
 }
 

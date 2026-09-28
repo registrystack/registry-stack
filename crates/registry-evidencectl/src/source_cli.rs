@@ -68,8 +68,16 @@ pub(crate) struct SourceDetachArgs {
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     pub(crate) project: PathBuf,
+    /// Retired spelling of the project directory argument, accepted for one release.
+    #[arg(
+        long = "project",
+        value_name = "PROJECT",
+        hide = true,
+        conflicts_with = "project"
+    )]
+    pub(crate) legacy_project: Option<PathBuf>,
 }
 
 pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
@@ -78,8 +86,14 @@ pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCo
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args), format),
         SourceCommand::Mock(command) => source_mock::run(command),
         SourceCommand::Diff(args) => diff(args, format),
-        SourceCommand::Import(args) | SourceCommand::Update(args) => apply(args, format),
-        SourceCommand::Detach(args) => detach(args),
+        SourceCommand::Import(args) => apply(args, "source import", format),
+        SourceCommand::Update(args) => apply(args, "source update", format),
+        SourceCommand::Detach(mut args) => {
+            if let Some(project) = args.legacy_project.take() {
+                args.project = project;
+            }
+            detach(args)
+        }
     }
 }
 
@@ -88,30 +102,41 @@ fn diff(args: SourceImportArgs, format: OutputFormat) -> Result<ExitCode> {
         args.into_import_args(),
         false,
         &mut std::io::stdout().lock(),
-        format,
+        Emit {
+            command: "source diff",
+            format,
+        },
     )
 }
 
-fn apply(args: SourceImportArgs, format: OutputFormat) -> Result<ExitCode> {
+fn apply(args: SourceImportArgs, command: &'static str, format: OutputFormat) -> Result<ExitCode> {
     review(
         args.into_import_args(),
         true,
         &mut std::io::stdout().lock(),
-        format,
+        Emit { command, format },
     )
+}
+
+/// How one review reports: the command path its JSON report names, and the
+/// output format.
+#[derive(Clone, Copy)]
+struct Emit {
+    command: &'static str,
+    format: OutputFormat,
 }
 
 fn review(
     args: source_import::ImportArgs,
     apply: bool,
     output: &mut impl Write,
-    format: OutputFormat,
+    emit: Emit,
 ) -> Result<ExitCode> {
     review_with_revisions_in_format(
         args,
         apply,
         output,
-        format,
+        emit,
         build::validated_question_revisions,
     )
 }
@@ -120,9 +145,10 @@ fn review_with_revisions_in_format(
     args: source_import::ImportArgs,
     apply: bool,
     output: &mut impl Write,
-    format: OutputFormat,
+    emit: Emit,
     mut target_revisions: impl FnMut(&Path, &Path) -> Result<BTreeMap<String, String>>,
 ) -> Result<ExitCode> {
+    let format = emit.format;
     let lock = source_import::ProjectLock::acquire(&args.project)
         .with_context(|| format!("locking editable project {}", args.project.display()))?;
     let resolutions = source_import::read_resolutions(args.resolutions.as_deref())?;
@@ -140,7 +166,7 @@ fn review_with_revisions_in_format(
             print_report_before_error(output, &report, format)?;
             bail!("source candidate has unresolved conflicts; choose keep, adopt, or an explicit resolved file");
         }
-        print_report(output, &report)?;
+        print_report(output, &report, emit, "conflict")?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -178,7 +204,8 @@ fn review_with_revisions_in_format(
         }
         report["application"] = json!("accepted");
     }
-    print_report(output, &report)?;
+    let status = if apply { "applied" } else { "complete" };
+    print_report(output, &report, emit, status)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -189,7 +216,16 @@ fn review_with_revisions(
     output: &mut impl Write,
     target_revisions: impl FnMut(&Path, &Path) -> Result<BTreeMap<String, String>>,
 ) -> Result<ExitCode> {
-    review_with_revisions_in_format(args, apply, output, OutputFormat::Human, target_revisions)
+    review_with_revisions_in_format(
+        args,
+        apply,
+        output,
+        Emit {
+            command: "source diff",
+            format: OutputFormat::Human,
+        },
+        target_revisions,
+    )
 }
 
 fn print_report_before_error(
@@ -198,12 +234,26 @@ fn print_report_before_error(
     format: OutputFormat,
 ) -> Result<()> {
     if format == OutputFormat::Human {
-        print_report(output, report)?;
+        write_pretty(output, report)?;
     }
     Ok(())
 }
 
-fn print_report(output: &mut impl Write, report: &Value) -> Result<()> {
+/// Write the comparison report: indented JSON for a human run, or the shared
+/// one-line envelope under `--format json`.
+fn print_report(output: &mut impl Write, report: &Value, emit: Emit, status: &str) -> Result<()> {
+    match emit.format {
+        OutputFormat::Human => write_pretty(output, report),
+        OutputFormat::Json => {
+            let report = crate::report::success(emit.command, status, report.clone());
+            writeln!(output, "{}", crate::report::render(&report))
+                .context("writing source comparison report")?;
+            output.flush().context("flushing source comparison report")
+        }
+    }
+}
+
+fn write_pretty(output: &mut impl Write, report: &Value) -> Result<()> {
     serde_json::to_writer_pretty(&mut *output, report)
         .context("writing source comparison report")?;
     writeln!(output).context("finishing source comparison report")?;
