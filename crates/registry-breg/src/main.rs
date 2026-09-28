@@ -38,6 +38,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    OperationalEvent::RoleMode(prepared.role_mode()).emit();
     for advisory in prepared.postgres_advisories() {
         OperationalEvent::PostgresBaselineAdvisory(advisory.clone()).emit();
     }

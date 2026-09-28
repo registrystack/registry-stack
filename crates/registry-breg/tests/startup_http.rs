@@ -22,7 +22,9 @@ use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{self, Metrics};
 use registry_breg::package::PackageError;
-use registry_breg::postgres::{advise, AdvisorySeverity, BaselineAdvisory, BaselineSettings};
+use registry_breg::postgres::{
+    advise, AdvisorySeverity, BaselineAdvisory, BaselineSettings, RoleMode,
+};
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, with_request_timeout_and_metrics_for_test,
@@ -496,7 +498,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 21] {
+fn startup_errors() -> [StartupError; 24] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -508,6 +510,9 @@ fn startup_errors() -> [StartupError; 21] {
         StartupError::DatabaseUninitialized,
         StartupError::PreLedgerDatabase,
         StartupError::InstanceClaimMismatch,
+        StartupError::RuntimeWriteAuthority,
+        StartupError::RuntimeGrantsMissing,
+        StartupError::RoleModeChanged,
         StartupError::FieldPatternSyntax {
             entity_id: "pattern-private-entity".to_owned(),
             field_id: "pattern-private-field".to_owned(),
@@ -597,6 +602,20 @@ fn expected_operational_event(
             None,
             Some(expected_webhook_state_transition_code(code)),
         ),
+        OperationalEvent::RoleMode(RoleMode::Single) => (
+            OperationalLogLevel::Info,
+            "registry_breg::startup",
+            "Base Registry Engine serves with the migration role (roleMode single); the activation ledger check catches mistakes but not someone holding that credential",
+            None,
+            Some("startup.role_mode.single"),
+        ),
+        OperationalEvent::RoleMode(RoleMode::Split) => (
+            OperationalLogLevel::Info,
+            "registry_breg::startup",
+            "Base Registry Engine serves with a separate runtime role (roleMode split)",
+            None,
+            Some("startup.role_mode.split"),
+        ),
         OperationalEvent::PostgresBaselineAdvisory(advisory) => (
             match advisory.severity() {
                 AdvisorySeverity::Warning => OperationalLogLevel::Warn,
@@ -664,6 +683,15 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::InstanceClaimMismatch => {
             "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
         }
+        StartupError::RuntimeWriteAuthority => {
+            "the Registry runtime role can write the activation ledger or the registry state; run `bregctl apply --package DIR` to name the fix"
+        }
+        StartupError::RuntimeGrantsMissing => {
+            "the Registry runtime role is missing grants the active package gives it; run `bregctl apply --package DIR` to reissue them"
+        }
+        StartupError::RoleModeChanged => {
+            "the Registry database was activated for a separate runtime role but the runtime file names one role; run `bregctl apply --package DIR` to activate it for one role"
+        }
         StartupError::FieldPatternSyntax { .. } => {
             "a persisted field pattern has invalid PostgreSQL syntax"
         }
@@ -722,6 +750,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             .into_iter()
             .map(OperationalEvent::StoppedWithError),
     );
+    events.push(OperationalEvent::RoleMode(RoleMode::Single));
+    events.push(OperationalEvent::RoleMode(RoleMode::Split));
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);

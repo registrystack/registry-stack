@@ -1460,12 +1460,19 @@ enum SuggestedAction {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DoctorSuccessReport<'a> {
     ok: bool,
     command: &'static str,
     checked: &'static [&'static str],
+    role_mode: &'static str,
     advisories: Vec<DoctorAdvisory<'a>>,
 }
+
+/// What one-role mode guards and what it does not, said wherever the role
+/// mode is reported.
+const SINGLE_ROLE_MODE_NOTE: &str = "the runtime serves with the migration role; the activation \
+     ledger check catches mistakes but not someone holding that credential";
 
 /// One PostgreSQL baseline advisory as doctor reports it. Advisories never
 /// change the outcome: doctor passed before they were decided.
@@ -2068,7 +2075,13 @@ where
         }
         Command::Doctor(args) => {
             return match doctor::run(&args.runtime_config) {
-                Ok(advisories) => write_doctor_success(&advisories, format, stdout, stderr),
+                Ok(checked) => write_doctor_success(
+                    &checked.postgres_advisories,
+                    checked.role_mode,
+                    format,
+                    stdout,
+                    stderr,
+                ),
                 Err(diagnostic) => {
                     let (artifact, action) =
                         if diagnostic.code.starts_with("startup.runtime_config") {
@@ -5010,6 +5023,18 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::ReconcileFailedMigration,
             ),
+            registry_breg::migration::MigrationError::RuntimeWriteAuthority(finding) => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "apply.runtime_role.can_write",
+                        "database.roles.runtime",
+                        &format!("{finding}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
             registry_breg::migration::MigrationError::AdoptionFingerprintMismatch {
                 live,
                 package,
@@ -11218,6 +11243,7 @@ fn write_dev_success(
 
 fn write_doctor_success(
     advisories: &[registry_breg::postgres::BaselineAdvisory],
+    role_mode: registry_breg::postgres::RoleMode,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -11226,6 +11252,7 @@ fn write_doctor_success(
         ok: true,
         command: "doctor",
         checked: &doctor::CHECKED_DEPENDENCIES,
+        role_mode: role_mode.as_str(),
         advisories: advisories
             .iter()
             .map(|advisory| DoctorAdvisory {
@@ -11247,12 +11274,16 @@ fn write_doctor_success(
                 "{} passed.",
                 report::counted(report.checked.len(), "dependency check")
             ));
-            let pairs: Vec<(&str, String)> = report
+            let mut pairs: Vec<(&str, String)> = report
                 .checked
                 .iter()
                 .map(|dependency| (*dependency, "pass".to_owned()))
                 .collect();
+            pairs.push(("roleMode", report.role_mode.to_owned()));
             lines.pairs(&pairs);
+            if role_mode == registry_breg::postgres::RoleMode::Single {
+                lines.prose(2, SINGLE_ROLE_MODE_NOTE);
+            }
             if !report.advisories.is_empty() {
                 lines.heading("PostgreSQL advisories:");
                 for advisory in &report.advisories {
@@ -12559,6 +12590,7 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_breg::postgres::RoleMode;
 
     fn reconcile_lifecycle_outcome(outcome: &'static str) -> ReconcileLifecycleOutcome {
         ReconcileLifecycleOutcome {
@@ -14044,23 +14076,65 @@ mod tests {
                  \u{20}\u{20}eventDestinations    pass\n\
                  \u{20}\u{20}reviewBindings       pass\n\
                  \u{20}\u{20}authentication       pass\n\
-                 \u{20}\u{20}fieldEncryption      pass\n",
+                 \u{20}\u{20}fieldEncryption      pass\n\
+                 \u{20}\u{20}roleMode             split\n",
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"advisories\": []\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(plain(&stdout), expected);
             assert!(stderr.is_empty());
         }
+    }
+
+    #[test]
+    fn doctor_says_what_one_role_mode_does_not_guard() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_doctor_success(
+                &[],
+                RoleMode::Single,
+                OutputFormat::Human,
+                &mut stdout,
+                &mut stderr
+            ),
+            ExitCode::SUCCESS
+        );
+        let human = plain(&stdout);
+        assert!(human.contains("roleMode             single\n"), "{human}");
+        assert!(
+            human
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("catches mistakes but not someone holding that credential"),
+            "{human}"
+        );
+
+        let mut stdout = Vec::new();
+        assert_eq!(
+            write_doctor_success(
+                &[],
+                RoleMode::Single,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr
+            ),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).expect("doctor JSON parses");
+        assert_eq!(report["roleMode"], "single");
     }
 
     #[test]
@@ -14080,7 +14154,13 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_doctor_success(&advisories, OutputFormat::Human, &mut stdout, &mut stderr),
+            write_doctor_success(
+                &advisories,
+                RoleMode::Split,
+                OutputFormat::Human,
+                &mut stdout,
+                &mut stderr
+            ),
             ExitCode::SUCCESS
         );
         assert!(stderr.is_empty());
@@ -14089,7 +14169,7 @@ mod tests {
             .split_once("\n\nPostgreSQL advisories:\n")
             .expect("advisories follow the passing checks in their own section");
         assert!(checks.starts_with("10 dependency checks passed.\n"));
-        assert!(checks.ends_with("fieldEncryption      pass"));
+        assert!(checks.ends_with("roleMode             split"));
         assert_eq!(
             advisory_section,
             "  warning  postgres.connections.pool_over_half\n\
@@ -14111,7 +14191,13 @@ mod tests {
 
         let mut stdout = Vec::new();
         assert_eq!(
-            write_doctor_success(&advisories, OutputFormat::Json, &mut stdout, &mut stderr),
+            write_doctor_success(
+                &advisories,
+                RoleMode::Split,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr
+            ),
             ExitCode::SUCCESS
         );
         assert!(stderr.is_empty());
@@ -14990,6 +15076,18 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             "apply.adoption.not_ready",
             "database",
             "bregctl migration reconcile",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::RuntimeWriteAuthority(
+                registry_breg::postgres::RuntimeWriteAuthority::Privilege {
+                    grantee: "PUBLIC".to_owned(),
+                    privilege: "CREATE".to_owned(),
+                    object: "SCHEMA registry_data".to_owned(),
+                },
+            )),
+            "apply.runtime_role.can_write",
+            "database.roles.runtime",
+            "`REVOKE CREATE ON SCHEMA registry_data FROM PUBLIC`, then rerun the refused command",
         ),
         (
             ApplyLifecycleError::Apply(MigrationError::AdoptionFingerprintMismatch {

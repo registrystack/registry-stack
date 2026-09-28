@@ -1532,6 +1532,54 @@ async fn verify_exact_acl(
     Ok(())
 }
 
+/// Whether a split-role runtime role lacks a grant the closed catalog gives
+/// it. Reassigning an object's ownership back to the migration role strips
+/// the grants the runtime role held on it, so an apply of the active package
+/// treats missing grants as pending and reissues them.
+pub(crate) async fn runtime_grants_missing(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+    expected_catalog: &ExpectedManagedCatalog,
+) -> Result<bool> {
+    let held: BTreeSet<(String, String, String)> = query_categorized_acl(client, runtime_role)
+        .await?
+        .into_iter()
+        .filter(|row| row.get::<_, String>(2) == "runtime")
+        .map(|row| (row.get(0), row.get(1), row.get(3)))
+        .collect();
+    let object_grant_missing = expected_catalog.objects.iter().any(|object| {
+        object.runtime_privileges.iter().any(|privilege| {
+            !held.contains(&(
+                object.kind.as_str().to_owned(),
+                object.name.clone(),
+                privilege.clone(),
+            ))
+        })
+    });
+    if object_grant_missing {
+        return Ok(true);
+    }
+    let checked_tables = expected_column_acl_tables(expected_catalog);
+    let held_columns: BTreeSet<(String, String, String)> =
+        query_categorized_column_acl(client, runtime_role, &checked_tables)
+            .await?
+            .into_iter()
+            .filter(|row| row.get::<_, String>(2) == "runtime")
+            .map(|row| (row.get(0), row.get(1), row.get(3)))
+            .collect();
+    Ok(expected_catalog
+        .column_privileges
+        .iter()
+        .filter(|privilege| privilege.grantee == "runtime")
+        .any(|privilege| {
+            !held_columns.contains(&(
+                privilege.table.clone(),
+                privilege.column.clone(),
+                privilege.privilege.clone(),
+            ))
+        }))
+}
+
 /// Compares every managed column ACL with the closed catalog. In single-role
 /// mode a runtime column grant on a migration-owned table is held by the owner.
 async fn verify_exact_column_acl(

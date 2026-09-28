@@ -30,7 +30,7 @@ use registry_breg::package::{
 use registry_breg::postgres::{
     initialize_registry_state_for_catalog_test, install_compiled_schema,
     managed_schema_fingerprint, verify_runtime_role, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryStateTestIdentity,
+    ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
 };
 use registry_breg::startup::{
     check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
@@ -1065,6 +1065,280 @@ async fn startup_refuses_a_pre_ledger_database_naming_the_adopting_apply_and_wri
     );
     idp.stop().await;
     database.cleanup().await;
+}
+
+/// Threat: in split mode the runtime credential is the one an attacker who
+/// compromises the serving process holds, and a runtime role that can write
+/// the activation ledger or the registry state could rewrite what the
+/// ledger says was activated. Enforcement: split startup refuses a runtime
+/// role that owns a registry object, holds CREATE on a registry schema, or
+/// serves a table carrying a trigger the migrations never created, and
+/// refuses a runtime role missing the grants the active package gives it,
+/// each naming the apply that names or reissues the fix. A one-role runtime
+/// file refuses a database last activated for a separate runtime role. Every
+/// refusal writes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let fixture = StartupFixture::new();
+    let (package, verified, mut active) =
+        split_activated_startup_package(&database, &fixture).await;
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("the split activation serves");
+    assert_eq!(prepared.role_mode(), RoleMode::Split);
+    drop(prepared);
+
+    let table: String = database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.format('%I.%I', schemaname, tablename)
+               FROM pg_catalog.pg_tables
+              WHERE schemaname = 'registry_data'
+              ORDER BY tablename
+              LIMIT 1",
+            &[],
+        )
+        .await
+        .expect("a model table exists")
+        .get(0);
+    let runtime = quote(database.runtime_role.as_str());
+    let migration = quote(database.migration_role.as_str());
+    for (grant, undo) in [
+        (
+            format!("ALTER TABLE {table} OWNER TO {runtime}"),
+            format!("REASSIGN OWNED BY {runtime} TO {migration}"),
+        ),
+        (
+            format!("GRANT CREATE ON SCHEMA registry_data TO {runtime}"),
+            format!("REVOKE CREATE ON SCHEMA registry_data FROM {runtime}"),
+        ),
+        (
+            format!(
+                "CREATE FUNCTION public.startup_foreign_trigger() RETURNS trigger
+                     LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+                 CREATE TRIGGER startup_foreign_trigger BEFORE INSERT ON {table}
+                     FOR EACH ROW EXECUTE FUNCTION public.startup_foreign_trigger()"
+            ),
+            format!(
+                "DROP TRIGGER startup_foreign_trigger ON {table};
+                 DROP FUNCTION public.startup_foreign_trigger()"
+            ),
+        ),
+    ] {
+        database
+            .admin
+            .batch_execute(&grant)
+            .await
+            .expect("administrator grants the runtime role write authority");
+        let before = managed_database_snapshot(&database.admin).await;
+        let refusal =
+            prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+                .await
+                .err();
+        assert_eq!(
+            refusal,
+            Some(StartupError::RuntimeWriteAuthority),
+            "{grant}"
+        );
+        assert_eq!(
+            managed_database_snapshot(&database.admin).await,
+            before,
+            "a refused startup writes nothing"
+        );
+        database
+            .admin
+            .batch_execute(&undo)
+            .await
+            .expect("administrator applies the named fix");
+        // A reassignment carries the runtime role's own grants away with the
+        // ownership, so startup then names the apply that reissues them.
+        match prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+        {
+            Ok(_) => {}
+            Err(StartupError::RuntimeGrantsMissing) => {
+                active = apply_startup_package_result(
+                    &database,
+                    &verified,
+                    ApplyPrecondition::RoleChange { current: &active },
+                )
+                .await
+                .expect("the apply reissues the runtime grants");
+                prepare_with_connection_config_for_test(
+                    &config_path,
+                    database.runtime_config.clone(),
+                )
+                .await
+                .expect("the reissued grants serve");
+            }
+            Err(other) => panic!("{grant}: {other:?}"),
+        }
+    }
+    assert!(StartupError::RuntimeWriteAuthority
+        .to_string()
+        .contains("run `bregctl apply --package DIR`"));
+
+    // A revoked runtime grant is pending work the apply reissues.
+    database
+        .admin
+        .batch_execute(&format!("REVOKE SELECT ON {table} FROM {runtime}"))
+        .await
+        .expect("administrator revokes a runtime grant");
+    let before = managed_database_snapshot(&database.admin).await;
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+    assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
+    assert!(StartupError::RuntimeGrantsMissing
+        .to_string()
+        .contains("run `bregctl apply --package DIR` to reissue them"));
+    assert_eq!(managed_database_snapshot(&database.admin).await, before);
+    active = apply_startup_package_result(
+        &database,
+        &verified,
+        ApplyPrecondition::RoleChange { current: &active },
+    )
+    .await
+    .expect("the apply reissues the revoked grant");
+    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+        .await
+        .expect("the reissued grant serves");
+
+    // A one-role runtime file over a database activated for a separate
+    // runtime role is refused until the apply activates it for one role.
+    let single_config_path = write_single_role_config(&fixture, &package, &database, &idp);
+    let before = managed_database_snapshot(&database.admin).await;
+    let refusal = prepare_with_connection_config_for_test(
+        &single_config_path,
+        database.migration_config.clone(),
+    )
+    .await
+    .err();
+    assert_eq!(refusal, Some(StartupError::RoleModeChanged));
+    assert!(StartupError::RoleModeChanged
+        .to_string()
+        .contains("run `bregctl apply --package DIR`"));
+    assert_eq!(managed_database_snapshot(&database.admin).await, before);
+    let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &verified,
+        ActivationDeployment::new("production", INSTANCE, DATABASE),
+        ApplyPrecondition::RoleChange { current: &active },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+            .expect("test apply timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("the apply activates the package for one role");
+    let prepared = prepare_with_connection_config_for_test(
+        &single_config_path,
+        database.migration_config.clone(),
+    )
+    .await
+    .expect("one role serves its own activation");
+    assert_eq!(prepared.role_mode(), RoleMode::Single);
+    drop(prepared);
+
+    // The separate runtime role holds no grant of a one-role activation, so a
+    // split runtime file names the apply that issues them.
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+    assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
+    apply_startup_package_result(
+        &database,
+        &verified,
+        ApplyPrecondition::RoleChange { current: &single },
+    )
+    .await
+    .expect("the apply activates the package for the separate role");
+    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+        .await
+        .expect("the separate role serves again");
+    idp.stop().await;
+    database.cleanup().await;
+}
+
+/// Activate the startup package in split mode against a fingerprint the
+/// compiled schema rehearses.
+async fn split_activated_startup_package(
+    database: &TestDatabase,
+    fixture: &StartupFixture,
+) -> (PackageFixture, VerifiedPackage, ExpectedRegistryIdentity) {
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
+    let verified_provisional = load_package(&provisional.root, &provisional.context())
+        .expect("provisional package verifies");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(
+        &transaction,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("split-role schema rehearses");
+    let schema_fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified_provisional.registry()),
+    )
+    .await
+    .expect("split-role fingerprint computes");
+    transaction
+        .rollback()
+        .await
+        .expect("split-role rehearsal rolls back");
+    migration_task.abort();
+    drop(provisional);
+
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint);
+    let verified = load_package(&package.root, &package.context()).expect("package verifies");
+    let active =
+        apply_startup_package(database, &verified, ApplyPrecondition::InitialActivation).await;
+    (package, verified, active)
+}
+
+/// A runtime file that serves and migrates with the migration role.
+fn write_single_role_config(
+    fixture: &StartupFixture,
+    package: &PackageFixture,
+    database: &TestDatabase,
+    idp: &MockIdp,
+) -> PathBuf {
+    let config_path = fixture.write_static_jwks_config(
+        package,
+        &database.migration_role,
+        &database.migration_role,
+        idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let raw = fs::read_to_string(&config_path).expect("runtime config reads");
+    fs::write(
+        &config_path,
+        raw.replace(
+            "migrationUrlRef: secret:file/migration-database-url",
+            "migrationUrlRef: secret:file/database-url",
+        ),
+    )
+    .expect("single-role runtime config writes");
+    config_path
 }
 
 /// The kernel state table as the release before the activation ledger

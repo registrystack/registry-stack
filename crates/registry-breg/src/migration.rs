@@ -122,6 +122,10 @@ pub enum MigrationError {
         "the live managed schema fingerprint `{live}` differs from the package's `{package}`; rebuild the package from the project that is deployed, with this release's `bregctl package`"
     )]
     AdoptionFingerprintMismatch { live: String, package: String },
+    /// The split-role runtime role could write the activation ledger or the
+    /// registry state; the finding names the statement that removes it.
+    #[error("{0}")]
+    RuntimeWriteAuthority(crate::postgres::RuntimeWriteAuthority),
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -828,6 +832,10 @@ pub async fn apply_verified_package(
             return Err(refusal_before_maintenance(error));
         }
     }
+    if let Err(error) = refuse_runtime_write_authority(&mut connection, request.roles).await {
+        let _ = connection.release().await;
+        return Err(error);
+    }
     // Prerequisites are administrator-owned. Refuse a missing extension or
     // spatial role before the existing registry enters maintenance.
     if connection
@@ -868,8 +876,31 @@ pub async fn apply_verified_package(
         match connection.active_activation_roles().await {
             Ok(Some((role_mode, runtime_role))) => {
                 if role_mode == ledger.role_mode.as_str() && runtime_role == ledger.runtime_role {
-                    let _ = connection.release().await;
-                    return Err(MigrationError::AlreadyActive);
+                    // Unchanged roles leave nothing to activate unless the
+                    // split-role runtime role lost a grant, as reassigning
+                    // an object's ownership back strips them: the apply then
+                    // reissues them.
+                    let grants_missing = if ledger.role_mode == RoleMode::Split {
+                        connection
+                            .runtime_grants_missing(
+                                request.roles.runtime,
+                                &ExpectedManagedCatalog::compiled(request.package.registry()),
+                            )
+                            .await
+                    } else {
+                        Ok(false)
+                    };
+                    match grants_missing {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let _ = connection.release().await;
+                            return Err(MigrationError::AlreadyActive);
+                        }
+                        Err(error) => {
+                            let _ = connection.release().await;
+                            return Err(refusal_before_maintenance(error));
+                        }
+                    }
                 }
                 SqlIdentifier::parse(&runtime_role)
                     .ok()
@@ -1218,6 +1249,26 @@ fn operator_reference_hash(
 /// package's and the deployment's and maintenance must be ready, and inside
 /// the one adoption transaction the live managed catalog must verify as the
 /// package's exact catalog; any refusal rolls the whole reshape back.
+/// Refuse a split-role runtime role that could write the activation ledger
+/// or the registry state, before the registry enters maintenance, by the one
+/// fix that removes the finding.
+async fn refuse_runtime_write_authority(
+    connection: &mut VerifiedPackageApplyConnection,
+    roles: ApplyRoles<'_>,
+) -> Result<()> {
+    if RoleMode::from_roles(roles.migration, roles.runtime) == RoleMode::Single {
+        return Ok(());
+    }
+    match connection
+        .runtime_write_authority(roles.migration, roles.runtime)
+        .await
+    {
+        Ok(None) => Ok(()),
+        Ok(Some(finding)) => Err(MigrationError::RuntimeWriteAuthority(finding)),
+        Err(error) => Err(refusal_before_maintenance(error)),
+    }
+}
+
 async fn adopt_verified_package(
     request: ApplyVerifiedPackageRequest<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
@@ -1280,6 +1331,10 @@ async fn adopt_verified_package(
     )
     .await
     .map_err(refusal_before_maintenance)?;
+    if let Err(error) = refuse_runtime_write_authority(&mut connection, request.roles).await {
+        let _ = connection.release().await;
+        return Err(error);
+    }
     if connection
         .verify_compiled_prerequisites(request.package.registry(), request.roles.runtime)
         .await
