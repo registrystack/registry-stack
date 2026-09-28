@@ -313,7 +313,7 @@ impl PostgresStore {
     /// One observation of the store's clock: a request's own `now` at the
     /// edge, and the time an authorization re-check inside a transaction is
     /// decided under. Production observes the system clock.
-    pub fn observed_now(&self) -> DateTime<Utc> {
+    pub(crate) fn observed_now(&self) -> DateTime<Utc> {
         let clock = self
             .clock
             .read()
