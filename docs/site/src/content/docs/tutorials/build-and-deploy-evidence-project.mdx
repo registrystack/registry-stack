@@ -116,12 +116,15 @@ real identifiers.
 The unit that moves from staging to production is not a built package. It is a reviewed commit of
 `shared/evidence-project` plus each environment's complete target. Build a separate package for
 every environment from that same commit with `evidencectl package`, and let each build run the same
-fixtures. The target's governance, including service identity, issuer, authentication, audit, rate
-limits, and authority profiles, is compiled into the package. So the staging and production packages
-have different package digests, and each requirement's `configurationRevision` differs between them
-even when the question is identical. Relying parties pin per environment: a revision pinned against
-staging does not verify a production assertion. Record the reviewed commit beside each environment's
-package digest, so the approval shows that every package came from the same reviewed semantics.
+fixtures. The target's governance is compiled into the package, so the staging and production
+packages have different package digests. Most of that governance, including service identity,
+issuer, authentication, audit, rate limits, and authority profiles, is also in each requirement's
+`configurationRevision`. When two environments differ there, as separate environments normally do in
+service identity and issuer, the same question carries a different revision in each, and relying
+parties pin per environment: a revision pinned against staging does not verify a production
+assertion. Runtime bindings and the signing public keys are in no revision, so environments that
+differ only in those share a revision. Record the reviewed commit beside each environment's package
+digest, so the approval shows that every package came from the same reviewed semantics.
 
 {/* Evidence: crates/registry-evidence/src/bundle.rs canonical_projection compute_requirement_revisions;
     crates/registry-evidencectl/src/build.rs validated_question_revisions. */}
