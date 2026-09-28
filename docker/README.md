@@ -9,9 +9,11 @@ docker build -f docker/Dockerfile --target casework -t registry-casework .
 ```
 
 These locally built images are **not release evidence**. Starting with
-`v0.21.0`, the official Evidence and Relay images are
-`ghcr.io/registrystack/evidence:v0.21.0`,
-`ghcr.io/registrystack/relay:v0.21.0`. They are assembled from
+`v0.21.0`, every release publishes the official Evidence and Relay images as
+`ghcr.io/registrystack/evidence:<tag>` and
+`ghcr.io/registrystack/relay:<tag>`; take `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest).
+They are assembled from
 `release/docker/` with byte-reproducible binaries built outside Docker by
 `release/scripts/build-release-binaries.sh`. Published deployments should pin
 the selected image by the digest recorded in the release manifest.
