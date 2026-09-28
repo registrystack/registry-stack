@@ -298,7 +298,7 @@ them:
    callbacks.
 7. **UI and AI authoring.** A future UI and the separate control tool may build
    on generated schemas, sample events, checks, explanations, and demos. AI may
-   propose configuration and tests but never bypass review, package signing,
+   propose configuration and tests but never bypass package review,
    runtime destination policy, or operator replay authority.
 
 Arbitrary synchronous callbacks, Django-style global signals, dynamic Rust

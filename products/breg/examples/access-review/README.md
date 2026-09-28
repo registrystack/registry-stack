@@ -82,7 +82,7 @@ Requirements govern request access, not independently configured event
 subscriptions or trusted internal derivations. Webhook projections, conditions,
 destination ceilings, and retention remain separately reviewed disclosure.
 Requirements also do not stop an authorized operator from replacing the complete
-configuration. Review, package signatures, and deployment authority still matter.
+configuration. Package review and deployment authority still matter.
 
 `diff` reports field-by-field access changes, including scopes, purposes, row
 bindings, fields, related-record permissions, and export/history permissions. Mixed

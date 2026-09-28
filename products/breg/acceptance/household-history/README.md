@@ -6,7 +6,7 @@ generic: `membership-record` stores a subject, a group, and a validity interval.
 
 The executable workflow lives in
 `products/breg/scripts/test-historical-workflow.sh`. It builds and
-applies signed packages, writes records only through the authenticated HTTP API,
+applies packages, writes records only through the authenticated HTTP API,
 captures snapshot references returned by the server, and verifies that a
 downstream consumer decision can retain its original snapshot, effective date,
 input revision, rule package, and decision identifier until a distinct

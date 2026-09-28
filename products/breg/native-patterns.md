@@ -49,8 +49,8 @@ quoted PostgreSQL SQL. It cannot establish PostgreSQL expression syntax or
 existing-data conformance. It reports `field.pattern.unverified_offline` for each
 pattern at its authored field path. These are advisory findings unless
 `--deny-findings` is selected. Use the normal PostgreSQL-backed `bregctl test <project> --runtime-config <config>
---credentials <credentials> --database-id <database-id> --output <receipt.json>`
-and package workflow before signing. The compiled installer explicitly evaluates
+--credentials <credentials> --output <receipt.json>`
+and package workflow before activation. The compiled installer explicitly evaluates
 each native expression even when all fixture tables are empty. An invalid
 expression refuses schema-test and installation. Schema-test and activation report
 `field.pattern.syntax_invalid` at `entities[<id>].fields[<id>].pattern`, using
@@ -58,7 +58,7 @@ authored identifiers and a repair hint without including the expression or raw
 database diagnostic. A failed activation keeps its exact target pinned in
 maintenance. Invalid syntax cannot be repaired by changing that target's bytes:
 restore the operator's pre-activation backup, correct the expression, and repeat
-schema-test, packaging, signing, and activation. No command clears failed
+schema-test, packaging, and activation. No command clears failed
 maintenance to bypass this recovery.
 
 The compiled effective model preserves the expression. Caller-filtered operation

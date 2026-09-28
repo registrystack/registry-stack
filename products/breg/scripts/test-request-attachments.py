@@ -130,7 +130,7 @@ def test_request_attachment_journey() -> None:
         cli("check", "check", str(project))
         breg_port, issuer_port, database_port = free_ports()
         # Native dev owns separate TLS PostgreSQL test/live databases, exact
-        # runtime/migration roles, rehearsal receipt, signed package and activation.
+        # runtime/migration roles, rehearsal receipt, package and activation.
         started = True
         state = cli("dev-start", "dev", str(project), "--breg-port", str(breg_port),
                     "--issuer-port", str(issuer_port), "--database-port", str(database_port),

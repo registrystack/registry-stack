@@ -8,9 +8,8 @@ runtime remains an independent OAuth resource server. This candidate cannot
 start a retained Mint-backed v1 dev session. Keep its matching Mint-era tools
 and data until a verified migration is available.
 
-Prepare the project with `bregctl init ./registry`. The generated package
-already declares `package.environment: local` and `package.sequence: 1`, and the
-generated `dev-clients.yaml` binds three distinct local clients to `operator`,
+Prepare the project with `bregctl init ./registry`. The generated
+`dev-clients.yaml` binds three distinct local clients to `operator`,
 `record-reader`, and `evidence-source`, so the project starts unchanged. Review the model,
 access profiles, journey fixtures and local clients before the first start.
 A later dedicated Evidence source can be prepared explicitly on a stopped session.

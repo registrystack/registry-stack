@@ -19,7 +19,7 @@ The product starts with two executables:
 
 AI-assisted authoring remains outside the production authority boundary. It
 may propose configuration and run deterministic checks, but it cannot bypass
-package review, signature policy, or the separate migration database role.
+package review or the separate migration database role.
 
 ## First-hour local quickstart
 
@@ -79,7 +79,7 @@ products/breg/quickstart/self-test.sh
 This route is intentionally local-only: the supervised stock ThunderID issuer,
 loopback HTTP, disposable PostgreSQL, and an unsigned local package.
 It is the first-hour learning path, not a shortcut around production package
-signing, operated database roles, TLS, migration review, or secret custody.
+review, operated database roles, TLS, migration review, or secret custody.
 
 For a retained local loop that needs no checkout, Python launcher, or shell
 script, [Native local BReg lifecycle](DEV.md) documents `bregctl dev` against
@@ -135,27 +135,24 @@ configured domain or a compatible additive schema change.
    review artifacts as needed, and uses `diff` against the active runtime
    configuration for a successor.
 2. `bregctl test` executes the declared journeys against a separate
-   schema-test database. Its result binds the candidate source, database
-   identity, exact catalog fingerprint, signature policy, and test receipt.
-3. `bregctl package` reproduces that tested candidate and stops at
-   `awaiting_signatures`. An external signer reviews and signs the exact
-   `signing-input.json`; rerunning `package` with the detached signature
-   document publishes the verified package with `SHA256SUMS` and reports its
-   shared package digest. `--revision <text>` optionally records a source label
-   in the hash-covered `REVISION` file. The CLI accepts no private signing key.
+   schema-test database. Its result binds the candidate source, reviewed
+   migrations, exact catalog fingerprint, and test receipt.
+3. `bregctl package` reproduces that tested candidate and publishes the
+   package with `SHA256SUMS` in one step, reporting its shared package digest.
+   `--revision <text>` optionally records a source label in the hash-covered
+   `REVISION` file.
 4. An operator with the migration database credential runs
    `bregctl apply --runtime-config <file> --package <directory>` and
    then `bregctl verify --runtime-config <file>`. Initial activation
    also requires `--initial`.
-5. `breg --runtime-config <file>` verifies `SHA256SUMS`, the optional
-   `package.expectedDigest` pin, and BReg's existing signatures and deployment
-   bindings before it serves the active package. Authorized
+5. `breg --runtime-config <file>` verifies `SHA256SUMS` and the optional
+   `package.expectedDigest` pin before it serves the active package. Authorized
    bulk operations use `bregctl data validate`, `data import`, and
    `data export`, which reuse the packaged plans and normal authenticated API
    paths.
 
-For a compatible successor, repeat test, package, external signing, and apply
-with the active runtime configuration as the baseline, then restart the same
+For a compatible successor, repeat test, package, and apply with the active
+package directory as `--baseline-package`, then restart the same
 server executable on the successor package. Removing or narrowing an access
 profile removes its obsolete compiled row-security policies during apply;
 activation still requires the exact candidate catalog. Unexpected policies
@@ -166,10 +163,9 @@ package again, or restores the operator's own pre-activation backup and
 starts activation again from there. No command clears a failed maintenance
 state.
 
-Authoring, signing, and migration authority are deliberately separate. An
-author or coding agent can edit configuration, inspect a diff, and run checks.
-Those commands cannot mint a package signature or obtain the production
-migration credential. A runtime configuration without that credential is
+Authoring and migration authority are deliberately separate. An author or
+coding agent can edit configuration, inspect a diff, and run checks. Those
+commands cannot obtain the production migration credential. A runtime configuration without that credential is
 refused before initial production control-plane state or DDL is created.
 
 OIDC key resolution is deployment configuration, not governed package content.
