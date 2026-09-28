@@ -82,6 +82,10 @@ two-person rule enforce it on who can read the migration credential.
   this start. It refuses to serve unless `package.acknowledgeStrandedWork`
   names the package it loaded, records nothing, and takes no migration lock;
   apply holds the lock and records the activation.
+- `caseworkctl plan` names the refusals schema migrations 15 and 17 would
+  meet, counting the hosted-work and audit outbox rows without a lock and
+  passing over a table the runtime role cannot read; apply counts them again
+  under an exclusive lock in its own transaction.
 - `casework migrate` and `caseworkctl db migrate` still parse, only to refuse
   with exit 2 and name the two commands.
 

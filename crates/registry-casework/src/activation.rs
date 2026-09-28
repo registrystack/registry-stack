@@ -24,8 +24,8 @@ use uuid::Uuid;
 use crate::audit::AuditOutcome;
 use crate::pinned_work::{compare_pinned_work, PinnedWorkVerdict, StrandedWork};
 use crate::store::{
-    migrate_in, pinned_work_inventory_in, register_source_generation_in, MIGRATIONS,
-    MIGRATION_LOCK_KEY, SUPPORTED_SCHEMA_VERSION,
+    migrate_in, pending_migration_refusals, pinned_work_inventory_in,
+    register_source_generation_in, MIGRATIONS, MIGRATION_LOCK_KEY, SUPPORTED_SCHEMA_VERSION,
 };
 use crate::{PostgresStore, StoreError};
 
@@ -933,6 +933,13 @@ async fn analyze(
     };
     if database_id_check == DatabaseIdCheck::Differs {
         refusals.push(ActivationRefusal::database_id_mismatch());
+    }
+    for refusal in pending_migration_refusals(transaction, &pending_schema_versions).await? {
+        refusals.push(ActivationRefusal::new(
+            migration_refusal_code(&refusal).expect("a destructive-migration refusal"),
+            "database",
+            refusal.to_string(),
+        ));
     }
     let effects = match schema_version {
         None => Some(empty_database_effects(candidate, &mut refusals)),
