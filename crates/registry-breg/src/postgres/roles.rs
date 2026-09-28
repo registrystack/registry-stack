@@ -781,7 +781,7 @@ pub async fn find_runtime_write_authority(
                   CROSS JOIN LATERAL pg_catalog.aclexplode(
                         COALESCE(c.relacl, pg_catalog.acldefault('r', c.relowner))) x
                   WHERE n.nspname = ANY($2::text[])
-                    AND c.relkind IN ('r', 'v')
+                    AND c.relkind IN ('r', 'v', 'p', 'f')
                     AND (x.privilege_type = 'TRIGGER'
                          OR (n.nspname = 'registry_internal'
                              AND c.relname = ANY($3::text[])

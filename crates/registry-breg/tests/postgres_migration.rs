@@ -2136,6 +2136,34 @@ async fn real_postgres_split_apply_names_the_fix_for_every_runtime_write_authori
         ),
         (
             format!(
+                "CREATE TABLE registry_data.foreign_partitioned (id integer) \
+                 PARTITION BY RANGE (id); \
+                 GRANT TRIGGER ON registry_data.foreign_partitioned TO {runtime}"
+            ),
+            "DROP TABLE registry_data.foreign_partitioned".to_owned(),
+            format!(
+                "`REVOKE TRIGGER ON TABLE registry_data.foreign_partitioned FROM {runtime}`, \
+                 then rerun the refused command"
+            ),
+        ),
+        (
+            format!(
+                "CREATE FOREIGN DATA WRAPPER foreign_wrapper; \
+                 CREATE SERVER foreign_server FOREIGN DATA WRAPPER foreign_wrapper; \
+                 CREATE FOREIGN TABLE registry_data.foreign_rows (id integer) \
+                 SERVER foreign_server; \
+                 GRANT TRIGGER ON registry_data.foreign_rows TO {runtime}"
+            ),
+            "DROP FOREIGN TABLE registry_data.foreign_rows; \
+             DROP SERVER foreign_server; DROP FOREIGN DATA WRAPPER foreign_wrapper"
+                .to_owned(),
+            format!(
+                "`REVOKE TRIGGER ON TABLE registry_data.foreign_rows FROM {runtime}`, \
+                 then rerun the refused command"
+            ),
+        ),
+        (
+            format!(
                 "CREATE FUNCTION public.foreign_trigger() RETURNS trigger LANGUAGE plpgsql \
                  AS 'BEGIN RETURN NEW; END'; \
                  CREATE TRIGGER foreign_trigger BEFORE INSERT ON {table} \
