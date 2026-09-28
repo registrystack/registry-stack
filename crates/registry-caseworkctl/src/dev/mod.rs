@@ -1974,7 +1974,9 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             crate::project::apply(&root.join("operator.yaml"), None, Vec::new()),
             &root,
         )?;
-        grants(&args.docker_bin, &state, &terminate)?;
+        if split_roles(&root) {
+            grants(&args.docker_bin, &state, &terminate)?;
+        }
         state.migrated = true;
         state.save()?;
         ensure_active(&terminate)?;
@@ -3716,10 +3718,12 @@ fn database(docker: &Path, state: &mut State, terminate: &AtomicBool) -> Result<
             terminate,
         )?;
         sql(docker,state,"postgres",b"ALTER SYSTEM SET hba_file = '/tmp/casework-dev-pg_hba.conf';\nALTER SYSTEM SET ssl = 'on';\nALTER SYSTEM SET ssl_cert_file = '/tmp/casework-dev-server.pem';\nALTER SYSTEM SET ssl_key_file = '/tmp/casework-dev-server.key';\nSELECT pg_reload_conf();\n",None,terminate)?;
-        for (role, filename) in [
-            (MIGRATION_ROLE, "migration-password"),
-            (RUNTIME_ROLE, "runtime-password"),
-        ] {
+        let split = split_roles(&root);
+        let mut roles = vec![(MIGRATION_ROLE, "migration-password")];
+        if split {
+            roles.push((RUNTIME_ROLE, "runtime-password"));
+        }
+        for (role, filename) in roles {
             let password = Zeroizing::new(String::from_utf8(private::read(
                 &root.join("database").join(filename),
                 64,
@@ -3755,11 +3759,31 @@ fn database(docker: &Path, state: &mut State, terminate: &AtomicBool) -> Result<
         // Casework's migrations create ordinary tables in `public` and declare
         // no extension and no other schema, so the migration role owns that one
         // schema and the runtime role only reads and writes through it.
-        sql(docker,state,DATABASE_NAME,format!("REVOKE ALL ON DATABASE {DATABASE_NAME} FROM PUBLIC; GRANT CONNECT ON DATABASE {DATABASE_NAME} TO {MIGRATION_ROLE},{RUNTIME_ROLE}; ALTER SCHEMA public OWNER TO {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {RUNTIME_ROLE};").as_bytes(),None,terminate)?;
+        let statements = if split {
+            format!("REVOKE ALL ON DATABASE {DATABASE_NAME} FROM PUBLIC; GRANT CONNECT ON DATABASE {DATABASE_NAME} TO {MIGRATION_ROLE},{RUNTIME_ROLE}; ALTER SCHEMA public OWNER TO {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {RUNTIME_ROLE};")
+        } else {
+            format!("REVOKE ALL ON DATABASE {DATABASE_NAME} FROM PUBLIC; GRANT CONNECT ON DATABASE {DATABASE_NAME} TO {MIGRATION_ROLE}; ALTER SCHEMA public OWNER TO {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA public FROM PUBLIC;")
+        };
+        sql(
+            docker,
+            state,
+            DATABASE_NAME,
+            statements.as_bytes(),
+            None,
+            terminate,
+        )?;
         state.database_ready = true;
         state.save()?;
     }
     Ok(())
+}
+
+/// Whether this session runs a separate runtime role. A session runs
+/// single-role, with the runtime connecting as the migration role; a session
+/// retained from a release that ran split roles keeps the runtime role its
+/// credentials name.
+fn split_roles(root: &Path) -> bool {
+    root.join("database/runtime-password").exists()
 }
 
 /// Grant the runtime role what the just-applied migrations created. Default

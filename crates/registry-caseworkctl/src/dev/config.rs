@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Authored local teaching identities and generated private service bindings.
 
-use super::{private, State, MIGRATION_ROLE, RUNTIME_ROLE};
+use super::{private, State, MIGRATION_ROLE};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
@@ -539,35 +539,7 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         )
         .as_bytes(),
     )?;
-    let migration_password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
-    let runtime_password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
-    private::create(
-        &root.join("database/migration-password"),
-        migration_password.as_bytes(),
-    )?;
-    private::create(
-        &root.join("database/runtime-password"),
-        runtime_password.as_bytes(),
-    )?;
-    for (name, role, password) in [
-        ("runtime-database-url", RUNTIME_ROLE, &runtime_password),
-        (
-            "migration-database-url",
-            MIGRATION_ROLE,
-            &migration_password,
-        ),
-    ] {
-        // The owned container publishes on 127.0.0.1 only. Naming the literal
-        // it publishes keeps a host that resolves localhost to ::1 first from
-        // failing to connect; the server certificate carries both names.
-        let url = Zeroizing::new(format!(
-            "postgresql://{role}:{}@127.0.0.1:{}/{}",
-            password.as_str(),
-            state.database_port,
-            super::DATABASE_NAME
-        ));
-        private::create(&root.join("secrets").join(name), url.as_bytes())?;
-    }
+    database_credentials(root, state)?;
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new())?;
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     let ca_key = rcgen::KeyPair::generate()?;
@@ -602,6 +574,31 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             integrations.operator(state, clients, &mut operator)?;
         }
         write_yaml(&root.join("operator.yaml"), &operator)?;
+    }
+    Ok(())
+}
+
+/// Write the session's one database credential as both the runtime and the
+/// migration URL. A dev session runs single-role, so apply records that the
+/// runtime credential can write the activation ledger; split roles are the
+/// production layout the operator templates show.
+pub(super) fn database_credentials(root: &Path, state: &State) -> Result<()> {
+    let password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
+    private::create(
+        &root.join("database/migration-password"),
+        password.as_bytes(),
+    )?;
+    // The owned container publishes on 127.0.0.1 only. Naming the literal it
+    // publishes keeps a host that resolves localhost to ::1 first from failing
+    // to connect; the server certificate carries both names.
+    let url = Zeroizing::new(format!(
+        "postgresql://{MIGRATION_ROLE}:{}@127.0.0.1:{}/{}",
+        password.as_str(),
+        state.database_port,
+        super::DATABASE_NAME
+    ));
+    for name in ["runtime-database-url", "migration-database-url"] {
+        private::create(&root.join("secrets").join(name), url.as_bytes())?;
     }
     Ok(())
 }
