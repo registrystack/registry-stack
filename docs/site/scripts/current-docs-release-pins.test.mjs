@@ -35,18 +35,22 @@ const TARGET_RULES = [
     // like. Write the reader's release as `<tag>`.
     id: 'git-checkout-at-release',
     pattern: new RegExp(
-      String.raw`\bgit\s+(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:-[-a-z]+\s+)*(?:tags/)?|switch\s+(?:-[-a-z]+\s+)*(?:--detach|-d)\s+(?:-[-a-z]+\s+)*|fetch\b[^\n\`]*?\stag\s+)${RELEASE}\b`,
+      String.raw`\bgit\s+(?:(?:-[Cc]\s+\S+|--[a-z-]+(?:=\S+)?|-[a-zA-Z])\s+)*(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:-[-a-z]+\s+)*(?:tags/)?|switch\s+(?:-[-a-z]+\s+)*(?:--detach|-d)\s+(?:-[-a-z]+\s+)*|fetch\b[^\n\`]*?\stag\s+)${RELEASE}\b`,
       'g',
     ),
   },
   {
     // `gh release download [<tag>]` takes the latest release when the tag is left out.
     id: 'github-cli-release-download',
-    pattern: new RegExp(String.raw`\bgh\s+release\s+(?:download|view)\s+(?:-[-a-zA-Z]+(?:[= ]\S+)?\s+)*${RELEASE}\b`, 'g'),
+    pattern: new RegExp(String.raw`\bgh\s+(?:-[-a-zA-Z]+(?:[= ]\S+)?\s+)*release\s+(?:download|view)\s+(?:-[-a-zA-Z]+(?:[= ]\S+)?\s+)*${RELEASE}\b`, 'g'),
   },
   {
     id: 'installer-version-variable',
-    pattern: new RegExp(String.raw`\b[A-Z][A-Z0-9_]*_VERSION=["']?${RELEASE}\b`, 'g'),
+    // Also a shell default such as RELAY_VERSION=${RELAY_VERSION:-v0.35.0}.
+    pattern: new RegExp(
+      String.raw`\b[A-Z][A-Z0-9_]*_VERSION=["']?(?:\$\{[A-Z0-9_]+:?[-=])?${RELEASE}\b`,
+      'g',
+    ),
   },
   {
     id: 'package-install-version',
@@ -56,12 +60,14 @@ const TARGET_RULES = [
     ),
   },
   {
-    // The versioned assets release/scripts/release_candidate.py publishes: platform binaries and
-    // client packages, installers, the SBOM, the security evidence and the docs archive.
+    // The versioned assets release/scripts/release_candidate.py and .github/workflows/release.yml
+    // publish: platform binaries and client packages, installers, the SBOM, the security evidence,
+    // the docs archive, and the release manifest, checksum signature and provenance files.
     id: 'release-asset-name',
     pattern: new RegExp(
       String.raw`\b[a-z][a-z0-9-]*-v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)[0-9.]*)?`
-        + String.raw`(?:-(?:linux|macos)-[a-z0-9]+|-install\.sh|-security-evidence\.tar\.gz|\.sbom\.spdx\.json|\.tar\.gz)`,
+        + String.raw`(?:-(?:linux|macos)-[a-z0-9]+|-install\.sh|-security-evidence\.tar\.gz|\.sbom\.spdx\.json|\.tar\.gz`
+        + String.raw`|-release-manifest\.json|-SHA256SUMS(?:\.sigstore\.json|\.intoto\.jsonl)?)`,
       'g',
     ),
   },
@@ -145,16 +151,40 @@ function isCurrentPage(page) {
   return !EXCLUDED_PREFIXES.some((prefix) => page.startsWith(prefix)) && !EXCLUDED_PAGES.has(page);
 }
 
+// A fenced code block holds what the reader runs or copies, never history, so any exact release in
+// one is a pin whatever command carries it. The targeted rules above also cover inline prose.
+const RELEASE_IN_CODE_BLOCK_RULE = {
+  id: 'release-in-code-block',
+  pattern: new RegExp(String.raw`(?<![\w.-])(?:v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?|${LEGACY_RELEASE})(?![\w-])`, 'g'),
+};
+
 export function findReleasePins(text, { operator }) {
   const rules = operator ? [...TARGET_RULES, REPOSITORY_AT_TAG_RULE] : TARGET_RULES;
   const findings = [];
   const lines = text.split(/\r?\n/);
+  let fence = null;
   lines.forEach((line, index) => {
+    const marker = line.match(/^\s*(`{3,}|~{3,})/);
+    if (marker && fence === null) {
+      fence = marker[1];
+      return;
+    }
+    if (fence !== null && line.trim().startsWith(fence) && line.trim().replace(/[`~]/g, '') === '') {
+      fence = null;
+      return;
+    }
+    const lineFindings = [];
     for (const rule of rules) {
       for (const match of line.matchAll(rule.pattern)) {
-        findings.push({ line: index + 1, rule: rule.id, match: match[0] });
+        lineFindings.push({ line: index + 1, rule: rule.id, match: match[0] });
       }
     }
+    if (fence !== null && lineFindings.length === 0) {
+      for (const match of line.matchAll(RELEASE_IN_CODE_BLOCK_RULE.pattern)) {
+        lineFindings.push({ line: index + 1, rule: RELEASE_IN_CODE_BLOCK_RULE.id, match: match[0] });
+      }
+    }
+    findings.push(...lineFindings);
   });
   return findings;
 }
@@ -240,6 +270,8 @@ test('each release-pin rule flags its install or download target', () => {
     'git checkout --detach v0.35.0',
     'git checkout -q --detach v0.35.0',
     'git switch --quiet --detach v0.35.0',
+    'git -C /srv/registry checkout v0.35.0',
+    'git -c advice.detachedHead=false checkout v0.35.0',
     'git switch --detach v0.35.0',
     'git fetch origin tag v0.35.0',
   ]) {
@@ -248,10 +280,15 @@ test('each release-pin rule flags its install or download target', () => {
   for (const download of [
     'gh release download v0.35.0 -R registrystack/registry-stack',
     'gh release download --repo registrystack/registry-stack v0.35.0',
+    'gh -R registrystack/registry-stack release download v0.35.0',
   ]) {
     assert.deepEqual(flagged(download), ['github-cli-release-download'], download);
   }
   assert.deepEqual(flagged('CASEWORK_VERSION=v0.30.0 bash'), ['installer-version-variable']);
+  assert.deepEqual(
+    flagged('RELAY_VERSION=${RELAY_VERSION:-v0.35.0} bash relay-install.sh'),
+    ['installer-version-variable'],
+  );
   assert.deepEqual(flagged('pip install "registry-stack-client==0.26.1"'), ['package-install-version']);
   assert.deepEqual(flagged('npm install @registrystack/client@0.26.1'), ['package-install-version']);
   for (const asset of [
@@ -263,6 +300,10 @@ test('each release-pin rule flags its install or download target', () => {
     'registry-stack-v0.35.0.sbom.spdx.json',
     'registry-stack-v0.35.0-security-evidence.tar.gz',
     'registry-docs-v0.35.0.tar.gz',
+    'registry-stack-v0.35.0-release-manifest.json',
+    'registry-stack-v0.35.0-SHA256SUMS',
+    'registry-stack-v0.35.0-SHA256SUMS.sigstore.json',
+    'registry-stack-v0.35.0-SHA256SUMS.intoto.jsonl',
   ]) {
     assert.deepEqual(flagged(`take ${asset}`), ['release-asset-name'], asset);
   }
@@ -279,6 +320,20 @@ test('each release-pin rule flags its install or download target', () => {
   const verify = 'https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md';
   assert.deepEqual(flagged(verify, true), ['repository-link-at-release-tag']);
   assert.deepEqual(flagged(verify, false), []);
+});
+
+test('any exact release inside a fenced code block is a pin', () => {
+  const block = (body, fence = '```') => `Run:\n\n${fence}sh\n${body}\n${fence}\n\nStarting with v0.33.0, prose is history.`;
+  const rules = (text) => findReleasePins(text, { operator: false }).map((finding) => finding.rule);
+
+  assert.deepEqual(rules(block('some-new-tool fetch --release v0.35.0')), ['release-in-code-block']);
+  assert.deepEqual(rules(block('deploy --version beta-5')), ['release-in-code-block']);
+  assert.deepEqual(rules(block('echo v0.35.0-rc.1', '~~~')), ['release-in-code-block']);
+  // A targeted rule reports the line once, not twice.
+  assert.deepEqual(rules(block('docker pull ghcr.io/registrystack/relay:v0.35.0')), ['container-image-tag']);
+  // Tags, versions without the release prefix, and prose outside the block stay clean.
+  assert.deepEqual(rules(block('relay --version\nrelay 0.35.0\ngit checkout <tag>')), []);
+  assert.deepEqual(rules(block('bind: 127.0.0.1:8080\nopenapi: 3.1.0')), []);
 });
 
 test('release-pin rules leave tags, latest releases and history alone', () => {
