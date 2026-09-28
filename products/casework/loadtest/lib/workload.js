@@ -28,8 +28,15 @@ function authorizationFrom(variable) {
   if (!path) {
     throw new Error(`${variable} must name one caseworkctl dev Authorization header file`);
   }
-  const header = open(path, 'r').trim();
-  if (!header.startsWith('Authorization: Bearer ') || header.split('.').length !== 3) {
+  // The bearer line comes first; the client's Casework profile follows.
+  const lines = open(path, 'r').trim().split('\n');
+  const header = lines[0];
+  if (
+    !header.startsWith('Authorization: Bearer ')
+    || header.split('.').length !== 3
+    || lines.length > 2
+    || (lines.length === 2 && !lines[1].startsWith('Registry-Casework-Profile: '))
+  ) {
     throw new Error(`${variable} must contain one caseworkctl dev Authorization header`);
   }
   return header.slice('Authorization: '.length);

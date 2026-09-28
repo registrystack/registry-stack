@@ -83,10 +83,17 @@ class DevTokenSource:
             path = Path(result.stdout.strip())
             if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
                 raise SeedError("caseworkctl dev token header is not an owner-only regular file")
-            value = path.read_text(encoding="ascii").strip()
+            lines = path.read_text(encoding="ascii").strip().split("\n")
         except (OSError, subprocess.SubprocessError, UnicodeError) as error:
             raise SeedError("could not acquire a fresh caseworkctl dev token") from error
-        if not value.startswith("Authorization: Bearer ") or value.count(".") != 2:
+        # The bearer line comes first; the client's Casework profile follows.
+        value = lines[0]
+        if (
+            not value.startswith("Authorization: Bearer ")
+            or value.count(".") != 2
+            or len(lines) > 2
+            or len(lines) == 2 and not lines[1].startswith("Registry-Casework-Profile: ")
+        ):
             raise SeedError("caseworkctl dev token header is malformed")
         self._authorization = value.split(": ", 1)[1]
         self._expires_at = time.monotonic() + HEADER_REFRESH_SECONDS
