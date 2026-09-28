@@ -1196,6 +1196,11 @@ pub(super) fn append_openapi(
                         "application/json": {
                             "schema": submit_chunk_schema(
                                 &input_schema_id,
+                                crate::artifacts::json_patch_array_schema(
+                                    surface.entity,
+                                    &profile.writable_fields,
+                                    &profile.readable_fields,
+                                ),
                                 batch,
                                 allow_create,
                                 allow_patch,
@@ -1440,12 +1445,14 @@ fn create_run_schema() -> Value {
 /// create item's data drawn from the grant's input schema.
 fn submit_chunk_schema(
     input_schema_id: &str,
+    patch_schema: Value,
     batch: &crate::contract::BatchSource,
     allow_create: bool,
     allow_patch: bool,
 ) -> Value {
     let items = crate::artifacts::openapi_batch_items_schema(
         json!({"$ref": format!("#/components/schemas/{input_schema_id}")}),
+        patch_schema,
         batch.maximum_items,
         allow_create,
         allow_patch,

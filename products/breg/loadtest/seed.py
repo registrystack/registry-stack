@@ -148,15 +148,11 @@ def post_batch(
 def record_id(result: Any) -> str:
     if not isinstance(result, dict):
         raise SeedError("batch result is not an object")
-    record = result.get("data")
-    if isinstance(record, dict):
-        identifier = record.get("recordIdentifier")
-        if isinstance(identifier, str):
-            return identifier
-    for key in ("id", "recordId", "record_id"):
-        value = result.get(key)
-        if isinstance(value, str):
-            return value
+    # A batch result is a Registry Record with the product members
+    # `operation` and `etag`.
+    identifier = result.get("recordIdentifier")
+    if isinstance(identifier, str):
+        return identifier
     raise SeedError(f"batch result carries no record identifier: {sorted(result)[:8]}")
 
 

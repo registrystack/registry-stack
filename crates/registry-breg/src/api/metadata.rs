@@ -452,7 +452,12 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
             value["ifMatchRequired"] = json!(true);
             value["idempotencyKeyRequired"] = json!(true);
             value["mutationSemantics"] = json!("direct");
-            value["schema"] = crate::artifacts::json_patch_array_schema();
+            let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
+            value["schema"] = crate::artifacts::json_patch_array_schema(
+                surface.entity,
+                &profile.writable_fields,
+                &profile.readable_fields,
+            );
         }
         Operation::Tombstone => {
             value["body"] = json!("none");
@@ -477,7 +482,8 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
             value["allowPatch"] = json!(profile.operations.contains(&Operation::Patch));
             value["schema"] = crate::artifacts::openapi_batch_input_schema(
                 surface.entity,
-                Some(&profile_batch_writable_fields(surface)),
+                &profile_batch_writable_fields(surface),
+                &profile.readable_fields,
                 batch.maximum_items,
                 profile.operations.contains(&Operation::Create),
                 profile.operations.contains(&Operation::Patch),

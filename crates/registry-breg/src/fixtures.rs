@@ -4180,8 +4180,16 @@ fn assert_response(
                     return Err(FixtureError::ExpectationMismatch);
                 }
                 for result in results {
-                    let object =
-                        exact_object(result, &["operation", "id", "revision", "etag", "data"])?;
+                    let object = exact_object(
+                        result,
+                        &[
+                            "operation",
+                            "recordIdentifier",
+                            "revisionIdentifier",
+                            "etag",
+                            "domainData",
+                        ],
+                    )?;
                     if object.get("operation").and_then(Value::as_str) != Some("create")
                         || object
                             .get("etag")
@@ -4510,15 +4518,21 @@ fn assert_batch_record_members(
     expected_fields: &Map<String, Value>,
 ) -> Result<(), FixtureError> {
     let identifier = object
-        .get("id")
+        .get("recordIdentifier")
         .and_then(Value::as_str)
         .ok_or(FixtureError::ResponseShapeRefused)?;
     let revision = object
-        .get("revision")
-        .and_then(Value::as_u64)
+        .get("revisionIdentifier")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|revision| revision.to_string() == value)
+        })
         .ok_or(FixtureError::ResponseShapeRefused)?;
     let data = object
-        .get("data")
+        .get("domainData")
         .and_then(Value::as_object)
         .ok_or(FixtureError::ResponseShapeRefused)?;
     if revision == 0
@@ -7980,8 +7994,8 @@ journeys:
             4 => (
                 200,
                 json!({"results":[
-                    {"operation":"create","id":second,"revision":1,"etag":"\"breg-second\"","data":{"jurisdiction":"zone-a","label":"second","quantity":2}},
-                    {"operation":"create","id":third,"revision":1,"etag":"\"breg-third\"","data":{"jurisdiction":"zone-a","label":"third","quantity":3}}
+                    {"operation":"create","recordIdentifier":second,"revisionIdentifier":"1","etag":"\"breg-second\"","domainData":{"jurisdiction":"zone-a","label":"second","quantity":2}},
+                    {"operation":"create","recordIdentifier":third,"revisionIdentifier":"1","etag":"\"breg-third\"","domainData":{"jurisdiction":"zone-a","label":"third","quantity":3}}
                 ],"snapshot":"breg1_00000000-0000-4000-8000-000000000003"}),
                 None,
             ),

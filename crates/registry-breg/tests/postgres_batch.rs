@@ -149,15 +149,15 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         .expect("ordered batch results");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["operation"], "create");
-    assert_eq!(items[0]["data"]["label"], "batch-created");
-    assert_eq!(items[0]["revision"], 1);
-    assert_eq!(items[1]["id"], seed_id);
+    assert_eq!(items[0]["domainData"]["label"], "batch-created");
+    assert_eq!(items[0]["revisionIdentifier"], "1");
+    assert_eq!(items[1]["recordIdentifier"], seed_id);
     assert_eq!(items[1]["operation"], "patch");
-    assert_eq!(items[1]["data"]["label"], "batch-patched");
-    assert_eq!(items[1]["revision"], 2);
+    assert_eq!(items[1]["domainData"]["label"], "batch-patched");
+    assert_eq!(items[1]["revisionIdentifier"], "2");
     assert!(items
         .iter()
-        .all(|item| item["data"].get("secret").is_none()));
+        .all(|item| item["domainData"].get("secret").is_none()));
     let after = effect_counts(&database, table).await;
     assert_eq!(after.current, before.current + 1);
     assert_eq!(after.revisions, before.revisions + 2);

@@ -163,7 +163,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     if (path.endsWith('/actions/apply')) return response.end(JSON.stringify(receipt));
     if (path.endsWith(':batch')) {
       const revision = request.headers['idempotency-key'] === 'exact-batch' ? '9007199254740992' : '2';
-      return response.end(`{"snapshot":"breg1_${applicationId}","results":[{"operation":"create","id":"${id}","revision":${revision},"etag":"\\"breg-record-000000000002\\"","data":{"wide":9007199254740992}}]}`);
+      return response.end(`{"snapshot":"breg1_${applicationId}","results":[{"operation":"create","recordIdentifier":"${id}","revisionIdentifier":"${revision}","etag":"\\"breg-record-000000000002\\"","domainData":{"wide":9007199254740992}}]}`);
     }
     response.setHeader('link','<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/item>; rel="describedby"');
     response.setHeader('etag','"breg-record-000000000001"');

@@ -105,9 +105,29 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
         .await;
     assert_eq!(batch.status(), StatusCode::OK);
     let batch = response_json(batch).await;
-    assert_eq!(batch["results"][0]["data"]["assetCode"], "A-102");
-    assert_eq!(batch["results"][1]["data"]["assetCode"], "A-103");
-    assert!(batch["results"][0]["data"].get("asset-code").is_none());
+    // #1442: a batch result is a Registry Record with product members.
+    for (index, operation, code) in [(0, "patch", "A-102"), (1, "create", "A-103")] {
+        let result = batch["results"][index]
+            .as_object()
+            .expect("batch result is an object");
+        assert_eq!(
+            result.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "domainData",
+                "etag",
+                "operation",
+                "recordIdentifier",
+                "revisionIdentifier"
+            ]
+        );
+        assert_eq!(result["operation"], operation);
+        assert_eq!(result["domainData"]["assetCode"], code);
+        assert!(result["domainData"].get("asset-code").is_none());
+        assert!(result["revisionIdentifier"].is_string());
+    }
+    assert_eq!(batch["results"][0]["recordIdentifier"], record_id);
+    assert_eq!(batch["results"][0]["revisionIdentifier"], "3");
+    assert_eq!(batch["results"][1]["revisionIdentifier"], "1");
 
     // #1442: the refusal names `/data` for a name the caller made up, such
     // as a field id where its API name belongs, and the field for a missing

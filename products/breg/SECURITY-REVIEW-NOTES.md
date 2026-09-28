@@ -761,3 +761,43 @@ client's closed forms.
   Both are already in the caller's filtered contract.
 - Ingestion chunk items still answer an unlocated `request.invalid`.
 
+## One record envelope for batch results and export lines
+
+The change renames the members of batch results, ingestion chunk results,
+and `bregctl data export` lines to the Registry Record names, and constrains
+JSON Patch paths in the generated OpenAPI
+(`batch_results_to_wire` in `crates/registry-breg/src/mutation.rs`,
+`exact_batch_mutation` in `crates/registry-breg/src/api/mod.rs`,
+`receipt_json` in `crates/registry-breg/src/postgres/mutation.rs`, and
+`json_patch_array_schema` in `crates/registry-breg/src/artifacts.rs`).
+
+### Threat
+
+A shape change serves members the grant does not admit, bypasses sealed
+member opening or the receipt projection, or breaks exact idempotent replay.
+A constrained schema publishes field names beyond the caller's grant.
+
+### Enforcement and defaults
+
+- The stored form is unchanged: the idempotency cache and chunk receipts
+  keep `id`, `revision`, and `data`, and every internal reader keeps parsing
+  them. The rename runs only where an answer is served, after sealed members
+  are opened and after the receipt projection retains only members the
+  current grant reads, so it renames the same projected values and adds
+  none. A replay passes the same translation and stays byte-identical to its
+  first answer.
+- A per-caller OpenAPI and the Registry Metadata document list only the API
+  names the selected grant may write, remove, or read. The package OpenAPI
+  lists the union for the profiles serving the route, names its component
+  schemas already carry.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_batch.rs` keeps the byte-identical
+replay assertion over the new shape;
+`crates/registry-breg/tests/postgres_ingestion_receipts.rs` keeps the
+projection and sealed-member assertions over fresh, replayed, and recovered
+receipts; `batch_wire_tests` pins the translation of an answer stored before
+this release; `crates/registry-breg/tests/postgres_workspace_metadata.rs`
+pins that the patch schema refuses what the runtime refuses at `path`.
+

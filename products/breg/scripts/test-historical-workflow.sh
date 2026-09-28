@@ -826,7 +826,7 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
 assert_status "$temporary_root/move-june-response.json" 200
 assert_snapshot_reference "$temporary_root/move-june-response.json" snapshot
 first_snapshot=$(json_field "$temporary_root/move-june-response.json" snapshot)
-b_id=$(json_field "$temporary_root/move-june-response.json" results.1.id)
+b_id=$(json_field "$temporary_root/move-june-response.json" results.1.recordIdentifier)
 b_etag=$(json_field_literal "$temporary_root/move-june-response.json" results.1.etag)
 a_move_etag=$(json_field_literal "$temporary_root/move-june-response.json" results.0.etag)
 
@@ -903,7 +903,7 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships:batch?accessProfile=registry-operator" second-june-move application/json \
   "$temporary_root/second-move-june.json" "$temporary_root/second-move-june-response.json"
 assert_status "$temporary_root/second-move-june-response.json" 200
-second_b_id=$(json_field "$temporary_root/second-move-june-response.json" results.1.id)
+second_b_id=$(json_field "$temporary_root/second-move-june-response.json" results.1.recordIdentifier)
 second_b_etag=$(json_field_literal "$temporary_root/second-move-june-response.json" results.1.etag)
 second_a_move_etag=$(json_field_literal "$temporary_root/second-move-june-response.json" results.0.etag)
 cat >"$temporary_root/second-correction-july.json" <<EOF

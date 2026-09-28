@@ -88,7 +88,7 @@ async fn a_renamed_encrypted_member_drops_from_the_released_receipt() {
         .as_array()
         .expect("receipt results")
     {
-        let replayed_data = &replayed_result["data"];
+        let replayed_data = &replayed_result["domainData"];
         assert!(
             replayed_data.get("serialNumber").is_none()
                 && replayed_data.get("serialCode").is_none(),
@@ -115,7 +115,7 @@ async fn a_renamed_encrypted_member_drops_from_the_released_receipt() {
     );
     let recovered: Value = serde_json::from_slice(&recovered_raw).expect("recovery answer is JSON");
     for recovered_result in recovered["batch"]["results"].as_array().expect("results") {
-        let recovered_data = &recovered_result["data"];
+        let recovered_data = &recovered_result["domainData"];
         assert!(
             recovered_data.get("serialNumber").is_none()
                 && recovered_data.get("serialCode").is_none(),
@@ -158,7 +158,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     let fresh: Value =
         serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"], "SN-0000",
         "the fresh answer serves the field the producing package granted"
     );
 
@@ -184,7 +184,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     let replayed: Value =
         serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
     assert_eq!(replayed["receipt"]["replayed"], true);
-    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["data"];
+    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["domainData"];
     assert!(
         replayed_data.get("serialNumber").is_none(),
         "the retired member does not serve under the reused api name: {replayed_data}"
@@ -201,7 +201,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     assert_eq!(recovered.status(), StatusCode::OK);
     let recovered: Value =
         serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
-    let recovered_data = &recovered["batch"]["results"][0]["data"];
+    let recovered_data = &recovered["batch"]["results"][0]["domainData"];
     assert!(
         recovered_data.get("serialNumber").is_none(),
         "the retired member does not serve under the reused api name: {recovered_data}"
@@ -238,7 +238,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     let fresh_successor: Value =
         serde_json::from_slice(&body_bytes(fresh_successor).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh_successor["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        fresh_successor["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"], "SN-0000",
         "the new field's own value serves under the reused api name"
     );
     let replayed_successor = successor
@@ -253,7 +253,8 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
         serde_json::from_slice(&body_bytes(replayed_successor).await).expect("replay is JSON");
     assert_eq!(replayed_successor["receipt"]["replayed"], true);
     assert_eq!(
-        replayed_successor["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        replayed_successor["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
+        "SN-0000",
         "the successor's own receipt keeps serving the new field"
     );
 
@@ -345,7 +346,7 @@ async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receip
     let fresh: Value =
         serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["quantity"], 0,
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["quantity"], 0,
         "the fresh answer serves the field the producing package granted"
     );
 
@@ -366,7 +367,7 @@ async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receip
     let replayed: Value =
         serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
     assert_eq!(replayed["receipt"]["replayed"], true);
-    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["data"];
+    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["domainData"];
     assert!(
         replayed_data.get("quantity").is_none(),
         "the replayed receipt drops the revoked member: {replayed_data}"
@@ -387,7 +388,7 @@ async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receip
     assert_eq!(recovered.status(), StatusCode::OK);
     let recovered: Value =
         serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
-    let recovered_data = &recovered["batch"]["results"][0]["data"];
+    let recovered_data = &recovered["batch"]["results"][0]["domainData"];
     assert!(
         recovered_data.get("quantity").is_none(),
         "the recovered receipt drops the revoked member: {recovered_data}"
@@ -422,12 +423,12 @@ async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
     let fresh: Value =
         serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["payload"],
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the fresh answer serves the tag-shaped caller data verbatim"
     );
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -443,7 +444,7 @@ async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
         serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
     assert_eq!(replayed["receipt"]["replayed"], true);
     assert_eq!(
-        replayed["receipt"]["batch"]["results"][0]["data"]["payload"],
+        replayed["receipt"]["batch"]["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the replayed receipt serves the tag-shaped caller data verbatim"
     );
@@ -458,7 +459,7 @@ async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
     let recovered: Value =
         serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
     assert_eq!(
-        recovered["batch"]["results"][0]["data"]["payload"],
+        recovered["batch"]["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the recovered receipt serves the tag-shaped caller data verbatim"
     );
@@ -494,11 +495,14 @@ async fn an_exact_batch_replay_serves_a_tag_shaped_plaintext_member() {
     let first_bytes = body_bytes(first).await;
     let answered: Value = serde_json::from_slice(&first_bytes).expect("batch answer is JSON");
     assert_eq!(
-        answered["results"][0]["data"]["payload"],
+        answered["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the fresh batch answer serves the tag-shaped caller data verbatim"
     );
-    assert_eq!(answered["results"][0]["data"]["serialNumber"], "SN-0000");
+    assert_eq!(
+        answered["results"][0]["domainData"]["serialNumber"],
+        "SN-0000"
+    );
 
     let replay = harness
         .post_batch_json(
@@ -555,7 +559,7 @@ async fn a_successor_without_the_rename_still_opens_the_stored_members() {
     let body: Value = serde_json::from_slice(&raw).expect("replay answer is JSON");
     assert_eq!(body["receipt"]["replayed"], true);
     assert_eq!(
-        body["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        body["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -573,7 +577,7 @@ async fn a_successor_without_the_rename_still_opens_the_stored_members() {
     );
     let body: Value = serde_json::from_slice(&raw).expect("recovery answer is JSON");
     assert_eq!(
-        body["batch"]["results"][0]["data"]["serialNumber"],
+        body["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 

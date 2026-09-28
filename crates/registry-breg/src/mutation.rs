@@ -4546,6 +4546,40 @@ fn map_field_database_error(
 /// A guarded boundary records a refusal only for a failure that proves the
 /// mutation did not commit. An unresolved commit is answered `unfinished` by
 /// the attempt's drop instead, consistent with ingestion's `reach_commit`.
+/// Serve the results of one stored batch answer in the wire form.
+///
+/// A batch answer is held in the idempotency cache, and an ingestion chunk
+/// answer is retained as its receipt, in the stored form `batch_item_response`
+/// builds: `operation`, `id`, an integer `revision`, `etag`, and `data`. Every
+/// internal reader parses that form. The wire form is a Registry Record with
+/// the product members `operation` and `etag`: `recordIdentifier`, a string
+/// `revisionIdentifier`, and `domainData`. Translating only where an answer is
+/// served keeps a replay byte-identical to its first answer and serves an
+/// answer stored before this form existed in the same shape.
+pub(crate) fn batch_results_to_wire(batch: &mut Value) {
+    let Some(results) = batch.get_mut("results").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for result in results {
+        let Some(object) = result.as_object_mut() else {
+            continue;
+        };
+        if let Some(id) = object.remove("id") {
+            object.insert("recordIdentifier".to_owned(), id);
+        }
+        if let Some(revision) = object.remove("revision") {
+            let revision = match &revision {
+                Value::Number(number) => Value::String(number.to_string()),
+                _ => revision,
+            };
+            object.insert("revisionIdentifier".to_owned(), revision);
+        }
+        if let Some(data) = object.remove("data") {
+            object.insert("domainData".to_owned(), data);
+        }
+    }
+}
+
 impl MutationError {
     /// Place a located refusal of one batch item inside that item.
     #[must_use]
@@ -4989,5 +5023,41 @@ mod tests {
         transaction.commit().await.expect("transaction commits");
         migration_task.abort();
         database.cleanup().await;
+    }
+}
+
+#[cfg(test)]
+mod batch_wire_tests {
+    use super::batch_results_to_wire;
+    use serde_json::json;
+
+    #[test]
+    fn a_stored_batch_answer_serves_its_results_as_registry_records() {
+        // The stored form every release, this one included, retains.
+        let mut stored = json!({
+            "snapshot": "breg1_00000000-0000-4000-8000-000000000009",
+            "results": [
+                {"operation": "create", "id": "00000000-0000-4000-8000-000000000001",
+                 "revision": 1, "etag": "\"breg-a\"", "data": {"label": "A"}},
+                {"operation": "patch", "id": "00000000-0000-4000-8000-000000000002",
+                 "revision": 9007199254740993_u64, "etag": "\"breg-b\"", "data": {}}
+            ]
+        });
+        batch_results_to_wire(&mut stored);
+        assert_eq!(
+            stored,
+            json!({
+                "snapshot": "breg1_00000000-0000-4000-8000-000000000009",
+                "results": [
+                    {"operation": "create", "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+                     "revisionIdentifier": "1", "etag": "\"breg-a\"", "domainData": {"label": "A"}},
+                    {"operation": "patch", "recordIdentifier": "00000000-0000-4000-8000-000000000002",
+                     "revisionIdentifier": "9007199254740993", "etag": "\"breg-b\"", "domainData": {}}
+                ]
+            })
+        );
+        let mut without_results = json!({"snapshot": "breg1_x"});
+        batch_results_to_wire(&mut without_results);
+        assert_eq!(without_results, json!({"snapshot": "breg1_x"}));
     }
 }

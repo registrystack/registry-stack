@@ -214,8 +214,14 @@ an `import` run, once its import authority stops admitting chunks. Each failure 
 ## Export with a checkpoint
 
 An export appends one bounded page at a time to the output file, then records the output length,
-digest, record count, and server cursor in its checkpoint. `--field` names each field to export,
-and the profile must be export-enabled for the entity:
+digest, record count, and server cursor in its checkpoint. Each line is one collection member of
+the Registry Record envelope, exactly as the list route served it:
+
+```json
+{"domainData":{"code":"AA","label":"First"},"recordIdentifier":"2d7e5e0c-…","revisionIdentifier":"1"}
+```
+
+`--field` names each field to export, and the profile must be export-enabled for the entity:
 
 ```sh
 bregctl data export \
@@ -241,7 +247,7 @@ server response is bounded at 2 MiB.
 
 {/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_export(),
     resume_existing_export(), and read_export_output_prefix();
-    crates/registry-breg/src/data.rs, MAX_DATA_HTTP_RESPONSE_BYTES;
+    crates/registry-breg/src/data.rs, MAX_DATA_HTTP_RESPONSE_BYTES and validate_export_response();
     crates/registry-bregctl/src/lib.rs, DataExportArgs. */}
 
 ## Troubleshooting

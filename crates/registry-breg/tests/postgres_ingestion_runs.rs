@@ -1020,7 +1020,7 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
     let receipt = body_json(committed).await["receipt"].clone();
-    let erased_record = receipt["batch"]["results"][0]["id"]
+    let erased_record = receipt["batch"]["results"][0]["recordIdentifier"]
         .as_str()
         .expect("receipt carries a created record id")
         .to_owned();
@@ -1109,7 +1109,8 @@ async fn an_erasure_committed_during_a_parked_recovery_refuses_the_release() {
         )
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
-    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]["id"]
+    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]
+        ["recordIdentifier"]
         .as_str()
         .expect("receipt carries a created record id")
         .to_owned();
@@ -1218,7 +1219,8 @@ async fn an_erasure_committed_during_a_parked_replay_refuses_the_release() {
         )
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
-    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]["id"]
+    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]
+        ["recordIdentifier"]
         .as_str()
         .expect("receipt carries a created record id")
         .to_owned();
@@ -2459,8 +2461,8 @@ async fn a_fresh_receipt_opens_encrypted_members_and_stays_sealed_at_rest() {
     let results = body["receipt"]["batch"]["results"]
         .as_array()
         .expect("receipt results");
-    assert_eq!(results[0]["data"]["serialNumber"], "SN-0000");
-    assert_eq!(results[1]["data"]["serialNumber"], "SN-0001");
+    assert_eq!(results[0]["domainData"]["serialNumber"], "SN-0000");
+    assert_eq!(results[1]["domainData"]["serialNumber"], "SN-0001");
 
     assert_receipt_stays_sealed(&harness, &run_id).await;
 }
@@ -2500,7 +2502,7 @@ async fn replayed_and_recovered_receipts_open_encrypted_members() {
     let body: Value = serde_json::from_slice(&raw).expect("replay answer is JSON");
     assert_eq!(body["receipt"]["replayed"], true);
     assert_eq!(
-        body["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        body["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -2518,7 +2520,7 @@ async fn replayed_and_recovered_receipts_open_encrypted_members() {
     );
     let body: Value = serde_json::from_slice(&raw).expect("recovery answer is JSON");
     assert_eq!(
-        body["batch"]["results"][0]["data"]["serialNumber"],
+        body["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -3573,9 +3575,12 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
         .await;
     assert_eq!(created.status(), StatusCode::OK);
     let results = body_json(created).await["receipt"]["batch"]["results"].clone();
-    let record_id = results[0]["id"].as_str().expect("record id").to_owned();
+    let record_id = results[0]["recordIdentifier"]
+        .as_str()
+        .expect("record id")
+        .to_owned();
     let etag = results[0]["etag"].as_str().expect("record etag").to_owned();
-    assert_eq!(results[0]["revision"], 1);
+    assert_eq!(results[0]["revisionIdentifier"], "1");
 
     let patch_item = json!({
         "operation": "patch",
@@ -3594,8 +3599,8 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
         .await;
     assert_eq!(patched.status(), StatusCode::OK);
     assert_eq!(
-        body_json(patched).await["receipt"]["batch"]["results"][0]["revision"],
-        2
+        body_json(patched).await["receipt"]["batch"]["results"][0]["revisionIdentifier"],
+        "2"
     );
 
     harness.erase_widget_history(&record_id).await;
@@ -3619,8 +3624,8 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
         .await;
     assert_eq!(retained.status(), StatusCode::OK);
     assert_eq!(
-        body_json(retained).await["batch"]["results"][0]["revision"],
-        2
+        body_json(retained).await["batch"]["results"][0]["revisionIdentifier"],
+        "2"
     );
 }
 

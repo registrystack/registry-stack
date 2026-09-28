@@ -2649,8 +2649,10 @@ fn receipt_json(
     digest: &str,
     replayed: bool,
     erased: bool,
-    batch: Value,
+    mut batch: Value,
 ) -> Value {
+    // The receipt keeps the stored result form; the caller reads the wire form.
+    crate::mutation::batch_results_to_wire(&mut batch);
     json!({
         "chunkIndex": chunk_index,
         "digest": digest,

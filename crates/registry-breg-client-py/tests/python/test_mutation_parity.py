@@ -379,10 +379,10 @@ class MutationParityTests(unittest.TestCase):
                             "results": [
                                 {
                                     "operation": "create",
-                                    "id": RECORD_ID,
-                                    "revision": 1,
+                                    "recordIdentifier": RECORD_ID,
+                                    "revisionIdentifier": "1",
                                     "etag": ETAG,
-                                    "data": {"legalName": "Batch Ltd"},
+                                    "domainData": {"legalName": "Batch Ltd"},
                                 }
                             ],
                         },

@@ -2308,6 +2308,21 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
             .get("snapshot")
             .is_none()
     );
+    // #1442: a batch result is a Registry Record with product members.
+    assert_eq!(
+        batch_response_schema["properties"]["results"]["items"]["required"],
+        json!([
+            "operation",
+            "recordIdentifier",
+            "revisionIdentifier",
+            "etag",
+            "domainData"
+        ])
+    );
+    assert_eq!(
+        batch_response_schema["properties"]["results"]["items"]["properties"]["revisionIdentifier"],
+        json!({"type": "string", "pattern": "^[1-9][0-9]*$"})
+    );
 
     let create_response_schema = &openapi["paths"]["/v1/records/records"]["post"]["responses"]
         ["201"]["content"]["application/json"]["schema"];

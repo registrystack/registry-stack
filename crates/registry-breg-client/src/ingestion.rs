@@ -1701,7 +1701,7 @@ mod tests {
             "batch": {
                 "snapshot": "breg1_00000000-0000-4000-8000-000000000002",
                 "results": [
-                    {"operation": "create", "id": RUN_ID, "revision": 1, "etag": "\"breg-record-v1-abcdef012345\"", "data": {"legalName": "Example Ltd"}}
+                    {"operation": "create", "recordIdentifier": RUN_ID, "revisionIdentifier": "1", "etag": "\"breg-record-v1-abcdef012345\"", "domainData": {"legalName": "Example Ltd"}}
                 ]
             }
         })

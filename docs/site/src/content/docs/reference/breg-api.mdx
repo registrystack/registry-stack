@@ -209,7 +209,9 @@ one that is not JSON has no single member at fault and carries no `fieldPath`; s
 
 ### Create
 
-`POST /v1/records/{route}` with the fields the grant lists in `writableFields`:
+`POST /v1/records/{route}` with the fields the grant lists in `writableFields`. A write body's
+`data` holds exactly what a read shows under `data.domainData`, the same fields under the same
+`apiName`:
 
 ```json
 {"data": {"code": "SITE-001", "label": "North depot", "location": {"type": "Point", "coordinates": [30.5234, -1.9441]}}}
@@ -222,7 +224,9 @@ violated `unique` constraint are refused before anything is written.
 ### Patch
 
 `PATCH /v1/records/{route}/{recordId}` takes a JSON Patch document whose paths start at
-`/data/`, followed by the field's `apiName`:
+`/data/`, followed by the field's `apiName`. The generated OpenAPI lists every path the grant
+admits for each operation: `add` and `replace` take a writable field, `remove` a writable
+optional field, and `test` a readable field that is not encrypted.
 
 ```json
 [
@@ -254,7 +258,7 @@ by the entity's `batch.maximumItems` and `batch.maximumBytes`:
 {
   "items": [
     {"operation": "create", "data": {"code": "SITE-002", "label": "East depot"}},
-    {"operation": "patch", "id": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
+    {"operation": "patch", "recordId": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
   ],
   "changeContext": {
     "kind": "correction",
@@ -265,9 +269,15 @@ by the entity's `batch.maximumItems` and `batch.maximumBytes`:
 }
 ```
 
-The response is `{"snapshot": "…", "results": [...]}` where each result carries `operation`,
-`id`, `revision`, `etag`, and `data`. Note that the result items keep the older identifier
-spelling rather than the Registry Record envelope.
+The response is `{"snapshot": "…", "results": [...]}`, one result per item in order. Each result
+is a collection member of the Registry Record envelope with two product members, `operation` and
+the record's new `etag`:
+
+```json
+{"operation": "patch", "recordIdentifier": "2d7e5e0c-…", "revisionIdentifier": "4", "etag": "\"breg-hmac-sha256:…\"", "domainData": {"label": "West depot"}}
+```
+
+An ingestion chunk's receipt carries the same results under `batch.results`.
 
 `changeContext` is optional and shared by the whole batch; an item-level override is refused. A
 `correction` requires a nonempty `reasonCode`. `reasonCode` holds at most 64 UTF-8 bytes,
@@ -283,7 +293,9 @@ action, or immediate action. A repeat with the same key and the same request ret
 response without writing again. The same key with a different request returns
 `409 idempotency.conflict`. Request actions and immediate actions require the header.
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), and precondition_required();
+{/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), exact_batch_mutation(), and precondition_required();
+    crates/registry-breg/src/mutation.rs, batch_results_to_wire();
+    crates/registry-breg/src/artifacts.rs, json_patch_array_schema() and batch_response_schema();
     crates/registry-breg/src/mutation/request.rs;
     crates/registry-breg/src/postgres/mutation.rs;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;

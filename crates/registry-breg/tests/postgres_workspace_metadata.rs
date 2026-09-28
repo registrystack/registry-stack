@@ -277,10 +277,10 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(patch_schema)
         .unwrap();
+    // The schema refuses every shape the structural parser refuses.
     for document in [
         json!([{"op":"add","path":"/data/label","value":"Value"}]),
         json!([{"op":"replace","path":"/data/label","value":"Value"}]),
-        json!([{"op":"remove","path":"/data/label"}]),
         json!([{"op":"test","path":"/data/label","value":"Value"}]),
         json!([{"op":"move","path":"/data/label","from":"/data/assetCode"}]),
         json!([{"op":"copy","path":"/data/label","from":"/data/assetCode"}]),
@@ -294,6 +294,22 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
             parse_json_patch_document(document.clone()).is_ok(),
             "schema and parser disagree: {document}"
         );
+    }
+    // #1442: it also constrains each `path` to an API name the operation
+    // admits, which the runtime enforces after parsing. Every field of this
+    // entity is required, so no `remove` is admitted.
+    for document in [
+        json!([{"op":"remove","path":"/data/label"}]),
+        json!([{"op":"replace","path":"/label","value":"Value"}]),
+        json!([{"op":"replace","path":"/data/asset-code","value":"Value"}]),
+        json!([{"op":"replace","path":"/data/noSuchField","value":"Value"}]),
+        json!([{"op":"test","path":"/data","value":{}}]),
+    ] {
+        assert!(
+            parse_json_patch_document(document.clone()).is_ok(),
+            "{document}"
+        );
+        assert!(!validator.is_valid(&document), "{document}");
     }
     let planner_token = harness.token("site-planning", &[]);
     let planner = response_json(

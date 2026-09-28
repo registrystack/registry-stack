@@ -1879,7 +1879,7 @@ async fn batch_dispatch(
         })
         .await
     {
-        Ok(outcome) => exact_mutation(
+        Ok(outcome) => exact_batch_mutation(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
@@ -5125,6 +5125,39 @@ fn exact_mutation(
     let Ok(body) = opened_held_body(response, response_entity, field_encryption) else {
         return field_encryption_unavailable();
     };
+    exact_held_response(response, response_entity, deployment_prefix, body)
+}
+
+/// Serve one held batch answer: its results leave the stored form here, after
+/// their sealed members are opened, for fresh and replayed answers alike.
+fn exact_batch_mutation(
+    response: &HeldResponse,
+    response_entity: Option<&CompiledEntity>,
+    deployment_prefix: &str,
+    field_encryption: Option<&crate::field_encryption::FieldEncryptionService>,
+) -> Response {
+    let Ok(body) = opened_held_body(response, response_entity, field_encryption) else {
+        return field_encryption_unavailable();
+    };
+    if !(200..300).contains(&response.status()) {
+        return exact_held_response(response, response_entity, deployment_prefix, body);
+    }
+    let Ok(mut value) = parse_json_strict(&body) else {
+        return unavailable();
+    };
+    crate::mutation::batch_results_to_wire(&mut value);
+    let Ok(body) = registry_platform_canonical_json::canonicalize_json(&value) else {
+        return unavailable();
+    };
+    exact_held_response(response, response_entity, deployment_prefix, body)
+}
+
+fn exact_held_response(
+    response: &HeldResponse,
+    response_entity: Option<&CompiledEntity>,
+    deployment_prefix: &str,
+    body: Vec<u8>,
+) -> Response {
     let mut builder = Response::builder()
         .status(response.status())
         .header(CACHE_CONTROL, "no-store")
@@ -5741,7 +5774,7 @@ mod held_body_encryption_tests {
     use serde_json::{json, Map, Value};
     use zeroize::Zeroizing;
 
-    use super::exact_mutation;
+    use super::{exact_batch_mutation, exact_mutation};
     use crate::compiler::{compile_project, CompileProfile, MAX_BATCH_ITEMS};
     use crate::contract::{parse_project_json, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS};
     use crate::field_encryption::FieldEncryptionService;
@@ -5904,25 +5937,37 @@ mod held_body_encryption_tests {
         assert_stays_sealed(&held, &[FIRST_PLAINTEXT, SECOND_PLAINTEXT]);
         assert_replay_canonical(&held);
 
-        let response = exact_mutation(&held, Some(entity), "", Some(&service));
+        let response = exact_batch_mutation(&held, Some(entity), "", Some(&service));
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let served = parse_json_strict(&bytes).unwrap();
         // The erasure tombstone scan reads the snapshot and each item's id and
-        // revision directly from the body, beside the sealed members, so those
-        // positions survive opening unchanged.
+        // revision directly from the held body, beside the sealed members, so
+        // the held body keeps them; the caller reads them under their Registry
+        // Record names, after opening.
         assert_eq!(served["snapshot"], json!(snapshot));
-        assert_eq!(served["results"][0]["id"], json!(RECORD_ID));
-        assert_eq!(served["results"][0]["revision"], json!(3));
-        assert_eq!(served["results"][1]["id"], json!(OTHER_RECORD_ID));
-        assert_eq!(served["results"][1]["revision"], json!(4));
+        assert_eq!(served["results"][0]["recordIdentifier"], json!(RECORD_ID));
+        assert_eq!(served["results"][0]["revisionIdentifier"], json!("3"));
         assert_eq!(
-            served["results"][0]["data"][&secret_key],
+            served["results"][1]["recordIdentifier"],
+            json!(OTHER_RECORD_ID)
+        );
+        assert_eq!(served["results"][1]["revisionIdentifier"], json!("4"));
+        assert_eq!(
+            served["results"][0]["domainData"][&secret_key],
             json!(FIRST_PLAINTEXT)
         );
         assert_eq!(
-            served["results"][1]["data"][&secret_key],
+            served["results"][1]["domainData"][&secret_key],
             json!(SECOND_PLAINTEXT)
+        );
+        assert!(served["results"][0].get("id").is_none());
+        assert!(served["results"][0].get("data").is_none());
+        // A replay serves the same bytes.
+        let replay = exact_batch_mutation(&held, Some(entity), "", Some(&service));
+        assert_eq!(
+            to_bytes(replay.into_body(), 1024 * 1024).await.unwrap(),
+            bytes
         );
     }
 
@@ -5957,7 +6002,7 @@ mod held_body_encryption_tests {
         assert!(held.body().len() < 3 * 1024 * 1024);
         assert!(!String::from_utf8_lossy(held.body()).contains(&plaintext));
 
-        let response = exact_mutation(&held, Some(entity), "", Some(&service));
+        let response = exact_batch_mutation(&held, Some(entity), "", Some(&service));
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
             .await
@@ -5968,9 +6013,9 @@ mod held_body_encryption_tests {
             served["results"].as_array().unwrap().len(),
             usize::from(MAX_BATCH_ITEMS)
         );
-        assert_eq!(served["results"][0]["data"][&secret_key], plaintext);
+        assert_eq!(served["results"][0]["domainData"][&secret_key], plaintext);
         assert_eq!(
-            served["results"][usize::from(MAX_BATCH_ITEMS) - 1]["data"][&secret_key],
+            served["results"][usize::from(MAX_BATCH_ITEMS) - 1]["domainData"][&secret_key],
             plaintext
         );
     }

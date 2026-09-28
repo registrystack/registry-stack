@@ -2482,7 +2482,7 @@ fn ingestion_receipt_wire() -> Value {
         "batch": {
             "snapshot": format!("breg1_{OTHER_RECORD_ID}"),
             "results": [
-                {"operation": "create", "id": RECORD_ID, "revision": 1, "etag": "\"breg-record-v1-abcdef012345\"", "data": {"legalName": "Example Ltd"}}
+                {"operation": "create", "recordIdentifier": RECORD_ID, "revisionIdentifier": "1", "etag": "\"breg-record-v1-abcdef012345\"", "domainData": {"legalName": "Example Ltd"}}
             ]
         }
     })

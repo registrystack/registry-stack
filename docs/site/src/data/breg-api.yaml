@@ -13,7 +13,7 @@
     - ['`PATCH /v1/records/{route}/{recordId}`', '`patch`', '`mutationMode: mutable`', 'Record envelope with `data.snapshot`. Requires `If-Match`.']
     - ['`DELETE /v1/records/{route}/{recordId}`', '`tombstone`', '`tombstone: true`', 'Envelope of the final revision with `data.snapshot`. Requires `If-Match`.']
     - ['`POST /v1/records/{route}:lookup`', '`lookup`', 'Entity declares `selectorProfiles`', 'Record envelope, or 404 `lookup.unresolved`.']
-    - ['`POST /v1/records/{route}:batch`', '`batch`', 'Entity declares `batch`', '`{"snapshot", "results": [...]}`.']
+    - ['`POST /v1/records/{route}:batch`', '`batch`', 'Entity declares `batch`', '`{"snapshot", "results": [...]}`, each result a Registry Record with `operation` and `etag`.']
     - ['`POST /v1/records/{route}/ingestion-runs`', '`batch`', 'Entity declares `batch`', '201 with the run document: the binding, the announced counts and bounds, and `nextChunkIndex`.']
     - ['`GET /v1/records/{route}/ingestion-runs`', '`batch`', 'Entity declares `batch`', 'Run documents the caller created. `limit` (default 25, at most 100), keyset `after`, and optional `status` and `inputDigest` filters.']
     - ['`GET /v1/records/{route}/ingestion-runs/{runId}`', '`batch`', 'Entity declares `batch`', 'The run document with `nextChunkIndex`. Another caller''s run and an unknown run are the same 404.']

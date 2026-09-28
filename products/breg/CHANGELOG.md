@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- BREAKING: a batch result is a Registry Record with the product members
+  `operation` and `etag`: `{"operation", "recordIdentifier",
+  "revisionIdentifier", "etag", "domainData"}`, where it was `{"operation",
+  "id", "revision", "etag", "data"}`, and `revisionIdentifier` is a decimal
+  string like every other Registry Record revision. The same results appear
+  under `batch.results` in an ingestion chunk answer and a recovered chunk
+  receipt, including receipts committed before the upgrade and idempotent
+  replays of earlier batch answers. Read `recordIdentifier` for `id`,
+  `revisionIdentifier` (parse it as an integer if you need one) for
+  `revision`, and `domainData` for `data`. `BRegBatchResult` and the Node.js
+  and Python binding results keep their fields.
+- BREAKING: a `bregctl data export` line is the collection member the list
+  route served, `{"recordIdentifier", "revisionIdentifier", "domainData"}`,
+  where it was `{"id", "revision", "data"}`. A tool reading an export reads
+  the new members. An export file written before the upgrade holds the old
+  members, so start a new export under this release rather than resuming one
+  across the upgrade.
+- BREAKING: the generated OpenAPI constrains every JSON Patch `path` in a
+  patch, batch, and ingestion chunk body to `/data/` followed by an API name
+  the operation admits: a writable field for `add` and `replace`, a writable
+  optional field for `remove`, and a readable unencrypted field for `test`.
+  The runtime already refused every other path; a client generated from the
+  OpenAPI now refuses it before sending. The OpenAPI is part of the compiled
+  artifacts, so every project with a patch or batch route compiles to a new
+  `registryRevision` and every package must be rebuilt, as the package
+  signing entry below already requires; a Casework source and an Evidence
+  import follow the repin and re-import steps that entry names. Create and patch request shapes are
+  unchanged: a write body's `data` holds what a read shows under
+  `data.domainData`.
+
 - BREAKING: a record or query `400` names the member or parameter at fault
   in `fieldPath`, where it carried none before. `detail` and `code` are
   unchanged. A create body names `/data` for a field the grant does not let

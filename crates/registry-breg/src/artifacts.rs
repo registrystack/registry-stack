@@ -2712,7 +2712,7 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
                 "data": {"$ref": format!("#/components/schemas/{}", spec.request_schema_ref)}
             }
         }))),
-        Operation::Patch => Some(json_patch_request_body()),
+        Operation::Patch => Some(json_patch_request_body(spec)),
         Operation::Lookup => Some(json_request_body(json!({
             "type": "object",
             "additionalProperties": false,
@@ -2740,7 +2740,7 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
                 .expect("batch routes require compiled bounds");
             let (allow_create, allow_patch) = batch_permissions(spec);
             Some(batch_request_body(
-                spec.request_schema_ref,
+                spec,
                 batch.maximum_items,
                 allow_create,
                 allow_patch,
@@ -2771,21 +2771,39 @@ fn json_request_body(schema: Value) -> Value {
     })
 }
 
-fn json_patch_request_body() -> Value {
+fn json_patch_request_body(spec: OpenApiOperationSpec<'_>) -> Value {
     json!({
         "required": true,
-        "content": {"application/json-patch+json": {"schema": json_patch_array_schema()}}
+        "content": {"application/json-patch+json": {"schema": route_patch_schema(spec)}}
     })
 }
 
+/// The patch document of a package route: the union of what the profiles
+/// serving it may write and read.
+fn route_patch_schema(spec: OpenApiOperationSpec<'_>) -> Value {
+    let readable = spec
+        .route
+        .access_profiles
+        .iter()
+        .filter_map(|profile_id| spec.entity.access_profiles.get(profile_id))
+        .flat_map(|profile| profile.readable_fields.iter().cloned())
+        .collect();
+    json_patch_array_schema(
+        spec.entity,
+        &writable_fields_for_route(spec.route, spec.entity),
+        &readable,
+    )
+}
+
 fn batch_request_body(
-    schema_ref: &str,
+    spec: OpenApiOperationSpec<'_>,
     maximum_items: u16,
     allow_create: bool,
     allow_patch: bool,
 ) -> Value {
     json_request_body(batch_input_schema(
-        json!({"$ref": format!("#/components/schemas/{schema_ref}")}),
+        json!({"$ref": format!("#/components/schemas/{}", spec.request_schema_ref)}),
+        route_patch_schema(spec),
         maximum_items,
         allow_create,
         allow_patch,
@@ -2795,13 +2813,15 @@ fn batch_request_body(
 #[cfg_attr(not(feature = "runtime"), allow(dead_code))]
 pub(crate) fn openapi_batch_input_schema(
     entity: &CompiledEntity,
-    writable_fields: Option<&BTreeSet<String>>,
+    writable_fields: &BTreeSet<String>,
+    readable_fields: &BTreeSet<String>,
     maximum_items: u16,
     allow_create: bool,
     allow_patch: bool,
 ) -> Value {
     batch_input_schema(
-        openapi_entity_input_schema(entity, writable_fields),
+        openapi_entity_input_schema(entity, Some(writable_fields)),
+        json_patch_array_schema(entity, writable_fields, readable_fields),
         maximum_items,
         allow_create,
         allow_patch,
@@ -2810,6 +2830,7 @@ pub(crate) fn openapi_batch_input_schema(
 
 fn batch_input_schema(
     create_data_schema: Value,
+    patch_schema: Value,
     maximum_items: u16,
     allow_create: bool,
     allow_patch: bool,
@@ -2822,6 +2843,7 @@ fn batch_input_schema(
             "changeContext": change_context_request_schema(),
             "items": openapi_batch_items_schema(
                 create_data_schema,
+                patch_schema,
                 maximum_items,
                 allow_create,
                 allow_patch,
@@ -2834,6 +2856,7 @@ fn batch_input_schema(
 /// and the ingestion chunk body carry the same item shapes.
 pub(crate) fn openapi_batch_items_schema(
     create_data_schema: Value,
+    patch_schema: Value,
     maximum_items: u16,
     allow_create: bool,
     allow_patch: bool,
@@ -2859,7 +2882,7 @@ pub(crate) fn openapi_batch_items_schema(
                 "operation": {"const": "patch"},
                 "recordId": {"type": "string", "format": "uuid"},
                 "ifMatch": {"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"},
-                "patch": json_patch_array_schema(),
+                "patch": patch_schema,
             }
         }));
     }
@@ -2913,24 +2936,72 @@ fn bounded_text_schema(max_bytes: usize) -> Value {
     })
 }
 
-pub(crate) fn json_patch_array_schema() -> Value {
+/// The JSON Patch document one grant may send. Every `path` is `/data/`
+/// followed by one API name the operation admits: `add` and `replace` take
+/// a writable field, `remove` a writable optional field, and `test` a
+/// readable stored field that is not encrypted, so the schema itself refuses
+/// a path at the wrong nesting level.
+pub(crate) fn json_patch_array_schema(
+    entity: &CompiledEntity,
+    writable_fields: &BTreeSet<String>,
+    readable_fields: &BTreeSet<String>,
+) -> Value {
+    let paths = |admits: &dyn Fn(&crate::model::CompiledField) -> bool| {
+        entity
+            .stored_fields
+            .iter()
+            .filter(|stored| entity.fields.get(&stored.logical.id).is_some_and(admits))
+            .map(|stored| {
+                format!(
+                    "/data/{}",
+                    stored
+                        .logical
+                        .api_name
+                        .replace('~', "~0")
+                        .replace('/', "~1")
+                )
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let write = paths(&|field| writable_fields.contains(&field.id));
+    let remove = paths(&|field| writable_fields.contains(&field.id) && !field.required);
+    let test = paths(&|field| readable_fields.contains(&field.id) && field.encryption.is_none());
+    let operation = |op: Value, paths: BTreeSet<String>, value: bool| {
+        (!paths.is_empty()).then(|| {
+            let mut properties = Map::from_iter([
+                ("op".to_owned(), op),
+                ("path".to_owned(), json!({"type": "string", "enum": paths})),
+            ]);
+            let mut required = vec!["op", "path"];
+            if value {
+                properties.insert("value".to_owned(), json!(true));
+                required.push("value");
+            }
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": required,
+                "properties": properties
+            })
+        })
+    };
+    let operations = [
+        operation(
+            json!({"type": "string", "enum": ["add", "replace"]}),
+            write,
+            true,
+        ),
+        operation(json!({"const": "remove"}), remove, false),
+        operation(json!({"const": "test"}), test, true),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     json!({
         "type": "array",
         "minItems": 1,
         "maxItems": 128,
-        "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["op", "path"],
-            "properties": {
-                "op": {"type": "string", "enum": ["add", "replace", "remove", "test"]},
-                "path": {"type": "string"},
-                "value": true
-            },
-            "if": {"properties": {"op": {"const": "remove"}}},
-            "then": {"not": {"required": ["value"]}},
-            "else": {"required": ["value"]}
-        }
+        "items": if operations.is_empty() { json!(false) } else { json!({"oneOf": operations}) }
     })
 }
 
@@ -3802,16 +3873,18 @@ fn batch_response_schema(
                 "type": "array",
                 "minItems": 1,
                 "maxItems": maximum_items,
+                // A Registry Record with the product members `operation`
+                // and `etag`, like a collection member.
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["operation", "id", "revision", "etag", "data"],
+                    "required": ["operation", "recordIdentifier", "revisionIdentifier", "etag", "domainData"],
                     "properties": {
                         "operation": {"enum": operations},
-                        "id": {"type": "string", "format": "uuid"},
-                        "revision": {"type": "integer", "format": "int64", "minimum": 1},
+                        "recordIdentifier": {"type": "string", "format": "uuid"},
+                        "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
                         "etag": {"type": "string", "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"},
-                        "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+                        "domainData": {"$ref": format!("#/components/schemas/{schema_ref}")},
                     }
                 }
             }

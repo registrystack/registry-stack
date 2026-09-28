@@ -58,7 +58,7 @@ function receiptWire() {
     erased: false,
     batch: {
       snapshot: 'breg1_00000000-0000-4000-8000-000000000002',
-      results: [{ operation: 'create', id: RUN_ID, revision: 1, etag: '"breg-record-v1-abcdef012345"', data: { label: 'Example Ltd' } }],
+      results: [{ operation: 'create', recordIdentifier: RUN_ID, revisionIdentifier: '1', etag: '"breg-record-v1-abcdef012345"', domainData: { label: 'Example Ltd' } }],
     },
   };
 }

@@ -469,16 +469,16 @@ async fn assert_batch_corrected(response: axum::response::Response, pair: &Membe
         .expect("batch response has ordered results");
     assert_eq!(results.len(), 2);
     assert!(results.iter().any(|item| {
-        item["id"] == pair.a_id
-            && item["revision"] == 2
-            && item["data"]["group"] == "A"
-            && item["data"]["validTo"] == "2026-06-15"
+        item["recordIdentifier"] == pair.a_id
+            && item["revisionIdentifier"] == "2"
+            && item["domainData"]["group"] == "A"
+            && item["domainData"]["validTo"] == "2026-06-15"
     }));
     assert!(results.iter().any(|item| {
-        item["id"] == pair.b_id
-            && item["revision"] == 2
-            && item["data"]["group"] == "B"
-            && item["data"]["validFrom"] == "2026-06-15"
+        item["recordIdentifier"] == pair.b_id
+            && item["revisionIdentifier"] == "2"
+            && item["domainData"]["group"] == "B"
+            && item["domainData"]["validFrom"] == "2026-06-15"
     }));
 }
 

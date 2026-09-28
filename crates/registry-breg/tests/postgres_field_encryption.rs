@@ -1494,11 +1494,20 @@ async fn sealed_idempotency_bodies_serve_plaintext_and_replay_exactly() {
         .as_str()
         .is_some_and(|snapshot| !snapshot.is_empty()));
     assert_eq!(batch_json["results"][0]["operation"], "create");
-    assert_eq!(batch_json["results"][0]["data"]["secret"], "sigma-five");
-    assert_eq!(batch_json["results"][0]["data"]["code"], "TUV-8888");
+    assert_eq!(
+        batch_json["results"][0]["domainData"]["secret"],
+        "sigma-five"
+    );
+    assert_eq!(batch_json["results"][0]["domainData"]["code"], "TUV-8888");
     assert_eq!(batch_json["results"][1]["operation"], "patch");
-    assert_eq!(batch_json["results"][1]["id"], json!(record_id));
-    assert_eq!(batch_json["results"][1]["data"]["secret"], "omega-four");
+    assert_eq!(
+        batch_json["results"][1]["recordIdentifier"],
+        json!(record_id)
+    );
+    assert_eq!(
+        batch_json["results"][1]["domainData"]["secret"],
+        "omega-four"
+    );
     let cached_batch = cached_response_body(&server, "batch").await;
     assert!(
         cached_batch.contains("__bregEncryptedV1"),

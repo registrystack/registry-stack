@@ -482,11 +482,19 @@ fn decode_result(
     expected: BRegBatchOperation,
     readable: &BTreeSet<String>,
 ) -> Result<BRegBatchResult, BRegBatchError> {
+    // A result is a Registry Record with the product members `operation` and
+    // `etag`.
     let object = value.as_object().ok_or(BRegBatchError::InvalidResponse)?;
     if object.len() != 5
-        || !["operation", "id", "revision", "etag", "data"]
-            .iter()
-            .all(|key| object.contains_key(*key))
+        || ![
+            "operation",
+            "recordIdentifier",
+            "revisionIdentifier",
+            "etag",
+            "domainData",
+        ]
+        .iter()
+        .all(|key| object.contains_key(*key))
     {
         return Err(BRegBatchError::InvalidResponse);
     }
@@ -498,7 +506,7 @@ fn decode_result(
     if operation != expected {
         return Err(BRegBatchError::InvalidResponse);
     }
-    let id = object["id"]
+    let id = object["recordIdentifier"]
         .as_str()
         .and_then(|value| {
             Uuid::parse_str(value)
@@ -506,15 +514,21 @@ fn decode_result(
                 .filter(|id| id.to_string() == value)
         })
         .ok_or(BRegBatchError::InvalidResponse)?;
-    let revision = object["revision"]
-        .as_u64()
+    let revision = object["revisionIdentifier"]
+        .as_str()
+        .and_then(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|revision| revision.to_string() == value)
+        })
         .filter(|value| *value > 0 && *value <= i64::MAX as u64)
         .ok_or(BRegBatchError::InvalidResponse)?;
     let etag = object["etag"]
         .as_str()
         .and_then(|value| BRegEtag::parse(value).ok())
         .ok_or(BRegBatchError::InvalidResponse)?;
-    let data = object["data"]
+    let data = object["domainData"]
         .as_object()
         .filter(|data| data.keys().all(|field| readable.contains(field)))
         .cloned()
