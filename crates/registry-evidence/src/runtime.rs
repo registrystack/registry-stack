@@ -49,6 +49,7 @@ use crate::{
         SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope,
         UnsignedIntegrityProtection, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
+    observability::SourceDiagnostics,
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
     sdjwt_vc,
@@ -445,6 +446,7 @@ pub struct EvidenceRuntime {
     jwks: JwksDocument,
     subject_binding_secret: ProtectedSecret,
     rate_limiter: Arc<EvidenceRateLimiter>,
+    source_diagnostics: Arc<SourceDiagnostics>,
 }
 
 #[async_trait]
@@ -499,6 +501,7 @@ fn build_sources(
     bundle: &Bundle,
     runtime_document: &RuntimeDocument,
     secrets: &Arc<SecretResolver>,
+    diagnostics: &Arc<SourceDiagnostics>,
 ) -> Result<BTreeMap<String, SourceExecutor>, RuntimeInitializationError> {
     let runtime_config = &runtime_document.config;
     let connection_pool = crate::source::SourceConnectionPool::new(
@@ -527,6 +530,10 @@ fn build_sources(
             &connection_pool,
         )
         .map_err(|_| RuntimeInitializationError::Source)?;
+        let executor = match diagnostics.observer(source_id) {
+            Some(observer) => executor.observed_by(observer),
+            None => executor,
+        };
         sources.insert(source_id.to_owned(), executor);
     }
     Ok(sources)
@@ -586,6 +593,7 @@ struct Startup<A> {
     audit: A,
     material: ValidatedSecretMaterial,
     rate_limiter: EvidenceRateLimiter,
+    source_diagnostics: Arc<SourceDiagnostics>,
 }
 
 /// The one startup sequence, shared by `serve` and by the dependency check
@@ -627,7 +635,10 @@ async fn assemble<A>(
     )
     .await?;
 
-    let sources = build_sources(&bundle, &runtime_document, &secrets)?;
+    let source_diagnostics = Arc::new(SourceDiagnostics::new(
+        bundle.config.sources.iter().map(|(source_id, _)| source_id),
+    ));
+    let sources = build_sources(&bundle, &runtime_document, &secrets, &source_diagnostics)?;
 
     let rate_limiter = rate_limiter(&bundle)?;
 
@@ -648,6 +659,7 @@ async fn assemble<A>(
         audit,
         material,
         rate_limiter,
+        source_diagnostics,
     })
 }
 
@@ -739,6 +751,7 @@ impl EvidenceRuntime {
             jwks: startup.material.jwks,
             subject_binding_secret: startup.material.subject_binding_secret,
             rate_limiter: Arc::new(startup.rate_limiter),
+            source_diagnostics: startup.source_diagnostics,
         })
     }
 
@@ -762,6 +775,12 @@ impl EvidenceRuntime {
     /// every scrape.
     pub(crate) fn rate_limiter(&self) -> Arc<EvidenceRateLimiter> {
         Arc::clone(&self.rate_limiter)
+    }
+
+    /// The per-source diagnostics whose counters back the
+    /// `evidence_source_shape_drift_total` series on the metrics listener.
+    pub(crate) fn source_diagnostics(&self) -> Arc<SourceDiagnostics> {
+        Arc::clone(&self.source_diagnostics)
     }
 
     #[cfg(test)]

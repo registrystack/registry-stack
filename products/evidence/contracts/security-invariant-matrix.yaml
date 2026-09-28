@@ -165,7 +165,7 @@ invariants:
   - id: V1-I33
     rule: Operational telemetry is off by default, served only on a separate operator-private listener, and carries no caller-supplied or protected value in any label or series.
     threat: A metrics surface becomes a public existence oracle, or per-request labels reconstruct selectors, requirement usage, or registry membership through unbounded series cardinality.
-    enforcement: Optional runtime metricsListener bound to a private address distinct from the evidence listener, serving only GET /metrics; series labels are drawn from the closed registered route-template set, a fixed method set, a fixed status category, and the reviewed problem-code set, never from request content.
+    enforcement: Optional runtime metricsListener bound to a private address distinct from the evidence listener, serving only GET /metrics; request series labels are drawn from the closed registered route-template set, a fixed method set, a fixed status category, and the reviewed problem-code set, and the source shape-drift series is labeled only by a governed bundle source identifier registered at startup, never from request or response content.
     negative_test: sec-telemetry-bounded-and-operator-private
   - id: V1-I34
     rule: Only the explicit local assurance profile may omit a requirement fixture reference; production and evidence-grade retain complete fixture validation before the bundle can load.

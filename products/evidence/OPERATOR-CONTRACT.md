@@ -741,9 +741,10 @@ Telemetry is off by default. Setting `metricsListener` in `runtime.yaml` serves
 differ from the evidence listener binding and is subject to the same
 loopback-or-private-address rule. The evidence listener never serves `/metrics`,
 and the metrics listener never serves evidence. Series carry only the registered
-route template, request method, status category, and reviewed problem code, so
-series cardinality is bounded by the deployed contract and cannot grow with
-caller input. A path that matches no route is counted as `unmatched` and a
+route template, request method, status category, and reviewed problem code, or
+for the source series a governed source identifier from the bundle, so series
+cardinality is bounded by the deployed contract and cannot grow with caller
+input. A path that matches no route is counted as `unmatched` and a
 method outside the served set as `other`, so a caller cannot write a label
 value. Operators should still reach this listener only from their own network,
 since request rates per route are operational information. The series and
@@ -981,12 +982,12 @@ makes the endpoint scrapable by every neighbouring workload. `127.0.0.1` with
 a same-pod or same-host collector is the shape that keeps the operator
 boundary the operator intended; any wider binding must be closed by a network
 policy, and the operator owns that control.
- `evidence_http_requests_total` and `evidence_http_request_duration_seconds`
-describe the HTTP boundary only. Version 1 publishes no source-call, signing,
-or credential-acquisition series. A slow or failing upstream source is visible
-only as evidence-request duration and as the problem code the boundary
-returned; signing, audit-writer, and
-source-credential health are reported by `/ready` rather than by telemetry.
+`evidence_http_requests_total` and `evidence_http_request_duration_seconds`
+describe the HTTP boundary only. Apart from the source shape-drift counter
+below, Version 1 publishes no source-call, signing, or credential-acquisition
+series. A slow or failing upstream source is visible as evidence-request
+duration and as the problem code the boundary returned; signing, audit-writer,
+and source-credential health are reported by `/ready` rather than by telemetry.
 
 One unlabeled gauge is published on the same listener. It carries none of the
 four request-boundary labels, since it reports a process-wide fact rather than
@@ -1005,6 +1006,61 @@ than degrading gracefully.
 Evidence publishes no audit series. Audit writer health is reported by
 `/ready`, and disk use in the audit directory is bounded by
 `audit.rotateBytes` and `audit.retainDays` and belongs to host monitoring.
+
+One source counter is published, with one series per source the governed
+bundle declares, each present from startup at `0`:
+
+| Series | Type | Meaning |
+|---|---|---|
+| `evidence_source_shape_drift_total` | counter | HTTP source responses whose shape departed from the declared projection |
+
+Its only label, `source`, is a source identifier from the governed bundle. The
+set is fixed when the process starts, so neither traffic nor a source can add a
+series. A response is counted once however many members drifted, and every
+drifted response is counted, including those whose WARN record the interval
+below suppressed. Alert on any increase: a source that renamed, dropped, or
+retyped a member the projection selects fails or degrades every request that
+reads it until the bundle is updated.
+
+```text
+# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.
+# TYPE evidence_source_shape_drift_total counter
+evidence_source_shape_drift_total{source="civil-register"} 0
+```
+
+### Source diagnostics
+
+A source failure reaches the caller as `source.unavailable` or
+`evidence.unavailable`, which names no member and no cause, and the served
+request's `category` field names only the failure class. Three `WARN` records
+on the `registry_evidence::source` target say where the fault lies. They are
+written to the same stream as the operational records and carry no operation
+or trace identifier. Each names a governed source identifier, JSON pointers,
+and closed reasons, and none carries a response value, a member name the bundle
+did not declare, a selector, a subject, or a credential. The projection record
+writes `*` for an array index, so it does not reveal how many items a response
+held; the response-shape record points into the projected tree and may name an
+index there.
+
+| Message | Fields | Meaning |
+|---|---|---|
+| `the source response does not match its declared projection` | `source`, `violations`, `total_violations`, `suppressed` | The response drifted from the projection: a selected container is missing or is not the declared object or array, or a selected leaf is missing beside a member the projection does not select, which is what a rename leaves. `violations` lists up to five distinct findings such as `/records/*/region is absent beside an undeclared member`, and `total_violations` counts them all. |
+| `the projected source response does not match its declared response shape` | `source`, `schema`, `violations`, `total_violations` | The projected response failed its `responseSchema`, for example an enumerated value outside the declared set or a member of the wrong type. Each violation pairs the member's pointer with the schema rule's pointer. |
+| `source answered 404 with an undeclared shape` | `source`, `unresolved_problem`, `suppressed` | A 404 was not the source's declared unresolved outcome. `unresolved_problem` is `not declared` when the source declares no `unresolvedProblem`, or `not matched` when this response was not exactly the declared tuple. |
+
+The caller's answer to an undeclared 404 stays `source.unavailable`. A distinct
+code would tell the caller that the subject is absent at the source, which the
+operator never declared as disclosable; `unresolvedProblem` is how an operator
+declares it. The record is how an operator learns that a source answers "not
+found" in a shape the bundle does not declare yet, or that a source rejected a
+request it no longer understands, such as a field selection naming a member the
+source removed.
+
+The projection and 404 records are rate-limited: each is written at most once
+per 60 seconds per source, and `suppressed` counts the events of the same kind
+for that source that were not written since the previous record. A 404 that is
+exactly the declared `unresolvedProblem` is an ordinary outcome and writes
+nothing.
 
 ## Startup and readiness
 
