@@ -75,27 +75,28 @@ operations using HTTP API field names as the primary copyable identifiers.
 Every filterable, sortable, and selector field also includes its logical field
 id so authors can trace the output back to source.
 
-`bregctl package PROJECT --database-id ID --schema-fingerprint
-SHA256 --output BUILD` always recompiles with the production profile. It writes
-the exact canonical `BUILD/signing-input.json`.
-For a non-local environment it reports `awaiting_signatures` and creates no
-package until a later invocation supplies an external signature document. It
-has no signing command and never receives private key material. The required
-schema fingerprint is the exact digest from the separately reviewed
-PostgreSQL rehearsal, not a compiler approximation.
+`bregctl package PROJECT --test-receipt RECEIPT --output BUILD` always
+recompiles with the production profile and publishes the unsigned package into
+`BUILD/package` in one step, with no signing command and no private key
+material. A successor names the active package directory with
+`--baseline-package`. The schema fingerprint is the exact digest from the
+schema-test receipt of the separately reviewed PostgreSQL rehearsal, or
+`--schema-fingerprint SHA256` when given, never a compiler approximation.
 
 `bregctl apply --runtime-config ACTIVE_RUNTIME --package TARGET`
 loads the package selected by the runtime configuration as the verified
 current state, verifies the separate target with activation intent, resolves
 the configured database secret, and delegates the closed plan to the server
-library. `--initial` is explicit and also requires the runtime package binding
-to name the sequence-one target. There is no maintenance-clear, arbitrary SQL,
-down-migration, role grant, or signing path in the CLI.
+library. `--initial` is explicit and is accepted only by a database that has
+never activated a package. `bregctl plan` makes the same checks under the same
+lock and rolls them back, and `bregctl status` reads the activation ledger.
+There is no maintenance-clear, arbitrary SQL, or down-migration path in the
+CLI.
 
 `bregctl diff PROJECT` compiles the candidate in authoring mode and
 compares it with a closed, rederived package baseline. Exactly one baseline is
-required: `--runtime-config ABSOLUTE_FILE` verifies configured deployment and
-trust bindings without opening runtime dependencies, while `--package
+required: `--runtime-config ABSOLUTE_FILE` verifies the configured package
+binding without opening runtime dependencies, while `--package
 DIRECTORY` performs integrity-only inspection and grants no activation
 authority.
 
