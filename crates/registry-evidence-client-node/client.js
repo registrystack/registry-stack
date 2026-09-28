@@ -1,9 +1,10 @@
 'use strict';
 
-// The package's actual entry point. `index.js`/`index.d.ts` are regenerated
-// by `napi build --platform` on every build (see `package.json`'s `build`
-// and `build:debug` scripts) and stay untouched here; this file sits on top
-// of them so a hand edit never gets silently overwritten by the next build.
+// The package's actual entry point. `index.js`/`index.d.ts` are napi-rs
+// output: `package.json`'s `build` script rewrites them in place,
+// `check:types` requires a fresh generation to match them byte for byte, and
+// `build:debug` leaves them untouched. This file sits on top of them so a hand
+// edit never gets silently overwritten by the next build.
 
 const native = require('./index');
 

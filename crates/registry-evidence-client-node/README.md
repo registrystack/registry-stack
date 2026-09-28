@@ -239,7 +239,9 @@ error mapping for denied/not-available/protocol/transport failures. Building
 the native addon first (`npm run build:debug`) is required before running the
 JS tests.
 
-`npm run check:types` rebuilds the addon in release mode with `--dts` and
-diffs the result against the committed `index.d.ts`, so a change to the
-`#[napi]` surface that is not reflected in the committed declaration file
-fails this check rather than silently drifting.
+`npm run check:types` rebuilds the addon, generates the loader and
+declarations into the ignored `index.js.check` and `index.d.ts.check`, and
+compares them byte for byte against the committed `index.js` and `index.d.ts`,
+so a change to the `#[napi]` surface that is not reflected in the committed
+declaration file, or a napi-rs CLI change to the loader, fails this check
+rather than silently drifting.
