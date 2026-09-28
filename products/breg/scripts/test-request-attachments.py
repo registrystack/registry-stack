@@ -300,9 +300,11 @@ def test_request_attachment_journey() -> None:
         require(isinstance(container_id, str) and len(container_id) == 64,
                 "Native dev did not identify its owned database container")
 
+        # The local registry serves with one role, the migration role, so the
+        # storage failure is withdrawn from that role.
         def storage_permission(grant: bool) -> None:
-            sql = ("GRANT INSERT ON registry_internal.registry_attachment_blobs TO breg_dev_runtime;"
-                   if grant else "REVOKE INSERT ON registry_internal.registry_attachment_blobs FROM breg_dev_runtime;")
+            sql = ("GRANT INSERT ON registry_internal.registry_attachment_blobs TO breg_dev_migration;"
+                   if grant else "REVOKE INSERT ON registry_internal.registry_attachment_blobs FROM breg_dev_migration;")
             result = subprocess.run([str(docker), "exec", "-i", container_id, "psql", "-X", "-q",
                                      "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "breg_dev"],
                                     input=sql.encode(), capture_output=True, timeout=20, check=False)
