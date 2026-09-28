@@ -629,3 +629,67 @@ previous release end to end.
   a drift under the same engine comes from compiler nondeterminism or from a
   predecessor package altered together with its `SHA256SUMS`, and the strict
   final check still catches any effect on the candidate.
+
+## Read paths over a target the profile holds no entry for
+
+The change lets a read path answer when the caller's profile holds no
+permission entry for the path's target entity
+(`install_request_visibility_context` in
+`crates/registry-breg/src/mutation.rs`). It changes which requests a
+configured read route answers: such a request answered
+`503 source.unavailable` before any row was read, and now returns what the
+path grant authorizes.
+
+### Threat
+
+A relationship traversal inherits direct target rights, or widens the
+target projection, filtering, ordering, or count authority its path grant
+configures (BREG-SEC-21). A second threat is new here: skipping the owner
+request visibility a change-request target would otherwise install, so a
+profile that declares `requestVisibility: owner` sees other owners'
+requests.
+
+### Enforcement and defaults
+
+- Admission is unchanged. `authorize_read_path_route` in
+  `crates/registry-breg/src/api/mod.rs` admits the request only when the
+  selected profile's entry on the source entity declares the path, and the
+  HTTP layer conceals an undeclared path exactly like an unknown one, before
+  record I/O. The response projection is the path grant's readable fields.
+- Rows are bounded by the generated target policy
+  (`read_path_target_policy` in `crates/registry-breg/src/generated_ddl.rs`),
+  which requires the installed path id and root id, an active edge from that
+  root, and the source profile's authority over the root. A target
+  permission entry never took part in that policy, so its absence widens
+  nothing.
+- The function now looks the profile up only for a change-request entity,
+  and installs the owner reference only when that entry declares
+  `requestVisibility: owner`. A profile without an entry cannot declare owner
+  visibility there, so there is nothing to install; the owner-scoped policy
+  it would feed belongs to that entry and is not generated for the profile.
+- Writes are unchanged. Both write call sites run after `validate_request`
+  (and the batch validator), whose `selected_profile` refuses a profile
+  without an entry on the written entity as `request.invalid` before any
+  transaction opens. The attachment read path cannot reach it without an
+  entry either: `execute_attachment` requires one before record I/O, so
+  `load_authorized_attachment` keeps its code.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_client_relationships.rs`:
+`read_path_answers_when_the_profile_has_no_entry_for_its_target_entity`
+returns exactly the one linked record under the path grant's projection,
+and refuses a profile without the path grant with the same
+`404 resource.not_found` as an unknown path.
+`read_path_to_a_change_request_entity_leaves_owner_visibility_to_its_own_profile`
+reads every linked request through the path, and proves each owner-visibility
+submitter still sees only its own request; it fails if the owner reference is
+not installed. The BREG-SEC-21 negative test
+`relationship_route_uses_path_grant_not_direct_target_rights` in
+`crates/registry-breg/tests/http_read_only.rs` is unchanged and still holds.
+
+### Accepted residuals
+
+- Other failures inside `read_rows` still answer `503 source.unavailable`;
+  this change removes only the one a compiler-accepted configuration could
+  reach on a healthy database.

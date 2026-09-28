@@ -65,6 +65,7 @@ pub struct ClientFixture {
     pub registry: Arc<registry_breg::CompiledRegistry>,
     pub identity: ExpectedRegistryIdentity,
     pub http: ClientHttp,
+    service: Arc<HttpService>,
 }
 
 impl ClientFixture {
@@ -160,13 +161,21 @@ impl ClientFixture {
         .with_postgres_mutations(Arc::new(mutations))
         .with_postgres_revisions(Arc::new(revisions))
         .with_snapshots(Arc::new(snapshots));
-        let http = ClientHttp::start(registry_breg::api::router(Arc::new(service)), claims).await;
+        let service = Arc::new(service);
+        let http = ClientHttp::start(registry_breg::api::router(service.clone()), claims).await;
         Self {
             database,
             registry,
             identity,
             http,
+            service,
         }
+    }
+
+    /// Serve the same services to another verified principal, for journeys
+    /// that need a second caller over one database.
+    pub async fn client_for(&self, claims: VerifiedRequestClaims) -> ClientHttp {
+        ClientHttp::start(registry_breg::api::router(self.service.clone()), claims).await
     }
 
     pub async fn finish(self) {

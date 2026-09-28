@@ -4204,12 +4204,17 @@ pub(crate) async fn install_request_visibility_context(
     audit_profile: &AuditProfile,
     database_id: &str,
 ) -> Result<(), MutationError> {
-    let profile = entity
-        .access_profiles
-        .get(claims.access_profile())
-        .ok_or(MutationError::Unavailable)?;
+    // A read path answers on the source profile's path grant, so its target
+    // entity may hold no entry for the profile at all. Such a profile cannot
+    // declare owner visibility there: there is nothing to install. Writes
+    // reach this only after their own profile entry was checked.
     if entity.change_request.is_none()
-        || profile.request_visibility != Some(crate::contract::RequestVisibilitySource::Owner)
+        || !entity
+            .access_profiles
+            .get(claims.access_profile())
+            .is_some_and(|profile| {
+                profile.request_visibility == Some(crate::contract::RequestVisibilitySource::Owner)
+            })
     {
         return Ok(());
     }
