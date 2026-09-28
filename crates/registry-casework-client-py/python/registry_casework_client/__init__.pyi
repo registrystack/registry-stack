@@ -319,11 +319,10 @@ class _DecideRequestOptional(TypedDict, total=False):
 
 class DecideRequest(_DecideRequestOptional):
     displayedBinding: SourceBinding
-    sourceProfileId: str
     operation: str
 
 class RecoverAttemptRequest(TypedDict):
-    sourceProfileId: str
+    """Empty: the source_profile argument selects the source profile."""
 
 class BootstrapDirectoryRequest(TypedDict):
     teamId: str

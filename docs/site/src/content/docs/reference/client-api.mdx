@@ -1203,6 +1203,10 @@ does not depend on the attempt identifier reaching the caller. `recover_decision
 identifier instead, for a caller that did receive one, including through the
 `Registry-Casework-Attempt` header on a refusal.
 
+The selected source profile travels only in the `Registry-Source-Profile` header. The decision body
+names the displayed binding and operation, the recovery body is an empty object, and a body that
+still carries `sourceProfileId` is refused as not matching the contract.
+
 {/* Evidence: crates/registry-casework-client/src/client.rs, claim_work_item(),
     decide_work_item(), recover_decision(), recover_decision_by_key(), and ORIGINAL_ATTEMPT_HEADER,
     crates/registry-casework-client/tests/http_boundary.rs,

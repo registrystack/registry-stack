@@ -1124,17 +1124,10 @@
                 "type": "null"
               }
             ]
-          },
-          "sourceProfileId": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_.:-]+$",
-            "type": "string"
           }
         },
         "required": [
           "displayedBinding",
-          "sourceProfileId",
           "operation"
         ],
         "type": "object"
@@ -3097,17 +3090,7 @@
       },
       "RecoverAttemptRequest": {
         "additionalProperties": false,
-        "properties": {
-          "sourceProfileId": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_.:-]+$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "sourceProfileId"
-        ],
+        "properties": {},
         "type": "object"
       },
       "ReviewAccountabilityRecord": {

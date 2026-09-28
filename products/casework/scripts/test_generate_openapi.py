@@ -1166,13 +1166,16 @@ class GeneratedOpenApiTests(unittest.TestCase):
             "maxLength": 128,
             "pattern": "^[!-~]+$",
         }
+        # The Registry-Source-Profile header is the only source-profile input.
         for schema_name in ("DecideRequest", "RecoverAttemptRequest"):
-            self.assertEqual(
-                profile_schema,
-                self.openapi["components"]["schemas"][schema_name]["properties"][
-                    "sourceProfileId"
-                ],
+            self.assertNotIn(
+                "sourceProfileId",
+                self.openapi["components"]["schemas"][schema_name]["properties"],
             )
+        self.assertEqual(
+            {"type": "object", "additionalProperties": False, "properties": {}},
+            self.openapi["components"]["schemas"]["RecoverAttemptRequest"],
+        )
         for rust in self.contract["operations"]:
             method = rust["method"].lower()
             path = rust["path"]

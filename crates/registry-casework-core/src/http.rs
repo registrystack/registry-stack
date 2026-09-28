@@ -317,7 +317,6 @@ pub struct SaveDraftRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecideRequest {
     pub displayed_binding: SourceBinding,
-    pub source_profile_id: String,
     pub operation: OperationName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -325,11 +324,11 @@ pub struct DecideRequest {
     pub flagged_fields: Vec<String>,
 }
 
+/// The `Registry-Source-Profile` header selects the source profile; the
+/// body is a closed empty object.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RecoverAttemptRequest {
-    pub source_profile_id: String,
-}
+pub struct RecoverAttemptRequest {}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

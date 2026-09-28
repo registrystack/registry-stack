@@ -349,6 +349,25 @@ class TypingContractTests(unittest.TestCase):
         ):
             self.assertIn(decision_name, classes)
 
+    def test_decide_and_recover_bodies_leave_the_source_profile_to_the_header(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        classes = {
+            node.name: node
+            for node in module.body
+            if isinstance(node, ast.ClassDef)
+        }
+
+        def fields(name: str) -> set[str]:
+            return {
+                node.target.id
+                for node in classes[name].body
+                if isinstance(node, ast.AnnAssign)
+            }
+
+        self.assertEqual(fields("RecoverAttemptRequest"), set())
+        self.assertEqual(fields("DecideRequest"), {"displayedBinding", "operation"})
+        self.assertEqual(fields("_DecideRequestOptional"), {"reason", "flaggedFields"})
+
 
 if __name__ == "__main__":
     unittest.main()
