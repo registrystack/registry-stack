@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:32a6c4602351fccb41faeff834e3c5886ba9018a7336ebb3c30c2d8c7d2022a9",
+      "sha256:579d38307df1ad88aa83af5e3073ad8f5023fd75c7a272dbae3e51dc556defdb",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -64,7 +64,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9"
+    "definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f"
   },
   "policies": [
     {
@@ -87,8 +87,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.35.0 Linux AMD64 Relay local reproduction is exact rehearsal run 36342916528 at source 545a9afc4840b1305c1641e36342c257640308fc, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-27; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
-      "reviewed_at": "2026-09-27",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.36.0 Linux AMD64 Relay local reproduction is exact rehearsal run 36494611865 at source 022b88e987db5e4779164ad7bf33df0201c48bea, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-28; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "reviewed_at": "2026-09-28",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -105,14 +105,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9",
-      "component_layer_id": "sha256:32a6c4602351fccb41faeff834e3c5886ba9018a7336ebb3c30c2d8c7d2022a9",
+      "runtime_definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f",
+      "component_layer_id": "sha256:579d38307df1ad88aa83af5e3073ad8f5023fd75c7a272dbae3e51dc556defdb",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:356899e509f3241064862d919eff941e6b406575ae45ecd493814ac94df17395",
-        "reference_source_revision": "545a9afc4840b1305c1641e36342c257640308fc",
+        "reference_image_digest": "sha256:5aebf959e4e64d7516048a43d6897951252a717673662cba0fe89ecb2195b248",
+        "reference_source_revision": "022b88e987db5e4779164ad7bf33df0201c48bea",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9",
+        "runtime_definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -132,10 +132,10 @@
           },
           {
             "path": "/usr/local/bin/relay",
-            "sha256": "sha256:34fbee88b513832088919ee1998a31d68d44ec07ce34438bb2415fac1cf08610"
+            "sha256": "sha256:1266ab67b668f6e4a2df169879404c95cf3680de64bf87a531e3d5c1c241e3aa"
           }
         ],
-        "definition_digest": "sha256:4a4e866cb989b4dcf0e2d8ea9abc36cd5aedfa47de16936e3343028fae1aff3f"
+        "definition_digest": "sha256:ba69f54d6fb03be125ab92a84e91b54196001a177c1cd32875f783edfa71b7a2"
       }
     },
     {
@@ -145,8 +145,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.35.0 Linux AMD64 Relay local reproduction is exact rehearsal run 36342916528 at source 545a9afc4840b1305c1641e36342c257640308fc, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-27; Debian fixes the issue only in forky and sid.",
-      "reviewed_at": "2026-09-27",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.36.0 Linux AMD64 Relay local reproduction is exact rehearsal run 36494611865 at source 022b88e987db5e4779164ad7bf33df0201c48bea, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-28; Debian fixes the issue only in forky and sid.",
+      "reviewed_at": "2026-09-28",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -163,14 +163,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9",
-      "component_layer_id": "sha256:32a6c4602351fccb41faeff834e3c5886ba9018a7336ebb3c30c2d8c7d2022a9",
+      "runtime_definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f",
+      "component_layer_id": "sha256:579d38307df1ad88aa83af5e3073ad8f5023fd75c7a272dbae3e51dc556defdb",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:356899e509f3241064862d919eff941e6b406575ae45ecd493814ac94df17395",
-        "reference_source_revision": "545a9afc4840b1305c1641e36342c257640308fc",
+        "reference_image_digest": "sha256:5aebf959e4e64d7516048a43d6897951252a717673662cba0fe89ecb2195b248",
+        "reference_source_revision": "022b88e987db5e4779164ad7bf33df0201c48bea",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9",
+        "runtime_definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -190,10 +190,10 @@
           },
           {
             "path": "/usr/local/bin/relay",
-            "sha256": "sha256:34fbee88b513832088919ee1998a31d68d44ec07ce34438bb2415fac1cf08610"
+            "sha256": "sha256:1266ab67b668f6e4a2df169879404c95cf3680de64bf87a531e3d5c1c241e3aa"
           }
         ],
-        "definition_digest": "sha256:4a4e866cb989b4dcf0e2d8ea9abc36cd5aedfa47de16936e3343028fae1aff3f"
+        "definition_digest": "sha256:ba69f54d6fb03be125ab92a84e91b54196001a177c1cd32875f783edfa71b7a2"
       }
     },
     {
@@ -203,8 +203,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.35.0 Linux AMD64 Relay local reproduction is exact rehearsal run 36342916528 at source 545a9afc4840b1305c1641e36342c257640308fc, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-27; Debian still lists no fixed zlib package for Trixie.",
-      "reviewed_at": "2026-09-27",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.36.0 Linux AMD64 Relay local reproduction is exact rehearsal run 36494611865 at source 022b88e987db5e4779164ad7bf33df0201c48bea, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-28; Debian still lists no fixed zlib package for Trixie.",
+      "reviewed_at": "2026-09-28",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -221,14 +221,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9",
+      "runtime_definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:356899e509f3241064862d919eff941e6b406575ae45ecd493814ac94df17395",
-        "reference_source_revision": "545a9afc4840b1305c1641e36342c257640308fc",
+        "reference_image_digest": "sha256:5aebf959e4e64d7516048a43d6897951252a717673662cba0fe89ecb2195b248",
+        "reference_source_revision": "022b88e987db5e4779164ad7bf33df0201c48bea",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b55a5e893a6656c02342857eb85e104bd4f9713b448a44a9dcd57197e3d328c9",
+        "runtime_definition_digest": "sha256:9b8ef39976bce269e81283e08b4154c18fa06d64ddfd202253872185a491749f",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -248,10 +248,10 @@
           },
           {
             "path": "/usr/local/bin/relay",
-            "sha256": "sha256:34fbee88b513832088919ee1998a31d68d44ec07ce34438bb2415fac1cf08610"
+            "sha256": "sha256:1266ab67b668f6e4a2df169879404c95cf3680de64bf87a531e3d5c1c241e3aa"
           }
         ],
-        "definition_digest": "sha256:4a4e866cb989b4dcf0e2d8ea9abc36cd5aedfa47de16936e3343028fae1aff3f"
+        "definition_digest": "sha256:ba69f54d6fb03be125ab92a84e91b54196001a177c1cd32875f783edfa71b7a2"
       }
     }
   ]

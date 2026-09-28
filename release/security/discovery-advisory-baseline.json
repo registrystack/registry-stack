@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:84d05115cda35c19fd92209ee841ad5b1bfd3b69da5639bdac0e498b58b8d35a"
+      "sha256:042f8f69118c661950b5901101736d4a07fd496f4d9e06db451fbcf832d99577"
     ],
     "config": {
       "user": "65532",
@@ -50,7 +50,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4"
+    "definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1"
   },
   "policies": [
     {
@@ -73,8 +73,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.35.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36342916528 at source 545a9afc4840b1305c1641e36342c257640308fc, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-27; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
-      "reviewed_at": "2026-09-27",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.36.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36494611865 at source 022b88e987db5e4779164ad7bf33df0201c48bea, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-28; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "reviewed_at": "2026-09-28",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -91,14 +91,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4",
-      "component_layer_id": "sha256:84d05115cda35c19fd92209ee841ad5b1bfd3b69da5639bdac0e498b58b8d35a",
+      "runtime_definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1",
+      "component_layer_id": "sha256:042f8f69118c661950b5901101736d4a07fd496f4d9e06db451fbcf832d99577",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0071c5043c0e6ab67377901ac81bde5c70c4553427c53a13179f151edbce5f08",
-        "reference_source_revision": "545a9afc4840b1305c1641e36342c257640308fc",
+        "reference_image_digest": "sha256:ab8f064d9904e01e0ba1255c053d6922b8ab347c32d54e560a8a0551d905c04f",
+        "reference_source_revision": "022b88e987db5e4779164ad7bf33df0201c48bea",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4",
+        "runtime_definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -118,10 +118,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:dbb1089a8a8ef64f28986d8868bad88b8f161dc96cf5b07c53216a65ee8a4431"
+            "sha256": "sha256:3fa9f5588060a9bf73880d2c748182656141737b6446302de3935cf7672164fc"
           }
         ],
-        "definition_digest": "sha256:01b31f62e1832cbd0a8e3695429bdb043bfe2d7eaadff3b7b508f019fb9c2043"
+        "definition_digest": "sha256:9b0dd112f98dff9d517a9f1ba4c2e238d84dcb9e67d342aba1a0f6e91a2b318c"
       }
     },
     {
@@ -131,8 +131,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.35.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36342916528 at source 545a9afc4840b1305c1641e36342c257640308fc, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-27; Debian fixes the issue only in forky and sid.",
-      "reviewed_at": "2026-09-27",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.36.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36494611865 at source 022b88e987db5e4779164ad7bf33df0201c48bea, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-28; Debian fixes the issue only in forky and sid.",
+      "reviewed_at": "2026-09-28",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -149,14 +149,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4",
-      "component_layer_id": "sha256:84d05115cda35c19fd92209ee841ad5b1bfd3b69da5639bdac0e498b58b8d35a",
+      "runtime_definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1",
+      "component_layer_id": "sha256:042f8f69118c661950b5901101736d4a07fd496f4d9e06db451fbcf832d99577",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0071c5043c0e6ab67377901ac81bde5c70c4553427c53a13179f151edbce5f08",
-        "reference_source_revision": "545a9afc4840b1305c1641e36342c257640308fc",
+        "reference_image_digest": "sha256:ab8f064d9904e01e0ba1255c053d6922b8ab347c32d54e560a8a0551d905c04f",
+        "reference_source_revision": "022b88e987db5e4779164ad7bf33df0201c48bea",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4",
+        "runtime_definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -176,10 +176,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:dbb1089a8a8ef64f28986d8868bad88b8f161dc96cf5b07c53216a65ee8a4431"
+            "sha256": "sha256:3fa9f5588060a9bf73880d2c748182656141737b6446302de3935cf7672164fc"
           }
         ],
-        "definition_digest": "sha256:01b31f62e1832cbd0a8e3695429bdb043bfe2d7eaadff3b7b508f019fb9c2043"
+        "definition_digest": "sha256:9b0dd112f98dff9d517a9f1ba4c2e238d84dcb9e67d342aba1a0f6e91a2b318c"
       }
     },
     {
@@ -189,8 +189,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.35.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36342916528 at source 545a9afc4840b1305c1641e36342c257640308fc, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-27; Debian still lists no fixed zlib package for Trixie.",
-      "reviewed_at": "2026-09-27",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.36.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36494611865 at source 022b88e987db5e4779164ad7bf33df0201c48bea, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-28; Debian still lists no fixed zlib package for Trixie.",
+      "reviewed_at": "2026-09-28",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -207,14 +207,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4",
+      "runtime_definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0071c5043c0e6ab67377901ac81bde5c70c4553427c53a13179f151edbce5f08",
-        "reference_source_revision": "545a9afc4840b1305c1641e36342c257640308fc",
+        "reference_image_digest": "sha256:ab8f064d9904e01e0ba1255c053d6922b8ab347c32d54e560a8a0551d905c04f",
+        "reference_source_revision": "022b88e987db5e4779164ad7bf33df0201c48bea",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:f4eda18f671b09a25aab5e95fe3adfd96129413ca26feb23517260f652a2cdf4",
+        "runtime_definition_digest": "sha256:479947848345b349a5bba716d4856ddaa49db1a0cbae3544a36082b795380ae1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -234,10 +234,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:dbb1089a8a8ef64f28986d8868bad88b8f161dc96cf5b07c53216a65ee8a4431"
+            "sha256": "sha256:3fa9f5588060a9bf73880d2c748182656141737b6446302de3935cf7672164fc"
           }
         ],
-        "definition_digest": "sha256:01b31f62e1832cbd0a8e3695429bdb043bfe2d7eaadff3b7b508f019fb9c2043"
+        "definition_digest": "sha256:9b0dd112f98dff9d517a9f1ba4c2e238d84dcb9e67d342aba1a0f6e91a2b318c"
       }
     }
   ]
