@@ -249,6 +249,13 @@ pub struct RuntimeConfig {
 /// the Base Registry Engine applies to its own deployment identifiers.
 pub const MAX_DATABASE_ID_BYTES: usize = 256;
 
+/// The `identity.databaseId` grammar as a JSON Schema pattern: no control
+/// character, and no leading or trailing Unicode whitespace. The schema's
+/// `maxLength` counts characters, so the byte bound
+/// [`MAX_DATABASE_ID_BYTES`] is enforced only when the document is loaded.
+#[cfg(feature = "schema")]
+const DATABASE_ID_PATTERN: &str = r"^[^\u0000-\u001f\u007f-\u009f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000](?:[^\u0000-\u001f\u007f-\u009f]*[^\u0000-\u001f\u007f-\u009f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000])?$";
+
 /// The logical identity of the database this deployment activates packages
 /// in. It is chosen by the operator (for example `casework-production`) and
 /// never derived from a URL or a PostgreSQL database name. The first
@@ -258,7 +265,10 @@ pub const MAX_DATABASE_ID_BYTES: usize = 256;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityConfig {
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = MAX_DATABASE_ID_BYTES)))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAX_DATABASE_ID_BYTES), regex(pattern = DATABASE_ID_PATTERN))
+    )]
     pub database_id: String,
 }
 
