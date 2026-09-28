@@ -11749,12 +11749,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12038,12 +12041,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12080,44 +12086,15 @@
               }
             }
           },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "410": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
                 }
               }
             },
-            "description": "Problem response: idempotency.expired, review.result-expired",
+            "description": "Problem response: review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12133,43 +12110,6 @@
               }
             },
             "description": "Problem response: request.body-too-large",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12349,12 +12289,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12395,18 +12338,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                 }
               }
             },
-            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
+            "description": "Problem response: idempotency.key-reused",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12469,18 +12405,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                 }
               }
             },
-            "description": "Problem response: request.unprocessable, review.initiator-required",
+            "description": "Problem response: request.unprocessable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13563,12 +13492,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13598,28 +13530,6 @@
               }
             }
           },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "410": {
             "description": "The retained result has expired.",
             "headers": {
@@ -13637,43 +13547,6 @@
               }
             },
             "description": "Problem response: request.body-too-large",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13842,27 +13715,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
-                }
-              }
-            },
-            "description": "Problem response: work-item.not-visible",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13884,44 +13745,15 @@
               }
             }
           },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "410": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
                 }
               }
             },
-            "description": "Problem response: idempotency.expired, review.result-expired",
+            "description": "Problem response: review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13937,43 +13769,6 @@
               }
             },
             "description": "Problem response: request.body-too-large",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
