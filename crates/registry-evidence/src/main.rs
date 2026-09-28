@@ -65,7 +65,7 @@ use registry_evidence::{
         HolderBoundPresentationPolicyDocument, VerificationError,
     },
 };
-use registry_platform_audit::{require_audit_under, PersistentRootFault};
+use registry_platform_audit::{require_audit_under, AuditError, PersistentRootFault};
 use registry_platform_config::SecretProvidersConfig;
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
@@ -769,6 +769,15 @@ const VERIFY_MALFORMED: CliError = CliError("stored response verification failed
 const LOCAL_RELYING_PROCEDURE_FAILED: CliError =
     CliError("local relying procedure preparation failed");
 const LOCAL_AUDIT_FAILED: CliError = CliError("local audit inspection failed");
+/// The closed failure classes of local audit inspection that name their
+/// cause. Each is fixed text, so `evidencectl` can tell them apart without
+/// ever echoing what the process wrote.
+const LOCAL_AUDIT_INVALID_ENTRY: CliError =
+    CliError("local audit inspection failed: an entry is not well formed");
+const LOCAL_AUDIT_WRITER_RUNNING: CliError =
+    CliError("local audit inspection failed: a writer still holds the audit file");
+const LOCAL_AUDIT_REQUEST_BATCH: CliError =
+    CliError("local audit inspection failed: the last operation is a request batch");
 /// Exit status, with nothing written, for a stopped local chain that verified
 /// and retains no operation. It is a verified answer, not a failure, so it
 /// stays apart from the one collapsed failure class.
@@ -860,8 +869,8 @@ fn write_canonical_json_line<T: serde::Serialize>(
 /// Inspect the last local audit operation only after the writer has stopped.
 ///
 /// The reader takes the audit destination lock, so it refuses while a server
-/// still writes. Every failure is deliberately collapsed to one value-free
-/// class. Retained files that read and hold no operation exit with their own
+/// still writes. Every failure is reported as one of a few fixed, value-free
+/// classes. Retained files that read and hold no operation exit with their own
 /// status. The view is written only after every retained file and its native
 /// entries have parsed, so stdout can never contain a partial operation.
 /// A `stdout` destination retains nothing locally and is refused.
@@ -882,10 +891,27 @@ fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, C
         Err(EvidenceAuditError::NoOperation) => {
             return Ok(ExitCode::from(LOCAL_AUDIT_NO_OPERATION_EXIT_CODE))
         }
-        Err(_) => return Err(LOCAL_AUDIT_FAILED.into()),
+        Err(error) => return Err(local_audit_failure(&error).into()),
     };
     write_canonical_json_line(&view, LOCAL_AUDIT_FAILED)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// The closed class a local audit inspection failure reports. Only causes an
+/// operator can act on differently are named; everything else is the one
+/// collapsed class.
+fn local_audit_failure(error: &EvidenceAuditError) -> CliError {
+    match error {
+        EvidenceAuditError::RequestBatchOperation => LOCAL_AUDIT_REQUEST_BATCH,
+        EvidenceAuditError::InvalidEvent => LOCAL_AUDIT_INVALID_ENTRY,
+        EvidenceAuditError::Audit(AuditError::Io(io))
+            if io.kind() == std::io::ErrorKind::InvalidData =>
+        {
+            LOCAL_AUDIT_INVALID_ENTRY
+        }
+        EvidenceAuditError::Audit(AuditError::SinkLocked { .. }) => LOCAL_AUDIT_WRITER_RUNNING,
+        _ => LOCAL_AUDIT_FAILED,
+    }
 }
 
 /// The one stored response an operator named, and the format its bytes are
@@ -5282,6 +5308,40 @@ mod tests {
         assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
         assert_eq!(artifact.artifact(), "evidence.yaml");
         assert_eq!(artifact.fault().cause(), "URI is invalid");
+    }
+
+    #[test]
+    fn local_audit_failures_report_closed_classes_without_values() {
+        assert_eq!(
+            local_audit_failure(&EvidenceAuditError::RequestBatchOperation).0,
+            "local audit inspection failed: the last operation is a request batch"
+        );
+        assert_eq!(
+            local_audit_failure(&EvidenceAuditError::InvalidEvent).0,
+            "local audit inspection failed: an entry is not well formed"
+        );
+        assert_eq!(
+            local_audit_failure(&EvidenceAuditError::Audit(AuditError::Io(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "person-123 canary"),
+            )))
+            .0,
+            "local audit inspection failed: an entry is not well formed"
+        );
+        assert_eq!(
+            local_audit_failure(&EvidenceAuditError::Audit(AuditError::SinkLocked {
+                path: "/private/audit.jsonl.lock".to_owned(),
+                role: None,
+            }))
+            .0,
+            "local audit inspection failed: a writer still holds the audit file"
+        );
+        assert_eq!(
+            local_audit_failure(&EvidenceAuditError::Audit(AuditError::Io(
+                std::io::Error::other("person-123 canary"),
+            )))
+            .0,
+            "local audit inspection failed"
+        );
     }
 
     #[test]

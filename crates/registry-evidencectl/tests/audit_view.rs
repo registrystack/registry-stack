@@ -299,7 +299,7 @@ fn closed_parser_alias_mapping_and_metadata_fail_without_partial_output() {
     cases.push(("unknown event field", unknown_event));
 
     let mut schema = base.clone();
-    schema["schema"] = json!("registry.evidence.local-audit-operation/v2");
+    schema["schema"] = json!("registry.evidence.local-audit-operation/v1");
     cases.push(("schema", schema));
 
     let mut requirement = base.clone();
@@ -419,6 +419,182 @@ fn malformed_or_mixed_refusal_views_fail_without_partial_output() {
     }
 }
 
+/// An operation that ends in a denial or a transient failure after its access
+/// is a complete, valid outcome, rendered rather than refused.
+#[test]
+fn a_denial_or_transient_failure_after_access_renders_its_outcome() {
+    let fixture = Fixture::new();
+    for (phase, decision, line) in [
+        (
+            "transient-failure",
+            "dependency-failure",
+            "TRANSIENT FAILURE reason=dependency_failure",
+        ),
+        (
+            "transient-failure",
+            "evaluation-failure",
+            "TRANSIENT FAILURE reason=evaluation_failure",
+        ),
+        (
+            "transient-failure",
+            "signing-failure",
+            "TRANSIENT FAILURE reason=signing_failure",
+        ),
+        ("denial", "no-match", "DISCLOSURE DENIED reason=no_match"),
+        ("denial", "ambiguous", "DISCLOSURE DENIED reason=ambiguous"),
+        (
+            "denial",
+            "unresolved",
+            "DISCLOSURE DENIED reason=unresolved",
+        ),
+        (
+            "denial",
+            "fact-missing",
+            "DISCLOSURE DENIED reason=fact_missing",
+        ),
+    ] {
+        fixture.write_core_json(&terminal_view(phase, decision));
+        let output = fixture.show();
+        assert_success(&output);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n{line}\n"),
+            "{phase} {decision}"
+        );
+    }
+
+    let mut cases = vec![
+        (
+            "a phase paired with another phase's decision",
+            terminal_view("transient-failure", "no-match"),
+        ),
+        (
+            "a denial paired with a failure decision",
+            terminal_view("denial", "dependency-failure"),
+        ),
+    ];
+    let mut release_fields = terminal_view("denial", "no-match");
+    release_fields["events"][1]["evidenceId"] = json!("urn:token-canary:evidence:person-123");
+    cases.push(("a denial carrying release fields", release_fields));
+    let mut without_access = terminal_view("transient-failure", "dependency-failure");
+    without_access["events"]
+        .as_array_mut()
+        .expect("events")
+        .remove(0);
+    cases.push(("a failure without its access", without_access));
+    for (label, view) in cases {
+        fixture.write_core_json(&view);
+        assert_closed_failure(&fixture.show(), label);
+    }
+}
+
+/// A phase or decision this version does not know is named as such rather
+/// than reported as a history Evidence could not read.
+#[test]
+fn an_outcome_this_version_does_not_recognize_is_named() {
+    let fixture = Fixture::new();
+    for view in [
+        terminal_view("later-phase", "dependency-failure"),
+        terminal_view("transient-failure", "later-decision"),
+    ] {
+        fixture.write_core_json(&view);
+        let output = fixture.show();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty(), "partial output");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            message.starts_with("error[evidence.audit.unrecognized-outcome]"),
+            "{message}"
+        );
+        for protected in ["person-123", "token-canary", "later-"] {
+            assert!(!message.contains(protected), "leaked {protected}");
+        }
+    }
+}
+
+/// Earlier operations that hold an access entry and no outcome, such as a
+/// request the process stopped during, are counted after the view.
+#[test]
+fn earlier_unmatched_operations_are_counted_after_the_view() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    view["unmatchedEarlierOperations"] = json!(2);
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             DISCLOSURE RELEASED is_adult\n\
+             EARLIER OPERATIONS WITHOUT AN OUTCOME count=2\n"
+        )
+    );
+
+    let mut refusal = refusal_view();
+    refusal["unmatchedEarlierOperations"] = json!(1);
+    fixture.write_core_json(&refusal);
+    let output = fixture.show();
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .ends_with("EARLIER OPERATIONS WITHOUT AN OUTCOME count=1\n"));
+
+    let mut missing = successful_view();
+    missing
+        .as_object_mut()
+        .expect("view")
+        .remove("unmatchedEarlierOperations");
+    fixture.write_core_json(&missing);
+    assert_closed_failure(&fixture.show(), "missing unmatched count");
+}
+
+/// The core names a few failures with fixed lines on stderr. Each becomes its
+/// own refusal; the line itself is never echoed, and anything else the core
+/// wrote stays the closed inspection failure.
+#[test]
+fn named_core_failures_become_their_own_refusals() {
+    let fixture = Fixture::new();
+    fixture.write_core_json(&successful_view());
+    for (line, code) in [
+        (
+            "evidence: local audit inspection failed: the last operation is a request batch\n",
+            "evidence.audit.request-batch",
+        ),
+        (
+            "evidence: local audit inspection failed: an entry is not well formed\n",
+            "evidence.audit.history-invalid",
+        ),
+        (
+            "evidence: local audit inspection failed: a writer still holds the audit file\n",
+            "evidence.audit.writer-running",
+        ),
+    ] {
+        fs::write(fixture.evidence.with_extension("stderr"), line).expect("core stderr");
+        let output = fixture.show();
+        assert_eq!(output.status.code(), Some(1), "{code}");
+        assert!(output.stdout.is_empty(), "{code}");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.starts_with(&format!("error[{code}]")), "{message}");
+        assert!(!message.contains("evidence: local audit"), "{message}");
+
+        let output = fixture.show_json();
+        assert_eq!(output.status.code(), Some(1), "{code}");
+        assert!(output.stderr.is_empty(), "{code}");
+        let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON refusal");
+        assert_eq!(report["diagnostics"][0]["code"], code);
+        assert!(report["diagnostics"][0].get("cause").is_none());
+    }
+
+    for line in [
+        "evidence: local audit inspection failed\n",
+        "evidence: local audit inspection failed: an entry is not well formed person-123\n",
+        "person-123 token-canary source-canary\n",
+    ] {
+        fs::write(fixture.evidence.with_extension("stderr"), line).expect("core stderr");
+        assert_closed_failure(&fixture.show(), line);
+    }
+}
+
 #[test]
 fn core_failure_oversized_output_and_non_stopped_state_are_value_free() {
     let fixture = Fixture::new();
@@ -446,8 +622,9 @@ fn core_failure_oversized_output_and_non_stopped_state_are_value_free() {
 
 fn successful_view() -> Value {
     json!({
-        "schema": "registry.evidence.local-audit-operation/v1",
+        "schema": "registry.evidence.local-audit-operation/v2",
         "operation": "person-123-token-canary",
+        "unmatchedEarlierOperations": 0,
         "events": [
             {
                 "occurredAt": "2026-08-04T00:00:01.000Z",
@@ -475,10 +652,23 @@ fn successful_view() -> Value {
     })
 }
 
+/// The successful view with its release replaced by a terminal `phase` and
+/// `decision`, which carry no release fields.
+fn terminal_view(phase: &str, decision: &str) -> Value {
+    let mut view = successful_view();
+    let terminal = view["events"][1].as_object_mut().expect("terminal event");
+    terminal.insert("phase".to_owned(), json!(phase));
+    terminal.insert("decision".to_owned(), json!(decision));
+    terminal.remove("disclosedConcepts");
+    terminal.remove("evidenceId");
+    view
+}
+
 fn refusal_view() -> Value {
     json!({
-        "schema": "registry.evidence.local-audit-operation/v1",
+        "schema": "registry.evidence.local-audit-operation/v2",
         "operation": "refused-operation-1234",
+        "unmatchedEarlierOperations": 0,
         "events": [
             {
                 "occurredAt": "2026-08-04T00:00:01.000Z",
@@ -636,7 +826,7 @@ impl Fixture {
         let evidence = temporary.path().join("evidence-stub");
         executable(
             &evidence,
-            b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nif [ -f \"$0.empty\" ]; then\n  exit 3\nfi\nif [ -f \"$0.fail\" ]; then\n  printf 'person-123 token-canary source-canary\\n' >&2\n  exit 41\nfi\ncat \"$0.output\"\n",
+            b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nif [ -f \"$0.empty\" ]; then\n  exit 3\nfi\nif [ -f \"$0.stderr\" ]; then\n  cat \"$0.stderr\" >&2\n  exit 1\nfi\nif [ -f \"$0.fail\" ]; then\n  printf 'person-123 token-canary source-canary\\n' >&2\n  exit 41\nfi\ncat \"$0.output\"\n",
         );
         Self {
             _temporary: temporary,
@@ -763,7 +953,7 @@ fn json_mode_embeds_the_validated_core_view_and_keeps_failures_value_free() {
     assert_eq!(report["status"], "complete");
     assert_eq!(
         report["operation"]["schema"],
-        "registry.evidence.local-audit-operation/v1"
+        "registry.evidence.local-audit-operation/v2"
     );
     assert_eq!(
         report["operation"]["events"].as_array().map(Vec::len),
