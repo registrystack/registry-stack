@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Write operational logs to standard error instead of standard output, so a
+  `stdout` audit destination carries audit entries alone. A collector that read
+  `scheduling` logs from standard output reads standard error instead.
+
 ## v0.35.0 - 2026-09-28
 
 - BREAKING: write audit through the shared platform audit writer instead of
