@@ -603,10 +603,15 @@ struct LockFreeAuditCase {
     expected: &'static str,
 }
 
+const TORN_LINE_SIDE_FILE_OCCUPIED: &str =
+    "evidence: runtime audit initialization failed: the audit file could not be opened: audit \
+     file has an incomplete final entry and its torn-line side file `<audit.path>.torn` \
+     already holds other bytes; archive the side file and restart\n";
+
 /// Leaving the lock to the running writer does not leave the rest of the audit
 /// boundary unchecked: a mode, a file the candidate could not write, and an
-/// active file ending in an incomplete entry each refuse as they would at
-/// `serve`.
+/// active file ending in a torn line whose side file already holds another
+/// each refuse as they would at `serve`.
 #[tokio::test]
 async fn dependency_check_without_the_audit_lock_still_refuses_an_unusable_audit_boundary() {
     use registry_evidence::audit::EvidenceAuditLog;
@@ -642,14 +647,13 @@ async fn dependency_check_without_the_audit_lock_still_refuses_an_unusable_audit
             expected: OWNER_ONLY,
         },
         LockFreeAuditCase {
-            label: "an audit file whose last entry was torn by an interrupted write",
+            label: "a torn final line whose side file already holds another",
             running_writer: false,
             break_audit: |deployment| {
                 deployment.stage_audit_file("{\"written\":\"before the interruption\"");
+                deployment.stage_torn_line_side_file("an earlier torn line");
             },
-            expected: "evidence: runtime audit initialization failed: the audit file could not \
-                       be opened: audit file has an incomplete final entry; archive it and \
-                       restart with a fresh path\n",
+            expected: TORN_LINE_SIDE_FILE_OCCUPIED,
         },
     ];
 
@@ -2361,17 +2365,16 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                        one\n",
         },
         AuditFaultCase {
-            label: "an audit file whose last entry was torn by an interrupted write",
+            label: "a torn final line whose side file already holds another",
             break_audit: |deployment| {
-                // No trailing newline: the writer's incomplete-final-entry
-                // check refuses to reopen a file it cannot prove finished its
-                // last write.
+                // No trailing newline: the writer moves the torn line to its
+                // side file at open, and never overwrites one that holds
+                // other bytes.
                 deployment.stage_audit_file("{\"written\":\"before the interruption\"");
+                deployment.stage_torn_line_side_file("an earlier torn line");
                 None
             },
-            expected: "evidence: runtime audit initialization failed: the audit file could not \
-                       be opened: audit file has an incomplete final entry; archive it and \
-                       restart with a fresh path\n",
+            expected: TORN_LINE_SIDE_FILE_OCCUPIED,
         },
         AuditFaultCase {
             label: "an audit file an earlier writer left in another format",
@@ -2495,6 +2498,50 @@ fn serve_keeps_operational_records_off_a_stdout_audit_destination() {
             "stdout carried a line that is not an audit entry: {line}"
         );
     }
+}
+
+/// A torn final line left by an interrupted write no longer blocks a restart:
+/// `serve` moves it to the owner-only side file, truncates the active file to
+/// its last complete line, and says so on stderr with the side file's path
+/// and byte count, never the torn bytes.
+#[test]
+fn serve_moves_a_torn_final_line_aside_and_starts() {
+    let port = free_port();
+    let deployment = Deployment::stage_on_port("all-definitions", port);
+    deployment.stage_acceptance_secrets();
+    let earlier = "{\"eventId\":\"5b1b5b8e-6f2b-4c1a-9b7a-6b1b5b8e6f2b\",\"schema\":\"registry.test.audit/v1\",\"time\":\"2024-01-01T00:00:00Z\",\"correlation\":\"by-an-earlier-process\",\"phase\":\"request\",\"record\":{\"written\":\"by an earlier process\"}}\n";
+    let torn = "{\"eventId\":\"torn-canary\",\"record\":{\"written\":";
+    deployment.stage_audit_file(&format!("{earlier}{torn}"));
+    deployment.seal();
+    let service = deployment.serve_capturing();
+    wait_until_ready(port);
+    let (_, stderr) = service.stop();
+    deployment.unseal();
+
+    let side = deployment.path("audit.jsonl.torn");
+    assert_eq!(fs::read_to_string(&side).expect("side file"), torn);
+    assert_eq!(
+        fs::metadata(&side).expect("side file").permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(fs::read_to_string(deployment.path("audit.jsonl"))
+        .expect("active file")
+        .starts_with(earlier));
+    let recovery = stderr
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON record"))
+        .find(|record| record["fields"]["side_file"].is_string())
+        .unwrap_or_else(|| panic!("the recovery is logged: {stderr}"));
+    assert_eq!(recovery["level"], "ERROR");
+    assert_eq!(
+        recovery["fields"]["side_file"],
+        side.display().to_string().as_str()
+    );
+    assert_eq!(recovery["fields"]["bytes"], torn.len());
+    assert!(
+        !stderr.contains("torn-canary"),
+        "the torn bytes were logged"
+    );
 }
 
 /// The staged verification key identifier, echoed by the protected header.
@@ -3663,6 +3710,13 @@ outboundTls:
 
     /// Place an audit file the service will find on start, owner-only as the
     /// writer requires. A case that is about a mode widens it afterwards.
+    fn stage_torn_line_side_file(&self, contents: &str) {
+        let path = self.path("audit.jsonl.torn");
+        fs::write(&path, contents).expect("stage torn-line side file");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("set owner-only torn-line side file mode");
+    }
+
     fn stage_audit_file(&self, contents: &str) {
         let path = self.path("audit.jsonl");
         fs::write(&path, contents).expect("stage audit file");

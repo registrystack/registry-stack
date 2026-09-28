@@ -50,7 +50,8 @@ pub const AUDIT_PATH_SEGMENT_PATTERN: &str = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[
 /// The JSON Schema pattern of a path [`FileDestination::new`] accepts: an
 /// absolute path with no `..` segment that ends in a file name, stated for
 /// runtime configuration schemas so an editor refuses what startup refuses.
-/// The file name's length limit is checked at startup only.
+/// The file name's length limit and the companion suffixes it must not end in
+/// are checked at startup only.
 pub const ABSOLUTE_AUDIT_PATH_PATTERN: &str =
     r"^/+(?:(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)/+)*(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+))$";
 
@@ -66,16 +67,29 @@ const SEQUENCE_SUFFIX: &str = ".seq";
 /// The suffix the sequence companion is written under before it is renamed
 /// into place.
 const SEQUENCE_TEMPORARY_SUFFIX: &str = ".seq.tmp";
+/// The suffix of the owner-only side file a torn final line is moved to when
+/// the writer opens, so the active file ends in a complete entry again.
+const TORN_LINE_SUFFIX: &str = ".torn";
+/// Every companion suffix the writer names after its active file, with the
+/// companion each one names, for refusals that name a collision.
+const COMPANION_SUFFIXES: [(&str, &str); 4] = [
+    (LOCK_SUFFIX, "lock"),
+    (SEQUENCE_SUFFIX, "sequence companion"),
+    (SEQUENCE_TEMPORARY_SUFFIX, "temporary sequence companion"),
+    (TORN_LINE_SUFFIX, "torn-line side file"),
+];
 /// The longest file name common filesystems accept.
 const MAX_FILE_NAME_BYTES: usize = 255;
 /// The longest active file name that leaves room for every sibling the
 /// writer names after it: a sealed segment adds `.` and the sequence digits,
-/// the longest suffix, and the lock and sequence companions add
-/// [`LOCK_SUFFIX`], [`SEQUENCE_SUFFIX`], and [`SEQUENCE_TEMPORARY_SUFFIX`].
+/// the longest suffix, and the lock, sequence, and torn-line companions add
+/// [`LOCK_SUFFIX`], [`SEQUENCE_SUFFIX`], [`SEQUENCE_TEMPORARY_SUFFIX`], and
+/// [`TORN_LINE_SUFFIX`].
 const MAX_AUDIT_FILE_NAME_BYTES: usize = MAX_FILE_NAME_BYTES - 1 - SEGMENT_SEQUENCE_DIGITS;
 const _: () = assert!(LOCK_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const _: () = assert!(SEQUENCE_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const _: () = assert!(SEQUENCE_TEMPORARY_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
+const _: () = assert!(TORN_LINE_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const DETACHED_LOCK_ATTEMPTS: usize = 1024;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -281,9 +295,22 @@ pub enum AuditDestinationError {
     InvalidProcessRole,
     #[error(
         "the audit process role names a file the configured audit.path reserves: \
-         a sealed segment, the lock, or the sequence companion"
+         a sealed segment, the lock, the sequence companion, or the torn-line side file"
     )]
     ProcessRoleOverlapsStream,
+    #[error(
+        "audit.path names the {companion} of an audit stream at `{stream}`: a file name \
+         ending in `{suffix}` is reserved for it, and a writer there would rename or \
+         replace this file; choose a file name without that suffix"
+    )]
+    PathNamesReservedCompanion {
+        /// The file name of the stream whose companion the path names.
+        stream: String,
+        /// The reserved suffix the file name ends in.
+        suffix: &'static str,
+        /// The companion that suffix names.
+        companion: &'static str,
+    },
 }
 
 /// Where the writer sends entries.
@@ -343,6 +370,12 @@ impl FileDestination {
                 maximum: MAX_AUDIT_FILE_NAME_BYTES,
             });
         }
+        // A writer at the shorter name would rename its sequence companion
+        // over this file, delete it as an expired sealed segment, or take it
+        // for its lock or torn-line side file.
+        if let Some(collision) = reserved_companion_collision(name) {
+            return Err(collision);
+        }
         Ok(Self {
             path,
             rotate_bytes: DEFAULT_AUDIT_ROTATE_BYTES,
@@ -393,7 +426,8 @@ impl FileDestination {
     /// ancestor is a directory it can create it in; the directory is owned by
     /// this user and not group- or world-writable; and any existing lock
     /// companion and active file are owner-only regular files the writer can
-    /// open, and the active file's final entry is complete.
+    /// open, and the active file's final entry is complete or is a torn line
+    /// the writer would move to its side file at open.
     pub fn check_writable(&self) -> Result<(), AuditError> {
         let parent = parent(&self.path)?;
         match fs::symlink_metadata(parent) {
@@ -480,8 +514,14 @@ impl FileDestination {
                     .custom_flags(open_flags())
                     .open(&self.path)
                     .map_err(AuditError::Io)?;
-                require_complete_final_entry(&active)?;
-                require_current_entry_format(&active)
+                let torn = torn_tail(&active)?;
+                require_current_entry_format(&active, torn.as_ref())?;
+                match torn {
+                    Some(torn) => {
+                        side_file_holds(&AuditSegments::new(&self.path), &torn).map(|_| ())
+                    }
+                    None => Ok(()),
+                }
             }
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(AuditError::Io(error)),
@@ -1517,8 +1557,13 @@ impl SegmentedFile {
 
         let active = open_append(&path)?;
         validate_active_file(&active)?;
-        require_complete_final_entry(&active)?;
-        require_current_entry_format(&active)?;
+        // A file in another format is refused before a torn line moves, so
+        // recovery never touches a file this writer did not produce.
+        let torn = torn_tail(&active)?;
+        require_current_entry_format(&active, torn.as_ref())?;
+        if let Some(torn) = torn {
+            recover_torn_tail(&AuditSegments::new(&path), &active, torn)?;
+        }
         active.sync_all().map_err(AuditError::Io)?;
         // An earlier open may have crashed after creating the lock or active
         // file but before syncing their names, so every open syncs them.
@@ -1528,10 +1573,7 @@ impl SegmentedFile {
         // sealed name appears, so a restart after retention or a shipper
         // removed every sealed segment cannot reuse a name already sealed.
         let recorded = read_next_sequence(&path)?;
-        let scanned = sealed_segments(&path)?
-            .pop()
-            .map_or(1, |(sequence, _)| sequence.saturating_add(1));
-        let next_sequence = recorded.map_or(scanned, |recorded| recorded.max(scanned));
+        let next_sequence = AuditSegments::new(&path).next_sequence()?;
         if next_sequence > recorded.unwrap_or(1) {
             write_next_sequence(&path, next_sequence)?;
         }
@@ -1909,24 +1951,11 @@ fn apply_retention(path: &Path, retain: Duration) -> Result<(), AuditError> {
         return Ok(());
     };
     let mut removed = false;
-    for (_, sealed) in sealed_segments(path)? {
+    for sealed in AuditSegments::new(path).sealed(usize::MAX)? {
+        let sealed = sealed.path;
         let metadata = fs::symlink_metadata(&sealed).map_err(AuditError::Io)?;
         if !metadata.is_file() {
             continue;
-        }
-        // A sealed segment never has a lock companion; a file that does is
-        // the active file of another stream configured at this name. A lock
-        // name past the file-name limit cannot exist.
-        let lock = lock_path(&sealed);
-        if lock
-            .file_name()
-            .is_some_and(|name| name.len() <= MAX_FILE_NAME_BYTES)
-        {
-            match fs::symlink_metadata(&lock) {
-                Ok(_) => continue,
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(AuditError::Io(error)),
-            }
         }
         if metadata.modified().map_err(AuditError::Io)? < cutoff {
             #[cfg(test)]
@@ -1956,17 +1985,136 @@ fn next_sequence(sequence: u64) -> Result<u64, AuditError> {
         .ok_or_else(|| AuditError::Io(io::Error::other("audit file sequence is exhausted")))
 }
 
-/// Sealed files, oldest first.
-fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
-    let mut sealed = Vec::new();
-    for entry in fs::read_dir(parent(path)?).map_err(AuditError::Io)? {
-        let candidate = entry.map_err(AuditError::Io)?.path();
-        if let Some(sequence) = segment_sequence(path, &candidate) {
-            sealed.push((sequence, candidate));
-        }
+/// The names a file destination's writer owns beside its active file: sealed
+/// segments `<path>.<8 digits>`, the lock `<path>.lock`, the sequence
+/// companion `<path>.seq` and its temporary `<path>.seq.tmp`, and the
+/// torn-line side file `<path>.torn`.
+///
+/// It is read-only: it names and lists files and never creates, renames, or
+/// deletes one, so tooling that inspects a stopped stream reads the same
+/// namespace the writer manages.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditSegments {
+    path: PathBuf,
+}
+
+/// One sealed segment of an [`AuditSegments`] namespace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SealedSegment {
+    /// The eight-digit sequence rotation sealed it under.
+    pub sequence: u64,
+    /// `<path>.<sequence>`.
+    pub path: PathBuf,
+}
+
+impl AuditSegments {
+    /// The namespace of the active file at `path`.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
     }
-    sealed.sort_unstable_by_key(|(sequence, _)| *sequence);
-    Ok(sealed)
+
+    /// The active file.
+    #[must_use]
+    pub fn active(&self) -> &Path {
+        &self.path
+    }
+
+    /// The single-writer lock companion, `<path>.lock`.
+    #[must_use]
+    pub fn lock(&self) -> PathBuf {
+        lock_path(&self.path)
+    }
+
+    /// The companion recording the next sealed-segment sequence, `<path>.seq`.
+    #[must_use]
+    pub fn sequence(&self) -> PathBuf {
+        sequence_path(&self.path)
+    }
+
+    /// The owner-only side file a torn final line is moved to at open,
+    /// `<path>.torn`.
+    #[must_use]
+    pub fn torn_line(&self) -> PathBuf {
+        companion_path(&self.path, TORN_LINE_SUFFIX)
+    }
+
+    /// The sealed segment for `sequence`, `<path>.<8 digits>`.
+    #[must_use]
+    pub fn sealed_path(&self, sequence: u64) -> PathBuf {
+        segment_path(&self.path, sequence)
+    }
+
+    /// The sequence `candidate` is sealed under, if it is named as a sealed
+    /// segment of this namespace.
+    #[must_use]
+    pub fn sequence_of(&self, candidate: &Path) -> Option<u64> {
+        if candidate.parent() != self.path.parent() {
+            return None;
+        }
+        segment_sequence(&self.path, candidate)
+    }
+
+    /// Whether `candidate` is the active file or a name the writer owns
+    /// beside it.
+    #[must_use]
+    pub fn reserves(&self, candidate: &Path) -> bool {
+        reserved_by(&self.path, candidate)
+    }
+
+    /// The sealed segments present, oldest first: the order they were
+    /// written in and the order retention deletes them. A name that has a
+    /// lock companion is the active file of another stream configured at
+    /// that name, never a sealed segment, and is left out. More than
+    /// `maximum` segments is refused rather than listed partially.
+    pub fn sealed(&self, maximum: usize) -> Result<Vec<SealedSegment>, AuditError> {
+        let mut sealed = Vec::new();
+        for (sequence, path) in self.segment_names()? {
+            // A lock name past the file-name limit cannot exist.
+            let lock = lock_path(&path);
+            if lock
+                .file_name()
+                .is_some_and(|name| name.len() <= MAX_FILE_NAME_BYTES)
+            {
+                match fs::symlink_metadata(&lock) {
+                    Ok(_) => continue,
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => return Err(AuditError::Io(error)),
+                }
+            }
+            if sealed.len() == maximum {
+                return Err(AuditError::Io(io::Error::other(
+                    "audit segment count exceeds the listing bound",
+                )));
+            }
+            sealed.push(SealedSegment { sequence, path });
+        }
+        Ok(sealed)
+    }
+
+    /// The sequence the next rotation seals under: past both the one the
+    /// sequence companion records and every name in the namespace that looks
+    /// sealed, so neither retention nor a shipper removing every sealed
+    /// segment can make a restart reuse a name.
+    pub fn next_sequence(&self) -> Result<u64, AuditError> {
+        let scanned = self
+            .segment_names()?
+            .pop()
+            .map_or(1, |(sequence, _)| sequence.saturating_add(1));
+        Ok(read_next_sequence(&self.path)?.map_or(scanned, |recorded| recorded.max(scanned)))
+    }
+
+    /// Every name shaped like a sealed segment, oldest first.
+    fn segment_names(&self) -> Result<Vec<(u64, PathBuf)>, AuditError> {
+        let mut names = Vec::new();
+        for entry in fs::read_dir(parent(&self.path)?).map_err(AuditError::Io)? {
+            let candidate = entry.map_err(AuditError::Io)?.path();
+            if let Some(sequence) = segment_sequence(&self.path, &candidate) {
+                names.push((sequence, candidate));
+            }
+        }
+        names.sort_unstable_by_key(|(sequence, _)| *sequence);
+        Ok(names)
+    }
 }
 
 fn segment_sequence(path: &Path, candidate: &Path) -> Option<u64> {
@@ -1976,11 +2124,16 @@ fn segment_sequence(path: &Path, candidate: &Path) -> Option<u64> {
         .to_str()?
         .strip_prefix(active)?
         .strip_prefix('.')?;
-    if suffix.len() != SEGMENT_SEQUENCE_DIGITS || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+    sequence_suffix(suffix)
+}
+
+/// The sequence an eight-digit segment suffix, without its dot, names.
+fn sequence_suffix(digits: &str) -> Option<u64> {
+    if digits.len() != SEGMENT_SEQUENCE_DIGITS || !digits.bytes().all(|byte| byte.is_ascii_digit())
     {
         return None;
     }
-    suffix.parse().ok()
+    digits.parse().ok()
 }
 
 fn segment_path(path: &Path, sequence: u64) -> PathBuf {
@@ -2003,8 +2156,33 @@ fn companion_path(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
+/// The refusal for an active file name that a writer at a shorter name would
+/// give one of its own files: a companion, or a sealed segment.
+fn reserved_companion_collision(name: &[u8]) -> Option<AuditDestinationError> {
+    let named = |stream: &[u8], suffix: &'static str, companion: &'static str| {
+        // A bare suffix leaves no file name for the other stream.
+        (!matches!(stream, b"" | b".")).then(|| AuditDestinationError::PathNamesReservedCompanion {
+            stream: String::from_utf8_lossy(stream).into_owned(),
+            suffix,
+            companion,
+        })
+    };
+    for (suffix, companion) in COMPANION_SUFFIXES {
+        if let Some(stream) = name.strip_suffix(suffix.as_bytes()) {
+            if let Some(collision) = named(stream, suffix, companion) {
+                return Some(collision);
+            }
+        }
+    }
+    let split = name.len().checked_sub(1 + SEGMENT_SEQUENCE_DIGITS)?;
+    let (stream, suffix) = name.split_at(split);
+    let digits = std::str::from_utf8(suffix.strip_prefix(b".")?).ok()?;
+    sequence_suffix(digits)?;
+    named(stream, ".<8 digits>", "sealed segment")
+}
+
 /// Whether `candidate` is `path` or a file the writer at `path` names after
-/// it: a sealed segment or a lock or sequence companion.
+/// it: a sealed segment or a lock, sequence, or torn-line companion.
 fn reserved_by(path: &Path, candidate: &Path) -> bool {
     if candidate == path {
         return true;
@@ -2019,9 +2197,9 @@ fn reserved_by(path: &Path, candidate: &Path) -> bool {
         return false;
     };
     segment_sequence(path, candidate).is_some()
-        || [LOCK_SUFFIX, SEQUENCE_SUFFIX, SEQUENCE_TEMPORARY_SUFFIX]
+        || COMPANION_SUFFIXES
             .iter()
-            .any(|reserved| suffix == reserved.as_bytes())
+            .any(|(reserved, _)| suffix == reserved.as_bytes())
 }
 
 /// Whether two writers at `a` and `b` would name a file the other owns.
@@ -2070,32 +2248,147 @@ fn write_next_sequence(path: &Path, next: u64) -> Result<(), AuditError> {
     sync_directory(parent(path)?)
 }
 
-/// Refuse an active file whose last entry was torn by an interrupted write.
-fn require_complete_final_entry(active: &File) -> Result<(), AuditError> {
+/// The bytes an interrupted write left after the active file's last complete
+/// line, and the length that keeps every complete line.
+#[derive(Debug)]
+struct TornTail {
+    complete: u64,
+    bytes: Vec<u8>,
+}
+
+/// Find a torn final line: bytes after the last newline. A line is
+/// acknowledged only after its whole batch is written and synced, so these
+/// bytes belong to no acknowledged entry. A tail at least as long as the
+/// largest entry is not one this writer's write left, and is refused.
+fn torn_tail(active: &File) -> Result<Option<TornTail>, AuditError> {
     let length = active.metadata().map_err(AuditError::Io)?.len();
-    if length > 0 {
-        let mut last = [0];
-        active
-            .read_exact_at(&mut last, length - 1)
-            .map_err(AuditError::Io)?;
-        if last[0] != b'\n' {
+    if length == 0 {
+        return Ok(None);
+    }
+    let mut last = [0];
+    active
+        .read_exact_at(&mut last, length - 1)
+        .map_err(AuditError::Io)?;
+    if last[0] == b'\n' {
+        return Ok(None);
+    }
+    // A torn line is a strict prefix of an entry, and an entry, newline
+    // included, is at most `MAX_ENTRY_BYTES`.
+    let window = length.min(MAX_ENTRY_BYTES as u64);
+    let start = length - window;
+    #[allow(clippy::cast_possible_truncation)]
+    let mut buffer = vec![0; window as usize];
+    active
+        .read_exact_at(&mut buffer, start)
+        .map_err(AuditError::Io)?;
+    let complete = match buffer.iter().rposition(|byte| *byte == b'\n') {
+        Some(newline) => newline + 1,
+        None if start == 0 && window < MAX_ENTRY_BYTES as u64 => 0,
+        None => {
             return Err(AuditError::Io(io::Error::new(
                 ErrorKind::InvalidData,
-                "audit file has an incomplete final entry; archive it and restart with a fresh path",
-            )));
+                "audit file ends in more bytes without a newline than any entry holds; \
+                 archive it and restart with a fresh path",
+            )))
         }
+    };
+    let bytes = buffer.split_off(complete);
+    Ok(Some(TornTail {
+        complete: start + complete as u64,
+        bytes,
+    }))
+}
+
+/// Whether the torn-line side file already holds exactly `torn`'s bytes, as
+/// after a crash between copying them and truncating the active file.
+/// `false` means there is no side file. A side file holding anything else is
+/// never overwritten: it is the only copy of an earlier torn line.
+fn side_file_holds(segments: &AuditSegments, torn: &TornTail) -> Result<bool, AuditError> {
+    let side = match open_read(&segments.torn_line()) {
+        Ok(side) => side,
+        Err(AuditError::Io(error)) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    validate_active_file(&side)?;
+    let mut held = Vec::with_capacity(torn.bytes.len());
+    (&side)
+        .take(torn.bytes.len() as u64 + 1)
+        .read_to_end(&mut held)
+        .map_err(AuditError::Io)?;
+    if held != torn.bytes {
+        return Err(AuditError::Io(io::Error::new(
+            ErrorKind::AlreadyExists,
+            "audit file has an incomplete final entry and its torn-line side file \
+             `<audit.path>.torn` already holds other bytes; archive the side file and restart",
+        )));
     }
+    // The earlier run may have crashed before the copy was synced.
+    side.sync_all().map_err(AuditError::Io)?;
+    Ok(true)
+}
+
+/// Copy a torn final line to the owner-only side file, sync it and its name,
+/// then truncate the active file to its last complete line, so an entry
+/// appended after restart is never joined to the torn bytes. Only the side
+/// file's path and the byte count are logged, never the bytes.
+fn recover_torn_tail(
+    segments: &AuditSegments,
+    active: &File,
+    torn: TornTail,
+) -> Result<(), AuditError> {
+    let side = segments.torn_line();
+    let directory = parent(segments.active())?;
+    if !side_file_holds(segments, &torn)? {
+        reject_symlink(&side)?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(open_flags())
+            .open(&side)
+            .map_err(AuditError::Io)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(AuditError::Io)?;
+        (&file).write_all(&torn.bytes).map_err(AuditError::Io)?;
+        file.sync_all().map_err(AuditError::Io)?;
+    }
+    sync_directory(directory)?;
+    active.set_len(torn.complete).map_err(AuditError::Io)?;
+    active.sync_all().map_err(AuditError::Io)?;
+    let bytes = torn.bytes.len() as u64;
+    #[cfg(test)]
+    TORN_RECOVERIES.lock().expect("torn recoveries").push((
+        segments.active().to_path_buf(),
+        side.clone(),
+        bytes,
+    ));
+    tracing::error!(
+        side_file = %side.display(),
+        bytes,
+        "audit file ended in a torn final line, left by an interrupted write; its bytes were \
+         moved to an owner-only side file and the active file was truncated to its last \
+         complete line. No acknowledged entry was lost. Inspect the side file and archive it \
+         with the sealed segments"
+    );
     Ok(())
 }
+
+/// Torn-line recoveries, so a test can observe what was logged.
+#[cfg(test)]
+static TORN_RECOVERIES: StdMutex<Vec<(PathBuf, PathBuf, u64)>> = StdMutex::new(Vec::new());
 
 /// Refuse an active file whose first entry was not produced by this writer,
 /// such as a leftover journal from the pre-simplification hash-chained
 /// writer. Every entry this writer appends carries `eventId`, `schema`,
 /// `time`, `phase`, and `correlation`; an old-format entry carries none of
 /// them. Only the first line is read, bounded to the largest entry this
-/// writer accepts, since a file this writer manages never mixes formats.
-fn require_current_entry_format(active: &File) -> Result<(), AuditError> {
-    let length = active.metadata().map_err(AuditError::Io)?.len();
+/// writer accepts, since a file this writer manages never mixes formats. A
+/// torn final line is not part of the first entry the check reads.
+fn require_current_entry_format(active: &File, torn: Option<&TornTail>) -> Result<(), AuditError> {
+    let length = match torn {
+        Some(torn) => torn.complete,
+        None => active.metadata().map_err(AuditError::Io)?.len(),
+    };
     if length == 0 {
         return Ok(());
     }
@@ -2441,6 +2734,21 @@ mod tests {
         request(correlation).to_line().expect("line")
     }
 
+    /// Every name shaped like a sealed segment of `path`, oldest first.
+    fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
+        AuditSegments::new(path).segment_names()
+    }
+
+    fn recorded_torn_recoveries(path: &Path) -> Vec<(PathBuf, u64)> {
+        TORN_RECOVERIES
+            .lock()
+            .expect("torn recoveries")
+            .iter()
+            .filter(|(active, _, _)| active == path)
+            .map(|(_, side, bytes)| (side.clone(), *bytes))
+            .collect()
+    }
+
     fn lines(path: &Path) -> Vec<Value> {
         fs::read_to_string(path)
             .expect("read audit file")
@@ -2534,37 +2842,176 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
     }
 
-    #[tokio::test]
-    async fn restart_refuses_an_incomplete_final_entry_without_changing_the_file() {
-        let directory = directory();
-        let destination = file_destination(&directory);
+    /// Seed `path` with one accepted entry followed by `torn`, the part of a
+    /// later entry an interrupted write left, and return the accepted bytes.
+    async fn seed_torn_tail(destination: &FileDestination, torn: &[u8]) -> Vec<u8> {
         let path = destination.path().to_path_buf();
         let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
             .await
             .expect("open");
         writer.append(request("accepted")).await.expect("append");
         drop(writer);
-        // A failed write or process interruption can leave only part of the
-        // next entry. Restart must not join a later accepted entry to it.
+        let accepted = fs::read(&path).expect("read accepted entry");
         OpenOptions::new()
             .append(true)
             .open(&path)
-            .and_then(|mut file| file.write_all(b"{\"schema\":"))
+            .and_then(|mut file| file.write_all(torn))
             .expect("partial entry");
+        accepted
+    }
+
+    #[tokio::test]
+    async fn restart_moves_a_torn_final_line_to_an_owner_only_side_file() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        // A failed write or process interruption can leave only part of the
+        // next entry. Restart must not join a later accepted entry to it.
+        let torn = b"{\"schema\":\"registry.test.audit/v2\",\"corr";
+        let accepted = seed_torn_tail(&destination, torn).await;
+
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("a torn final line is recovered at open");
+        let side = AuditSegments::new(&path).torn_line();
+        assert_eq!(
+            side,
+            directory.path().join("audit").join("audit.jsonl.torn")
+        );
+        assert_eq!(fs::read(&side).expect("side file"), torn);
+        let mode = fs::metadata(&side).expect("side file").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(fs::read(&path).expect("active file"), accepted);
+        assert_eq!(
+            recorded_torn_recoveries(&path),
+            [(side.clone(), torn.len() as u64)]
+        );
+
+        writer.append(request("after")).await.expect("append");
+        let entries = lines(&path);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["correlation"], "accepted");
+        assert_eq!(entries[1]["correlation"], "after");
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_only_a_torn_line_is_emptied_into_the_side_file() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let torn = b"{\"eventId\":\"5b1b";
+        fs::write(&path, torn).expect("torn file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+
+        AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("a torn first line is recovered at open");
+        assert_eq!(
+            fs::read(AuditSegments::new(&path).torn_line()).expect("side"),
+            torn
+        );
+        assert!(fs::read(&path).expect("active file").is_empty());
+    }
+
+    #[tokio::test]
+    async fn restart_leaves_a_clean_file_and_creates_no_side_file() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+            .await
+            .expect("open");
+        writer.append(request("before")).await.expect("append");
+        drop(writer);
         let before = fs::read(&path).expect("read before restart");
 
+        let _writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("reopen complete stream");
+        assert_eq!(fs::read(&path).expect("read after restart"), before);
+        assert!(!AuditSegments::new(&path).torn_line().exists());
+        assert!(recorded_torn_recoveries(&path).is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_existing_side_file_is_never_overwritten() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        seed_torn_tail(&destination, b"{\"schema\":").await;
+        let side = AuditSegments::new(&path).torn_line();
+        fs::write(&side, b"an earlier torn line").expect("earlier side file");
+        fs::set_permissions(&side, fs::Permissions::from_mode(0o600)).expect("mode");
+        let before = fs::read(&path).expect("read before restart");
+
+        destination
+            .check_writable()
+            .expect_err("check refuses a side file holding other bytes");
         let error = AuditWriter::open(AuditDestination::File(destination))
             .await
-            .expect_err("incomplete final entry must refuse startup");
+            .expect_err("open refuses a side file holding other bytes");
         assert!(
-            matches!(error, AuditError::Io(ref error) if error.kind() == ErrorKind::InvalidData)
+            matches!(error, AuditError::Io(ref error) if error.kind() == ErrorKind::AlreadyExists)
         );
         assert_eq!(
             error.operator_description(),
-            "the audit file could not be opened: audit file has an incomplete final entry; \
-             archive it and restart with a fresh path"
+            "the audit file could not be opened: audit file has an incomplete final entry and \
+             its torn-line side file `<audit.path>.torn` already holds other bytes; archive the \
+             side file and restart"
+        );
+        assert_eq!(fs::read(&side).expect("side file"), b"an earlier torn line");
+        assert_eq!(fs::read(&path).expect("read after restart"), before);
+        assert!(recorded_torn_recoveries(&path).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_side_file_already_holding_the_torn_line_finishes_the_recovery() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let torn = b"{\"schema\":";
+        let accepted = seed_torn_tail(&destination, torn).await;
+        // A crash after the copy was synced but before the truncation leaves
+        // the same bytes in both places.
+        let side = AuditSegments::new(&path).torn_line();
+        fs::write(&side, torn).expect("copied side file");
+        fs::set_permissions(&side, fs::Permissions::from_mode(0o600)).expect("mode");
+
+        destination
+            .check_writable()
+            .expect("check accepts the copy");
+        AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open finishes the recovery");
+        assert_eq!(fs::read(&side).expect("side file"), torn);
+        assert_eq!(fs::read(&path).expect("active file"), accepted);
+    }
+
+    #[tokio::test]
+    async fn a_torn_tail_longer_than_any_entry_is_refused_unchanged() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        seed_torn_tail(&destination, &vec![b'x'; MAX_ENTRY_BYTES]).await;
+        let before = fs::read(&path).expect("read before restart");
+
+        destination
+            .check_writable()
+            .expect_err("check refuses a tail no write of this writer left");
+        let error = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect_err("open refuses a tail no write of this writer left");
+        assert_eq!(
+            error.operator_description(),
+            "the audit file could not be opened: audit file ends in more bytes without a newline \
+             than any entry holds; archive it and restart with a fresh path"
         );
         assert_eq!(fs::read(&path).expect("read after restart"), before);
+        assert!(!AuditSegments::new(&path).torn_line().exists());
     }
 
     #[tokio::test]
@@ -3786,7 +4233,7 @@ mod tests {
     }
 
     #[test]
-    fn check_writable_refuses_an_existing_file_with_an_incomplete_final_entry() {
+    fn check_writable_accepts_a_torn_final_line_without_changing_anything() {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
@@ -3801,7 +4248,31 @@ mod tests {
         fs::write(&path, format!("{entry}{{")).expect("torn file");
         destination
             .check_writable()
-            .expect_err("incomplete final entry");
+            .expect("a torn final line the writer would recover");
+        assert_eq!(
+            fs::read(&path).expect("active file"),
+            format!("{entry}{{").as_bytes()
+        );
+        assert!(!AuditSegments::new(&path).torn_line().exists());
+    }
+
+    #[tokio::test]
+    async fn a_torn_file_in_another_format_is_refused_before_anything_moves() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let content = "{\"envelope_id\":\"01J000000000000000000000\"}\n{\"envelope_id\"";
+        fs::write(&path, content).expect("old-format file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect_err("leftover journal with a torn tail");
+        assert_eq!(fs::read_to_string(&path).expect("active file"), content);
+        assert!(!AuditSegments::new(&path).torn_line().exists());
     }
 
     #[test]
@@ -4300,18 +4771,21 @@ mod tests {
             .create(path.parent().expect("parent"))
             .expect("audit directory");
         // A stream configured at `<path>.00000001` is an active file with its
-        // own lock companion, never a segment this stream sealed.
-        let other = FileDestination::new(segment_path(&path, 1))
-            .expect("absolute")
-            .with_retain_days(1)
-            .expect("retention");
-        let other_writer = AuditWriter::open(AuditDestination::File(other.clone()))
-            .await
-            .expect("other stream");
-        other_writer.append(request("other")).await.expect("append");
+        // own lock companion, never a segment this stream sealed. Such a path
+        // is now refused as configuration, but a directory may still hold a
+        // stream configured before that refusal.
+        let other = segment_path(&path, 1);
+        assert!(matches!(
+            FileDestination::new(&other),
+            Err(AuditDestinationError::PathNamesReservedCompanion { .. })
+        ));
+        for file in [&other, &lock_path(&other)] {
+            fs::write(file, current_format_line("other")).expect("other stream");
+            fs::set_permissions(file, fs::Permissions::from_mode(0o600)).expect("mode");
+        }
         File::options()
             .append(true)
-            .open(other.path())
+            .open(&other)
             .and_then(|handle| {
                 handle.set_modified(SystemTime::now() - Duration::from_secs(3 * SECONDS_PER_DAY))
             })
@@ -4320,10 +4794,156 @@ mod tests {
         let _writer = AuditWriter::open(AuditDestination::File(destination))
             .await
             .expect("open");
-        assert!(
-            other.path().exists(),
-            "another stream's active file deleted"
+        assert!(other.exists(), "another stream's active file deleted");
+    }
+
+    #[test]
+    fn a_path_named_like_another_streams_companion_is_refused() {
+        let directory = directory();
+        let audit = directory.path().join("audit");
+        for (name, suffix, companion) in [
+            ("events.lock", ".lock", "lock"),
+            ("events.seq", ".seq", "sequence companion"),
+            ("events.seq.tmp", ".seq.tmp", "temporary sequence companion"),
+            ("events.torn", ".torn", "torn-line side file"),
+            ("events.00000001", ".<8 digits>", "sealed segment"),
+        ] {
+            let error = FileDestination::new(audit.join(name)).expect_err(name);
+            assert_eq!(
+                error,
+                AuditDestinationError::PathNamesReservedCompanion {
+                    stream: "events".to_owned(),
+                    suffix,
+                    companion,
+                },
+                "{name}"
+            );
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "audit.path names the {companion} of an audit stream at `events`: a file \
+                     name ending in `{suffix}` is reserved for it, and a writer there would \
+                     rename or replace this file; choose a file name without that suffix"
+                )
+            );
+            assert_eq!(
+                AuditDestination::from_settings(
+                    AuditDestinationKind::File,
+                    Some(audit.join(name)),
+                    None,
+                    None,
+                ),
+                Err(error),
+                "{name}"
+            );
+        }
+        for name in [
+            "events.locks",
+            "events.0000001",
+            "events.000000001",
+            "events.tmp",
+            "events.jsonl",
+            ".lock.jsonl",
+        ] {
+            FileDestination::new(audit.join(name)).expect(name);
+        }
+    }
+
+    #[test]
+    fn a_process_role_cannot_name_the_torn_line_side_file() {
+        let directory = directory();
+        let bare = AuditDestination::File(
+            FileDestination::new(directory.path().join("audit").join("journal")).expect("file"),
         );
+        assert_eq!(
+            bare.for_process("torn"),
+            Err(AuditDestinationError::ProcessRoleOverlapsStream)
+        );
+    }
+
+    #[test]
+    fn the_segment_namespace_names_every_file_the_writer_owns() {
+        let segments = AuditSegments::new("/var/audit/events.jsonl");
+        assert_eq!(segments.active(), Path::new("/var/audit/events.jsonl"));
+        assert_eq!(segments.lock(), Path::new("/var/audit/events.jsonl.lock"));
+        assert_eq!(
+            segments.sequence(),
+            Path::new("/var/audit/events.jsonl.seq")
+        );
+        assert_eq!(
+            segments.torn_line(),
+            Path::new("/var/audit/events.jsonl.torn")
+        );
+        assert_eq!(
+            segments.sealed_path(7),
+            Path::new("/var/audit/events.jsonl.00000007")
+        );
+        assert_eq!(
+            segments.sequence_of(Path::new("/var/audit/events.jsonl.00000007")),
+            Some(7)
+        );
+        for other in [
+            "/var/audit/events.jsonl.0000007",
+            "/var/audit/events.jsonl.lock",
+            "/elsewhere/events.jsonl.00000007",
+            "/var/audit/other.jsonl.00000007",
+        ] {
+            assert_eq!(segments.sequence_of(Path::new(other)), None, "{other}");
+        }
+        for reserved in [
+            "/var/audit/events.jsonl",
+            "/var/audit/events.jsonl.lock",
+            "/var/audit/events.jsonl.seq",
+            "/var/audit/events.jsonl.seq.tmp",
+            "/var/audit/events.jsonl.torn",
+            "/var/audit/events.jsonl.00000001",
+        ] {
+            assert!(segments.reserves(Path::new(reserved)), "{reserved}");
+        }
+        assert!(!segments.reserves(Path::new("/var/audit/events.jsonl.tmp")));
+    }
+
+    #[test]
+    fn the_segment_namespace_lists_sealed_segments_oldest_first() {
+        let directory = directory();
+        let path = directory.path().join("events.jsonl");
+        let segments = AuditSegments::new(&path);
+        for name in [
+            "events.jsonl",
+            "events.jsonl.00000010",
+            "events.jsonl.00000002",
+            "events.jsonl.0000003",
+            "events.jsonl.lock",
+            "events.jsonl.torn",
+            "other.jsonl.00000001",
+            // Another stream configured at a sealed-looking name.
+            "events.jsonl.00000005",
+            "events.jsonl.00000005.lock",
+        ] {
+            fs::write(directory.path().join(name), "").expect(name);
+        }
+        let sealed = segments.sealed(usize::MAX).expect("listing");
+        assert_eq!(
+            sealed,
+            [
+                SealedSegment {
+                    sequence: 2,
+                    path: directory.path().join("events.jsonl.00000002"),
+                },
+                SealedSegment {
+                    sequence: 10,
+                    path: directory.path().join("events.jsonl.00000010"),
+                },
+            ]
+        );
+        assert_eq!(segments.sealed(2).expect("within the bound"), sealed);
+        segments.sealed(1).expect_err("over the bound");
+        // The next sequence passes every sealed-looking name, another
+        // stream's included, and the recorded one.
+        assert_eq!(segments.next_sequence().expect("next"), 11);
+        fs::write(segments.sequence(), "40\n").expect("sequence");
+        fs::set_permissions(segments.sequence(), fs::Permissions::from_mode(0o600)).expect("mode");
+        assert_eq!(segments.next_sequence().expect("next"), 40);
     }
 
     #[test]
