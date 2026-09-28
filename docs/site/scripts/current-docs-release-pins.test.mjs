@@ -35,7 +35,7 @@ const TARGET_RULES = [
     // like. Write the reader's release as `<tag>`.
     id: 'git-checkout-at-release',
     pattern: new RegExp(
-      String.raw`\bgit\s+(?:(?:-[Cc]\s+\S+|--[a-z-]+(?:=\S+)?|-[a-zA-Z])\s+)*(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:-[-a-z]+\s+)*(?:tags/)?|switch\s+(?:-[-a-z]+\s+)*(?:--detach|-d)\s+(?:-[-a-z]+\s+)*|fetch\b[^\n\`]*?\stag\s+)${RELEASE}\b`,
+      String.raw`\bgit\s+(?:(?:-[Cc]\s+\S+|--[a-z-]+(?:=\S+)?|-[a-zA-Z])\s+)*(?:clone\b[^\n\`]*?\s(?:--branch|-b)[= ]|checkout\s+(?:-[-a-z]+\s+)*|switch\s+(?:-[-a-z]+\s+)*(?:--detach|-d)\s+(?:-[-a-z]+\s+)*|fetch\b[^\n\`]*?\stag\s+)(?:(?:refs/)?tags/)?${RELEASE}\b`,
       'g',
     ),
   },
@@ -267,6 +267,8 @@ test('each release-pin rule flags its install or download target', () => {
     'git clone --depth 1 -b v0.35.0 https://github.com/registrystack/registry-stack.git',
     'git checkout v0.35.0',
     'git checkout tags/v0.35.0-rc.1',
+    'git checkout --detach refs/tags/v0.35.0',
+    'git switch --detach refs/tags/v0.35.0',
     'git checkout --detach v0.35.0',
     'git checkout -q --detach v0.35.0',
     'git switch --quiet --detach v0.35.0',
