@@ -87,7 +87,11 @@ and exactly one hard link; `openssl rand -hex 32` generates the audit key.
 `database.migrationUrlRef` supplies the operator-run migration connection.
 `schedulingctl plan` and `schedulingctl status` connect with the runtime
 credential and only read; `schedulingctl apply` connects with the migration
-credential. When the two credentials log in as different PostgreSQL roles
+credential. A `plan` whose runtime role cannot read an existing activation
+ledger, such as one rotated in after the last apply, is refused with
+`schedulingctl.activation.ledger-unreadable`, naming `schedulingctl apply
+--runtime-config FILE` to grant it, then `schedulingctl plan --runtime-config
+FILE`. When the two credentials log in as different PostgreSQL roles
 (split role mode), apply grants the runtime role USAGE on the schema,
 SELECT, INSERT, UPDATE, and DELETE on its tables, use of its sequences, and
 EXECUTE on its functions, then revokes INSERT, UPDATE, DELETE, and TRUNCATE

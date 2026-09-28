@@ -430,7 +430,13 @@ connect with the runtime credential inside a read-only transaction and write
 nothing, on an empty database too. `scheduling serve` reads the ledger with
 the runtime credential and writes no activation state: it no longer adopts
 the scheduling id or publishes the policy, which the apply does in its
-transaction.
+transaction. `plan` refuses, as `schedulingctl.activation.ledger-unreadable`
+(exit 1), a runtime role that cannot read the ledger it compares: one without
+USAGE on the schema, which would hide the ledger and read the database as
+empty, or without SELECT on `scheduling_activations` or
+`scheduling_schema_migrations`, as a rotated runtime role before apply grants
+it. The refusal names `schedulingctl apply --runtime-config FILE`, then `plan`
+again. A database with no ledger is not refused.
 
 **Role separation and the grants apply issues.** Apply compares
 `current_user` on the two connections. When they differ (split role mode)
@@ -553,8 +559,9 @@ took until apply reissues them),
 migration, naming its `ALTER DEFAULT PRIVILEGES` revoke, and a TRIGGER held
 through PUBLIC revoked from PUBLIC; the CREATE
 test shows the same for CREATE),
-`a_runtime_role_holding_the_migration_role_is_recorded_as_single`, and
-`rotating_the_runtime_role_reapplies_the_active_package`
+`a_runtime_role_holding_the_migration_role_is_recorded_as_single`,
+`rotating_the_runtime_role_reapplies_the_active_package`, and
+`plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply`
 (SCHEDULING-SEC-30; the drift test also grants UPDATE on
 `scheduling_schema_migrations`),
 `apply_refuses_the_active_package_and_a_foreign_database_without_writing`,
