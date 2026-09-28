@@ -16,9 +16,8 @@ together and need a recovery plan that covers all three. Each product restores d
 BReg restores a database and then proves it is the one instance serving the registry, Casework
 restores a database and then catches up from the BReg sources it reads, and Evidence holds no
 database at all. The procedures below link each product's own guide for the details and state
-what a restore does not bring back. The BReg and Casework logical restores are each run end to end
-by a repository test, `products/breg/scripts/test-backup-restore.sh` and
-`products/casework/scripts/test-backup-restore.sh`, on every change to their product.
+what a restore does not bring back. Continuous integration restores both BReg and Casework from a
+logical backup and checks these procedures end to end.
 
 ## Know what a database backup leaves out
 
