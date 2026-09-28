@@ -439,6 +439,9 @@ impl PostgresStore {
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
             .start()
             .await?;
+        if let Some(schema) = unreadable_ledger_in(&*transaction).await? {
+            return Err(StoreError::LedgerUnreadable { schema });
+        }
         let mut refusals = Vec::new();
 
         let active = active_activation_in(&*transaction).await?;
@@ -888,6 +891,36 @@ async fn ledger_exists(client: &impl GenericClient) -> Result<bool, StoreError> 
         )
         .await?
         .get(0))
+}
+
+/// The schema holding the activation ledger this connection's search path
+/// reaches first, when this connection's role cannot read that ledger: it
+/// lacks USAGE on the schema, which hides the ledger so the database would
+/// read as empty, or SELECT on `scheduling_activations` or
+/// `scheduling_schema_migrations`, as a rotated runtime role does before
+/// apply grants it. `pg_class` names the ledger whatever the role may use.
+async fn unreadable_ledger_in(client: &impl GenericClient) -> Result<Option<String>, StoreError> {
+    let row = client
+        .query_opt(
+            "SELECT n.nspname::text,
+               has_schema_privilege(n.oid, 'USAGE')
+               AND has_table_privilege(a.oid, 'SELECT')
+               AND (m.oid IS NULL OR has_table_privilege(m.oid, 'SELECT'))
+             FROM unnest(string_to_array(current_setting('search_path'), ','))
+               WITH ORDINALITY AS p(entry, position)
+             JOIN pg_namespace n ON n.nspname = CASE btrim(btrim(p.entry), '\"')
+               WHEN '$user' THEN current_user::text ELSE btrim(btrim(p.entry), '\"') END
+             JOIN pg_class a ON a.relnamespace = n.oid AND a.relname = 'scheduling_activations'
+             LEFT JOIN pg_class m
+               ON m.relnamespace = n.oid AND m.relname = 'scheduling_schema_migrations'
+             ORDER BY p.position
+             LIMIT 1",
+            &[],
+        )
+        .await?;
+    Ok(row
+        .filter(|row| !row.get::<_, bool>(1))
+        .map(|row| row.get(0)))
 }
 
 async fn active_activation_in(

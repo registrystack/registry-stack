@@ -1311,6 +1311,67 @@ async fn rotating_the_runtime_role_reapplies_the_active_package() {
     deployment.drop().await;
 }
 
+#[tokio::test]
+async fn plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply() {
+    let mut deployment = Deployment::split("activation_plan_rotated").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    apply(&config).expect("the package activates");
+
+    let rotated = format!("scheduling_rotated_{}", Uuid::new_v4().simple());
+    let password = Uuid::new_v4().simple().to_string();
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "CREATE ROLE {rotated} LOGIN PASSWORD '{password}'"
+        ))
+        .await
+        .unwrap();
+    deployment.roles.insert(0, rotated.clone());
+    std::env::set_var(
+        &deployment.runtime_secret,
+        scoped_url(
+            &with_login(&base_url(), &rotated, &password),
+            &deployment.schema,
+        ),
+    );
+    let planned = |config: &Path| {
+        let config = config.to_path_buf();
+        ctl(move || activation::plan(&config))
+    };
+    let expected = format!(
+        "the Scheduling runtime role cannot read the activation ledger in schema {}; run `schedulingctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `schedulingctl plan --runtime-config FILE`",
+        deployment.schema
+    );
+
+    // Without USAGE on the schema the ledger is invisible, which must not
+    // read as an empty database.
+    let error = planned(&config).expect_err("a role that cannot see the ledger is refused");
+    assert!(
+        error
+            .chain()
+            .any(|cause| cause.downcast_ref::<activation::Refusal>().is_some()),
+        "{error:#}"
+    );
+    assert!(format!("{error:#}").ends_with(&expected), "{error:#}");
+
+    // With USAGE but without SELECT on the ledger tables.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA {} TO {rotated}",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let error = planned(&config).expect_err("a role that cannot read the ledger is refused");
+    assert!(format!("{error:#}").ends_with(&expected), "{error:#}");
+
+    apply(&config).expect("the active package applies for the rotated role");
+    assert_eq!(plan(&config)["changesPending"], false);
+    deployment.drop().await;
+}
+
 /// An audit sink that accepts its first `lines` lines and refuses every
 /// later write.
 struct LimitedSink {

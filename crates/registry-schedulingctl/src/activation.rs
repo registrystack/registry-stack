@@ -178,6 +178,7 @@ pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
         StoreError::RoleModeDrift => "schedulingctl.activation.role-mode-drift",
         StoreError::SplitRoleWeakened(_) => "schedulingctl.activation.split-role-weakened",
         StoreError::NotActivated => "schedulingctl.activation.not-activated",
+        StoreError::LedgerUnreadable { .. } => "schedulingctl.activation.ledger-unreadable",
         StoreError::SchemaPending { .. } => "schedulingctl.activation.schema-pending",
         StoreError::SchemaNewer { .. } => "schedulingctl.activation.schema-newer",
         StoreError::DeploymentIdentity => "schedulingctl.activation.deployment-identity",
@@ -246,6 +247,7 @@ pub fn plan(config_path: &Path) -> Result<Value> {
                 verify_retained(&loaded, &store, &audit, &schema, deployed).await
             },
         ))
+        .map_err(refusal_or_failure)
         .context("planning the Scheduling activation")?;
     let database_id_check = match &plan.active {
         None => "initial",
