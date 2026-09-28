@@ -291,3 +291,94 @@ and need `CASEWORK_ACTIVATION_TEST_DATABASE_URL`.
 - If reading the ledger back after a refused response entry also fails, apply
   reports a generic store failure; `caseworkctl status` then shows whether the
   activation committed.
+
+## HTTP review fixes: source-profile input, empty inbox, moved-binding reads, strict JSON
+
+The change closes #1443, #1467, and #1209 on the Casework HTTP boundary
+(`crates/registry-casework/src/http.rs`, `review.rs`, `service.rs`, and the
+BReg adapter's caller read).
+
+### Which input decides the source profile
+
+`POST /v1/work-items/{itemId}/decisions` and both attempt recovery routes read
+`Registry-Source-Profile` and then required a `sourceProfileId` body member to
+repeat it. Two inputs had to agree, so a caller could not tell which one
+governed, and a mismatch was a generic `request.invalid`. The header is now
+the only input, as on every other source-backed route: `DecideRequest` has no
+`sourceProfileId`, and `RecoverAttemptRequest` is a closed empty object, so a
+body that still names a profile is refused (`request.unprocessable`) rather
+than ignored. The value Casework presents to the source adapter, binds into
+the attempt lookup, and records is the header's. Nothing stored depended on
+the body copy: the attempt lookup and every durable attempt already carried
+the header's value. Tests:
+`the_source_profile_header_alone_selects_the_profile_to_decide_and_recover`
+(service_visibility) and
+`decision_and_recovery_bodies_leave_the_source_profile_to_the_header`
+(client http_boundary).
+
+### What an empty-inbox refusal reveals
+
+`GET /v1/review-tasks` without `Registry-Source-Profile` now answers
+`source-profile.required` when its page would be empty and at least one
+candidate was skipped only because the header is absent. The candidates are
+already limited by the store to the caller's current membership and served
+queues. The refusal is the static six-field problem body with no header of
+its own: it names no task, request, subject, count, queue, or source, and it
+is returned only in place of an empty page. What it discloses is one bit, that
+the caller's queues hold at least one source-backed candidate. A page that lists anything
+keeps today's behaviour. A source profile under which the source hides every
+task still yields an ordinary empty page, so the refusal reveals nothing
+about which tasks the source shows. Test:
+`an_inbox_emptied_only_by_the_missing_source_profile_says_so` (review_http).
+
+### A read across a binding change
+
+A plain read of one work item, its history, and its clocks now return the
+retained occurrence without actions when the source's binding generation
+moved, or when the adapter refuses the caller read as `BindingMoved`.
+Visibility is unchanged: the caller read still runs with the caller's own
+credential under the selected source profile before anything is returned,
+and `Concealed` or `Denied` still refuse the read as `work-item.not-visible`.
+`SourceAdapter::read_for_caller` now states the contract this relies on:
+`BindingMoved` means the source disclosed the subject to that caller. The
+BReg adapter holds it, since its `BindingMoved` follows a successful
+caller-credentialed record read; a record read the source answers with 409 or
+412, which disclosed nothing, is now `Invalid` instead. Without a caller view
+the response carries no display reference and no routing copy, so no
+caller-filtered value reaches the caller from the service reader's copy. No
+action is exposed across the move, and every mutation still refuses it
+(`work-item.proposal-changed`). A superseded occurrence answers
+`work-item.superseded`. Tests:
+`a_plain_read_across_a_binding_move_returns_the_retained_item_without_actions`
+(service_visibility) and
+`a_conflicting_record_read_is_never_reported_as_a_moved_binding`
+(casework-breg source_boundary).
+
+### Duplicate JSON members
+
+serde refused a duplicated field of a typed request struct, but a duplicate
+inside a free-form member (a review draft body, a decision `result`, a
+submitted context snapshot, `resultConstraints`) was accepted with the last
+occurrence winning. A body could therefore carry a second value past
+anything that read or logged the first, while the canonicalized value that
+Casework hashed into the accountability digest was the last. Every mutating
+route now parses with `parse_json_strict`, after the router's one MiB body
+limit has bounded the bytes, and deserializes the closed type from that one
+unambiguous value. A duplicate member at any depth is refused with 422
+`request.unprocessable`, the class a duplicated typed field already received.
+The parser inherits serde_json's recursion limit of 128. Tests:
+`strict_json_accepts_one_unambiguous_document_in_a_json_media_type` and
+`http_edge_returns_closed_problems_with_request_trace_and_security_headers`
+(http unit tests), and one `*_refuse_a_duplicate_member` test per route
+family (review_http).
+
+### Residual risk
+
+- The empty-inbox refusal tells a caller who omits the header that a
+  source-backed candidate exists in their queues.
+- An adapter other than BReg that returns `BindingMoved` from a caller read
+  without the source disclosing the subject would break the documented
+  contract and let a caller see the retained item without actions. Only the
+  BReg adapter ships.
+- The inbox still refuses a whole page with `work-item.proposal-changed` when
+  the source's binding generation moved; only single-item reads changed.
