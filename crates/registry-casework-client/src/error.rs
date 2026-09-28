@@ -6,8 +6,8 @@ use registry_casework_core::{
     IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
-    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
-    REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
+    REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
+    REQUEST_NOT_FOUND_PROBLEM, REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
     REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
     SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
     SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
@@ -58,6 +58,7 @@ pub enum CaseworkProblemCode {
     ProfileNotHuman,
     RequestBodyTooLarge,
     RequestInvalid,
+    RequestLimitOutOfRange,
     RequestMethodNotAllowed,
     RequestNotFound,
     RequestReasonUnsupported,
@@ -95,7 +96,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 46] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -113,6 +114,7 @@ impl CaseworkProblemCode {
         Self::ProfileNotHuman,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
+        Self::RequestLimitOutOfRange,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
         Self::RequestReasonUnsupported,
@@ -163,6 +165,7 @@ impl CaseworkProblemCode {
             Self::ProfileNotHuman => PROFILE_NOT_HUMAN_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
+            Self::RequestLimitOutOfRange => REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
             Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
@@ -214,6 +217,7 @@ impl CaseworkProblemCode {
             PROFILE_NOT_HUMAN_PROBLEM => Self::ProfileNotHuman,
             REQUEST_BODY_TOO_LARGE_PROBLEM => Self::RequestBodyTooLarge,
             REQUEST_INVALID_PROBLEM => Self::RequestInvalid,
+            REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM => Self::RequestLimitOutOfRange,
             REQUEST_METHOD_NOT_ALLOWED_PROBLEM => Self::RequestMethodNotAllowed,
             REQUEST_NOT_FOUND_PROBLEM => Self::RequestNotFound,
             REQUEST_REASON_UNSUPPORTED_PROBLEM => Self::RequestReasonUnsupported,
@@ -266,6 +270,7 @@ impl CaseworkProblemCode {
             | Self::OperationNotAuthorized
             | Self::ReviewInitiatorExcluded => 403,
             Self::RequestInvalid
+            | Self::RequestLimitOutOfRange
             | Self::SourceProfileNotApplicable
             | Self::SourceProfileRequired
             | Self::SourceSignatureInvalid => 400,
@@ -360,6 +365,10 @@ impl CaseworkProblemCode {
                 "The request body exceeds the one MiB limit.",
             ),
             Self::RequestInvalid => ("Invalid request", "The Casework request is invalid."),
+            Self::RequestLimitOutOfRange => (
+                "Page size out of range",
+                "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size.",
+            ),
             Self::RequestMethodNotAllowed => (
                 "Method not allowed",
                 "This route does not accept that HTTP method.",

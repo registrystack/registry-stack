@@ -10,8 +10,8 @@ use registry_casework_core::{
     IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
-    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
-    REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
+    REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
+    REQUEST_NOT_FOUND_PROBLEM, REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
     REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
     SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
     SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
@@ -48,6 +48,7 @@ pub enum ProblemCode {
     ProfileNotHuman,
     RequestBodyTooLarge,
     RequestInvalid,
+    RequestLimitOutOfRange,
     RequestMethodNotAllowed,
     RequestNotFound,
     RequestReasonUnsupported,
@@ -98,6 +99,7 @@ impl ProblemCode {
         Self::ProfileNotHuman,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
+        Self::RequestLimitOutOfRange,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
         Self::RequestReasonUnsupported,
@@ -148,6 +150,7 @@ impl ProblemCode {
             Self::ProfileNotHuman => PROFILE_NOT_HUMAN_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
+            Self::RequestLimitOutOfRange => REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
             Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
@@ -196,6 +199,7 @@ impl ProblemCode {
             | Self::OperationNotAuthorized
             | Self::ReviewInitiatorExcluded => StatusCode::FORBIDDEN,
             Self::RequestInvalid
+            | Self::RequestLimitOutOfRange
             | Self::SourceProfileNotApplicable
             | Self::SourceProfileRequired
             | Self::SourceSignatureInvalid => StatusCode::BAD_REQUEST,
@@ -250,6 +254,7 @@ impl ProblemCode {
             Self::ProfileNotHuman => "Human session required",
             Self::RequestBodyTooLarge => "Request body too large",
             Self::RequestInvalid => "Invalid request",
+            Self::RequestLimitOutOfRange => "Page size out of range",
             Self::RequestMethodNotAllowed => "Method not allowed",
             Self::RequestNotFound => "Route not found",
             Self::RequestReasonUnsupported => "Reason not supported",
@@ -317,6 +322,9 @@ impl ProblemCode {
             Self::ProfileNotHuman => "This action is reserved for a human session.",
             Self::RequestBodyTooLarge => "The request body exceeds the one MiB limit.",
             Self::RequestInvalid => "The Casework request is invalid.",
+            Self::RequestLimitOutOfRange => {
+                "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size."
+            }
             Self::RequestMethodNotAllowed => "This route does not accept that HTTP method.",
             Self::RequestNotFound => "The requested Casework route does not exist.",
             Self::RequestReasonUnsupported => {
@@ -488,6 +496,7 @@ const REVIEW_RESULT_FEED: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::ReviewResultExpired,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceProfileNotApplicable,
@@ -501,6 +510,23 @@ const REVIEW_TASK: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ReviewTaskNotHeld,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const REVIEW_HISTORY: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::RequestUnprocessable,
     ProblemCode::RequestUnsupportedMediaType,
     ProblemCode::ReviewTaskNotHeld,
@@ -528,6 +554,7 @@ const REVIEW_TASK_PAGE: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceBadGateway,
     ProblemCode::SourceProfileNotApplicable,
@@ -684,6 +711,19 @@ const ITEM_READ: &[ProblemCode] = &[
     ProblemCode::WorkItemSourceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
+const ITEM_PAGE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
 // A plain read of one item returns the retained occurrence across a moved
 // source binding; only a superseded occurrence is refused.
 const ITEM_OPEN: &[ProblemCode] = &[
@@ -706,6 +746,7 @@ const SOURCE_ITEM_PAGE: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
@@ -809,6 +850,7 @@ const HOLDINGS: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
@@ -832,6 +874,7 @@ const DIRECTORY_PAGE: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
@@ -912,6 +955,7 @@ const CASELOAD_PREVIEW: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestLimitOutOfRange,
     ProblemCode::RequestUnprocessable,
     ProblemCode::RequestUnsupportedMediaType,
     ProblemCode::ServiceUnavailable,
@@ -1372,7 +1416,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_TASK,
+        problems: REVIEW_HISTORY,
     },
     OperationContract {
         method: "POST",
@@ -1543,7 +1587,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: ITEM_READ,
+        problems: ITEM_PAGE,
     },
     OperationContract {
         method: "GET",
@@ -1809,10 +1853,13 @@ mod tests {
             (
                 "GET",
                 "/v1/review-results",
-                &[(
-                    ReviewResultExpired,
-                    "review_result_feed: cursor event erased",
-                )],
+                &[
+                    (RequestLimitOutOfRange, "page_limit: limit outside 1 to 100"),
+                    (
+                        ReviewResultExpired,
+                        "review_result_feed: cursor event erased",
+                    ),
+                ],
             ),
         ];
         for (method, path, specific) in expected {

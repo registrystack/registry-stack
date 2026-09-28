@@ -307,23 +307,29 @@ class TypingContractTests(unittest.TestCase):
             if isinstance(node, ast.ClassDef)
         }
 
-        for page_name, optional_name in (
-            ("ReviewResultFeedPage", "_ReviewResultFeedPageOptional"),
-            ("ReviewTaskPage", "_ReviewTaskPageOptional"),
-            ("ReviewHistoryPage", "_ReviewHistoryPageOptional"),
+        for page_name, optional_name, required in (
+            ("ReviewResultFeedPage", "_ReviewResultFeedPageOptional", {"items"}),
+            ("ReviewTaskPage", "_ReviewTaskPageOptional", {"items", "status"}),
+            ("ReviewHistoryPage", "_ReviewHistoryPageOptional", {"items"}),
         ):
             with self.subTest(page=page_name):
                 page = classes[page_name]
                 optional = classes[optional_name]
                 self.assertEqual(
                     {node.target.id for node in page.body if isinstance(node, ast.AnnAssign)},
-                    {"items"},
+                    required,
                 )
                 self.assertEqual(
                     {node.target.id for node in optional.body if isinstance(node, ast.AnnAssign)},
                     {"nextCursor"},
                 )
                 self.assertFalse(any(keyword.arg == "total" for keyword in page.keywords))
+        task_page_status = next(
+            node.annotation
+            for node in classes["ReviewTaskPage"].body
+            if isinstance(node, ast.AnnAssign) and node.target.id == "status"
+        )
+        self.assertEqual(ast.unparse(task_page_status), "PageStatus")
 
         history = classes["ReviewHistoryEntry"]
         history_optional = classes["_ReviewHistoryEntryOptional"]

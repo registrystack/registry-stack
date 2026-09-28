@@ -1316,6 +1316,12 @@ async fn review_task_inbox_continues_after_the_configured_source_read_budget() {
     )
     .expect("first task page JSON");
     assert!(first.items.is_empty());
+    // The short page says the source-read budget ran out, so a caller does
+    // not read it as the end of the inbox.
+    assert_eq!(
+        first.status,
+        registry_casework_core::PageStatus::BudgetExhausted
+    );
     let continuation = first
         .next_cursor
         .expect("scan-budget page preserves a continuation");
@@ -1341,6 +1347,7 @@ async fn review_task_inbox_continues_after_the_configured_source_read_budget() {
     .expect("continued task page JSON");
     assert_eq!(second.items.len(), 1);
     assert_eq!(second.items[0].request_id, visible.accepted.request_id);
+    assert_eq!(second.status, registry_casework_core::PageStatus::Complete);
 
     idp.stop().await;
 }
@@ -2610,4 +2617,135 @@ async fn a_review_request_with_a_duplicate_member_creates_nothing_and_its_twin_d
     // reserved nothing.
     let created = app.oneshot(producer(body.to_string())).await.unwrap();
     assert_eq!(created.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn every_paged_route_names_its_limit_range_when_refusing_it() {
+    let idp = MockIdp::start().await;
+    let (app, ..) = app(&idp).await;
+    let id = Uuid::new_v4();
+    // (method, path with query prefix, maximum, producer, source profile, body)
+    type PagedRoute = (&'static str, String, usize, bool, bool, Option<Value>);
+    let routes: [PagedRoute; 9] = [
+        (
+            "GET",
+            "/v1/review-tasks?".to_owned(),
+            100,
+            false,
+            false,
+            None,
+        ),
+        (
+            "GET",
+            "/v1/review-results?".to_owned(),
+            100,
+            true,
+            false,
+            None,
+        ),
+        (
+            "GET",
+            format!("/v1/review-requests/{id}/history?"),
+            100,
+            false,
+            false,
+            None,
+        ),
+        (
+            "GET",
+            "/v1/work-items?view=my_teams&".to_owned(),
+            100,
+            false,
+            true,
+            None,
+        ),
+        (
+            "GET",
+            format!("/v1/work-items/{id}/history?"),
+            100,
+            false,
+            true,
+            None,
+        ),
+        ("GET", "/v1/holdings?".to_owned(), 100, false, true, None),
+        (
+            "GET",
+            "/v1/directory/targets?purpose=absence_person&".to_owned(),
+            100,
+            false,
+            false,
+            None,
+        ),
+        (
+            "GET",
+            "/v1/directory/absences?".to_owned(),
+            1_000,
+            false,
+            false,
+            None,
+        ),
+        (
+            "POST",
+            "/v1/directory/caseload/preview?".to_owned(),
+            100,
+            false,
+            false,
+            Some(json!({
+                "from": {"issuer": idp.issuer(), "subject": "reviewer"},
+                "to": {"issuer": idp.issuer(), "subject": "colleague"},
+                "reason": "rebalance",
+            })),
+        ),
+    ];
+    for (method, prefix, maximum, producer, source_profile, body) in routes {
+        for (limit, refused) in [(0, true), (maximum + 1, true), (maximum, false)] {
+            let (token, profile) = if producer {
+                (token(&idp), "producer")
+            } else {
+                (reviewer_token(&idp), "staff")
+            };
+            let mut request = Request::builder()
+                .method(method)
+                .uri(format!("{prefix}limit={limit}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header(CASEWORK_PROFILE_HEADER, profile);
+            if source_profile {
+                request = request.header(SOURCE_PROFILE_HEADER, "reviewer-source");
+            }
+            let body = match &body {
+                Some(body) => {
+                    request = request.header(CONTENT_TYPE, "application/json");
+                    Body::from(body.to_string())
+                }
+                None => Body::empty(),
+            };
+            let response = app
+                .clone()
+                .oneshot(request.body(body).expect("paged request"))
+                .await
+                .expect("paged response");
+            let status = response.status();
+            let problem: Value = serde_json::from_slice(
+                &to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .expect("bounded response"),
+            )
+            .unwrap_or(Value::Null);
+            let label = format!("{method} {prefix}limit={limit}");
+            if refused {
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {problem}");
+                assert_eq!(problem["code"], "request.limit-out-of-range", "{label}");
+                let detail = problem["detail"].as_str().expect("problem detail");
+                assert!(detail.contains("limit"), "{label}");
+                assert!(detail.contains("1 to 100"), "{label}");
+                assert!(detail.contains("1 to 1000"), "{label}");
+            } else {
+                assert_ne!(
+                    problem["code"], "request.limit-out-of-range",
+                    "{label}: {status} {problem}"
+                );
+            }
+        }
+    }
+    idp.stop().await;
 }

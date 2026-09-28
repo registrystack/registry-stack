@@ -1783,6 +1783,7 @@
               "profile.not-human",
               "request.body-too-large",
               "request.invalid",
+              "request.limit-out-of-range",
               "request.method-not-allowed",
               "request.not-found",
               "request.reason-unsupported",
@@ -2294,6 +2295,33 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/request/invalid"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestLimitOutOfRange": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.limit-out-of-range"
+              },
+              "detail": {
+                "const": "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Page size out of range"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/request/limit-out-of-range"
               }
             },
             "type": "object"
@@ -4860,10 +4888,19 @@
           "nextCursor": {
             "format": "uuid",
             "type": "string"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "budget_exhausted",
+              "source_unavailable"
+            ],
+            "type": "string"
           }
         },
         "required": [
-          "items"
+          "items",
+          "status"
         ],
         "type": "object"
       },
@@ -7126,7 +7163,7 @@
             }
           },
           {
-            "description": "Page size from 1 through 1000; defaults to 1000. Values outside that range are request.invalid.",
+            "description": "Page size from 1 through 1000; defaults to 1000. Values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -7166,13 +7203,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
+            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8827,7 +8867,7 @@
             }
           },
           {
-            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -8874,12 +8914,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10166,7 +10209,7 @@
             }
           },
           {
-            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -10205,13 +10248,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
+            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10704,7 +10750,7 @@
             }
           },
           {
-            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -10740,13 +10786,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.required",
+            "description": "Problem response: request.invalid, request.limit-out-of-range, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12812,7 +12861,7 @@
             }
           },
           {
-            "description": "Bounded page size.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -12848,13 +12897,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, request.limit-out-of-range, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13635,7 +13687,7 @@
             }
           },
           {
-            "description": "Bounded page size.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -13671,13 +13723,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, request.limit-out-of-range, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13878,7 +13933,7 @@
             }
           },
           {
-            "description": "Bounded page size.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -13917,6 +13972,9 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     },
                     {
@@ -13926,7 +13984,7 @@
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable, source-profile.required",
+            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19321,7 +19379,7 @@
             }
           },
           {
-            "description": "Bounded page size; values above 100 are served as 100.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -19357,13 +19415,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.required",
+            "description": "Problem response: request.invalid, request.limit-out-of-range, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -23366,7 +23427,7 @@
             }
           },
           {
-            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "description": "Page size from 1 through 100; values outside that range are request.limit-out-of-range.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -23405,13 +23466,16 @@
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid, source-profile.required",
+            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
