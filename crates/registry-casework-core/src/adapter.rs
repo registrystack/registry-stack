@@ -211,11 +211,26 @@ pub enum SourceAdapterError {
     Invalid,
 }
 
+/// The source revision an imported source description pins, beside the one
+/// the source serves now.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRevisionPin {
+    pub pinned: String,
+    pub served: String,
+}
+
 /// Internal seam implemented by each source protocol adapter.
 #[async_trait]
 pub trait SourceAdapter: Send + Sync {
     fn source_id(&self) -> &str;
     fn binding_generation(&self) -> &str;
+
+    /// Read the revision the source serves now beside the one its imported
+    /// description pins. `None` means the adapter pins no source revision.
+    /// Startup refuses a pin the source no longer serves.
+    async fn source_revision_pin(&self) -> Result<Option<SourceRevisionPin>, SourceAdapterError> {
+        Ok(None)
+    }
 
     /// Imported source metadata for one request entity, used to validate and
     /// evaluate that entity's routing policy. Implementations must not treat

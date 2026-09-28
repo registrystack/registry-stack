@@ -1499,3 +1499,18 @@ async fn a_caller_read_is_refused_when_the_engine_is_from_another_release() {
         Some("0.0.1")
     );
 }
+
+#[tokio::test]
+async fn source_revision_pin_reports_the_pinned_and_the_served_registry_revision() {
+    let served = "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let server = MockServer::start().await;
+    mount_metadata_revision(&server, "reader-token", "reader", served).await;
+
+    assert_eq!(
+        adapter(&server.uri()).source_revision_pin().await,
+        Ok(Some(SourceRevisionPin {
+            pinned: DIGEST.to_owned(),
+            served: served.to_owned(),
+        }))
+    );
+}
