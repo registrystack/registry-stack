@@ -51,6 +51,8 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: metrics_report_bounded_series_without_disclosing_request_content}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_configured_metrics_listener_serves_beside_the_evidence_listener}
       - {file: crates/registry-evidence/src/config.rs, name: the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private}
+      - {file: crates/registry-evidence/src/observability.rs, name: shape_drift_series_stay_bounded_by_the_governed_sources}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_response}
   - id: sec-no-entitlement-union
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}
@@ -115,6 +117,12 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_undeclared_source_404_stays_source_unavailable_and_logs_a_value_free_cause}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_response}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_retyped_source_member_warns_with_the_declared_pointer_and_no_value}
+      - {file: crates/registry-evidence/src/source.rs, name: projection_reports_a_declared_leaf_absent_beside_an_undeclared_member}
+      - {file: crates/registry-evidence/src/source.rs, name: projection_reports_type_mismatches_and_missing_intermediates_by_declared_pointer}
   - id: sec-protected-canaries-redacted
     tests:
       - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
@@ -133,6 +141,8 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_after_unique_search_is_dependency_failure}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_set_member_after_unique_search_is_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_undeclared_source_404_stays_source_unavailable_and_logs_a_value_free_cause}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/bundle.rs, name: declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories}
       - {file: crates/registry-evidence/src/main.rs, name: reference_declared_unresolved_form_is_data_free_and_source_bound}

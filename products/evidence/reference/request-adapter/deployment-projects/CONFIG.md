@@ -484,6 +484,15 @@ search-stage outcome becomes Evidence unavailable under the neutral audit
 decision `unresolved`; the same outcome from a fetch or member after unique
 search is a dependency failure.
 
+Every other 404 stays `source.unavailable` for the caller, whether the source
+declares no `unresolvedProblem` or the response is not exactly the declared
+tuple, because a distinct answer would disclose subject absence the bundle
+never declared. The operator log names the cause instead, with a rate-limited
+`source answered 404 with an undeclared shape` record carrying the source
+identifier and whether the tuple is not declared or not matched, and nothing
+from the response; see
+[Source diagnostics](../../../OPERATOR-CONTRACT.md#source-diagnostics).
+
 ### Optional shared source connections
 
 Inline sources remain supported without a connection declaration. The same

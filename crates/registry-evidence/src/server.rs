@@ -149,6 +149,7 @@ fn build_app_with_tracker_at(
     // metrics registry can sample the same rate limiter the evidence routes
     // use, on the separate opt-in metrics listener.
     let rate_limiter = runtime.rate_limiter();
+    let source_diagnostics = runtime.source_diagnostics();
     let state = Arc::new(ServerState {
         runtime,
         maximum_request_bytes,
@@ -190,7 +191,7 @@ fn build_app_with_tracker_at(
             authentication_challenge,
             attach_authentication_challenge,
         ));
-    let metrics = Arc::new(Metrics::new(rate_limiter));
+    let metrics = Arc::new(Metrics::new(rate_limiter, source_diagnostics));
     (
         response_layers(routes, Arc::clone(&metrics)),
         evaluations,

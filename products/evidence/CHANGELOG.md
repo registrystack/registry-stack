@@ -68,6 +68,16 @@
   nothing. It previously returned `evidence.rate_limited` with a retry hint,
   although the bucket never refills past the burst and the retry could never
   be admitted.
+- Add: an HTTP source response whose shape drifted from the declared
+  projection (a selected container missing or of another JSON type, or a
+  selected leaf missing beside a member the projection does not select, which
+  is what a rename leaves) increments the new
+  `evidence_source_shape_drift_total{source}` counter and writes a
+  rate-limited `WARN` naming the source and the declared JSON pointers. A 404
+  that is not the source's declared `unresolvedProblem` still answers
+  `source.unavailable`, and now writes a rate-limited `WARN` saying the source
+  answered 404 with an undeclared shape. Neither record carries a response
+  value, an undeclared member name, a selector, or a subject.
 
 ## v0.35.0 - 2026-09-28
 

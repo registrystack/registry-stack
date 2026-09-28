@@ -321,6 +321,30 @@ An empty projection, duplicate path, invalid escape, overlapping ancestor and
 descendant paths, or path that cannot be reconciled with another selected path
 fails bundle validation.
 
+Projection also reports where an HTTP source's response departed from the
+declared shape, without changing what it produces or refuses. A mistyped
+intermediate container, a missing intermediate container, and a selected leaf
+that is missing from an object which carries a member the projection does not
+select are shape drift. The last is the signature a renamed upstream member
+leaves: the old name is gone and a new one appears beside it. Each drifted
+response increments `evidence_source_shape_drift_total{source}`, and the
+operator log carries a rate-limited WARN naming the source and the declared
+pointers, with `*` in place of any array index. Neither ever carries a response
+value, an unselected member name, or an array length. The
+[operator contract](../../OPERATOR-CONTRACT.md#source-diagnostics) describes
+both.
+
+Two cases are deliberately not drift. A missing selected leaf alone is a record
+with no value for that member, and unselected members alone are a source sending
+more than the projection needs. Declaring a member optional therefore has a
+cost: when a source renames it, a record that drops the old name and carries the
+new one is reported, but a source that simply stops sending it looks exactly
+like a subject without the value, and the extraction script answers it as
+one. Require a member in `responseSchema`
+whenever the source always sends it, so its disappearance is a response-shape
+rejection the operator log names, and keep it optional only where absence is
+a real answer.
+
 ### Declared response shape
 
 Every source declares a required `responseSchema`: a bundle-relative closed
