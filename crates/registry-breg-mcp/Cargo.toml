@@ -75,6 +75,9 @@ registry-breg.workspace = true
 registry-breg-review.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
 reqwest.workspace = true
-rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+# The test client reaches the gateway over plain loopback HTTP. rmcp's
+# `reqwest` feature would add reqwest's aws-lc-rs rustls provider beside the
+# workspace's ring one, and rustls then refuses to pick either at runtime.
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 tempfile.workspace = true
 tokio-postgres.workspace = true
