@@ -6444,11 +6444,13 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
             .await
             .expect("snapshot before mutation")
             .get(0);
-        // The edge's observation, the request's own now, stands inside the
-        // grant. A confirmation reads the clock once more to judge its hold
-        // after it takes the anchor, and must still find the hold live. Every
-        // later observation, the re-check after the writes, is past the grant.
-        let valid_reads = if operation == "confirm" { 2 } else { 1 };
+        // The edge's observation, the request's own now, and the post-lock
+        // re-check immediately before the writes both stand inside the grant.
+        // A confirmation reads the clock once more between them to judge its
+        // hold after it takes the anchor, and must still find the hold live.
+        // Only the next observation, the re-check after the writes and just
+        // before COMMIT, is past the grant, so it alone refuses.
+        let valid_reads = if operation == "confirm" { 3 } else { 2 };
         let calls = Arc::new(AtomicUsize::new(0));
         let observed = calls.clone();
         let valid = pinned_now();
@@ -6464,9 +6466,10 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
             .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{operation}: {problem}");
         assert_eq!(problem["code"], "operation.not-authorized", "{operation}");
-        assert!(
-            calls.load(Ordering::SeqCst) > valid_reads,
-            "{operation} observes the final clock"
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            valid_reads + 1,
+            "{operation} refuses at the re-check after its writes, its last observation"
         );
         let after: Value = fx
             .admin
