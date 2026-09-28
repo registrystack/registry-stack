@@ -2229,3 +2229,385 @@ async fn an_excluded_initiator_and_a_missing_initiator_get_their_own_problem_cod
 
     idp.stop().await;
 }
+
+/// Insert a second, different value for the first member of `object` into
+/// its serialized text, so the only defect is the duplicate member.
+fn with_duplicate_member(object: &serde_json::Map<String, Value>) -> String {
+    let text = serde_json::to_string(object).expect("serialize fixture object");
+    match object.keys().next() {
+        Some(first) => format!(
+            "{{{}:\"smuggled\",{}",
+            serde_json::to_string(first).expect("serialize member name"),
+            &text[1..]
+        ),
+        None => r#"{"member":1,"member":2}"#.to_owned(),
+    }
+}
+
+/// The first nested object member of `body` receives a duplicate member.
+fn with_nested_duplicate_member(body: &Value) -> Option<String> {
+    let object = body.as_object()?;
+    let (name, nested) = object
+        .iter()
+        .find(|(_, value)| value.as_object().is_some_and(|nested| !nested.is_empty()))?;
+    let mut rest = object.clone();
+    rest.remove(name);
+    let rest = serde_json::to_string(&rest).expect("serialize fixture object");
+    let separator = if rest == "{}" { "" } else { "," };
+    Some(format!(
+        "{{{}:{}{separator}{}",
+        serde_json::to_string(name).expect("serialize member name"),
+        with_duplicate_member(nested.as_object().expect("nested object")),
+        &rest[1..]
+    ))
+}
+
+struct StrictJsonRoute {
+    method: &'static str,
+    path: String,
+    body: Value,
+    producer: bool,
+    source_profile: bool,
+    /// Hand-written bodies whose duplicate sits inside a free-form JSON
+    /// member, which a typed field's own duplicate check never saw.
+    free_form_duplicates: Vec<String>,
+}
+
+fn strict_route(method: &'static str, path: String, body: Value) -> StrictJsonRoute {
+    StrictJsonRoute {
+        method,
+        path,
+        body,
+        producer: false,
+        source_profile: false,
+        free_form_duplicates: Vec::new(),
+    }
+}
+
+async fn send_strict_json(
+    app: &axum::Router,
+    idp: &MockIdp,
+    route: &StrictJsonRoute,
+    body: String,
+) -> (StatusCode, Value) {
+    let (token, profile) = if route.producer {
+        (token(idp), "producer")
+    } else {
+        (reviewer_token(idp), "staff")
+    };
+    let mut request = Request::builder()
+        .method(route.method)
+        .uri(&route.path)
+        .header("authorization", format!("Bearer {token}"))
+        .header(CASEWORK_PROFILE_HEADER, profile)
+        .header(CONTENT_TYPE, "application/json")
+        .header("if-match", "\"1\"")
+        .header("idempotency-key", "strict-json");
+    if route.source_profile {
+        request = request.header(SOURCE_PROFILE_HEADER, "reviewer-source");
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body)).expect("strict JSON request"))
+        .await
+        .expect("strict JSON response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("bounded response");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Every route refuses a duplicate member at the top level and inside a
+/// nested object with 422 request.unprocessable, while the same body without
+/// the duplicate passes body parsing and closed-type validation.
+async fn assert_duplicate_members_are_refused(routes: impl FnOnce(&str) -> Vec<StrictJsonRoute>) {
+    let idp = MockIdp::start().await;
+    let (app, ..) = app(&idp).await;
+    for route in &routes(&idp.issuer()) {
+        let label = format!("{} {}", route.method, route.path);
+        let mut duplicated = vec![with_duplicate_member(
+            route.body.as_object().expect("fixture bodies are objects"),
+        )];
+        duplicated.extend(with_nested_duplicate_member(&route.body));
+        duplicated.extend(route.free_form_duplicates.iter().cloned());
+        for body in duplicated {
+            assert!(
+                parse_json_strict_refuses(&body),
+                "{label}: fixture {body} must carry a duplicate member"
+            );
+            let (status, problem) = send_strict_json(&app, &idp, route, body).await;
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{label}: {problem}"
+            );
+            assert_eq!(problem["code"], "request.unprocessable", "{label}");
+        }
+        let (status, problem) = send_strict_json(&app, &idp, route, route.body.to_string()).await;
+        assert!(
+            !matches!(
+                problem["code"].as_str(),
+                Some("request.invalid" | "request.unprocessable")
+            ),
+            "{label}: the valid twin was refused as a body: {status} {problem}"
+        );
+    }
+}
+
+fn parse_json_strict_refuses(body: &str) -> bool {
+    serde_json::from_str::<Value>(body).is_ok()
+        && registry_platform_canonical_json::parse_json_strict(body.as_bytes()).is_err()
+}
+
+fn principal(subject: &str) -> Value {
+    json!({"issuer": "https://issuer.example.test", "subject": subject})
+}
+
+fn source_binding() -> Value {
+    json!({"sourceRevision": "revision-1", "version": "1", "generation": "review-http-source"})
+}
+
+#[tokio::test]
+async fn review_request_routes_refuse_a_duplicate_member() {
+    let id = Uuid::new_v4();
+    let producer = |mut route: StrictJsonRoute| {
+        route.producer = true;
+        route
+    };
+    assert_duplicate_members_are_refused(|issuer| {
+        let request = review_request("strict-json", issuer);
+        let body = serde_json::to_value(&request).expect("serialize review request");
+        let text = body.to_string();
+        let mut create = producer(strict_route("POST", "/v1/review-requests".to_owned(), body));
+        create.free_form_duplicates.push(format!(
+            r#"{},"resultConstraints":{{"type":"object","type":"string"}}}}"#,
+            &text[..text.len() - 1]
+        ));
+        vec![
+            create,
+            producer(strict_route(
+                "POST",
+                format!("/v1/review-requests/{id}/cancel"),
+                json!({"subject": request.subject, "reason": "withdrawn"}),
+            )),
+            strict_route(
+                "POST",
+                format!("/v1/review-requests/{id}/notes"),
+                json!({"audience": "reviewers", "note": "checked"}),
+            ),
+        ]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn review_task_routes_refuse_a_duplicate_member() {
+    let id = Uuid::new_v4();
+    assert_duplicate_members_are_refused(|_issuer| {
+        vec![
+            strict_route(
+                "POST",
+                format!("/v1/review-tasks/{id}/assign"),
+                json!({"assignee": principal("colleague"), "reason": "cover"}),
+            ),
+            strict_route(
+                "POST",
+                format!("/v1/review-tasks/{id}/delegate"),
+                json!({"delegate": principal("colleague"), "reason": "cover"}),
+            ),
+            strict_route(
+                "PUT",
+                format!("/v1/review-tasks/{id}/draft"),
+                json!({"body": {"summary": "draft"}}),
+            ),
+            StrictJsonRoute {
+                free_form_duplicates: vec![concat!(
+                    r#"{"decision":{"type":"reject","outcome":"returned","#,
+                    r#""result":{"note":"a","note":"b"}}}"#
+                )
+                .to_owned()],
+                ..strict_route(
+                    "POST",
+                    format!("/v1/review-tasks/{id}/decisions"),
+                    json!({"decision": {"type": "approve"}}),
+                )
+            },
+        ]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn work_item_routes_refuse_a_duplicate_member() {
+    let id = Uuid::new_v4();
+    let source = |mut route: StrictJsonRoute| {
+        route.source_profile = true;
+        route
+    };
+    assert_duplicate_members_are_refused(|_issuer| {
+        vec![
+            source(strict_route(
+                "PUT",
+                format!("/v1/work-items/{id}/draft"),
+                json!({"binding": source_binding(), "reason": "draft", "flaggedFields": []}),
+            )),
+            source(strict_route(
+                "POST",
+                format!("/v1/work-items/{id}/decisions"),
+                json!({"displayedBinding": source_binding(), "operation": "approve"}),
+            )),
+        ]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn attempt_recovery_routes_refuse_a_duplicate_member() {
+    let id = Uuid::new_v4();
+    let source = |mut route: StrictJsonRoute| {
+        route.source_profile = true;
+        route
+    };
+    assert_duplicate_members_are_refused(|_issuer| {
+        vec![
+            source(strict_route(
+                "POST",
+                format!("/v1/work-items/{id}/attempts/recover"),
+                json!({}),
+            )),
+            source(strict_route(
+                "POST",
+                format!("/v1/work-items/{id}/attempts/{}/recover", Uuid::new_v4()),
+                json!({}),
+            )),
+        ]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn assignment_directory_and_absence_routes_refuse_a_duplicate_member() {
+    let id = Uuid::new_v4();
+    let absence = json!({
+        "person": principal("reviewer"),
+        "from": "2026-10-01T00:00:00Z",
+        "until": "2026-10-02T00:00:00Z",
+        "cover": principal("colleague"),
+    });
+    let movement = json!({
+        "from": principal("reviewer"),
+        "to": principal("colleague"),
+        "reason": "rebalance",
+    });
+    assert_duplicate_members_are_refused(|_issuer| vec![
+        strict_route(
+            "POST",
+            format!("/v1/work-items/{id}/assign"),
+            json!({"assignee": principal("colleague")}),
+        ),
+        strict_route(
+            "POST",
+            format!("/v1/work-items/{id}/delegate"),
+            json!({"delegate": principal("colleague")}),
+        ),
+        strict_route("POST", "/v1/directory/absences".to_owned(), absence.clone()),
+        strict_route("PUT", format!("/v1/directory/absences/{id}"), absence),
+        strict_route(
+            "POST",
+            "/v1/directory/caseload/preview".to_owned(),
+            movement.clone(),
+        ),
+        strict_route(
+            "POST",
+            "/v1/directory/caseload/apply".to_owned(),
+            json!({"movement": movement, "items": [{"itemId": id, "expectedRevision": 1}]}),
+        ),
+        strict_route(
+            "PUT",
+            "/v1/directory/teams/review-team".to_owned(),
+            json!({"staff": [principal("reviewer")], "supervisors": [], "servedQueues": ["review"]}),
+        ),
+        strict_route(
+            "POST",
+            "/v1/directory/bootstrap".to_owned(),
+            json!({"teamId": "review-team", "staff": [], "supervisors": [], "queueId": "review"}),
+        ),
+        strict_route(
+            "POST",
+            "/v1/directory/holidays".to_owned(),
+            json!({"document": {"holidaySet": "office", "revision": 1, "dates": ["2026-09-07"]}}),
+        ),
+        strict_route(
+            "POST",
+            "/v1/directory/clocks/recompute/preview".to_owned(),
+            json!({"clockId": "review-deadline", "holidaySet": "office", "holidayRevision": 1}),
+        ),
+        strict_route(
+            "POST",
+            "/v1/directory/clocks/recompute/apply".to_owned(),
+            json!({"previewId": id}),
+        ),
+    ])
+    .await;
+}
+
+#[tokio::test]
+async fn task_grant_approval_routes_refuse_a_duplicate_member() {
+    let id = Uuid::new_v4();
+    let source = |mut route: StrictJsonRoute| {
+        route.source_profile = true;
+        route
+    };
+    let approval = json!({"templateId": "review-assistant", "templateVersion": "1"});
+    assert_duplicate_members_are_refused(|_issuer| {
+        vec![
+            source(strict_route(
+                "POST",
+                format!("/v1/work-items/{id}/task-grants"),
+                approval.clone(),
+            )),
+            source(strict_route(
+                "POST",
+                format!("/v1/review-tasks/{id}/task-grants"),
+                approval,
+            )),
+        ]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_review_request_with_a_duplicate_member_creates_nothing_and_its_twin_does() {
+    let idp = MockIdp::start().await;
+    let (app, ..) = app(&idp).await;
+    let request = review_request("strict-json-twin", &idp.issuer());
+    let body = serde_json::to_value(&request).expect("serialize review request");
+    let object = body.as_object().expect("review request object");
+    let mut smuggled = object.clone();
+    smuggled.remove("requesterReference");
+    let smuggled = format!(
+        "{{\"requesterReference\":\"first\",\"requesterReference\":\"second\",{}",
+        &serde_json::to_string(&smuggled).expect("serialize remaining members")[1..]
+    );
+    let producer = |body: String| {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/review-requests")
+            .header(CONTENT_TYPE, "application/json")
+            .header(CASEWORK_PROFILE_HEADER, "producer")
+            .header("idempotency-key", "strict-json-twin")
+            .header("authorization", format!("Bearer {}", token(&idp)))
+            .body(Body::from(body))
+            .expect("review HTTP request")
+    };
+    let refused = app.clone().oneshot(producer(smuggled)).await.unwrap();
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // The same idempotency key then creates the request: the refused body
+    // reserved nothing.
+    let created = app.oneshot(producer(body.to_string())).await.unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+}
