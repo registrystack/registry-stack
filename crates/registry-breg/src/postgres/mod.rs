@@ -62,8 +62,8 @@ pub(crate) use interlock::{
     ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
-    statement_checksum, MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry,
-    MigrationLedgerStep, MigrationLedgerStepKind,
+    statement_checksum, BackupReference, MigrationArtifactBinding, MigrationKind,
+    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
 };
 pub use migration_ledger::{ActivationPlanKind, RoleMode};
 pub use mutation::{

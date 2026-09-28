@@ -84,6 +84,17 @@ pub(crate) struct MigrationArtifactBinding {
     pub checksum: String,
 }
 
+/// One backup a destructive activation was bound to, as the operator's
+/// binding described it. The ledger keeps the reference, never the backup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BackupReference {
+    pub binding_path: String,
+    pub backup_file: String,
+    pub sha256: String,
+    pub byte_length: u64,
+    pub created_at: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MigrationLedgerStepKind {
     CompilerDdl,
@@ -135,6 +146,7 @@ pub(crate) struct MigrationLedgerEntry {
     pub operator_reference_hash: Option<String>,
     pub statement_checksums: Vec<String>,
     pub artifact_bindings: Vec<MigrationArtifactBinding>,
+    pub backup_references: Vec<BackupReference>,
     pub steps: Vec<MigrationLedgerStep>,
 }
 
@@ -168,6 +180,13 @@ impl MigrationLedgerEntry {
                 .iter()
                 .any(|checksum| !valid_sha256(checksum))
             || self.artifact_bindings.len() > MAX_MIGRATION_ARTIFACTS
+            || self.backup_references.len() > MAX_MIGRATION_ARTIFACTS
+            || self.backup_references.iter().any(|backup| {
+                !valid_ledger_path(&backup.binding_path)
+                    || !valid_ledger_path(&backup.backup_file)
+                    || !valid_sha256(&backup.sha256)
+                    || !valid_ledger_text(&backup.created_at)
+            })
             || self.steps.len() > MAX_MIGRATION_STEPS
         {
             return invalid_identity();
@@ -186,12 +205,14 @@ impl MigrationLedgerEntry {
             }
             _ => {}
         }
-        if self.artifact_bindings.iter().any(|binding| {
-            binding.path.is_empty() || binding.path.len() > 1024 || !valid_sha256(&binding.checksum)
-        }) || self
+        if self
             .artifact_bindings
-            .windows(2)
-            .any(|pair| pair[0].path >= pair[1].path)
+            .iter()
+            .any(|binding| !valid_ledger_path(&binding.path) || !valid_sha256(&binding.checksum))
+            || self
+                .artifact_bindings
+                .windows(2)
+                .any(|pair| pair[0].path >= pair[1].path)
         {
             return invalid_identity();
         }
@@ -242,6 +263,24 @@ impl MigrationLedgerEntry {
             .iter()
             .map(|binding| binding.checksum.clone())
             .collect()
+    }
+
+    fn backup_references_json(&self) -> String {
+        serde_json::Value::Array(
+            self.backup_references
+                .iter()
+                .map(|backup| {
+                    serde_json::json!({
+                        "bindingPath": backup.binding_path,
+                        "backupFile": backup.backup_file,
+                        "sha256": backup.sha256,
+                        "byteLength": backup.byte_length,
+                        "createdAt": backup.created_at,
+                    })
+                })
+                .collect(),
+        )
+        .to_string()
     }
 }
 
@@ -433,12 +472,12 @@ pub(crate) async fn record_started(
                  activation_id, apply_order, package_digest, predecessor_package_digest,
                  registry_revision, plan_kind, migration_kind, statement_checksums,
                  artifact_paths, artifact_checksums, outcome, operator_reference_hash,
-                 role_mode, runtime_role
+                 role_mode, runtime_role, backup_references
              ) VALUES (
                  $1,
                  (SELECT COALESCE(max(apply_order), 0) + 1
                   FROM registry_internal.registry_migrations),
-                 $2, $3, $4, $5, $6, $7, $8, $9, 'applying', $10, $11, $12
+                 $2, $3, $4, $5, $6, $7, $8, $9, 'applying', $10, $11, $12, $13::text::jsonb
              )
              ON CONFLICT DO NOTHING",
             &[
@@ -454,6 +493,7 @@ pub(crate) async fn record_started(
                 &entry.operator_reference_hash,
                 &entry.role_mode.as_str(),
                 &entry.runtime_role,
+                &entry.backup_references_json(),
             ],
         )
         .await?;
@@ -845,6 +885,10 @@ fn valid_ledger_text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+fn valid_ledger_path(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
@@ -881,6 +925,7 @@ mod tests {
             operator_reference_hash: None,
             statement_checksums: Vec::new(),
             artifact_bindings: Vec::new(),
+            backup_references: Vec::new(),
             steps: Vec::new(),
         }
     }
