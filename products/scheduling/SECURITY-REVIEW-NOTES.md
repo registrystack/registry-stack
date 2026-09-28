@@ -440,7 +440,12 @@ again. A database with no ledger is not refused. When schema migration 8 is
 pending, `plan` counts the unpublished audit outbox rows it would drop without
 a lock, passing over an outbox the runtime role cannot read, and reports
 `schedulingctl.activation.unpublished-audit`; apply counts them again under an
-exclusive lock inside its transaction before the drop.
+exclusive lock inside its transaction before the drop. Plan also resolves the
+candidate's hook destinations and signing material as apply does before it
+writes anything, and reports `schedulingctl.activation.hook-destinations` when
+one cannot run. It resolves a key only to learn that it exists at a usable
+size and drops it; the report and the refusal text name neither the key nor
+its source.
 
 **Role separation and the grants apply issues.** Apply compares
 `current_user` on the two connections. When they differ (split role mode)

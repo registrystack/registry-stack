@@ -398,6 +398,57 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     deployment.drop().await;
 }
 
+/// A policy hook whose destination cannot sign is refused by apply before
+/// it writes anything, so plan reports the same refusal and no pending
+/// change. Plan resolves the key reference only to learn whether it names a
+/// key of a usable size; the report carries neither the key nor its source.
+#[tokio::test]
+async fn plan_reports_a_hook_destination_apply_cannot_sign_for() {
+    let deployment = Deployment::single("activation_plan_hook_key").await;
+    let policy = format!(
+        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n"
+    );
+    let package = deployment.package("package", &policy);
+    let key_secret = format!("{}_HOOK_KEY", deployment.audit_secret);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(&format!(
+        "destinations:\n  hooks:\n    appointment-events:\n      url: http://127.0.0.1:9/events\n      hmacSha256KeyRef: secret:env/{key_secret}\n"
+    ));
+    std::fs::write(&config, text).unwrap();
+
+    for key in [None, Some("too-short")] {
+        match key {
+            Some(value) => std::env::set_var(&key_secret, value),
+            None => std::env::remove_var(&key_secret),
+        }
+        let report = plan(&config);
+        assert_eq!(report["changesPending"], false, "{report}");
+        let refusals = report["refusals"].as_array().expect("refusals");
+        assert_eq!(refusals.len(), 1, "{report}");
+        assert_eq!(
+            refusals[0]["code"],
+            "schedulingctl.activation.hook-destinations"
+        );
+        let message = refusals[0]["message"].as_str().unwrap();
+        assert!(message.contains("signing secret"), "{message}");
+        assert!(!report.to_string().contains("too-short"), "{report}");
+        let refused = apply(&config).expect_err("apply refuses the same destination");
+        assert!(
+            format!("{refused:#}").contains("signing secret"),
+            "{refused:#}"
+        );
+        assert_eq!(deployment.tables().await, 0, "apply created a table");
+    }
+
+    std::env::set_var(&key_secret, "k".repeat(32));
+    let report = plan(&config);
+    assert_eq!(report["changesPending"], true, "{report}");
+    assert_eq!(report["refusals"], serde_json::json!([]));
+    std::env::remove_var(&key_secret);
+    deployment.drop().await;
+}
+
 #[tokio::test]
 async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row() {
     let deployment = Deployment::single("activation_history").await;

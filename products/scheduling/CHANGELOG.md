@@ -49,6 +49,12 @@
     when schema migration 8 is pending and the audit outbox still holds
     unpublished records, counted without a lock; apply counts them again
     under an exclusive lock and refuses the same.
+  - `schedulingctl plan` names `schedulingctl.activation.hook-destinations`,
+    with `changesPending` false, when a destination the policy hooks name is
+    not bound under `destinations.hooks` or its `hmacSha256KeyRef` does not
+    resolve to a key of at least 32 bytes. Apply refuses the same before it
+    writes anything, exit 1, with the same code. Plan resolves the key only
+    to learn its presence and size; no report carries it.
   - `schedulingctl status --runtime-config FILE` reads the full activation
     history, the schema version, and the role mode.
   - In split role mode the runtime role reads the ledger and the schema

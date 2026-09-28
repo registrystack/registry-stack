@@ -107,6 +107,10 @@ fn hook_payload_retention(config: &RuntimeConfig) -> Duration {
     Duration::from_secs(u64::from(config.retention.hook_payload_days) * 24 * 60 * 60)
 }
 
+/// The closed code of a candidate whose hook destinations cannot run, which
+/// apply refuses before it writes anything.
+pub(crate) const HOOK_DESTINATIONS_CODE: &str = "schedulingctl.activation.hook-destinations";
+
 /// Activate the candidate policy's hooks under one identity. Every
 /// destination and its signing material is resolved here, so a candidate
 /// whose hooks cannot run is refused before anything is written.
@@ -284,11 +288,29 @@ pub fn plan(config_path: &Path) -> Result<Value> {
         Some(true) => "verified",
         Some(false) => "refused",
     };
-    let refusals = plan
+    let mut refusals = plan
         .refusals
         .iter()
         .map(|refusal| json!({"code": refusal_code(refusal), "message": refusal.to_string()}))
         .collect::<Vec<_>>();
+    // Apply resolves the candidate's hook destinations and signing material
+    // before it writes anything, so plan reports the same refusal. A key is
+    // resolved only to learn that it exists at a usable size, then dropped.
+    let hook_refusal = ActivatedHooks::check_destinations(
+        &loaded.policy.hooks,
+        &loaded.config.destinations.hooks,
+        &loaded.resolver,
+    )
+    .err();
+    if let Some(error) = &hook_refusal {
+        refusals.push(json!({
+            "code": HOOK_DESTINATIONS_CODE,
+            "message": format!(
+                "{error}; bind every destination the policy hooks name under destinations.hooks, \
+                 with an hmacSha256KeyRef that resolves to a key of at least 32 bytes, then plan again"
+            ),
+        }));
+    }
     Ok(json!({
         "ok": true,
         "command": "plan",
@@ -315,7 +337,7 @@ pub fn plan(config_path: &Path) -> Result<Value> {
         "retainedHookBindings": retained_hook_bindings,
         "runtimeRole": plan.runtime_role,
         "effectiveRoleMode": plan.effective_role_mode.map(RoleMode::as_str),
-        "changesPending": plan.changes_pending,
+        "changesPending": plan.changes_pending && hook_refusal.is_none(),
         "refusals": refusals,
     }))
 }
