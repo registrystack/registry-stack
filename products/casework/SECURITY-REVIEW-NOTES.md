@@ -77,8 +77,11 @@ two-person rule enforce it on who can read the migration credential.
   no, several, or an unknown BReg source is refused rather than guessed
   (`casework.source.none`, `casework.source.ambiguous`,
   `casework.source.unknown`).
-- What startup no longer checks: it does not verify or record stranded pinned
-  work, and it takes no migration lock; apply does both.
+- Startup repeats the stranded pinned work comparison read-only, because a
+  process still serving the earlier package can admit work between apply and
+  this start. It refuses to serve unless `package.acknowledgeStrandedWork`
+  names the package it loaded, records nothing, and takes no migration lock;
+  apply holds the lock and records the activation.
 - `casework migrate` and `caseworkctl db migrate` still parse, only to refuse
   with exit 2 and name the two commands.
 

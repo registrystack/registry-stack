@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use registry_casework::{
-    check_activation, ActivationCandidate, ActivationError, ApplyRequest, AuditCapture,
-    CaseworkAudit, DatabaseConfig, DatabaseIdCheck, GenerationChange, PlanKind, PostgresStore,
-    RoleMode, RuntimeError, StoreError, TemplateChange, MIGRATION_LOCK_KEY,
+    check_activation, check_pinned_work, ActivationCandidate, ActivationError, ApplyRequest,
+    AuditCapture, CaseworkAudit, DatabaseConfig, DatabaseIdCheck, GenerationChange, PlanKind,
+    PostgresStore, RoleMode, RuntimeError, StoreError, TemplateChange, MIGRATION_LOCK_KEY,
 };
 use registry_casework_core::{
     ActiveSubjectsPage, AuthoritativeObservation, CallerSubjectView, CaseworkProject,
@@ -964,6 +964,53 @@ async fn stranded_work_is_refused_until_the_exact_package_is_acknowledged() {
         .expect("the acknowledged package applies");
     assert_eq!(applied.effects.pinned_work.verdict, "acknowledged");
     assert_eq!(fixture.ledger().await.len(), 2);
+}
+
+/// Work admitted under the active package after its apply, by a process
+/// still serving an earlier package, is refused at startup until the
+/// operator acknowledges the package that strands it.
+#[tokio::test]
+async fn startup_refuses_work_stranded_after_apply_until_the_package_is_acknowledged() {
+    let fixture = Fixture::single("stranded_startup").await;
+    let project = project();
+    let first = digest('a');
+    let applied = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("apply with no pinned work");
+    assert_eq!(applied.effects.pinned_work.verdict, "clear");
+    fixture
+        .client
+        .execute(
+            "INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,revision,first_observed_at,updated_at) VALUES($1,'retired-source','request','subject-1','review','review-1',$2,'open','retired-queue',1,now(),now())",
+            &[
+                &Uuid::new_v4(),
+                &json!({"sourceRevision": "1", "version": "proposal-1", "generation": "retired"}),
+            ],
+        )
+        .await
+        .expect("an earlier process admits work the active package strands");
+    let runtime = fixture.runtime();
+
+    let refused = check_pinned_work(&runtime, &project, &[], &first, None)
+        .await
+        .expect_err("startup refuses the stranded work");
+    assert!(
+        matches!(refused, RuntimeError::StrandedPinnedWork(_)),
+        "{refused}"
+    );
+    let message = refused.to_string();
+    assert!(message.contains("source retired-source"), "{message}");
+    assert!(
+        message.contains(&format!("set package.acknowledgeStrandedWork to {first}")),
+        "{message}"
+    );
+    check_pinned_work(&runtime, &project, &[], &first, Some(&digest('b')))
+        .await
+        .expect_err("an acknowledgement of another package is refused");
+    check_pinned_work(&runtime, &project, &[], &first, Some(&first))
+        .await
+        .expect("the acknowledged package starts");
 }
 
 #[tokio::test]
