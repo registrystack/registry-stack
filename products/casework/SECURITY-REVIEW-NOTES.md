@@ -49,9 +49,10 @@ two-person rule enforce it on who can read the migration credential.
 - Only `caseworkctl apply` resolves the migration credential. `casework serve`,
   `caseworkctl plan`, `status`, and `doctor` connect with the runtime
   credential; `plan` does so in a read-only transaction.
-- The runtime code no longer migrates, registers source generations,
-  activates or retires task templates, or checks stranded pinned work at
-  startup. Its activation check (`runtime::check_activation`) only reads.
+- The runtime code no longer migrates, registers source generations, or
+  activates or retires task templates at startup. Its activation check
+  (`runtime::check_activation`) and its stranded pinned work check (below)
+  only read.
   That is what the runtime does, not what its credential can do: the runtime
   role keeps DML on the tables that hold template activation and source
   generations (see Residual risk).
