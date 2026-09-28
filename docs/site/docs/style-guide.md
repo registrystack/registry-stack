@@ -190,6 +190,7 @@ This applies to `tutorial` and `how-to` pages, and to any page that asks the rea
 - Link into another page's section when the reader wants that section and not the page: a procedure they were sent to perform, a definition they were sent to check. Link to the page itself when they need its context to make sense of the part. `check-built-links` resolves every fragment against the built page, so a renamed heading fails the build rather than dropping the reader silently at the top.
 - Link to upstream standards bodies first, then to mirrors or summaries.
 - Pin links to code to a release tag (`v0.8.3`) or a commit SHA, never a branch, when the claim depends on the code state.
+- Current pages never name an exact release as an install or download target: write the reader's release as `<tag>`, point at the [latest release](https://github.com/registrystack/registry-stack/releases/latest), and name a release-dependent repository file by its path at that tag (`release/VERIFY.md` at the tag you install). Exact release pins belong to archived docsets. `scripts/current-docs-release-pins.test.mjs` enforces this.
 
 ## Tables
 
