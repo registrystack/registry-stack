@@ -436,6 +436,10 @@ impl ApplyTimeouts {
 pub struct RecordedRegistryState {
     pub identity: ExpectedRegistryIdentity,
     pub ready: bool,
+    /// Whether the ledger records the active activation as applied. It is
+    /// false only while an initial activation is unfinished: its state row
+    /// names its own target, which no applied activation made active.
+    pub activation_applied: bool,
 }
 
 /// Reads the registry state the database records for one registry package
@@ -470,7 +474,13 @@ pub async fn read_recorded_registry_state(
         return Err(MigrationError::PreLedgerDatabase);
     }
     let snapshot = match shape {
-        Ok(_) => connection.maintenance_snapshot().await,
+        Ok(_) => match connection.maintenance_snapshot().await {
+            Ok(snapshot) => connection
+                .active_activation_roles()
+                .await
+                .map(|roles| (snapshot, roles.is_some())),
+            Err(error) => Err(error),
+        },
         Err(error) => Err(error),
     };
     connection
@@ -478,10 +488,11 @@ pub async fn read_recorded_registry_state(
         .await
         .map_err(refusal_before_maintenance)?;
     match snapshot {
-        Ok(snapshot) => Ok(Some(RecordedRegistryState {
+        Ok((snapshot, activation_applied)) => Ok(Some(RecordedRegistryState {
             ready: snapshot.maintenance_status == "ready"
                 && snapshot.maintenance_target_package_digest.is_none(),
             identity: snapshot.identity,
+            activation_applied,
         })),
         Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => Ok(None),
         Err(error) => Err(refusal_before_maintenance(error)),

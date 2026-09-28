@@ -25,8 +25,9 @@ use registry_breg::compiler::{
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use registry_breg::event_destination::EventDestinationCompatibilityInventory;
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, MigrationError,
+    apply_verified_package, plan_verified_package, read_recorded_registry_state,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, MigrationError, PlannedActivation,
 };
 #[cfg(feature = "tooling")]
 use registry_breg::migration_plan::{
@@ -1629,6 +1630,73 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
     .await;
     assert_eq!(startup.err(), Some(StartupError::DatabaseUnready));
     drop(runtime);
+    database.cleanup().await;
+}
+
+/// A failed initial activation leaves a state row naming its own target,
+/// yet the ledger records no applied activation, so the recorded state says
+/// so and a plan of the same package reports the initial activation the
+/// next apply resumes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resume() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs prerequisite");
+    let fixture = PackageFixture::build(None, fingerprint(7), PlanChoice::Schema);
+    let context = fixture.context();
+    let package = load_package(fixture.root.path(), &context)
+        .expect("production-shaped package verifies before catalog apply");
+    let refused = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
+    let failed_activation: String = database
+        .admin
+        .query_one(
+            "SELECT activation_id::text FROM registry_internal.registry_migrations",
+            &[],
+        )
+        .await
+        .expect("the one ledger entry reads")
+        .get(0);
+
+    let timeouts = ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
+        .expect("test timeouts are bounded");
+    let recorded = read_recorded_registry_state(
+        &database.migration_config,
+        &package.manifest().package_id,
+        &database.migration_role,
+        timeouts,
+    )
+    .await
+    .expect("the recorded state reads")
+    .expect("the failed initial activation left a state row");
+    assert!(!recorded.ready);
+    assert!(
+        !recorded.activation_applied,
+        "the ledger records no applied activation"
+    );
+
+    let plan = plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        &package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.runtime_role),
+        timeouts,
+    ))
+    .await
+    .expect("the plan reports the interrupted initial activation");
+    assert_eq!(plan.activation, PlannedActivation::Initial);
+    assert_eq!(plan.resumes_activation_id, Some(failed_activation));
     database.cleanup().await;
 }
 
