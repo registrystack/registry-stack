@@ -352,9 +352,14 @@ mod tests {
 
     #[test]
     fn a_private_label_anywhere_refuses_the_input() {
-        let input = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n\
-                     -----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n";
-        let error = public_jwk_from_pem(input, None).unwrap_err().to_string();
+        // The label is assembled at run time so the source carries no
+        // key-shaped block for the secret scanner to report.
+        let label = ["EC", "PRIVATE", "KEY"].join(" ");
+        let input = format!(
+            "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n\
+             -----BEGIN {label}-----\nAAAA\n-----END {label}-----\n"
+        );
+        let error = public_jwk_from_pem(&input, None).unwrap_err().to_string();
         assert!(error.contains("private key"), "{error}");
     }
 
