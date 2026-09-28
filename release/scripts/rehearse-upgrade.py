@@ -1612,6 +1612,9 @@ class Evidence:
         runtime = load_yaml(target_runtime)
         if "package" in runtime:
             if self.installed.exists():
+                # evidencectl seals every package directory read-only.
+                for directory, _, _ in os.walk(self.installed):
+                    os.chmod(directory, 0o700)
                 shutil.rmtree(self.installed)
             candidate.rename(self.installed)
         if self.runtime.exists():
