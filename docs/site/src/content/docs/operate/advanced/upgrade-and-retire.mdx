@@ -78,7 +78,7 @@ sequence on a restored copy first, as
    adoption rather than the activation they were opened under. A `package.root` that still names
    the earlier release's package is refused with path `package.root`. When an `apply` stops
    before it finishes, rerun it with the same `database.roles`: a retry under other roles is
-   refused as `apply.resume.roles_differ`, naming the roles the activation started with. Casework reports each BReg source as unavailable from here until step 5
+   refused as `apply.resume.roles_differ`, naming the roles the activation started with. A new package applied under `database.roles` other than the ones the active activation serves with is refused as `apply.successor.roles_differ` before maintenance; apply the active package under the new roles first, then the new package. Casework reports each BReg source as unavailable from here until step 5
    finishes.
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
    `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see

@@ -221,9 +221,9 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActivationAuditUnavailable
             | MigrationError::PreLedgerDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
-            MigrationError::RuntimeWriteAuthority(_) | MigrationError::ResumeRolesDiffer { .. } => {
-                Self::MigrationAuthority
-            }
+            MigrationError::RuntimeWriteAuthority(_)
+            | MigrationError::ResumeRolesDiffer { .. }
+            | MigrationError::SuccessorRolesDiffer { .. } => Self::MigrationAuthority,
         }
     }
 }
