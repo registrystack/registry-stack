@@ -59,6 +59,39 @@
         },
         "databaseAccess": {
           "const": false
+        },
+        "bregPackage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "package",
+            "packageDigest",
+            "registryRevision",
+            "sourceId",
+            "sourceRevision",
+            "pin"
+          ],
+          "properties": {
+            "package": {
+              "type": "string"
+            },
+            "packageDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "registryRevision": {
+              "type": "string"
+            },
+            "sourceId": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "string"
+            },
+            "pin": {
+              "const": "current"
+            }
+          }
         }
       }
     },

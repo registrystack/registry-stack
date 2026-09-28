@@ -140,6 +140,26 @@ REPORTS = {
             "findings": FINDINGS,
             "networkAccess": {"const": False},
             "databaseAccess": {"const": False},
+            "bregPackage": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "package",
+                    "packageDigest",
+                    "registryRevision",
+                    "sourceId",
+                    "sourceRevision",
+                    "pin",
+                ],
+                "properties": {
+                    "package": STRING,
+                    "packageDigest": DIGEST,
+                    "registryRevision": STRING,
+                    "sourceId": STRING,
+                    "sourceRevision": STRING,
+                    "pin": {"const": "current"},
+                },
+            },
         },
     },
     "PlanReport": {
