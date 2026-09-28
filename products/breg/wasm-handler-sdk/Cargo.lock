@@ -390,7 +390,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1287,7 +1287,7 @@ dependencies = [
  "ipnet",
  "jni",
  "rand 0.10.2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tokio",
  "tracing",
@@ -1308,7 +1308,7 @@ dependencies = [
  "prefix-trie",
  "rand 0.10.2",
  "ring",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "url",
@@ -1335,7 +1335,7 @@ dependencies = [
  "resolv-conf",
  "smallvec",
  "system-configuration",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -1708,7 +1708,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -2293,7 +2293,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "strum",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2509,7 +2509,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "rustls",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -2531,7 +2531,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -2779,7 +2779,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2 0.11.0",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "uuid",
 ]
@@ -2806,7 +2806,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "url",
  "zeroize",
@@ -2826,7 +2826,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "utoipa",
 ]
 
@@ -2840,7 +2840,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2 0.11.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2853,7 +2853,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "ulid",
  "zeroize",
 ]
@@ -2865,7 +2865,7 @@ dependencies = [
  "ryu-js",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2879,7 +2879,7 @@ dependencies = [
  "serde_norway",
  "serde_path_to_error",
  "sha2 0.11.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "url",
  "zeroize",
 ]
@@ -2901,7 +2901,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "url",
  "zeroize",
@@ -2915,7 +2915,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "uuid",
 ]
@@ -2927,7 +2927,7 @@ dependencies = [
  "http",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2948,7 +2948,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "url",
@@ -2978,7 +2978,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "ulid",
 ]
 
@@ -3678,11 +3678,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -3698,9 +3698,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4158,7 +4158,7 @@ checksum = "e112fc0db85e7edf9258a9a0fa07566540c19a6a2af3fbf45a4d45d886bfd7df"
 dependencies = [
  "anyhow",
  "logos",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "wit-parser",
 ]
 
@@ -4352,7 +4352,7 @@ dependencies = [
  "pulley-interpreter",
  "smallvec",
  "target-lexicon",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "wasmparser 0.254.0",
  "wasmtime-environ",
  "wasmtime-internal-core",
