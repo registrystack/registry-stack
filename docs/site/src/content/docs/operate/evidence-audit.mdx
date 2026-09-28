@@ -144,6 +144,11 @@ A standalone authorization refusal produces a one-event view:
 ACCESS REFUSED requester=<pseudonym> reason=not_authorized
 ```
 
+An operation that ended after its access without a release prints the decision instead of a
+release line: `DISCLOSURE DENIED reason=no_match` (or `ambiguous`, `unresolved`, `fact_missing`)
+for a denial the evaluation decided, and `TRANSIENT FAILURE reason=dependency_failure` (or
+`evaluation_failure`, `signing_failure`) for a failure a retry may clear.
+
 The command takes the writer's lock, so it refuses while Evidence Gateway still runs. It reads the
 retained local audit files in order, checks that every entry is well formed and that each
 operation's access attempts, one per source call, share one context and pair with a coherent
@@ -153,8 +158,25 @@ does not mean the most recently admitted request. The command is not a productio
 and has no `--all`, subject filter, or export mode. An access-only operation prints only the
 authorized line rather than claiming a release that did not occur.
 
-{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, ShowArgs;
-    crates/registry-evidence/src/audit.rs, last_local_audit_operation. */}
+Request-batch entries are checked like every other entry but never shown. When the last operation
+is a request batch, the command refuses with `evidence.audit.request-batch` rather than showing an
+earlier operation as the last one. When other operations hold an access entry and no outcome, as a
+request the process stopped during does, the view ends with a count and never their identities:
+
+```text
+EARLIER OPERATIONS WITHOUT AN OUTCOME count=1
+```
+
+A refusal names its cause where the cause changes what to do: `evidence.audit.writer-running`
+while a process still holds the audit file, `evidence.audit.history-invalid` for an entry that is
+not well formed, and `evidence.audit.unrecognized-outcome` for an outcome a mismatched
+`evidencectl` version does not know. Every other failure is `evidence.audit.inspection-failed`.
+The command never repeats what the `evidence` process wrote on standard error.
+
+{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, ShowArgs, render_unreleased, and
+    CORE_NAMED_FAILURES; crates/registry-evidence/src/audit.rs, last_local_audit_operation and
+    LocalAuditCollector::collect_request_batch; crates/registry-evidence/src/main.rs,
+    local_audit_failure. */}
 
 ## Understand pseudonymous correlation
 

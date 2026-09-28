@@ -14,8 +14,29 @@ use serde_json::json;
 
 use crate::{dev, OutputFormat};
 
-const CORE_VIEW_SCHEMA: &str = "registry.evidence.local-audit-operation/v1";
+const CORE_VIEW_SCHEMA: &str = "registry.evidence.local-audit-operation/v2";
 const MAX_CORE_OUTPUT_BYTES: usize = 256 * 1024;
+/// The most the core's standard error is read, which is enough for any line
+/// it names a failure with. More than that is no named failure.
+const MAX_CORE_ERROR_BYTES: usize = 1024;
+/// Builds the refusal a named core failure becomes.
+type Refusal = fn() -> anyhow::Error;
+/// The fixed lines the core names a failure with, and the refusal each one
+/// becomes. A line is matched whole and never echoed.
+const CORE_NAMED_FAILURES: [(&str, Refusal); 3] = [
+    (
+        "evidence: local audit inspection failed: the last operation is a request batch\n",
+        request_batch,
+    ),
+    (
+        "evidence: local audit inspection failed: an entry is not well formed\n",
+        history_invalid,
+    ),
+    (
+        "evidence: local audit inspection failed: a writer still holds the audit file\n",
+        writer_running,
+    ),
+];
 /// The core's exit status, with nothing written, for a stopped local audit
 /// history that was read and retains no operation.
 const CORE_NO_OPERATION_EXIT_CODE: i32 = 3;
@@ -96,8 +117,10 @@ fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
 }
 
 /// Read no more than the closed core output bound and retain nothing from a
-/// failed child. Stderr is never inherited because it may contain protected
-/// audit or deployment detail from a substituted binary.
+/// failed child. Stderr is never inherited or echoed because it may contain
+/// protected audit or deployment detail from a substituted binary; a bounded
+/// read of it is only compared whole against the fixed lines the core names a
+/// failure with.
 fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
     let mut child = Command::new(evidence)
         .arg("local-audit-last-operation")
@@ -106,9 +129,22 @@ fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| unavailable())?;
+    // Drained beside stdout, so a child that fills one pipe never blocks the
+    // other. Past the bound the rest is discarded, never retained.
+    let stderr = child.stderr.take().ok_or_else(failed)?;
+    let stderr = std::thread::spawn(move || {
+        let mut named = Vec::with_capacity(MAX_CORE_ERROR_BYTES);
+        let mut stderr = stderr;
+        let within = (&mut stderr)
+            .take(MAX_CORE_ERROR_BYTES as u64 + 1)
+            .read_to_end(&mut named)
+            .is_ok();
+        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        within.then_some(named)
+    });
     let mut bytes = Vec::with_capacity(MAX_CORE_OUTPUT_BYTES.min(8192));
     let read = child
         .stdout
@@ -119,16 +155,31 @@ fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
     if read.is_err() || bytes.len() > MAX_CORE_OUTPUT_BYTES {
         let _ = child.kill();
         let _ = child.wait();
+        let _ = stderr.join();
         return Err(failed());
     }
     let status = child.wait().map_err(|_| failed())?;
+    let named = stderr.join().ok().flatten();
     if status.code() == Some(CORE_NO_OPERATION_EXIT_CODE) && bytes.is_empty() {
         return Err(no_operation());
     }
     if !status.success() {
-        return Err(failed());
+        return Err(bytes
+            .is_empty()
+            .then(|| named.as_deref().and_then(named_core_failure))
+            .flatten()
+            .unwrap_or_else(failed));
     }
     Ok(bytes)
+}
+
+/// The refusal a failed core named with one of its fixed lines, if its whole
+/// standard error is exactly that line.
+fn named_core_failure(stderr: &[u8]) -> Option<anyhow::Error> {
+    CORE_NAMED_FAILURES
+        .iter()
+        .find(|(line, _)| line.as_bytes() == stderr)
+        .map(|(_, refusal)| refusal())
 }
 
 fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> Result<String> {
@@ -136,6 +187,20 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
         return Err(failed());
     }
 
+    let mut rendered = render_events(view, questions)?;
+    if view.unmatched_earlier_operations > 0 {
+        rendered.push_str(&format!(
+            "EARLIER OPERATIONS WITHOUT AN OUTCOME count={}\n",
+            view.unmatched_earlier_operations
+        ));
+    }
+    Ok(rendered)
+}
+
+fn render_events(
+    view: &CoreAuditOperation,
+    questions: &[dev::ReadyQuestionState],
+) -> Result<String> {
     if let [CoreAuditEvent::Refusal(refusal)] = view.events.as_slice() {
         return render_refusal(refusal);
     }
@@ -147,12 +212,13 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
             CoreAuditEvent::Refusal(_) => Err(failed()),
         })
         .collect::<Result<Vec<_>>>()?;
-    // One access entry per source call, then the release when one occurred.
+    // One access entry per source call, then the terminal entry when the
+    // operation ended.
     match authorized.split_last() {
-        Some((release, accesses))
-            if release.phase == Phase::DisclosureRelease && !accesses.is_empty() =>
+        Some((terminal, accesses))
+            if terminal.phase != Phase::AccessAttempt && !accesses.is_empty() =>
         {
-            render_authorized(accesses, Some(release), questions)
+            render_authorized(accesses, Some(terminal), questions)
         }
         Some(_) => render_authorized(&authorized, None, questions),
         None => Err(failed()),
@@ -160,6 +226,9 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
 }
 
 fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
+    if refusal.phase == Phase::Unrecognized || refusal.decision == Decision::Unrecognized {
+        return Err(unrecognized_outcome());
+    }
     if refusal.phase != Phase::Denial
         || refusal.decision != Decision::NotAuthorized
         || refusal.safe_error_category != SafeErrorCategory::NotAuthorized
@@ -176,9 +245,17 @@ fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
 
 fn render_authorized(
     accesses: &[&CoreAuthorizedAuditEvent],
-    release: Option<&CoreAuthorizedAuditEvent>,
+    terminal: Option<&CoreAuthorizedAuditEvent>,
     questions: &[dev::ReadyQuestionState],
 ) -> Result<String> {
+    if accesses
+        .iter()
+        .copied()
+        .chain(terminal)
+        .any(|event| event.phase == Phase::Unrecognized || event.decision == Decision::Unrecognized)
+    {
+        return Err(unrecognized_outcome());
+    }
     let (access, _) = accesses.split_first().ok_or_else(failed)?;
     let question = questions
         .iter()
@@ -231,9 +308,14 @@ fn render_authorized(
         ));
     }
     let access = previous.ok_or_else(failed)?;
-    let Some(release) = release else {
+    let Some(terminal) = terminal else {
         return Ok(rendered);
     };
+    if terminal.phase != Phase::DisclosureRelease {
+        rendered.push_str(&render_unreleased(access, terminal, question)?);
+        return Ok(rendered);
+    }
+    let release = terminal;
 
     validate_common(release, question)?;
     if release.phase != Phase::DisclosureRelease
@@ -268,6 +350,40 @@ fn render_authorized(
             .join(", ")
     ));
     Ok(rendered)
+}
+
+/// The line for an operation that ended after its access without releasing:
+/// a denial the evaluation decided, or a transient failure. Either carries
+/// the access's context and no release field.
+fn render_unreleased(
+    access: &CoreAuthorizedAuditEvent,
+    terminal: &CoreAuthorizedAuditEvent,
+    question: &dev::ReadyQuestionState,
+) -> Result<String> {
+    validate_common(terminal, question)?;
+    let outcome = match (terminal.phase, terminal.decision) {
+        (
+            Phase::Denial,
+            Decision::NoMatch | Decision::Ambiguous | Decision::Unresolved | Decision::FactMissing,
+        ) => "DISCLOSURE DENIED",
+        (
+            Phase::TransientFailure,
+            Decision::DependencyFailure | Decision::EvaluationFailure | Decision::SigningFailure,
+        ) => "TRANSIENT FAILURE",
+        _ => return Err(failed()),
+    };
+    if terminal.requester_pseudonym != access.requester_pseudonym
+        || terminal.response_protection != access.response_protection
+        || terminal.disclosed_concepts != Presence::Absent
+        || terminal.evidence_id != Presence::Absent
+        || parse_time(&terminal.occurred_at)? < parse_time(&access.occurred_at)?
+    {
+        return Err(failed());
+    }
+    Ok(format!(
+        "{outcome} reason={}\n",
+        terminal.decision.reason().ok_or_else(failed)?
+    ))
 }
 
 fn validate_common(
@@ -371,6 +487,42 @@ fn no_operation() -> anyhow::Error {
     )
 }
 
+fn request_batch() -> anyhow::Error {
+    refusal(
+        "evidence.audit.request-batch",
+        "local audit history",
+        "The last operation in the stopped local audit history is a request batch, which audit show does not display.",
+        "Send one single-item request to a local session started with evidencectl dev start, run evidencectl dev stop, then rerun audit show.",
+    )
+}
+
+fn history_invalid() -> anyhow::Error {
+    refusal(
+        "evidence.audit.history-invalid",
+        "local audit history",
+        "The stopped local audit history holds an entry that is not a well-formed Evidence audit entry.",
+        "If Evidence stopped abruptly, run evidencectl dev start and evidencectl dev stop once so the writer moves a torn final line aside, then rerun audit show; otherwise archive the session's audit files before starting a fresh session.",
+    )
+}
+
+fn writer_running() -> anyhow::Error {
+    refusal(
+        "evidence.audit.writer-running",
+        "local audit history",
+        "A running Evidence process still holds the local audit file.",
+        "Stop the local session with evidencectl dev stop, then rerun audit show.",
+    )
+}
+
+fn unrecognized_outcome() -> anyhow::Error {
+    refusal(
+        "evidence.audit.unrecognized-outcome",
+        "local audit history",
+        "The last local operation records an outcome this evidencectl version does not recognize.",
+        "Install the evidence and evidencectl binaries of the same version, then rerun audit show.",
+    )
+}
+
 /// The one closed class for every other failure. It names no cause, because
 /// the detail may come from protected audit or deployment state.
 fn failed() -> anyhow::Error {
@@ -423,6 +575,7 @@ struct CoreAuditOperation {
     schema: String,
     operation: String,
     events: Vec<CoreAuditEvent>,
+    unmatched_earlier_operations: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -458,20 +611,54 @@ struct CoreRefusalAuditEvent {
     safe_error_category: SafeErrorCategory,
 }
 
+/// The core's closed phase vocabulary. A phase a later core adds reads as
+/// `Unrecognized`, which is named as such rather than refused as unreadable.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 enum Phase {
     AccessAttempt,
     DisclosureRelease,
     Denial,
+    TransientFailure,
+    #[serde(other)]
+    Unrecognized,
 }
 
+/// The core's closed decision vocabulary, with the same fallback as [`Phase`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 enum Decision {
     Authorized,
     Released,
     NotAuthorized,
+    NoMatch,
+    Ambiguous,
+    Unresolved,
+    FactMissing,
+    DependencyFailure,
+    EvaluationFailure,
+    SigningFailure,
+    #[serde(other)]
+    Unrecognized,
+}
+
+impl Decision {
+    /// The reason a terminal line names for a decision that ended an
+    /// operation without a release.
+    fn reason(self) -> Option<&'static str> {
+        Some(match self {
+            Self::NoMatch => "no_match",
+            Self::Ambiguous => "ambiguous",
+            Self::Unresolved => "unresolved",
+            Self::FactMissing => "fact_missing",
+            Self::DependencyFailure => "dependency_failure",
+            Self::EvaluationFailure => "evaluation_failure",
+            Self::SigningFailure => "signing_failure",
+            Self::Authorized | Self::Released | Self::NotAuthorized | Self::Unrecognized => {
+                return None
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `evidencectl audit show --last-operation` reads a retained history that
+  holds request-batch entries instead of refusing it, and refuses with
+  `evidence.audit.request-batch` when the last operation is a batch. An
+  operation that ended in a denial or a transient failure after its access
+  prints `DISCLOSURE DENIED` or `TRANSIENT FAILURE` with its reason instead of
+  failing, and earlier operations left without an outcome are counted on an
+  `EARLIER OPERATIONS WITHOUT AN OUTCOME` line. Refusals name a running writer,
+  a malformed entry, or an unrecognized outcome with their own codes. The
+  internal core view moves to `registry.evidence.local-audit-operation/v2`,
+  which adds `unmatchedEarlierOperations`, so `evidence` and `evidencectl` must
+  be the same version.
+
 - `evidence serve` writes its operational records to standard error instead of
   standard output, so a `stdout` audit destination carries audit entries alone.
   A collector that read Evidence logs from standard output reads standard error

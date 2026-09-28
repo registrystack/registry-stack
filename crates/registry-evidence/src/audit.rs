@@ -853,6 +853,11 @@ pub enum EvidenceAuditError {
     /// read failure because it is a complete answer.
     #[error("stopped local audit retains no operation")]
     NoOperation,
+    /// The last operation the stopped local audit retains is a request batch,
+    /// which the minimized local view does not show. Reported apart from a
+    /// read failure because the history read and is well formed.
+    #[error("the last local audit operation is a request batch")]
+    RequestBatchOperation,
 }
 
 /// Evidence's audit boundary: the closed native record families, their keyed
@@ -1032,7 +1037,7 @@ fn identifier_key_hasher(
     Ok(profile.key_hasher())
 }
 
-pub const LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1: &str = "registry.evidence.local-audit-operation/v1";
+pub const LOCAL_AUDIT_OPERATION_VIEW_SCHEMA: &str = "registry.evidence.local-audit-operation/v2";
 
 /// Minimized verified view of one native audit operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1041,6 +1046,10 @@ pub struct LocalAuditOperationView {
     schema: &'static str,
     operation: String,
     events: Vec<LocalAuditOperationEvent>,
+    /// How many other operations the retained history holds an access entry
+    /// for and no terminal entry, such as a request the process stopped
+    /// during. A count, never their identities, so the view stays minimized.
+    unmatched_earlier_operations: usize,
     #[serde(skip)]
     assurance_profile: AssuranceProfile,
 }
@@ -1134,6 +1143,10 @@ struct LocalAuditCollector {
     /// Operations whose earlier entries retention deleted. They are neither
     /// inspectable nor the last operation.
     cut: BTreeSet<String>,
+    /// Every request-batch operation read. The local view does not show one.
+    request_batches: BTreeSet<String>,
+    /// Request-batch operations with an access entry and no terminal entry.
+    pending_request_batches: BTreeSet<String>,
     last_completed: Option<LocalAuditOperationView>,
     /// Whether the entries read come from the oldest retained file, where a
     /// terminal entry may follow an access entry retention deleted.
@@ -1179,8 +1192,59 @@ impl LocalAuditCollector {
                 }
                 self.collect_authorization_refusal(event)
             }
+            REQUEST_BATCH_AUDIT_SCHEMA => {
+                let event: EvidenceRequestBatchAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                let expected_phase = if event.phase == EvidenceRequestBatchAuditPhase::AccessAttempt
+                {
+                    EntryPhase::Request
+                } else {
+                    EntryPhase::Response
+                };
+                if entry.phase != expected_phase || entry.correlation != event.operation {
+                    return Err(invalid_audit_data());
+                }
+                self.collect_request_batch(event)
+            }
             _ => Err(invalid_audit_data()),
         }
+    }
+
+    /// Check a request-batch entry and record its operation. A batch is
+    /// never the operation the view shows, so its entries are checked for
+    /// shape and order only and never abort the read of another operation.
+    fn collect_request_batch(
+        &mut self,
+        event: EvidenceRequestBatchAuditEvent,
+    ) -> Result<(), AuditError> {
+        event
+            .validate_phase_fields()
+            .map_err(|_| invalid_audit_data())?;
+        let operation = event.operation;
+        // One operation identifier belongs to one record family.
+        if self.pending.contains_key(&operation)
+            || (self.completed.contains(&operation) && !self.request_batches.contains(&operation))
+        {
+            return Err(invalid_audit_data());
+        }
+        self.record_operation(&operation);
+        self.request_batches.insert(operation.clone());
+        if event.phase == EvidenceRequestBatchAuditPhase::AccessAttempt {
+            // A batch writes one access entry per physical source call, all
+            // before its one terminal entry.
+            if self.completed.contains(&operation) {
+                return Err(invalid_audit_data());
+            }
+            self.pending_request_batches.insert(operation);
+            return Ok(());
+        }
+        // A batch may end before any source call, so a terminal entry needs
+        // no access entry before it, but an operation ends once.
+        self.pending_request_batches.remove(&operation);
+        if !self.completed.insert(operation) {
+            return Err(invalid_audit_data());
+        }
+        Ok(())
     }
 
     fn record_operation(&mut self, operation: &str) {
@@ -1194,6 +1258,9 @@ impl LocalAuditCollector {
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
+        if self.request_batches.contains(&operation) {
+            return Err(invalid_audit_data());
+        }
         self.record_operation(&operation);
         let view = LocalAuditOperationEvent::from(&event);
 
@@ -1273,9 +1340,10 @@ impl LocalAuditCollector {
         let mut events: Vec<_> = stages.into_iter().map(|stage| stage.view).collect();
         events.push(view);
         self.last_completed = Some(LocalAuditOperationView {
-            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
+            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA,
             operation,
             events,
+            unmatched_earlier_operations: 0,
             assurance_profile,
         });
         Ok(())
@@ -1289,14 +1357,18 @@ impl LocalAuditCollector {
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
+        if self.request_batches.contains(&operation) {
+            return Err(invalid_audit_data());
+        }
         self.record_operation(&operation);
         if self.pending.contains_key(&operation) || !self.completed.insert(operation.clone()) {
             return Err(invalid_audit_data());
         }
         self.last_completed = Some(LocalAuditOperationView {
-            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
+            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA,
             operation,
             events: vec![LocalAuditOperationEvent::from(&event)],
+            unmatched_earlier_operations: 0,
             assurance_profile: event.assurance_profile,
         });
         Ok(())
@@ -1311,16 +1383,27 @@ impl LocalAuditCollector {
             .find(|operation| !self.cut.contains(*operation))
             .cloned()
             .ok_or(EvidenceAuditError::NoOperation)?;
-        let view = if let Some(stages) = self.pending.remove(&last) {
+        if self.request_batches.contains(&last) {
+            return Err(EvidenceAuditError::RequestBatchOperation);
+        }
+        // Every other operation still waiting for its terminal entry, whether
+        // a single request or a batch, is reported as a count.
+        let unmatched_earlier_operations = self
+            .pending
+            .len()
+            .saturating_add(self.pending_request_batches.len())
+            .saturating_sub(usize::from(self.pending.contains_key(&last)));
+        let mut view = if let Some(stages) = self.pending.remove(&last) {
             let assurance_profile = stages
                 .first()
                 .ok_or(EvidenceAuditError::InvalidEvent)?
                 .event
                 .assurance_profile;
             LocalAuditOperationView {
-                schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
+                schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA,
                 operation: last,
                 events: stages.into_iter().map(|stage| stage.view).collect(),
+                unmatched_earlier_operations: 0,
                 assurance_profile,
             }
         } else {
@@ -1329,6 +1412,7 @@ impl LocalAuditCollector {
                 .filter(|completed| completed.operation == last)
                 .ok_or(EvidenceAuditError::InvalidEvent)?
         };
+        view.unmatched_earlier_operations = unmatched_earlier_operations;
         let starts_with_complete_native_event =
             view.events.first().is_some_and(|event| match event {
                 LocalAuditOperationEvent::Authorized(event) => {
@@ -3034,6 +3118,138 @@ mod tests {
         log.append(release).await.expect("release event appends");
     }
 
+    /// A request batch's access and release entries, as the batch route
+    /// writes them for `operation`.
+    fn local_request_batch(
+        operation: &str,
+    ) -> (
+        EvidenceRequestBatchAuditEvent,
+        EvidenceRequestBatchAuditEvent,
+    ) {
+        let mut access = request_batch_event(
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+        );
+        access.assurance_profile = AssuranceProfile::Local;
+        access.operation = operation.to_owned();
+        access.source_id = Some("source-a".to_owned());
+        access.adapter_id = Some("adapter-a".to_owned());
+        access.item_indices = Some(vec![0]);
+        access.item_groups = Some(vec![request_batch_item_group(vec![0], '2')]);
+        let mut release = request_batch_event(
+            EvidenceRequestBatchAuditPhase::DisclosureRelease,
+            EvidenceRequestBatchAuditDecision::Released,
+        );
+        release.assurance_profile = AssuranceProfile::Local;
+        release.operation = operation.to_owned();
+        release.item_groups = access.item_groups.clone();
+        release.disclosed_concepts = Some(Vec::new());
+        release.outcomes = Some(vec![EvidenceRequestBatchAuditOutcome {
+            item_index: 0,
+            outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+            evidence_id: None,
+        }]);
+        (access, release)
+    }
+
+    #[tokio::test]
+    async fn local_inspection_skips_a_request_batch_of_another_operation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        let (access, release) = local_request_batch("batch-operation-00000000001");
+        log.append_request_batch(access)
+            .await
+            .expect("batch access appends");
+        log.append_request_batch(release)
+            .await
+            .expect("batch release appends");
+        append_local_operation(&log, "local-operation-0000000000000002").await;
+        drop(log);
+
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("a batch entry does not abort the read"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000002")
+        );
+        assert_eq!(value["unmatchedEarlierOperations"], serde_json::json!(0));
+    }
+
+    #[tokio::test]
+    async fn local_inspection_names_a_request_batch_as_the_last_operation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        let (access, release) = local_request_batch("batch-operation-00000000002");
+        log.append_request_batch(access)
+            .await
+            .expect("batch access appends");
+        log.append_request_batch(release)
+            .await
+            .expect("batch release appends");
+        drop(log);
+
+        assert!(
+            matches!(
+                last_local_audit_operation(&path),
+                Err(EvidenceAuditError::RequestBatchOperation)
+            ),
+            "the view never passes an earlier operation off as the last one"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_inspection_refuses_a_request_batch_entry_that_breaks_its_pairing() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        let (access, release) = local_request_batch("batch-operation-00000000001");
+        log.append_request_batch(access.clone())
+            .await
+            .expect("batch access appends");
+        log.append_request_batch(release)
+            .await
+            .expect("batch release appends");
+        // An access after the operation's terminal entry is corrupt history.
+        log.append_request_batch(access)
+            .await
+            .expect("late batch access appends");
+        append_local_operation(&log, "local-operation-0000000000000002").await;
+        drop(log);
+        assert!(last_local_audit_operation(&path).is_err());
+    }
+
+    #[tokio::test]
+    async fn local_inspection_counts_earlier_operations_left_unmatched() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        // A crashed request leaves its access entry with no terminal entry.
+        log.append(local_access(&log, "local-operation-0000000000000001"))
+            .await
+            .expect("unmatched access appends");
+        let (batch_access, _) = local_request_batch("batch-operation-00000000002");
+        log.append_request_batch(batch_access)
+            .await
+            .expect("unmatched batch access appends");
+        append_local_operation(&log, "local-operation-0000000000000003").await;
+        drop(log);
+
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("the last operation still reads"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000003")
+        );
+        assert_eq!(value["unmatchedEarlierOperations"], serde_json::json!(2));
+    }
+
     #[tokio::test]
     async fn local_inspection_skips_a_terminal_whose_access_retention_removed() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -3369,7 +3585,7 @@ mod tests {
                 ),
             ),
             (
-                "request-batch-family",
+                "request-batch-terminal-filed-as-request",
                 AuditEntry::request(
                     REQUEST_BATCH_AUDIT_SCHEMA,
                     "operation-request-batch-audit",
@@ -3515,11 +3731,17 @@ mod tests {
                 .expect("view is an object")
                 .keys()
                 .collect::<Vec<_>>(),
-            ["events", "operation", "schema"]
+            [
+                "events",
+                "operation",
+                "schema",
+                "unmatchedEarlierOperations"
+            ]
         );
+        assert_eq!(value["unmatchedEarlierOperations"], serde_json::json!(0));
         assert_eq!(
             value["schema"],
-            serde_json::json!(LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1)
+            serde_json::json!(LOCAL_AUDIT_OPERATION_VIEW_SCHEMA)
         );
         assert_eq!(value["operation"], serde_json::json!(operation));
         let events = value["events"].as_array().expect("events are an array");
