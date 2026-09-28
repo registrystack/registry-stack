@@ -229,6 +229,12 @@ fn parse_backup_reference(value: &str) -> Result<String, String> {
     registry_casework::validate_backup_reference(value).map(|()| value.to_owned())
 }
 
+/// The uuid parser's own error quotes part of the rejected text, and a usage
+/// error repeats the reason, so this one names only the flag.
+fn parse_attempt_id(value: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(value).map_err(|_| "--attempt-id must be a UUID".to_owned())
+}
+
 /// A removed command keeps its name only to refuse it and name the
 /// replacement; whatever followed it is ignored.
 #[derive(Debug, Args)]
@@ -301,7 +307,7 @@ struct AttemptMarkUncertainArgs {
     #[command(flatten)]
     operator: OperatorArgs,
     /// Pending source attempt to mark uncertain.
-    #[arg(long, value_name = "UUID")]
+    #[arg(long, value_name = "UUID", value_parser = parse_attempt_id)]
     attempt_id: Uuid,
     /// Why the attempt is marked uncertain; recorded in the work item's history.
     #[arg(long)]
@@ -319,7 +325,7 @@ struct AttemptSettleArgs {
     #[command(flatten)]
     operator: OperatorArgs,
     /// Uncertain source attempt to settle.
-    #[arg(long, value_name = "UUID")]
+    #[arg(long, value_name = "UUID", value_parser = parse_attempt_id)]
     attempt_id: Uuid,
     /// What the source owner confirmed about the attempt.
     #[arg(long, value_enum)]
@@ -2118,6 +2124,37 @@ mod tests {
     }
 
     #[test]
+    fn a_validator_reason_survives_as_the_usage_message() {
+        let sentinel = "sentinel-7f3a9c";
+        let mut settle = attempt_settle_arguments();
+        settle.remove(0);
+        let settle = replace_argument(settle, "--attempt-id", sentinel);
+        let refusals: [(&[&str], &str); 2] = [
+            (
+                &["apply", "--runtime-config", "runtime.yaml", "--backup", ""],
+                "--backup must not be empty",
+            ),
+            (&settle, "--attempt-id must be a UUID"),
+        ];
+        for (arguments, reason) in refusals {
+            for format in ["human", "json"] {
+                let mut all = vec!["--format", format];
+                all.extend_from_slice(arguments);
+                let (exit, stdout, stderr) = run_args(&all);
+                assert_eq!(exit, ExitCode::from(2), "{stdout}{stderr}");
+                assert!(
+                    stdout.contains(reason) || stderr.contains(reason),
+                    "{reason}: {stdout}{stderr}"
+                );
+                assert!(
+                    !stdout.contains(sentinel) && !stderr.contains(sentinel),
+                    "{stdout}{stderr}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn apply_bounds_its_operator_references_as_usage_errors() {
         let long = "r".repeat(registry_casework::MAX_OPERATOR_REFERENCE_BYTES + 1);
         for reference in ["", "change\n42", long.as_str()] {
@@ -2134,7 +2171,7 @@ mod tests {
         let (exit, _, stderr) =
             run_args(&["apply", "--runtime-config", "runtime.yaml", "--backup", ""]);
         assert_eq!(exit, ExitCode::from(2), "{stderr}");
-        assert!(stderr.contains("invalid value for --backup"), "{stderr}");
+        assert!(stderr.contains("--backup must not be empty"), "{stderr}");
 
         let mut arguments = vec!["apply", "--runtime-config", "runtime.yaml"];
         for _ in 0..=registry_casework::MAX_BACKUP_REFERENCES {
