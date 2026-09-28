@@ -600,7 +600,7 @@ candidate does not declare (release provenance).
 ### Tests
 
 `crates/registry-breg/src/tooling.rs`:
-`a_signed_baseline_without_an_index_reports_the_index_the_plan_adds`.
+`a_packaged_baseline_without_an_index_reports_the_index_the_plan_adds`.
 `crates/registry-breg/tests/postgres_migration.rs`:
 `real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse`
 covers both a drift that is reported and a final mismatch that is still
