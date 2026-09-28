@@ -3817,13 +3817,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54b4ed3a7192fa19f5f48f99871f2755047fabefd7f222f12a1df1773796a102"
 
 [[package]]
+name = "oxiri"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b6bd0ef560f078e41ce2ebf370cce217e7fb2c3695ffa87541151c9de94e83a"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "oxjsonld"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86a3e89e005662e60327027f45ec7cefd0472404e01831b5d83a3ac522cfabe0"
 dependencies = [
  "json-event-parser",
- "oxiri",
+ "oxiri 0.2.11",
  "oxrdf",
  "ryu-js",
  "thiserror 2.0.21",
@@ -3836,7 +3845,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4be15186205eb60ddbdc2fb47cb25df472c7f399bbe119b68c0972b6b6dd46ea"
 dependencies = [
  "oxilangtag",
- "oxiri",
+ "oxiri 0.2.11",
  "rand 0.9.5",
  "thiserror 2.0.21",
 ]
@@ -5625,7 +5634,7 @@ dependencies = [
 name = "registry-manifest-core"
 version = "0.35.0"
 dependencies = [
- "oxiri",
+ "oxiri 0.3.1",
  "oxjsonld",
  "registry-platform-canonical-json",
  "serde",
