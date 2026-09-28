@@ -114,7 +114,8 @@ MiB, at least 1 MiB, at most 4294967295) and rotated files are removed after
 `audit.retainDays` (default 90, at most 36500). `stdout` takes none of the
 three and leaves collection and retention to the platform that reads the
 stream. The runtime writes its operational logs to standard error whatever the
-destination is, so a `stdout` stream carries audit entries alone.
+destination is, so a `stdout` stream carries audit entries alone. `RUST_LOG`
+selects their verbosity and defaults to `info` when it is unset or invalid.
 `schedulingctl records apply`
 writes beside the runtime, to `<stem>.schedulingctl.<ext>` next to
 `audit.path`, so the two processes never share a file, or to standard error

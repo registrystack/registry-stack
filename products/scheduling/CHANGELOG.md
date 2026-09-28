@@ -5,6 +5,9 @@
 - Write operational logs to standard error instead of standard output, so a
   `stdout` audit destination carries audit entries alone. A collector that read
   `scheduling` logs from standard output reads standard error instead.
+- Log at `info` when `RUST_LOG` is unset or invalid. The runtime previously
+  logged errors only by default, so a deployment without `RUST_LOG` lost every
+  info and warn record.
 
 ## v0.35.0 - 2026-09-28
 
