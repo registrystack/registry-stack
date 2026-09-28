@@ -248,7 +248,7 @@ pub(super) fn app_with_clients(
             HttpService::new(
                 registry,
                 ReadRuntimeIdentity {
-                    package_revision: identity.package_revision,
+                    package_revision: identity.activation_id,
                     schema_fingerprint: identity.schema_fingerprint,
                 },
                 reads,
