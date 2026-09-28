@@ -272,6 +272,14 @@ and need `CASEWORK_ACTIVATION_TEST_DATABASE_URL`.
   schema the path does not name is invisible to it, as it is to the runtime.
 - A source unreachable at startup is served with its pin unchecked until
   the next start; its registry revision is not re-read while the service runs.
+- Registering a changed source binding generation is not serialized against
+  a running runtime's attempt reservation, which locks only the work item and
+  does not read the subject's generation. A runtime still serving the earlier
+  package can reserve an attempt under the earlier binding while or after
+  apply rebinds the source, stranding it where the new runtime cannot execute
+  or recover it. The race predates the activation ledger: the same
+  registration ran at startup before. The mitigation is operational (stop
+  every runtime on the earlier package before apply); the fix is #1723.
 - `plan` sees the runtime role's membership in the migration role only through
   ownership; apply, which runs as the migration role, sees it directly.
 - If reading the ledger back after a refused response entry also fails, apply

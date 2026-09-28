@@ -102,6 +102,15 @@
   release's BReg no longer serves: after upgrading BReg, run `caseworkctl
   check --against-breg-package`, repin with `caseworkctl source add --apply`,
   and package the project again before plan and apply.
+  Stop every runtime serving the earlier package before `caseworkctl apply`
+  of a package that changes a source's binding generation. A runtime left
+  running can reserve a source attempt under the earlier binding while or
+  after apply rebinds the source, and the new runtime cannot execute or
+  recover it (#1723). No `status` or `doctor` report lists such an attempt:
+  its work item stays fenced, the holder's next call receives the recovery
+  problem naming it, and the operator clears it with `caseworkctl attempt
+  mark-uncertain` then `caseworkctl attempt settle` once the source owner
+  confirms the outcome.
   `caseworkctl dev` applies in-process on every start, after it rewrites the
   session's operator configuration, so a session retained from an earlier
   release starts with its database in place. Ctrl+C stops a start whose
