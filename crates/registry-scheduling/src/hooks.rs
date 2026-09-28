@@ -281,6 +281,20 @@ impl ActivatedHooks {
         self.compiled.schema_fingerprint()
     }
 
+    /// Compile `declarations` and resolve every destination they name with
+    /// its signing material, as [`Self::activate`] does, without a runtime
+    /// identity, and keep nothing. Operator tooling reports with it that a
+    /// candidate's hooks cannot run before anything is planned or applied.
+    pub fn check_destinations(
+        declarations: &[HookDeclaration],
+        configured: &BTreeMap<String, HookDestinationConfig>,
+        secrets: &SecretResolver,
+    ) -> Result<(), HookActivationError> {
+        let compiled = CompiledHooks::compile(declarations)?;
+        ActivatedDestinations::activate(&compiled.destination_ids, configured, secrets)?;
+        Ok(())
+    }
+
     #[must_use]
     pub fn destination_binding_digest(&self) -> &str {
         &self.destinations.binding_digest
