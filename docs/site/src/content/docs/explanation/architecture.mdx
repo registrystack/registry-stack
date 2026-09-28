@@ -204,8 +204,8 @@ decision.
 4. A registry project (`registry.yaml`, `kind: RegistryProject`) declares the entities, fields,
    relationships, vocabularies, access profiles, and events one Base Registry Engine deployment
    holds. `bregctl` compiles that project into the PostgreSQL schema, the REST routes, the
-   per-profile permissions, revision history, and the audit journal, and packages the result. A
-   signer approves the exact package bytes and an operator activates it; the `breg` runtime serves
+   per-profile permissions, revision history, and the audit journal, and packages the result. An
+   operator activates that exact package; the `breg` runtime serves
    one activated package against one database, and its runtime file cannot widen what the package
    sealed. Base Registry Engine is the one product in the stack that holds records and accepts
    writes. The [Base Registry Engine authoring reference](../../configure/breg/) covers the project

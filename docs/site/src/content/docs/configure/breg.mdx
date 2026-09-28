@@ -119,7 +119,7 @@ and a snippet copied from a Relay page does not compile here.
 |---|---|
 | `apiVersion`, `kind` | `registry.registrystack.org/v1alpha1` and `RegistryProject`. |
 | `registry` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
-| `package` | Production identity: `environment`, `instanceId`, `sequence`, `sourceRevision`. Required for a production package. |
+| `package` | Production identity: `sourceRevision`. Required for a production package. The retired `environment`, `instanceId`, and `sequence` keys are refused; the environment and instance belong in the runtime file's `identity`. |
 | `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `manifest_projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. A project that still carries the retired singular `dataset` or `dataService` is refused; `bregctl project migrate <project> --write` rewrites it to the plural shape. |
 | `modules` | Included modules by `id`, `version`, and `digest`. A production compilation requires a digest on every lock, and a lock and a loaded source for every module. |
 | `entities` | Entities declared in this file. |

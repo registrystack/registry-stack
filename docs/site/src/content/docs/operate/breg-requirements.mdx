@@ -1,6 +1,6 @@
 ---
 title: What you need to run Base Registry Engine
-description: The database, token issuer, signing process, and people a production Base Registry Engine deployment needs, what it does not depend on, and what stays your job once it runs.
+description: The database, token issuer, and people a production Base Registry Engine deployment needs, what it does not depend on, and what stays your job once it runs.
 status: current
 owner: registry-docs
 source_repos:
@@ -30,10 +30,6 @@ on your machine.
   ingress terminates TLS, and generated links use the public origin you configure.
 - **A token issuer.** BReg verifies bearer tokens from one OpenID Connect issuer and issues none.
   Configure a compatible OAuth issuer for this role.
-- **A signer who is not the author.** A production package is published only after an external
-  signer produces a detached Ed25519 signature over it, and the runtime accepts a package only when
-  enough of the keys in its trust anchor have signed. Who holds those keys, and how they sign, is
-  your decision.
 - **A backup of the database before every activation.** The product restores nothing itself,
   and it refuses to serve a logically restored copy until an operator adopts it, as
   [back up and restore the database](../breg-changes/#back-up-and-restore-the-database)
@@ -45,7 +41,7 @@ on your machine.
     verify_postgres_16_or_newer and postgis_version_supported;
     crates/registry-breg/src/runtime_config.rs, SqlRoles and PublicOrigin;
     crates/registry-breg/src/auth.rs, RegistryAuthenticator;
-    crates/registry-breg/src/package.rs, validate_signature_policy;
+    crates/registry-breg/src/package.rs, verify_shared_package;
     crates/registry-breg/src/instance_claim.rs; products/breg/README.md;
     products/breg/DECISIONS.md. */}
 
@@ -71,7 +67,7 @@ binaries, with an installer that verifies them against the release checksums and
 together or not at all. Each release also publishes a
 container image built on a distroless base with no shell,
 running as a non-root user, that holds the runtime binary and nothing else; configuration, package,
-trust anchor, and secrets mount read-only into it. File audit needs a separate writable volume.
+and secrets mount read-only into it. File audit needs a separate writable volume.
 
 The release ships no Helm chart, Compose file, or hosted offering. Scheduling, TLS termination,
 and the proxy in front of the listener are yours. The Docker use in the first tutorial is a
@@ -85,12 +81,11 @@ loopback development path, not a deployment pattern.
 
 **Secrets.** You hold two database credentials, the audit hash key, the cursor secret, one key per
 webhook destination, and the issuer's key material when you pin a static key set. The runtime
-file names each of them by reference and refuses one that carries a value inline. Package signing
-keys stay with the signer and never reach the tooling or the server.
+file names each of them by reference and refuses one that carries a value inline.
 
 **Every production change.** A one-line access widening takes the same path as a new registry: a
-production check, a test run against a schema-test database with real tokens, packaging, external
-signing, and activation under the migration credential. A change the tooling classifies as
+production check, a test run against a schema-test database with real tokens, packaging, and
+activation under the migration credential. A change the tooling classifies as
 additive needs no more; one it marks for review needs a reviewed migration with a rehearsal, and a
 destructive one names its backup. A failed activation holds the database in maintenance until you
 reconcile or restore.

@@ -1,11 +1,11 @@
 ---
 title: Build a production candidate
-description: Read what the production profile finds in your registry project, run its journeys against a PostgreSQL you start, then package, sign, and verify the result with keys you create.
+description: Read what the production profile finds in your registry project, run its journeys against a PostgreSQL you start, then package the result and verify it the way the runtime reads it.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
+last_reviewed: "2026-09-28"
 doc_type: tutorial
 persona:
   - data publisher
@@ -13,7 +13,7 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: breg
-  skip: needs a reader-supplied signing key and a production database; product CI builds the candidate
+  skip: needs a reader-started PostgreSQL over TLS and a reader-generated issuer key; product CI builds the candidate
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -22,15 +22,15 @@ If you finished [Extend a registry with a module](../extend-a-registry-with-a-mo
 installed and a `tutorial-work` directory. This tutorial builds from a fresh project of its own,
 `tutorial-work/candidate-project`, because the module tutorial edits its project and every edit
 changes the digests. In this tutorial you read what the production profile finds in the new project,
-run its journeys against a PostgreSQL you start yourself, and turn the result into a package signed
-with a key you create and verified the way the runtime verifies it at startup. You end with a
-verified package on disk, not a running registry: [Deploy a registry](../../operate/breg/) takes it
+run its journeys against a PostgreSQL you start yourself, and turn the result into a package that
+`bregctl verify` checks the way the runtime checks its files at startup. You end with a verified
+package on disk, not a running registry: [Deploy a registry](../../operate/breg/) takes it
 from there.
 
 <QuickstartMeta
-  outcome="A package built from your project, signed with a local key, and accepted by bregctl verify under a trust anchor you wrote."
+  outcome="A package built from your project and accepted by bregctl verify under a runtime configuration you wrote."
   time="About 30 minutes"
-  level="Production build with synthetic data and local keys"
+  level="Production build with synthetic data and a local issuer key"
   prerequisites={['The bregctl from Create and query your first registry', 'Docker', 'OpenSSL 3']}
 />
 
@@ -48,18 +48,10 @@ mkdir -p tutorial-work
 bregctl init tutorial-work/candidate-project
 ```
 
-`init` writes a project for `bregctl dev`, so its `package` block names `local`, the unsigned
-environment. A candidate is built for a named environment and must be signed. Open
-`tutorial-work/candidate-project/registry.yaml` and change the `environment` line in that block:
+The project names no environment, instance, or database. The runtime configuration you write later
+names all three, so the package you build here is the same package whichever deployment reads it.
 
-```yaml
-package:
-  environment: development
-```
-
-The runtime configuration and the trust anchor you write later name the same environment.
-
-Confirm the tools. The signing steps need an OpenSSL that signs with Ed25519; the LibreSSL that macOS
+Confirm the tools. The token steps need an OpenSSL that signs with Ed25519; the LibreSSL that macOS
 ships as `/usr/bin/openssl` does not, so install OpenSSL 3 and put it first on `PATH`.
 
 ```sh
@@ -76,8 +68,8 @@ umask 077
 ```
 
 Every other file this tutorial creates sits under `tutorial-work/candidate`. The digests shown on this
-page come from the `bregctl init` project with only that environment change; if you edit anything else
-in `candidate-project`, yours differ, and that is expected.
+page come from the unchanged `bregctl init` project; if you edit anything in `candidate-project`,
+yours differ, and that is expected.
 
 ## Read the production findings
 
@@ -91,7 +83,7 @@ bregctl check --production tutorial-work/candidate-project
 
 ```text
 Production check passed.
-  revision  sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
+  revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
 
   finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
@@ -136,23 +128,21 @@ with an unreviewed finding; the rest of this tutorial runs without it.
 
 {/* Evidence: crates/registry-breg/src/access.rs, access_findings; crates/registry-bregctl/src/lib.rs, CheckArgs, deny_findings. */}
 
-## Create the keys
+## Create the issuer key
 
-Two Ed25519 keys play two roles. The package signer signs the package, and its public key becomes
-the trust anchor the runtime checks. The issuer key stands in for your identity provider: it signs
-the access tokens the journeys send, and its public half is the static JWKS the runtime reads.
+One Ed25519 key stands in for your identity provider: it signs the access tokens the journeys send,
+and its public half is the static JWKS the runtime reads.
 
 ```sh
 mkdir -p tutorial-work/candidate/secrets tutorial-work/candidate/postgres
-openssl genpkey -algorithm ED25519 -out tutorial-work/candidate/package-signer.pem
 openssl genpkey -algorithm ED25519 -out tutorial-work/candidate/issuer.pem
 issuer_x=$(openssl pkey -in tutorial-work/candidate/issuer.pem -pubout -outform DER | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
 printf '{"keys":[{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"candidate-issuer","x":"%s"}]}' "$issuer_x" > tutorial-work/candidate/secrets/issuer-jwks
 ```
 
-:::caution[Private keys stay private]
-The two private keys are the whole trust of this candidate. Never copy them into the project, a
-package, or a repository. They exist for this exercise and are deleted in the cleanup step.
+:::caution[The private key stays private]
+Anyone holding the issuer's private key can mint tokens the runtime accepts. Never copy it into the
+project, a package, or a repository. It exists for this exercise and is deleted in the cleanup step.
 :::
 
 ## Start PostgreSQL
@@ -226,11 +216,12 @@ SQL
 
 ## Bind the runtime and the credentials
 
-`bregctl test` reads the runtime configuration document the runtime itself reads at startup, with one
-difference: `databaseInitializationEnvironment: local` marks the database as disposable, so no
-package, trust anchor, or signature exists yet. `identity` must match the project's `package` block,
-`listener.bind` is never opened because the journeys are driven in-process, and every path must be
-absolute, which the unquoted heredoc arranges by expanding `$PWD`:
+`bregctl test` reads the runtime configuration document the runtime itself reads at startup.
+`identity` names the environment, instance, and database this deployment is, and its `environment`
+and `databaseInitializationEnvironment` must be the same value. `package.root` names an empty
+directory because no package exists yet, `listener.bind` is never opened because the journeys are
+driven in-process, and every path must be absolute, which the unquoted heredoc arranges by expanding
+`$PWD`:
 
 ```sh
 mkdir -p tutorial-work/candidate/empty-package
@@ -243,7 +234,7 @@ identity:
   environment: development
   instanceId: generic-registry-1
   databaseId: generic-registry-db-1
-  databaseInitializationEnvironment: local
+  databaseInitializationEnvironment: development
 secretProviders:
   file:
     root: $PWD/tutorial-work/candidate/secrets
@@ -257,10 +248,6 @@ database:
     runtime: registry_runtime
 package:
   root: $PWD/tutorial-work/candidate/empty-package
-  trustAnchorPath: $PWD/tutorial-work/candidate/package-trust-anchor.json
-  compilerSourceRevision: generic-registry-0.1.0
-  activeRevision: sha256:1111111111111111111111111111111111111111111111111111111111111111
-  activeSequence: 1
 authentication:
   oidc:
     issuer: https://issuer.example.invalid
@@ -365,97 +352,60 @@ bindings:
 EOF
 ```
 
-{/* Evidence: crates/registry-breg/src/fixtures.rs, authenticate_exact; crates/registry-breg/src/runtime_config.rs, package_trust_anchor. */}
+{/* Evidence: crates/registry-breg/src/fixtures.rs, authenticate_exact; crates/registry-breg/src/runtime_config.rs, EnvironmentIdentityConflict. */}
 
 ## Run the journeys
 
 ```sh
 SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem" bregctl test tutorial-work/candidate-project \
-  --database-id generic-registry-db-1 \
   --runtime-config "$PWD/tutorial-work/candidate/runtime-test.yaml" \
   --credentials "$PWD/tutorial-work/candidate/credentials.yaml" \
-  --output "$PWD/tutorial-work/candidate/test-receipt.json" \
-  --signature-threshold 1 --signature-key-id candidate-signer
+  --output "$PWD/tutorial-work/candidate/test-receipt.json"
 ```
 
 ```text
 Fixture run passed. 1 journey.
-  profile               production
-  package revision      sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
-  schema fingerprint    sha256:d459608ae9792a4bc387ff3965652ead7a7a1ac2ffa11b81506b55c66ebc6c02
-  signing input sha256  248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
-  successful journeys   record-lifecycle
-  receipt sha256        c8e518182c09c45c620163d2fe5b71d1cbcaae7581356c15944e000aff96c9cf
-  receipt bytes         1054
+  profile              production
+  registry revision    sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
+  schema fingerprint   sha256:c479ff47b061e3c53c6f460e7a897a58e867f7c090c8fd852d8075ab93d9e8e5
+  successful journeys  record-lifecycle
+  receipt sha256       2345f4e51538a3bc1acb80ebd6f015d77eac1d084e57f706a6a8510005d2435e
+  receipt bytes        746
 ```
 
 `SSL_CERT_FILE` points the TLS client at your certificate authority, and the URL host `localhost`
-must match the certificate's name. The two signature options declare the signing policy the package
-will carry, one signature from the key id `candidate-signer`, and the receipt records that policy
-together with the package revision, the schema fingerprint, and the journey that passed. `package`
-requires this receipt.
+must match the certificate's name. The receipt records the registry revision, the schema fingerprint
+the run measured, digests of the project sources, migration plan, and journey file, and the journey
+that passed. It names no environment, instance, or database. `package` requires this receipt.
 
-## Package and sign
+## Package
 
-Build into a new directory. The first run leaves it unsigned and the signing run publishes into the
-same directory; after that, `package` refuses it with `package.output.refused`, so the next candidate
-needs a `build-2` of its own.
+Build into a new directory. `package` publishes into it once; after that it refuses the directory
+with `package.output.refused`, so the next candidate needs a `build-2` of its own.
 
 ```sh
 bregctl package tutorial-work/candidate-project \
-  --database-id generic-registry-db-1 \
   --test-receipt "$PWD/tutorial-work/candidate/test-receipt.json" \
-  --output "$PWD/tutorial-work/candidate/build-1" \
-  --signature-threshold 1 --signature-key-id candidate-signer
+  --output "$PWD/tutorial-work/candidate/build-1"
 ```
 
 ```text
-Sealed a deployment package. It is awaiting signatures.
-  profile               production
-  state                 awaiting_signatures
-  package revision      sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
-  signature threshold   1
-  provided signatures   0
-  package files         18
-  signing input sha256  248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
-  signing input bytes   14921
+Sealed and published a deployment package.
+  profile            production
+  package digest     sha256:f06c407cbddba19a094664d880e69a8935a0d8c7ad5f73d41f15760ef10463f7
+  registry revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
+  package files      19
 ```
 
-Nothing is published yet. The output directory holds `signing-input.json`, the exact bytes to sign,
-and a copy of the receipt. Sign the input with the package signer, hand the signature back as hex,
-and run the same command again with `--signatures`:
+The package is in `tutorial-work/candidate/build-1/package`, beside a copy of the receipt: the
+effective model, the DDL and migration plan, the OpenAPI document and JSON Schemas, the inventories,
+the manifest projection, the journeys, and the project source it was built from. `SHA256SUMS` lists
+the SHA-256 of every file, and the package digest is the SHA-256 of `SHA256SUMS`, so changing any
+file changes the digest. The runtime configuration names the package next.
 
-```sh
-openssl pkeyutl -sign -rawin -inkey tutorial-work/candidate/package-signer.pem -in tutorial-work/candidate/build-1/signing-input.json -out tutorial-work/candidate/signature.bin
-signature_hex=$(od -An -v -tx1 tutorial-work/candidate/signature.bin | tr -d ' \n')
-printf '{"signatures":[{"keyId":"candidate-signer","signatureHex":"%s"}]}' "$signature_hex" > tutorial-work/candidate/signatures.json
-bregctl package tutorial-work/candidate-project \
-  --database-id generic-registry-db-1 \
-  --test-receipt "$PWD/tutorial-work/candidate/test-receipt.json" \
-  --output "$PWD/tutorial-work/candidate/build-1" \
-  --signature-threshold 1 --signature-key-id candidate-signer \
-  --signatures "$PWD/tutorial-work/candidate/signatures.json"
-```
-
-The report repeats, its lead sentence now reading `Sealed and published a deployment package.`, with `state` at `published` and `provided signatures` at `1`. The package is in
-`tutorial-work/candidate/build-1/package`: the effective model, the DDL and migration plan, the
-OpenAPI document and JSON Schemas, the inventories, the manifest projection, the journeys, and the
-project source it was built from. Its revision binds all of them together with the environment, the
-instance, the database id, and the signing policy; the runtime configuration names it next.
-
-{/* Evidence: crates/registry-bregctl/src/package_lifecycle.rs, SIGNING_INPUT_PATH; crates/registry-bregctl/src/lib.rs, PackageArgs. */}
+{/* Evidence: crates/registry-platform-config/src/package.rs, write_sum_file, verify_package; crates/registry-bregctl/src/lib.rs, PackageArgs. */}
 
 ## Verify the package
-
-The runtime accepts a package only through a trust anchor: the signer's public key, bound to the
-same environment, instance, and database id, with the same threshold and key id as the package's
-signing policy. The runtime parses the anchor as canonical JSON, so write it with sorted keys, no
-whitespace, and no trailing newline. `printf` does that; an editor usually does not.
-
-```sh
-signer_x=$(openssl pkey -in tutorial-work/candidate/package-signer.pem -pubout -outform DER | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
-printf '{"apiVersion":"registry.registrystack.org/package-trust/v1","databaseId":"generic-registry-db-1","environment":"development","instanceId":"generic-registry-1","keys":[{"jwk":{"alg":"EdDSA","crv":"Ed25519","kid":"candidate-signer","kty":"OKP","x":"%s"},"keyId":"candidate-signer"}],"threshold":1}' "$signer_x" > tutorial-work/candidate/package-trust-anchor.json
-```
 
 Copy `runtime-test.yaml` to `runtime.yaml`:
 
@@ -463,16 +413,11 @@ Copy `runtime-test.yaml` to `runtime.yaml`:
 cp tutorial-work/candidate/runtime-test.yaml tutorial-work/candidate/runtime.yaml
 ```
 
-Change three values in the copy. `databaseInitializationEnvironment` becomes `development`, the
-environment the package was built for; `package.root` becomes the published package directory;
-`activeRevision` becomes the package revision that `package` printed:
+Change one value in the copy: `package.root` becomes the published package directory.
 
 ```yaml
-identity:
-  databaseInitializationEnvironment: development
 package:
   root: <working-directory>/tutorial-work/candidate/build-1/package
-  activeRevision: <package-revision>
 ```
 
 ```sh
@@ -482,49 +427,48 @@ bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
 ```text
 Verified the package against the runtime it is bound to.
   assurance            runtime_bound
-  package revision     sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
+  package digest       sha256:f06c407cbddba19a094664d880e69a8935a0d8c7ad5f73d41f15760ef10463f7
   registry id          generic-registry
   registry version     0.1.0
-  registry revision    sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
+  registry revision    sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
   modules              1
   entities             2
   routes               8
   access entries       8
   queries              4
   event deliveries     0
-  DDL statements       23
+  DDL statements       25
   generated artifacts  14
 ```
 
-`runtime_bound` means the check ran with everything the runtime has at startup: the trust anchor,
-the identity bindings, the closure of files, and a re-derivation of every generated artifact from the
-package's own source. Keeping `local` in `runtime.yaml` is refused: a runtime that initialises a
-disposable database has no trust anchor, and the package's environment must equal the one the
-runtime declares.
+`runtime_bound` means the check read the runtime configuration the runtime reads at startup,
+recomputed every file digest against `SHA256SUMS`, and re-derived every generated artifact from the
+package's own source. It opens no database.
 
-{/* Evidence: crates/registry-breg/src/package.rs, verify_signatures, parse_canonical, validate_bindings, rederive. */}
+To pin the exact package, add `package.expectedDigest` with the digest `package` printed. `verify`
+and the runtime then refuse any other package at `package.root`, naming both digests.
+
+{/* Evidence: crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package; crates/registry-breg/src/package.rs, inspect_package_integrity_with_verified_envelope, rederive; crates/registry-platform-config/src/blocks.rs, verify_digest; crates/registry-breg/src/startup.rs, verify_package_envelope. */}
 
 ## Clean up
 
 ```sh
 docker rm -f breg-candidate-postgres
-rm -f tutorial-work/candidate/package-signer.pem tutorial-work/candidate/issuer.pem tutorial-work/candidate/postgres/postgres.env
+rm -f tutorial-work/candidate/issuer.pem tutorial-work/candidate/postgres/postgres.env
 rm -rf tutorial-work/candidate/secrets
 ```
 
 :::caution[Removal is final]
 `docker rm -f` deletes the container and the test database inside it, which is what a disposable
-database is for. Deleting the signer key means this package can never be re-signed; a real
-candidate's key lives in your key management, never on a laptop. Keep `build-1`, `runtime.yaml`, and
-the trust anchor if you continue with Deploy a registry.
+database is for. Keep `build-1` and `runtime.yaml` if you continue with Deploy a registry.
 :::
 
 ## What you built
 
 A project reviewed under the production profile; a schema-test receipt from its journeys, run against
-PostgreSQL 17 over TLS with tokens from a static JWKS; a package whose revision binds its files,
-environment, instance, database id, and signing policy; one Ed25519 signature over its signing input;
-and a trust anchor under which `bregctl verify` accepts the package with `runtime_bound` assurance.
+PostgreSQL 17 over TLS with tokens from a static JWKS; and a package whose digest covers every file
+it holds, which `bregctl verify` accepts with `runtime_bound` assurance under the runtime
+configuration you wrote.
 No registry served a request: the test drove the journeys in-process, and the database was
 disposable.
 
@@ -535,9 +479,10 @@ disposable.
 | `bregctl test` reports `test.database.unavailable` | The database already holds managed objects from an earlier run, or the TLS connection failed; the message is the same for both. Rerun the database block, and confirm that `SSL_CERT_FILE` names `ca.pem` and that the URLs use `localhost`, the name on the certificate. |
 | `bregctl test` reports `test.output.refused` | A receipt already exists at `--output`. The command never overwrites one, so delete `test-receipt.json` or name a new file before the rerun. |
 | `bregctl test` reports `test.step.failed` and `the fixture authority reference was refused` | The token bound to that step does not carry the claims the step declares, or it has expired. The message names the step by index, `journeys[0].steps[3]`. Check the binding in `credentials.yaml`, and reissue both tokens with `issue-token.sh` if the run started more than an hour after you issued them. |
-| `bregctl verify` reports `verify.package.integrity_refused` right after a successful `package` | The trust anchor is not canonical JSON: pretty-printed, keys out of order, or a trailing newline. Rewrite it with the `printf` command. |
-| `verify.package.binding_refused` | `activeRevision`, `identity`, or `databaseInitializationEnvironment` in `runtime.yaml` does not match the package manifest. `local` is refused for a published package. |
-| `verify.package.signature_refused` | The anchor's `threshold` or `keyId` differs from the policy the package was built with, or the signature covers different bytes. Sign `signing-input.json` unchanged. |
+| `bregctl package` reports `package.output.refused` | `--output` already holds a build. `package` never publishes into a used directory, so name a new one, such as `build-2`. |
+| `bregctl verify` reports `verify.runtime_config.environment_identity_conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
+| `verify.package.integrity_refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
+| `verify.package.integrity_refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
 | `openssl` rejects `-rawin` or `-algorithm ED25519` | The `openssl` on `PATH` is LibreSSL. Install OpenSSL 3 and put it first on `PATH`. |
 
 ## Next

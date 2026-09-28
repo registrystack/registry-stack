@@ -64,10 +64,7 @@ sequence on a restored copy first, as
 4. **Upgrade BReg.** Build the successor package with the new `bregctl`, `apply` it, update the
    runtime file, run `bregctl verify`, and restart every `breg` process on the new binary; see
    [Activate the successor](../../breg-changes/#activate-the-successor). Casework reports each
-   BReg source as unavailable from here until step 5 finishes. A registry from a release without
-   an instance claim refuses to start after this first `apply` until you run
-   `bregctl instance-claim adopt --acknowledge-original-retired` once; see
-   [back up and restore the database](../../breg-changes/#back-up-and-restore-the-database).
+   BReg source as unavailable from here until step 5 finishes.
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
    `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see
    [Migrate and serve](../../casework/#migrate-and-serve).
@@ -103,7 +100,7 @@ Because the release rule holds in both directions, rolling back one product mean
 every product that must match it: Casework refuses a BReg that went back without it.
 
 {/* Evidence: crates/registry-casework/src/store.rs, refuse_newer_schema();
-    crates/registry-bregctl/src/lib.rs, apply.package.older_than_active;
+    crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
     crates/registry-evidence/src/config.rs, deny_unknown_fields on the runtime file. */}
 
 ## Retire a deployment

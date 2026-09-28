@@ -146,12 +146,12 @@ A change reaches a running registry through a fixed sequence, and `bregctl` has 
 
 1. **Check.** `check` compiles the project and reports findings with the file and path that caused them.
 2. **Test.** `test` runs the journeys against a PostgreSQL database and fails on the first step whose outcome differs.
-3. **Package.** `package` reproduces the tested candidate as a package directory and stops at the signing boundary; an external signer signs it, and reviewed migrations are bound when the model changed.
-4. **Apply.** `apply` activates the signed package in the database under the migration credential, and the `breg` binary serves it after restart.
+3. **Package.** `package` reproduces the tested candidate as a package directory, and reviewed migrations are bound when the model changed.
+4. **Apply.** `apply` activates the package in the database under the migration credential, and the `breg` binary serves it after restart.
 5. **Verify.** `verify` and `doctor` confirm that the running registry, the database, and the bundle agree.
 
 The first deployment creates the schema.
-A later deployment diffs the active model against the new one, and any change that PostgreSQL cannot apply safely on its own needs a reviewed migration that a maintainer signs.
+A later deployment diffs the active model against the new one, and any change that PostgreSQL cannot apply safely on its own needs a reviewed migration.
 [Deploy a registry](../../operate/breg/) describes each command, the database prerequisites, and the checks to run before and after apply.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, Command, PackageArgs, and ApplyArgs; products/breg/README.md. */}
@@ -176,4 +176,4 @@ Failed deliveries retry with backoff, and an operator can list and replay them.
 - [Author a registry project](../../configure/breg/): every project file and every `bregctl` authoring command.
 - [Control access per profile](../../configure/breg-access/): grants, readable and writable fields, row boundaries, and access requirements.
 - [Declare change requests and actions](../../configure/breg-change-control/): review stages, planner scripts, and immediate actions.
-- [Deploy a registry](../../operate/breg/): database setup, the runtime configuration, packaging, signing, and activation.
+- [Deploy a registry](../../operate/breg/): database setup, the runtime configuration, packaging, and activation.
