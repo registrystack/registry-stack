@@ -29,7 +29,6 @@ use registry_casework_core::{
     VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_authcommon::parse_bearer_token;
-use registry_platform_canonical_json::StrictJsonError;
 use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
@@ -281,31 +280,31 @@ where
         let bytes = Bytes::from_request(request, state)
             .await
             .map_err(IntoResponse::into_response)?;
-        let value =
-            registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|error| {
-                let malformed = matches!(
-                    &error,
-                    StrictJsonError::Json(error)
-                        if matches!(error.classify(), Category::Syntax | Category::Eof)
-                );
-                problem_response(
-                    if malformed {
-                        ProblemCode::RequestInvalid
-                    } else {
-                        ProblemCode::RequestUnprocessable
-                    },
-                    None,
-                    None,
-                )
-            })?;
+        let value = registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|_| {
+            // The strict parser can refuse an inexact integer before it
+            // reaches a later syntax error, so malformedness is decided by a
+            // plain syntax pass over the same bounded bytes.
+            let malformed = serde_json::from_slice::<serde::de::IgnoredAny>(&bytes)
+                .is_err_and(|error| matches!(error.classify(), Category::Syntax | Category::Eof));
+            problem_response(
+                if malformed {
+                    ProblemCode::RequestInvalid
+                } else {
+                    ProblemCode::RequestUnprocessable
+                },
+                None,
+                None,
+            )
+        })?;
         serde_json::from_value(value)
             .map(Self)
             .map_err(|_| problem_response(ProblemCode::RequestUnprocessable, None, None))
     }
 }
 
-/// `application/json` or an `application/*+json` media type, as axum's
-/// `Json` extractor accepts.
+/// `application/json` or an `application/*+json` media type with well-formed
+/// parameters, as axum's `Json` extractor accepts. The whole value must parse
+/// as a media type, so a malformed parameter or subtype is refused.
 fn json_content_type(headers: &HeaderMap) -> bool {
     let Some(value) = headers
         .get(CONTENT_TYPE)
@@ -313,15 +312,57 @@ fn json_content_type(headers: &HeaderMap) -> bool {
     else {
         return false;
     };
-    let essence = value
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    essence
-        .strip_prefix("application/")
-        .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
+    let mut segments = value.split(';');
+    let essence = segments.next().unwrap_or_default().trim();
+    let Some((kind, subtype)) = essence.split_once('/') else {
+        return false;
+    };
+    let subtype = subtype.to_ascii_lowercase();
+    media_token(kind)
+        && media_token(&subtype)
+        && kind.eq_ignore_ascii_case("application")
+        && (subtype == "json" || subtype.ends_with("+json"))
+        && segments.all(|parameter| {
+            parameter
+                .trim()
+                .split_once('=')
+                .is_some_and(|(name, value)| {
+                    media_token(name) && (media_token(value) || quoted_string(value))
+                })
+        })
+}
+
+/// An RFC 9110 token.
+fn media_token(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+}
+
+/// An RFC 9110 quoted-string without control characters.
+fn quoted_string(value: &str) -> bool {
+    let Some(inner) = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    else {
+        return false;
+    };
+    let mut escaped = false;
+    inner.chars().all(|character| {
+        if escaped {
+            escaped = false;
+            return !character.is_control() || character == '\t';
+        }
+        match character {
+            '\\' => {
+                escaped = true;
+                true
+            }
+            '"' => false,
+            character => !character.is_control() || character == '\t',
+        }
+    }) && !escaped
 }
 
 async fn route_not_found() -> Response {
@@ -2280,6 +2321,24 @@ mod tests {
                     .method("POST")
                     .uri(format!("/json/{id}"))
                     .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":9007199254740993x}"#))
+                    .expect("malformed inexact integer request"),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/json/{id}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":9007199254740993}"#))
+                    .expect("inexact integer request"),
+                ProblemCode::RequestUnprocessable,
+            ),
+            (
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/json/{id}"))
+                    .header(CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"value":"ok","value":"smuggled"}"#))
                     .expect("duplicate member request"),
                 ProblemCode::RequestUnprocessable,
@@ -2355,6 +2414,7 @@ mod tests {
             "application/json; charset=utf-8",
             "Application/JSON",
             "application/merge-patch+json",
+            "application/json;charset=\"utf-8\"",
         ] {
             let response = edge_fixture()
                 .oneshot(
@@ -2369,7 +2429,15 @@ mod tests {
                 .expect("edge response");
             assert_eq!(response.status(), StatusCode::NO_CONTENT, "{content_type}");
         }
-        for content_type in [None, Some("text/json"), Some("application/jsonx")] {
+        for content_type in [
+            None,
+            Some("text/json"),
+            Some("application/jsonx"),
+            Some("application/json; charset"),
+            Some("application/not a type+json"),
+            Some("application/json; =utf-8"),
+            Some("application/json; charset=\"utf-8"),
+        ] {
             let mut request = Request::builder().method("POST").uri(format!("/json/{id}"));
             if let Some(content_type) = content_type {
                 request = request.header(CONTENT_TYPE, content_type);
