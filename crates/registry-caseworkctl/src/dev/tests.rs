@@ -2772,6 +2772,150 @@ fn a_token_header_file_carries_the_bearer_and_the_registered_profile() {
 }
 
 #[test]
+fn dev_token_writes_a_profile_line_only_for_a_client_bound_to_an_access_profile() {
+    let temp = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(temp.path())).unwrap();
+
+    // A local token endpoint that answers each client-assertion grant.
+    let issuer = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let issuer_port = issuer.local_addr().unwrap().port();
+    let token_server = thread::spawn(move || {
+        let mut forms = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = issuer.accept().unwrap();
+            stream.set_read_timeout(Some(TEST_EVENT_BOUND)).unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                assert!(head.len() < 32 * 1024);
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            let length = String::from_utf8(head)
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            forms.push(String::from_utf8(body).unwrap());
+            let token = r#"{"access_token":"header.payload.signature","token_type":"Bearer","expires_in":300}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{token}",
+                token.len()
+            )
+            .unwrap();
+        }
+        forms
+    });
+
+    // A ready session retaining one access-profile client and one
+    // integration client.
+    let mut state = session(&project);
+    state.status = Status::Ready;
+    state.issuer_port = issuer_port;
+    state.clients = vec![ReportedClient {
+        id: "staff".to_owned(),
+        profile: "staff".to_owned(),
+        role: CaseworkRole::Staff,
+        principal: config::principal("staff"),
+    }];
+    let root = state.root();
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&root).unwrap();
+    private::directory(&root.join("secrets")).unwrap();
+    private::directory(&root.join("credentials")).unwrap();
+    state.save().unwrap();
+    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    clients.integrations = Some(
+        serde_json::from_value(json!({
+            "resource":"urn:casework:source-group",
+            "serviceClients":[{"id":"seed","scopes":["casework:reviews:request"]}]
+        }))
+        .unwrap(),
+    );
+    private::create(
+        &root.join("clients.json"),
+        &serde_json::to_vec(&clients).unwrap(),
+    )
+    .unwrap();
+    for id in ["staff", "seed"] {
+        config::keypair(&root.join("credentials").join(id)).unwrap();
+    }
+    let control_root = control_directory(&root).unwrap();
+    private::directory(&control_root).unwrap();
+    let socket = control_root.join("control.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+    let control_server = thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 7];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"status\n");
+            stream.write_all(b"ready\n").unwrap();
+        }
+    });
+    let dev_token = |client: &str| {
+        let crate::Command::Dev(dev) = crate::Cli::try_parse_from([
+            "caseworkctl",
+            "dev",
+            "token",
+            client,
+            project.to_str().unwrap(),
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected dev token");
+        };
+        run(*dev)
+    };
+    let header = |report: &Value| {
+        let path = PathBuf::from(report["headerFile"].as_str().unwrap());
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::read_to_string(path).unwrap()
+    };
+
+    let staff = dev_token("staff").unwrap();
+    assert_eq!(staff["command"], "dev token");
+    assert_eq!(
+        header(&staff),
+        "Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\n"
+    );
+
+    let seed = dev_token("seed").unwrap();
+    assert_eq!(
+        header(&seed),
+        "Authorization: Bearer header.payload.signature\n"
+    );
+
+    let refusal = format!("{:#}", dev_token("unregistered").unwrap_err());
+    assert!(refusal.contains("not registered"), "{refusal}");
+    assert!(!root.join("secrets/unregistered.header").exists());
+
+    control_server.join().unwrap();
+    let forms = token_server.join().unwrap();
+    assert!(forms[0].contains("client_id=staff"), "{}", forms[0]);
+    assert!(forms[1].contains("client_id=seed"), "{}", forms[1]);
+    // The integration client is issued its own service-client scopes.
+    assert!(
+        forms[1].contains("scope=casework%3Areviews%3Arequest&"),
+        "{}",
+        forms[1]
+    );
+    remove_socket(&root).unwrap();
+}
+
+#[test]
 fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
     let args = [
         "caseworkctl",
