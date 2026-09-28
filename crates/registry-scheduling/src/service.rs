@@ -371,8 +371,12 @@ impl SchedulingService {
             .or(minted_interval.map(|(from, _)| from))
             .unwrap_or(now);
         let to = match end {
-            Some(end) => end.max(from + TimeDelta::minutes(1)).min(from + span),
-            None => minted_interval.map(|(_, to)| to).unwrap_or(from + span),
+            Some(end) => end
+                .max(saturating_later(from, TimeDelta::minutes(1)))
+                .min(saturating_later(from, span)),
+            None => minted_interval
+                .map(|(_, to)| to)
+                .unwrap_or(saturating_later(from, span)),
         };
         let context = format!("availability:{offering_id}:{}:{to}", from.to_rfc3339());
         let position = match stored {
@@ -392,16 +396,21 @@ impl SchedulingService {
                 ..
             } => {
                 let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
-                let buffer = TimeDelta::minutes(i64::from(
-                    exact.buffer_before_minutes + exact.buffer_after_minutes,
-                ));
+                let buffer = TimeDelta::minutes(
+                    i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
+                );
                 let ids: Vec<String> = members.iter().map(|m| m.resource_id.clone()).collect();
                 // The snapshot window widens by the duration and both buffers:
                 // a booking that intrudes on any listed slot's occupied span
                 // must be in the snapshot, wherever it starts.
                 let snapshot = self
                     .store
-                    .member_snapshot(&ids, from - buffer, to + duration + buffer, now)
+                    .member_snapshot(
+                        &ids,
+                        saturating_earlier(from, buffer),
+                        saturating_later(to, duration + buffer),
+                        now,
+                    )
                     .await?;
                 exact_time_slots(
                     &exact,
@@ -493,16 +502,16 @@ impl SchedulingService {
                 closures,
             } => {
                 let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
-                let buffer = TimeDelta::minutes(i64::from(
-                    exact.buffer_before_minutes + exact.buffer_after_minutes,
-                ));
+                let buffer = TimeDelta::minutes(
+                    i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
+                );
                 let ids: Vec<String> = members.iter().map(|m| m.resource_id.clone()).collect();
                 let snapshot = self
                     .store
                     .member_snapshot(
                         &ids,
-                        start - buffer - duration,
-                        start + duration + buffer,
+                        saturating_earlier(start, buffer + duration),
+                        saturating_later(start, duration + buffer),
                         now,
                     )
                     .await?;
@@ -1866,8 +1875,8 @@ fn exact_time_slots(
 ) -> Vec<AvailabilityEntry> {
     let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
     let increment = TimeDelta::minutes(i64::from(exact.start_increment_minutes).max(1));
-    let earliest = now + TimeDelta::minutes(i64::from(exact.lead_time_minutes));
-    let latest = now + TimeDelta::days(i64::from(exact.horizon_days));
+    let earliest = saturating_later(now, TimeDelta::minutes(i64::from(exact.lead_time_minutes)));
+    let latest = saturating_later(now, TimeDelta::days(i64::from(exact.horizon_days)));
     let mut entries = Vec::new();
     for interval in open {
         // Slots anchor on each published opening's own start. Jump directly
@@ -1933,8 +1942,8 @@ fn window_entries(
 ) -> Vec<AvailabilityEntry> {
     let consumed: u32 = snapshot.claims.iter().map(|claim| claim.units).sum();
     let remaining = window.units.saturating_sub(consumed);
-    let earliest = now + TimeDelta::minutes(i64::from(lead_time_minutes));
-    let latest = now + TimeDelta::days(i64::from(horizon_days));
+    let earliest = saturating_later(now, TimeDelta::minutes(i64::from(lead_time_minutes)));
+    let latest = saturating_later(now, TimeDelta::days(i64::from(horizon_days)));
     let in_range = window.start >= from && window.start < to;
     let in_horizon = window.start >= earliest && window.start <= latest;
     let is_open = open
@@ -1953,6 +1962,24 @@ fn window_entries(
     } else {
         Vec::new()
     }
+}
+
+/// `instant` moved later by `delta`, or the last representable instant when
+/// the sum would leave the calendar. A bound past representable time bounds
+/// nothing, so saturating keeps its meaning where the sum would panic: policy
+/// validation accepts any nonzero `horizonDays`, and a caller may name a
+/// range end at the edge of the calendar.
+fn saturating_later(instant: DateTime<Utc>, delta: TimeDelta) -> DateTime<Utc> {
+    instant
+        .checked_add_signed(delta)
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
+}
+
+/// `instant` moved earlier by `delta`, or the first representable instant.
+fn saturating_earlier(instant: DateTime<Utc>, delta: TimeDelta) -> DateTime<Utc> {
+    instant
+        .checked_sub_signed(delta)
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 fn entry_instant(entry: &AvailabilityEntry) -> DateTime<Utc> {
@@ -2470,6 +2497,51 @@ mod tests {
         assert_eq!(
             entries.iter().map(entry_instant).collect::<Vec<_>>(),
             vec![at(3, 30)]
+        );
+    }
+
+    /// Policy validation accepts any nonzero `horizonDays`, and the largest
+    /// reaches past the last instant the calendar can represent. A horizon
+    /// beyond representable time bounds nothing, so the walk lists what the
+    /// opening and the requested range allow rather than panicking.
+    #[test]
+    fn an_exact_time_horizon_past_representable_time_bounds_nothing() {
+        let mut exact = exact();
+        exact.horizon_days = u32::MAX;
+        let entries = exact_time_slots(
+            &exact,
+            &members(1),
+            &[],
+            &[interval(2, 4)],
+            &LedgerSnapshot { claims: Vec::new() },
+            at(1, 0),
+            at(5, 0),
+            at(0, 0),
+        );
+        assert_eq!(
+            entries.iter().map(entry_instant).collect::<Vec<_>>(),
+            vec![at(2, 0), at(2, 30), at(3, 0), at(3, 30)]
+        );
+    }
+
+    /// The same boundary for an arrival window: the largest accepted horizon
+    /// lists the window instead of panicking the availability request.
+    #[test]
+    fn a_window_horizon_past_representable_time_bounds_nothing() {
+        let window = window_facts().windows.remove(0);
+        let entries = window_entries(
+            &window,
+            &LedgerSnapshot { claims: Vec::new() },
+            at(1, 0),
+            at(5, 0),
+            at(0, 0),
+            60,
+            u32::MAX,
+            &[interval(0, 6)],
+        );
+        assert_eq!(
+            entries.iter().map(entry_instant).collect::<Vec<_>>(),
+            vec![at(2, 0)]
         );
     }
 
