@@ -34,7 +34,35 @@ fn invoke(arguments: impl IntoIterator<Item = OsString>) -> (ExitCode, Value) {
             String::from_utf8_lossy(&stdout)
         )
     });
+    assert_envelope(&stdout, &report, exit);
     (exit, report)
+}
+
+/// Every JSON report opens with `ok`, `command`, and `status` in that order;
+/// `ok` is true exactly when the process exits zero, and a report that is not
+/// ok carries at least one diagnostic naming the next step.
+fn assert_envelope(stdout: &[u8], report: &Value, exit: ExitCode) {
+    let text = String::from_utf8_lossy(stdout);
+    let head = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("  \""))
+        .filter_map(|line| line.split_once('"').map(|(key, _)| key))
+        .take(3)
+        .collect::<Vec<_>>();
+    assert_eq!(head, ["ok", "command", "status"], "{text}");
+    assert_eq!(report["ok"], json!(exit == ExitCode::SUCCESS), "{text}");
+    if exit != ExitCode::SUCCESS {
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+        assert!(!diagnostics.is_empty(), "{text}");
+        for diagnostic in diagnostics {
+            assert!(
+                diagnostic["suggestedAction"]
+                    .as_str()
+                    .is_some_and(|action| !action.is_empty()),
+                "{text}"
+            );
+        }
+    }
 }
 
 fn arguments(values: &[&str]) -> Vec<OsString> {
@@ -267,6 +295,61 @@ fn every_public_json_report_matches_its_schema() {
     }
 }
 
+#[test]
+fn every_report_names_its_command_and_status() {
+    let root = crate::canonical_tempdir();
+    let project = root.path().join("standalone");
+    let missing = root.path().join("missing");
+    let (_, init) = invoke(vec![
+        OsString::from("init"),
+        project.as_os_str().to_owned(),
+        OsString::from("--template"),
+        OsString::from("standalone-decision"),
+    ]);
+    assert_eq!(
+        (&init["command"], &init["status"]),
+        (&json!("init"), &json!("complete"))
+    );
+    let (_, check) = invoke(project_arguments("check", &project));
+    assert_eq!(check["status"], "complete");
+    let (_, test) = invoke(project_arguments("test", &project));
+    assert_eq!(test["status"], "passed");
+
+    let (exit, usage) = invoke(arguments(&["--not-a-real-argument"]));
+    assert_eq!(exit, ExitCode::from(2));
+    assert_eq!(
+        (&usage["command"], &usage["status"]),
+        (&json!("usage"), &json!("usage-error"))
+    );
+
+    let (exit, status) = invoke(arguments(&[
+        "status",
+        "--runtime-config",
+        missing.to_str().unwrap(),
+    ]));
+    assert_eq!(status["command"], "status");
+    let expected = if exit == ExitCode::from(OPERATIONAL_FAILURE_EXIT) {
+        "operational-failure"
+    } else {
+        "domain-refusal"
+    };
+    assert_eq!(status["status"], expected, "{status:#?}");
+
+    let (exit, attempt) = invoke(arguments(&[
+        "attempt",
+        "mark-uncertain",
+        missing.to_str().unwrap(),
+        "--attempt-id",
+        "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "--reason",
+        "contract fixture",
+        "--decided-by",
+        "contract test",
+    ]));
+    assert_ne!(exit, ExitCode::SUCCESS);
+    assert_eq!(attempt["command"], "attempt mark-uncertain");
+}
+
 /// Runs statements against the dedicated test database at `url`.
 #[cfg(feature = "postgres-test")]
 fn execute_in_test_database(url: &str, statements: &str) {
@@ -434,6 +517,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         report["diagnostics"][0]["code"],
         "casework.activation.schema-newer"
     );
+    assert_eq!(report["status"], "domain-refusal");
     assert_eq!(report["diagnostics"][0]["path"], "database");
     assert_eq!(report["diagnostics"][0]["message"], refusal);
     assert_matches_contract("apply refusal", "ApplyReport", &report);
@@ -444,6 +528,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         planned["refusals"][0]["code"],
         "casework.activation.schema-newer"
     );
+    assert_eq!(planned["status"], "refused");
     assert_matches_contract("plan refusal", "PlanReport", &planned);
 
     let mut human = vec![OsString::from("caseworkctl")];

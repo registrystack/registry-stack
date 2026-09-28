@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/SimulationReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/SimulationReport.schema.json",
   "title": "SimulationReport",
   "description": "Versioned JSON report emitted by caseworkctl for simulate.",
   "oneOf": [
@@ -8,10 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "fixture",
         "projectId",
         "policyVersion",
@@ -23,17 +24,20 @@
         "databaseAccess"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "SimulationReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "simulate"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "SimulationReport"
         },
         "fixture": {
           "type": "string"
@@ -83,23 +87,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "SimulationReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "simulate"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "SimulationReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

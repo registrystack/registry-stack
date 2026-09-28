@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/PlanReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/PlanReport.schema.json",
   "title": "PlanReport",
   "description": "Versioned JSON report emitted by caseworkctl for plan.",
   "oneOf": [
@@ -8,10 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "runtimeConfig",
         "active",
         "candidatePackageDigest",
@@ -26,17 +27,20 @@
         "changesPending"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "PlanReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "plan"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "PlanReport"
         },
         "runtimeConfig": {
           "type": "string"
@@ -120,10 +124,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "runtimeConfig",
         "active",
         "candidatePackageDigest",
@@ -139,17 +144,20 @@
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "PlanReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "plan"
+        },
+        "status": {
+          "const": "refused"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "PlanReport"
         },
         "runtimeConfig": {
           "type": "string"
@@ -236,23 +244,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "PlanReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "plan"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "PlanReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

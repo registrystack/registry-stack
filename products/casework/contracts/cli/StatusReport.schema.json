@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/StatusReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/StatusReport.schema.json",
   "title": "StatusReport",
   "description": "Versioned JSON report emitted by caseworkctl for status.",
   "oneOf": [
@@ -8,10 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "runtimeConfig",
         "active",
         "history",
@@ -21,17 +22,20 @@
         "singleRoleStatement"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "StatusReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "status"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "StatusReport"
         },
         "runtimeConfig": {
           "type": "string"
@@ -88,23 +92,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "StatusReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "status"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "StatusReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

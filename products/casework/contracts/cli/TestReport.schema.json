@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/TestReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/TestReport.schema.json",
   "title": "TestReport",
   "description": "Versioned JSON report emitted by caseworkctl for test.",
   "oneOf": [
@@ -8,10 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "project",
         "authoringStatus",
         "findings",
@@ -22,17 +23,20 @@
         "databaseAccess"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "TestReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "test"
+        },
+        "status": {
+          "const": "passed"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "TestReport"
         },
         "project": {
           "type": "string"
@@ -71,23 +75,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "TestReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "test"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "TestReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

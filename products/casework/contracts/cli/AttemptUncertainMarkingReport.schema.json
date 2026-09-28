@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/AttemptUncertainMarkingReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/AttemptUncertainMarkingReport.schema.json",
   "title": "AttemptUncertainMarkingReport",
   "description": "Versioned JSON report emitted by caseworkctl for attempt mark-uncertain.",
   "oneOf": [
@@ -8,26 +8,30 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "project",
         "runtimeConfig",
         "report"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "AttemptUncertainMarkingReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "attempt mark-uncertain"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "AttemptUncertainMarkingReport"
         },
         "project": {
           "type": "string"
@@ -44,23 +48,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "AttemptUncertainMarkingReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "attempt mark-uncertain"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "AttemptUncertainMarkingReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

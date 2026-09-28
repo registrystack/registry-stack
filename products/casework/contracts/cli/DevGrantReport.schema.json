@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/DevGrantReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/DevGrantReport.schema.json",
   "title": "DevGrantReport",
   "description": "Versioned JSON report emitted by caseworkctl for dev grant.",
   "oneOf": [
@@ -8,25 +8,29 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "headerFile",
         "grantExpiresAt"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "DevGrantReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "dev grant"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "DevGrantReport"
         },
         "headerFile": {
           "type": "string"
@@ -40,23 +44,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "DevGrantReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "dev grant"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "DevGrantReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/UsageReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/UsageReport.schema.json",
   "title": "UsageReport",
   "description": "Versioned JSON report emitted by caseworkctl for usage.",
   "oneOf": [
@@ -8,23 +8,28 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "UsageReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "usage"
+        },
+        "status": {
+          "const": "usage-error"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "UsageReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

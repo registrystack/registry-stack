@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/DoctorReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/DoctorReport.schema.json",
   "title": "DoctorReport",
   "description": "Versioned JSON report emitted by caseworkctl for doctor.",
   "oneOf": [
@@ -8,10 +8,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "runtimeConfig",
         "packageRoot",
         "checks",
@@ -24,17 +25,20 @@
         "singleRoleStatement"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "DoctorReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "doctor"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "DoctorReport"
         },
         "runtimeConfig": {
           "type": "string"
@@ -104,23 +108,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "DoctorReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "doctor"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "DoctorReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

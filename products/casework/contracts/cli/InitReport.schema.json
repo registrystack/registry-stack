@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/InitReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/InitReport.schema.json",
   "title": "InitReport",
   "description": "Versioned JSON report emitted by caseworkctl for init.",
   "oneOf": [
@@ -8,27 +8,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "template",
         "project",
         "created",
         "next"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "InitReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "init"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "InitReport"
         },
         "template": {
           "enum": [
@@ -57,23 +61,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "InitReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "init"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "InitReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

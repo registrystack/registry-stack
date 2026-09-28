@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/DevEventsReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha3/DevEventsReport.schema.json",
   "title": "DevEventsReport",
   "description": "Versioned JSON report emitted by caseworkctl for dev events.",
   "oneOf": [
@@ -8,27 +8,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "apiVersion",
-        "kind",
         "ok",
         "command",
+        "status",
+        "apiVersion",
+        "kind",
         "project",
         "journal",
         "events",
         "truncated"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "DevEventsReport"
-        },
         "ok": {
           "const": true
         },
         "command": {
           "const": "dev events"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "DevEventsReport"
         },
         "project": {
           "type": "string"
@@ -51,23 +55,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "ok",
+        "command",
+        "status",
         "apiVersion",
         "kind",
-        "ok",
         "diagnostics"
       ],
       "properties": {
-        "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
-        },
-        "kind": {
-          "const": "DevEventsReport"
-        },
         "ok": {
           "const": false
         },
         "command": {
           "const": "dev events"
+        },
+        "status": {
+          "enum": [
+            "domain-refusal",
+            "operational-failure"
+          ]
+        },
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+        },
+        "kind": {
+          "const": "DevEventsReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"
