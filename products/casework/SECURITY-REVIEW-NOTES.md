@@ -149,7 +149,7 @@ two-person rule enforce it on who can read the migration credential.
   REVOKE TRIGGER ON TABLES FROM <grantee>`, since a refusal after the
   migrations would name tables its rollback removes. A single-role
   deployment already holds the ledger and is refused none of these.
-- A split-role runtime role that no longer holds every grant apply issues it,
+- A split-role runtime role that does not hold every grant apply issues it,
   as after `REASSIGN OWNED BY` takes a table back, is refused at startup with
   `RuntimeError::RuntimeGrantsMissing`, naming
   `caseworkctl apply --runtime-config FILE`. `plan` reports the active
@@ -158,6 +158,12 @@ two-person rule enforce it on who can read the migration credential.
   are schema `USAGE`, `SELECT` on both ledgers, full DML on every other
   Casework table, `USAGE` on the sequences, and `EXECUTE` on the Casework
   functions.
+  Startup checks them whenever the runtime credential is split by its own
+  authority, not only when the latest row records `split`, so a single-role
+  activation whose `runtimeUrlRef` was rotated to a separate role refuses
+  until apply grants that role. A rotated role that can still write the
+  ledger is single-role, as the row records, and a split apply for it
+  refuses that authority.
 - Re-applying the active package is allowed, and planned as pending, when the
   effective role mode differs from the latest row or the runtime role's grants
   are not current, so moving to split or rotating the runtime role reissues
