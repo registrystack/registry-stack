@@ -593,6 +593,9 @@ struct FixtureProblemBindings {
     refusal_label: Option<String>,
     refusal_field_paths: BTreeSet<String>,
     request_field_paths: BTreeSet<String>,
+    /// A record step's refusal may name one closed record location instead
+    /// of an action location.
+    record_request_locations: bool,
     pattern_field: Option<(String, String)>,
 }
 
@@ -2376,6 +2379,7 @@ fn compile_problem_bindings(
             .find(|action| action.id == id)
     });
     if expectation.problem_code.as_deref() == Some("request.invalid") {
+        bindings.record_request_locations = action.is_none();
         if let Some(action) = action {
             bindings
                 .request_field_paths
@@ -4075,7 +4079,22 @@ fn assert_response(
                 if !document
                     .get("fieldPath")
                     .and_then(Value::as_str)
-                    .is_some_and(|path| step.problem_bindings.request_field_paths.contains(path))
+                    .is_some_and(|path| {
+                        step.problem_bindings.request_field_paths.contains(path)
+                            || step.problem_bindings.record_request_locations
+                                && (crate::problem_location::is_record_request_location(path)
+                                    || path == crate::problem_location::IDEMPOTENCY_KEY_HEADER)
+                    })
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+            }
+            if code == "query.invalid" && document.get("fieldPath").is_some() {
+                keys.push("fieldPath");
+                if !document
+                    .get("fieldPath")
+                    .and_then(Value::as_str)
+                    .is_some_and(crate::problem_location::is_query_parameter_location)
                 {
                     return Err(FixtureError::ExpectationMismatch);
                 }

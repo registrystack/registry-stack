@@ -76,6 +76,7 @@ use crate::postgres::{
     ImmediateActionTargetBinding, ImmediateActionTargetContext, RegistryLockKey,
     RowBoundaryContext, SqlIdentifier,
 };
+use crate::problem_location::{BatchItemMember, PatchMember, RequestLocation};
 use crate::record_profile::{self, RecordRepresentation};
 use crate::revision::{canonical_snapshot, insert_revision, RevisionError, RevisionInsert};
 
@@ -1148,14 +1149,17 @@ impl MutationCoordinator {
         if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
-        let normalized_body = match normalize_mutation_body(&request.plan.entity, &request.body) {
-            Ok(body) => body,
-            Err(error) => {
-                self.record_boundary_audit(request, PreIoAuditKind::Refusal)
-                    .await?;
-                return Err(error);
-            }
-        };
+        let normalized_body =
+            match admit_submitted_names(request.plan, request.claims, &request.body)
+                .and_then(|()| normalize_mutation_body(&request.plan.entity, &request.body))
+            {
+                Ok(body) => body,
+                Err(error) => {
+                    self.record_boundary_audit(request, PreIoAuditKind::Refusal)
+                        .await?;
+                    return Err(error);
+                }
+            };
         let request = MutationRequest {
             plan: request.plan,
             idempotency_key: request.idempotency_key,
@@ -1202,7 +1206,17 @@ impl MutationCoordinator {
         if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
-        let normalized_items = match normalize_batch_items(&request.plan.entity, &request.items) {
+        let normalized_items = match request
+            .items
+            .iter()
+            .enumerate()
+            .try_for_each(|(index, item)| {
+                let (_, _, body) = item.request_parts();
+                admit_submitted_names(request.plan, request.claims, &body)
+                    .map_err(|error| error.in_batch_item(index))
+            })
+            .and_then(|()| normalize_batch_items(&request.plan.entity, &request.items))
+        {
             Ok(items) => items,
             Err(error) => {
                 self.record_batch_boundary_audit(request, PreIoAuditKind::Refusal)
@@ -2572,6 +2586,10 @@ pub(crate) fn strong_record_etag_for_representation(
 pub enum MutationError {
     #[error("mutation request is invalid")]
     InvalidRequest,
+    /// The same refusal as [`MutationError::InvalidRequest`], located at one
+    /// fixed envelope member or one admitted field of the write body.
+    #[error("mutation request is invalid")]
+    InvalidRequestAt(crate::problem_location::RequestLocation),
     #[error("mutation precondition failed")]
     PreconditionFailed,
     #[error("mutation conflicts with current state")]
@@ -3544,56 +3562,62 @@ fn apply_patch_document(
     let mut materialized = current.clone();
     let mut changed = Map::new();
     let mut mutated = false;
-    for operation in operations {
+    for (index, operation) in operations.iter().enumerate() {
+        let at = |member| patch_location(index, member);
         match operation {
             PatchOperation::Add { path, value } | PatchOperation::Replace { path, value } => {
-                let field_id = patch_field(path)?;
+                let field_id = patch_field(path).map_err(|_| at(PatchMember::Path))?;
                 let field = request
                     .plan
                     .entity
                     .fields
                     .get(&field_id)
-                    .ok_or(MutationError::InvalidRequest)?;
-                if !profile.writable_fields.contains(&field_id) || value.is_null() && field.required
-                {
-                    return Err(MutationError::InvalidRequest);
+                    .ok_or_else(|| at(PatchMember::Path))?;
+                if !profile.writable_fields.contains(&field_id) {
+                    return Err(at(PatchMember::Path));
                 }
-                sql_value(value, &field.field_type)?;
+                if value.is_null() && field.required {
+                    return Err(at(PatchMember::Value));
+                }
+                sql_value(value, &field.field_type).map_err(|_| at(PatchMember::Value))?;
                 materialized.insert(field_id.clone(), value.clone());
                 changed.insert(field_id, value.clone());
                 mutated = true;
             }
             PatchOperation::Remove { path } => {
-                let field_id = patch_field(path)?;
+                let field_id = patch_field(path).map_err(|_| at(PatchMember::Path))?;
                 let field = request
                     .plan
                     .entity
                     .fields
                     .get(&field_id)
-                    .ok_or(MutationError::InvalidRequest)?;
-                if field.required || !profile.writable_fields.contains(&field_id) {
-                    return Err(MutationError::InvalidRequest);
+                    .ok_or_else(|| at(PatchMember::Path))?;
+                if !profile.writable_fields.contains(&field_id) {
+                    return Err(at(PatchMember::Path));
+                }
+                if field.required {
+                    return Err(at(PatchMember::Op));
                 }
                 materialized.insert(field_id.clone(), Value::Null);
                 changed.insert(field_id, Value::Null);
                 mutated = true;
             }
             PatchOperation::Test { path, value } => {
-                let field_id = patch_field(path)?;
+                let field_id = patch_field(path).map_err(|_| at(PatchMember::Path))?;
                 let field = request
                     .plan
                     .entity
                     .fields
                     .get(&field_id)
-                    .ok_or(MutationError::InvalidRequest)?;
+                    .ok_or_else(|| at(PatchMember::Path))?;
                 if !profile.readable_fields.contains(&field_id) {
-                    return Err(MutationError::InvalidRequest);
+                    return Err(at(PatchMember::Path));
                 }
                 if field.encryption.is_some() {
                     // The stored member is an opaque envelope, so a test
                     // against it can neither pass nor fail honestly; the
                     // operation is refused instead of misreporting.
-                    return Err(MutationError::InvalidRequest);
+                    return Err(at(PatchMember::Op));
                 }
                 if materialized.get(&field_id) != Some(value) {
                     return Err(MutationError::Conflict);
@@ -3614,16 +3638,20 @@ pub fn parse_json_patch_document(value: Value) -> Result<Vec<PatchOperation>, Mu
     }
     operations
         .iter()
-        .map(|operation| {
-            let object = operation.as_object().ok_or(MutationError::InvalidRequest)?;
+        .enumerate()
+        .map(|(index, operation)| {
+            let at = |member| {
+                MutationError::InvalidRequestAt(RequestLocation::patch_operation(index, member))
+            };
+            let object = operation.as_object().ok_or_else(|| at(None))?;
             let op = object
                 .get("op")
                 .and_then(Value::as_str)
-                .ok_or(MutationError::InvalidRequest)?;
+                .ok_or_else(|| at(Some(PatchMember::Op)))?;
             let path = object
                 .get("path")
                 .and_then(Value::as_str)
-                .ok_or(MutationError::InvalidRequest)?;
+                .ok_or_else(|| at(Some(PatchMember::Path)))?;
             match op {
                 "add" | "replace" | "test" if object.len() == 3 && object.contains_key("value") => {
                     let value = object["value"].clone();
@@ -3646,7 +3674,13 @@ pub fn parse_json_patch_document(value: Value) -> Result<Vec<PatchOperation>, Mu
                 "remove" if object.len() == 2 => Ok(PatchOperation::Remove {
                     path: path.to_owned(),
                 }),
-                _ => Err(MutationError::InvalidRequest),
+                // A member beside the fixed ones is caller-named, so the
+                // location stops at the operation.
+                "add" | "replace" | "test" if !object.contains_key("value") => {
+                    Err(at(Some(PatchMember::Value)))
+                }
+                "add" | "replace" | "test" | "remove" => Err(at(None)),
+                _ => Err(at(Some(PatchMember::Op))),
             }
         })
         .collect()
@@ -3810,14 +3844,18 @@ fn validate_request(
             let MutationBody::Create(data) = &request.body else {
                 unreachable!("create request body matched above")
             };
-            if request
+            if let Some(field) = request
                 .plan
                 .entity
                 .fields
                 .values()
-                .any(|field| field.required && !data.contains_key(&field.id))
+                .find(|field| field.required && !data.contains_key(&field.id))
             {
-                return Err(MutationError::InvalidRequest);
+                return Err(MutationError::InvalidRequestAt(data_field_location(
+                    &request.plan.entity,
+                    profile,
+                    &field.id,
+                )));
             }
         }
         Operation::Patch
@@ -3860,13 +3898,101 @@ fn validate_request(
     if let MutationBody::Create(data) = &request.body {
         for (field_id, value) in data {
             let field = &request.plan.entity.fields[field_id];
+            let location = || {
+                MutationError::InvalidRequestAt(data_field_location(
+                    &request.plan.entity,
+                    profile,
+                    field_id,
+                ))
+            };
             if value.is_null() && field.required {
-                return Err(MutationError::InvalidRequest);
+                return Err(location());
             }
-            sql_value(value, &field.field_type)?;
+            sql_value(value, &field.field_type).map_err(|_| location())?;
         }
     }
     Ok(())
+}
+
+/// Refuse the first submitted name the selected grant does not admit, before
+/// any other member check reads the body. An unknown name and a name the
+/// grant withholds take the same branch, so neither the refusal nor its
+/// location depends on whether a withheld field exists: a create body stops
+/// at `/data`, and a patch operation at its own `path`.
+fn admit_submitted_names(
+    plan: &MutationPlan,
+    claims: &ClaimContext,
+    body: &MutationBody,
+) -> Result<(), MutationError> {
+    // A request refused for who is asking, not for what it sent, is refused
+    // unlocated by `validate_request`: a profile without an entry, an
+    // anonymous profile, a missing principal, or a route that does not serve
+    // the profile.
+    let Some(profile) = plan.entity.access_profiles.get(claims.access_profile()) else {
+        return Ok(());
+    };
+    if profile.anonymous
+        || claims.principal().is_none()
+        || claims.entity_id() != plan.entity.id
+        || !plan
+            .route
+            .access_profiles
+            .iter()
+            .any(|candidate| candidate == claims.access_profile())
+    {
+        return Ok(());
+    }
+    let admitted = |api_name: &str, write: bool| {
+        field_id_for_api_name(&plan.entity, api_name).is_ok_and(|field_id| {
+            if write {
+                profile.writable_fields.contains(field_id)
+            } else {
+                profile.readable_fields.contains(field_id)
+            }
+        })
+    };
+    match body {
+        MutationBody::Create(data) => {
+            if data.keys().any(|api_name| !admitted(api_name, true)) {
+                return Err(MutationError::InvalidRequestAt(RequestLocation::data()));
+            }
+        }
+        MutationBody::Patch(operations) => {
+            for (index, operation) in operations.iter().enumerate() {
+                let (path, write) = match operation {
+                    PatchOperation::Add { path, .. }
+                    | PatchOperation::Replace { path, .. }
+                    | PatchOperation::Remove { path } => (path, true),
+                    PatchOperation::Test { path, .. } => (path, false),
+                };
+                if !patch_field(path).is_ok_and(|api_name| admitted(&api_name, write)) {
+                    return Err(patch_location(index, PatchMember::Path));
+                }
+            }
+        }
+        MutationBody::Tombstone | MutationBody::Attachment(_) => {}
+    }
+    Ok(())
+}
+
+/// Name one field of a create body only when the grant admits writing it.
+fn data_field_location(
+    entity: &CompiledEntity,
+    profile: &AccessProfileSource,
+    field_id: &str,
+) -> RequestLocation {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .filter(|_| profile.writable_fields.contains(field_id))
+        .map_or_else(RequestLocation::data, |field| {
+            RequestLocation::data_field(&field.logical.api_name)
+        })
+}
+
+fn patch_location(index: usize, member: PatchMember) -> MutationError {
+    MutationError::InvalidRequestAt(RequestLocation::patch_operation(index, Some(member)))
 }
 
 impl BatchMutationItem {
@@ -3961,7 +4087,7 @@ fn validate_batch_request(
         return Err(MutationError::InvalidRequest);
     }
 
-    for item in &request.items {
+    for (index, item) in request.items.iter().enumerate() {
         let item_granted = match request.plan.route.operation {
             Operation::Import => item.operation() == Operation::Create,
             _ => profile.operations.contains(&item.operation()),
@@ -3970,7 +4096,9 @@ fn validate_batch_request(
             || item.operation() == Operation::Patch
                 && request.plan.entity.mutation_mode != MutationMode::Mutable
         {
-            return Err(MutationError::InvalidRequest);
+            return Err(MutationError::InvalidRequestAt(
+                RequestLocation::batch_item(index, Some(BatchItemMember::Operation)),
+            ));
         }
         let item_plan = request
             .plan
@@ -3987,9 +4115,10 @@ fn validate_batch_request(
             representation: RecordRepresentation::Json,
             correlation: request.correlation.clone(),
         };
-        validate_request(&item_request, expected)?;
+        validate_request(&item_request, expected).map_err(|error| error.in_batch_item(index))?;
         if let MutationBody::Patch(operations) = &item_request.body {
-            validate_patch_static(&item_request, operations)?;
+            validate_patch_static(&item_request, operations)
+                .map_err(|error| error.in_batch_item(index))?;
         }
     }
     Ok(())
@@ -4001,41 +4130,47 @@ fn validate_patch_static(
 ) -> Result<(), MutationError> {
     let profile = selected_profile(request)?;
     let mut mutated = false;
-    for operation in operations {
+    for (index, operation) in operations.iter().enumerate() {
+        let at = |member| patch_location(index, member);
         let path = match operation {
             PatchOperation::Add { path, .. }
             | PatchOperation::Replace { path, .. }
             | PatchOperation::Remove { path }
             | PatchOperation::Test { path, .. } => path,
         };
-        let field_id = patch_field(path)?;
+        let field_id = patch_field(path).map_err(|_| at(PatchMember::Path))?;
         let field = request
             .plan
             .entity
             .fields
             .get(&field_id)
-            .ok_or(MutationError::InvalidRequest)?;
+            .ok_or_else(|| at(PatchMember::Path))?;
         match operation {
             PatchOperation::Add { value, .. } | PatchOperation::Replace { value, .. } => {
-                if !profile.writable_fields.contains(&field_id) || value.is_null() && field.required
-                {
-                    return Err(MutationError::InvalidRequest);
+                if !profile.writable_fields.contains(&field_id) {
+                    return Err(at(PatchMember::Path));
                 }
-                sql_value(value, &field.field_type)?;
+                if value.is_null() && field.required {
+                    return Err(at(PatchMember::Value));
+                }
+                sql_value(value, &field.field_type).map_err(|_| at(PatchMember::Value))?;
                 mutated = true;
             }
             PatchOperation::Remove { .. } => {
-                if field.required || !profile.writable_fields.contains(&field_id) {
-                    return Err(MutationError::InvalidRequest);
+                if !profile.writable_fields.contains(&field_id) {
+                    return Err(at(PatchMember::Path));
+                }
+                if field.required {
+                    return Err(at(PatchMember::Op));
                 }
                 mutated = true;
             }
             PatchOperation::Test { value, .. } => {
                 if !profile.readable_fields.contains(&field_id) {
-                    return Err(MutationError::InvalidRequest);
+                    return Err(at(PatchMember::Path));
                 }
                 if !value.is_null() {
-                    sql_value(value, &field.field_type)?;
+                    sql_value(value, &field.field_type).map_err(|_| at(PatchMember::Value))?;
                 }
             }
         }
@@ -4411,6 +4546,19 @@ fn map_field_database_error(
 /// A guarded boundary records a refusal only for a failure that proves the
 /// mutation did not commit. An unresolved commit is answered `unfinished` by
 /// the attempt's drop instead, consistent with ingestion's `reach_commit`.
+impl MutationError {
+    /// Place a located refusal of one batch item inside that item.
+    #[must_use]
+    pub(crate) fn in_batch_item(self, index: usize) -> Self {
+        match self {
+            Self::InvalidRequestAt(location) => {
+                Self::InvalidRequestAt(location.in_batch_item(index))
+            }
+            other => other,
+        }
+    }
+}
+
 pub(crate) fn failure_is_refusal<T>(result: &Result<T, MutationError>) -> bool {
     matches!(result, Err(error) if *error != MutationError::CommitUnresolved)
 }

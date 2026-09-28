@@ -693,3 +693,71 @@ not installed. The BREG-SEC-21 negative test
 - Other failures inside `read_rows` still answer `503 source.unavailable`;
   this change removes only the one a compiler-accepted configuration could
   reach on a healthy database.
+
+## Located record and query refusals
+
+The change adds a `fieldPath` to record and query `400` refusals
+(`crates/registry-breg/src/problem_location.rs`, `admit_submitted_names` in
+`crates/registry-breg/src/mutation.rs`, and `invalid_request_at` and
+`invalid_query_at` in `crates/registry-breg/src/api/mod.rs`). It changes
+what a refusal tells the caller.
+
+### Threat
+
+A refusal location discloses a field the caller's grant withholds, or lets
+the caller tell an unknown name from a withheld one, so the refusal becomes
+a probe of the compiled model. A location that echoes caller text also
+carries caller-controlled bytes into responses and logs.
+
+### Enforcement and defaults
+
+- `fieldPath` is built only by `RequestLocation`'s constructors and by the
+  fixed `QUERY_PARAMETERS` list and header name. It carries a fixed envelope
+  member, a compiled API name the caller's grant admits for writing, or a
+  fixed parameter or header name. Every pointer segment is RFC 6901 escaped
+  and the whole pointer is bounded to the schema's 256 characters.
+- A name the caller supplied is never echoed. An unknown or withheld create
+  member stops at `/data`, a patch path at `/<n>/path`, a batch item at
+  `/items/<n>/data`, and a field inside `$select`, `$filter`, or `$orderby`
+  at the parameter. An unrecognized query parameter or body member names no
+  location at all.
+- The index a location carries cannot depend on whether a withheld field
+  exists. `admit_submitted_names` checks every submitted name against the
+  selected grant in one pass, in body order, before normalization, value
+  checks, or any record I/O, and treats an unknown name and a withheld name
+  identically. Before this change a patch `test` of a withheld field was
+  refused only inside the transaction, after an unknown one had already been
+  refused at normalization; both now take the same branch before I/O.
+- Query locations are attributed after parsing and admission in a fixed
+  order that never consults the grant, so which parameter is named does not
+  depend on a withheld field either. The feature API and lookup bodies keep
+  their unlocated refusals: the feature API speaks its own parameter names,
+  and lookup refusals keep the value-free equivalence BREG-SEC-20 pins.
+- `detail` and `code` are unchanged, so typed clients keep matching them,
+  and the Rust client accepts the new forms only on `request.invalid` and
+  `query.invalid`, never exposes them, and still turns any other location
+  into a protocol failure.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_mutation.rs`:
+`record_and_query_refusals_name_only_fixed_members_and_admitted_fields`
+asserts byte-identical problems, apart from `traceId`, for an unknown and a
+withheld field in a create body, a patch path, a patch `test`, a batch item,
+`$select`, and `$filter`, including a withheld field placed ahead of an
+unknown one, and asserts that no withheld or unknown name appears in any
+body. `crates/registry-breg/tests/postgres_mutation_logical_names.rs` pins
+the kebab-case field id refused at `/data`.
+`crates/registry-breg/src/problem_location.rs` pins the rendered and
+accepted grammar, and
+`crates/registry-breg-client/tests/write_http_boundary.rs`:
+`record_and_query_problem_paths_are_closed_bounded_and_discarded` pins the
+client's closed forms.
+
+### Accepted residuals
+
+- A located refusal tells the caller which of its own admitted fields or
+  parameters was wrong, and that a required field it may write is missing.
+  Both are already in the caller's filtered contract.
+- Ingestion chunk items still answer an unlocated `request.invalid`.
+

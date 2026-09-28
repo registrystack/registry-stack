@@ -31,6 +31,7 @@ use registry_breg::postgres::{
     test_package_digest, ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
     RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
+use registry_breg::problem_location::{PatchMember, RequestLocation};
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Map, Value};
 use tower::Service as _;
@@ -227,7 +228,12 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
             ),
         )
         .await;
-    assert_eq!(invalid, Err(MutationError::InvalidRequest));
+    assert_eq!(
+        invalid,
+        Err(MutationError::InvalidRequestAt(
+            RequestLocation::data_field("quantity")
+        ))
+    );
     assert_eq!(
         durable_counts(&database, table).await,
         DurableCounts {
@@ -689,7 +695,12 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
             },
         )
         .await;
-    assert_eq!(forbidden_field, Err(MutationError::InvalidRequest));
+    assert_eq!(
+        forbidden_field,
+        Err(MutationError::InvalidRequestAt(
+            RequestLocation::patch_operation(0, Some(PatchMember::Path))
+        ))
+    );
     assert_eq!(
         durable_counts(&database, table).await,
         DurableCounts {
@@ -2355,6 +2366,525 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
 
     assert_journals_are_minimized_and_paired(&database).await;
     database.cleanup().await;
+}
+
+/// #1442: every record and query `400` names the offending member or query
+/// parameter, and never a caller-supplied name: an unknown and a withheld
+/// field answer byte-identical problems.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_and_query_refusals_name_only_fixed_members_and_admitted_fields() {
+    let database = TestDatabase::create(8).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(located_refusal_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "located-refusal-registry",
+            database_id: DATABASE_ID,
+            label: "package-located-refusal-1",
+        },
+    )
+    .await
+    .expect("migration initializes state");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6c; 32].into())
+            .expect("test owns keyed audit"),
+    );
+    let lock_key = RegistryLockKey::derive("located-refusal-registry").expect("lock id is bounded");
+    let app = mutation_router(pool, compiled, identity, lock_key, audit, None);
+    let claims = api_claims("case-management", Some("zone-a"));
+    let json_headers = |key: &'static str| {
+        vec![
+            ("content-type", "application/json"),
+            ("idempotency-key", key),
+        ]
+    };
+
+    let create = |key: &'static str, body: Value| {
+        let app = app.clone();
+        let claims = claims.clone();
+        async move {
+            send(
+                &app,
+                Method::POST,
+                "/v1/records/widgets",
+                Some(claims),
+                &json_headers(key),
+                serde_json::to_vec(&body).unwrap(),
+            )
+            .await
+        }
+    };
+
+    // An unknown and a withheld field stop at their container.
+    let unknown = problem(
+        create(
+            "located-unknown",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A","quantity":1,"noSuchField":"x"
+            }}),
+        )
+        .await,
+    )
+    .await;
+    let withheld = problem(
+        create(
+            "located-withheld",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A","quantity":1,"secret":"x"
+            }}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&unknown, Some("/data"));
+    assert_identical_problems(&unknown, &withheld);
+    let kebab = problem(
+        create(
+            "located-kebab",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A","quantity":1,"is-flagged":true
+            }}),
+        )
+        .await,
+    )
+    .await;
+    assert_identical_problems(&unknown, &kebab);
+
+    // A missing required and a wrongly typed admitted field are named.
+    let missing = problem(
+        create(
+            "located-missing",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A"
+            }}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&missing, Some("/data/quantity"));
+    let wrong_type = problem(
+        create(
+            "located-type",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A","quantity":"many"
+            }}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&wrong_type, Some("/data/quantity"));
+    let camel = problem(
+        create(
+            "located-camel",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A","quantity":1,"isFlagged":"yes"
+            }}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&camel, Some("/data/isFlagged"));
+    let missing_data = problem(create("located-no-data", json!({"record":{}})).await).await;
+    assert_request_invalid_at(&missing_data, Some("/data"));
+    // No single member is at fault in an unparseable body.
+    let unparseable = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets",
+            Some(claims.clone()),
+            &json_headers("located-unparseable"),
+            b"{\"data\":".to_vec(),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&unparseable, None);
+    let bad_key = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets",
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "bad key"),
+            ],
+            b"{\"data\":{}}".to_vec(),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&bad_key, Some("Idempotency-Key"));
+
+    let created = response_parts(
+        create(
+            "located-created",
+            json!({"data":{
+                "jurisdiction":"zone-a","label":"A","quantity":1
+            }}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let record_id = created.body["data"]["recordIdentifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let etag = created.etag.clone();
+    let patch = |key: &'static str, document: Value| {
+        let app = app.clone();
+        let claims = claims.clone();
+        let uri = format!("/v1/records/widgets/{record_id}");
+        let etag = etag.clone();
+        async move {
+            send(
+                &app,
+                Method::PATCH,
+                &uri,
+                Some(claims),
+                &[
+                    ("content-type", "application/json-patch+json"),
+                    ("idempotency-key", key),
+                    ("if-match", &etag),
+                ],
+                serde_json::to_vec(&document).unwrap(),
+            )
+            .await
+        }
+    };
+    let outside = problem(
+        patch(
+            "located-outside",
+            json!([
+                {"op":"replace","path":"/label","value":"B"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&outside, Some("/0/path"));
+    // A withheld field ahead of an unknown one is located exactly like an
+    // unknown one: the index never tells the caller the first field exists.
+    let withheld_first = problem(
+        patch(
+            "located-withheld-first",
+            json!([
+                {"op":"replace","path":"/data/label","value":"B"},
+                {"op":"replace","path":"/data/secret","value":"s"},
+                {"op":"replace","path":"/data/noSuchField","value":"x"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    let unknown_first = problem(
+        patch(
+            "located-unknown-first",
+            json!([
+                {"op":"replace","path":"/data/label","value":"B"},
+                {"op":"replace","path":"/data/otherField","value":"s"},
+                {"op":"replace","path":"/data/noSuchField","value":"x"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&withheld_first, Some("/1/path"));
+    assert_identical_problems(&withheld_first, &unknown_first);
+    let withheld_test = problem(
+        patch(
+            "located-withheld-test",
+            json!([
+                {"op":"replace","path":"/data/quantity","value":"many"},
+                {"op":"test","path":"/data/secret","value":"s"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    let unknown_test = problem(
+        patch(
+            "located-unknown-test",
+            json!([
+                {"op":"replace","path":"/data/quantity","value":"many"},
+                {"op":"test","path":"/data/noSuchField","value":"s"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&withheld_test, Some("/1/path"));
+    assert_identical_problems(&withheld_test, &unknown_test);
+    let patch_type = problem(
+        patch(
+            "located-patch-type",
+            json!([
+                {"op":"test","path":"/data/label","value":"A"},
+                {"op":"replace","path":"/data/quantity","value":"many"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&patch_type, Some("/1/value"));
+    let patch_op = problem(
+        patch(
+            "located-patch-op",
+            json!([
+                {"op":"move","path":"/data/label","from":"/data/note"}
+            ]),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&patch_op, Some("/0/op"));
+
+    let batch = |key: &'static str, body: Value| {
+        let app = app.clone();
+        let claims = claims.clone();
+        async move {
+            send(
+                &app,
+                Method::POST,
+                "/v1/records/widgets:batch",
+                Some(claims),
+                &json_headers(key),
+                serde_json::to_vec(&body).unwrap(),
+            )
+            .await
+        }
+    };
+    let item =
+        json!({"operation":"create","data":{"jurisdiction":"zone-a","label":"C","quantity":2}});
+    let bad_item = problem(
+        batch(
+            "located-batch-item",
+            json!({"items":[
+                item, {"operation":"create"}
+            ]}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&bad_item, Some("/items/1/data"));
+    let batch_withheld = problem(batch("located-batch-withheld", json!({"items":[
+        {"operation":"create","data":{"jurisdiction":"zone-a","label":"D","quantity":2,"secret":"s"}},
+        {"operation":"create","data":{"jurisdiction":"zone-a","label":"E","quantity":2,"noSuchField":"x"}}
+    ]})).await).await;
+    let batch_unknown = problem(batch("located-batch-unknown", json!({"items":[
+        {"operation":"create","data":{"jurisdiction":"zone-a","label":"D","quantity":2,"otherField":"s"}},
+        {"operation":"create","data":{"jurisdiction":"zone-a","label":"E","quantity":2,"noSuchField":"x"}}
+    ]})).await).await;
+    assert_request_invalid_at(&batch_withheld, Some("/items/0/data"));
+    assert_identical_problems(&batch_withheld, &batch_unknown);
+    let batch_type = problem(batch("located-batch-type", json!({"items":[
+        item, {"operation":"create","data":{"jurisdiction":"zone-a","label":"F","quantity":"many"}}
+    ]})).await).await;
+    assert_request_invalid_at(&batch_type, Some("/items/1/data/quantity"));
+    let batch_patch = problem(
+        batch(
+            "located-batch-patch",
+            json!({"items":[{
+                "operation":"patch","recordId":record_id,"ifMatch":created.etag,
+                "patch":[{"op":"replace","path":"/label","value":"G"}]
+            }]}),
+        )
+        .await,
+    )
+    .await;
+    assert_request_invalid_at(&batch_patch, Some("/items/0/patch/0/path"));
+
+    let query = |uri: &'static str| {
+        let app = app.clone();
+        let claims = claims.clone();
+        async move { send(&app, Method::GET, uri, Some(claims), &[], Vec::new()).await }
+    };
+    let select_unknown = problem(query("/v1/records/widgets?$select=noSuchField").await).await;
+    let select_withheld = problem(query("/v1/records/widgets?$select=secret").await).await;
+    assert_query_invalid_at(&select_unknown, Some("$select"));
+    assert_identical_problems(&select_unknown, &select_withheld);
+    let filter_unknown =
+        problem(query("/v1/records/widgets?$filter=noSuchField%20eq%20'x'").await).await;
+    let filter_withheld =
+        problem(query("/v1/records/widgets?$filter=secret%20eq%20'x'").await).await;
+    assert_query_invalid_at(&filter_unknown, Some("$filter"));
+    assert_identical_problems(&filter_unknown, &filter_withheld);
+    let filter_syntax = problem(query("/v1/records/widgets?$filter=label%20eq").await).await;
+    assert_query_invalid_at(&filter_syntax, Some("$filter"));
+    let top = problem(query("/v1/records/widgets?$top=0").await).await;
+    assert_query_invalid_at(&top, Some("$top"));
+    let orderby = problem(query("/v1/records/widgets?$orderby=secret").await).await;
+    assert_query_invalid_at(&orderby, Some("$orderby"));
+    let invented = problem(query("/v1/records/widgets?noSuchParameter=1").await).await;
+    assert_query_invalid_at(&invented, None);
+    assert!(!String::from_utf8_lossy(&invented.1).contains("noSuchParameter"));
+    let get_filter = problem(
+        send(
+            &app,
+            Method::GET,
+            &format!("/v1/records/widgets/{record_id}?$filter=label%20eq%20'A'"),
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_query_invalid_at(&get_filter, Some("$filter"));
+
+    for (_, bytes) in [
+        &unknown,
+        &withheld,
+        &kebab,
+        &withheld_first,
+        &unknown_first,
+        &withheld_test,
+        &batch_withheld,
+        &select_withheld,
+        &filter_withheld,
+        &orderby,
+    ] {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!text.contains("secret"), "{text}");
+        assert!(!text.contains("noSuchField"), "{text}");
+        assert!(!text.contains("otherField"), "{text}");
+        assert!(!text.contains("is-flagged"), "{text}");
+    }
+}
+
+async fn problem(response: axum::response::Response) -> (StatusCode, Vec<u8>) {
+    let status = response.status();
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/problem+json")
+    );
+    (status, response_bytes(response).await)
+}
+
+fn assert_request_invalid_at(problem: &(StatusCode, Vec<u8>), field_path: Option<&str>) {
+    assert_problem_at(
+        problem,
+        "request.invalid",
+        "The request is invalid.",
+        field_path,
+    );
+}
+
+fn assert_query_invalid_at(problem: &(StatusCode, Vec<u8>), field_path: Option<&str>) {
+    assert_problem_at(
+        problem,
+        "query.invalid",
+        "The query request is invalid.",
+        field_path,
+    );
+}
+
+fn assert_problem_at(
+    (status, bytes): &(StatusCode, Vec<u8>),
+    code: &str,
+    detail: &str,
+    field_path: Option<&str>,
+) {
+    let body: Value = serde_json::from_slice(bytes).expect("problem is JSON");
+    assert_eq!(*status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], code, "{body}");
+    assert_eq!(body["detail"], detail, "{body}");
+    assert_eq!(body["title"], "Bad Request", "{body}");
+    assert_eq!(
+        body.get("fieldPath").and_then(Value::as_str),
+        field_path,
+        "{body}"
+    );
+    let mut members = vec!["type", "title", "status", "detail", "code", "traceId"];
+    if field_path.is_some() {
+        members.push("fieldPath");
+    }
+    assert_eq!(
+        body.as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        members.into_iter().collect::<BTreeSet<_>>(),
+        "{body}"
+    );
+}
+
+/// Two problems are byte-identical apart from their trace identifiers.
+fn assert_identical_problems(left: &(StatusCode, Vec<u8>), right: &(StatusCode, Vec<u8>)) {
+    let strip = |(status, bytes): &(StatusCode, Vec<u8>)| {
+        let mut body: Value = serde_json::from_slice(bytes).unwrap();
+        let trace = body["traceId"].as_str().unwrap().to_owned();
+        body.as_object_mut().unwrap().remove("traceId");
+        (
+            *status,
+            String::from_utf8(bytes.clone())
+                .unwrap()
+                .replace(&trace, ""),
+            body,
+        )
+    };
+    assert_eq!(strip(left), strip(right));
+}
+
+fn located_refusal_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"located-refusal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+            "batch":{"maximumItems":4,"maximumBytes":16384},
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+              {"id":"quantity","type":"int64","required":true,"classification":"public"},
+              {"id":"is-flagged","type":"boolean","required":false,"classification":"public"},
+              {"id":"secret","type":"string","maxLength":128,"required":false,"classification":"public"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"writer","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "permissions":[{
+              "entity":"widget","operations":["create","get","list","patch","batch"],
+              "readableFields":["jurisdiction","label","quantity","is-flagged"],
+              "writableFields":["jurisdiction","label","quantity","is-flagged"],
+              "filterableFields":["label"],
+              "sortableFields":["label"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"keeper","principalClaim":"registry_principal",
+            "requiredPurposes":["case-review"],
+            "permissions":[{
+              "entity":"widget","operations":["get","list","patch"],
+              "readableFields":["jurisdiction","label","secret"],
+              "writableFields":["secret"],
+              "filterableFields":["secret"],
+              "sortableFields":["secret"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("located refusal fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("located refusal fixture compiles")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
