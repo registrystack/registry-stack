@@ -904,9 +904,7 @@ fn safe_command(
             }
             .into();
         }
-        let operational = error
-            .chain()
-            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
+        let operational = operational_cause(&error);
         SafeCliFailure {
             operational,
             code: code.to_owned(),
@@ -1196,6 +1194,25 @@ mod tests {
         assert!(!operational_cause(&anyhow::anyhow!(
             "authored input refused"
         )));
+    }
+
+    #[test]
+    fn a_wrapped_command_whose_delegated_run_is_bounded_exits_operational() {
+        let bound = anyhow::Error::new(evidence_binary::DelegatedRunBoundError::for_test())
+            .context("evidence version handshake");
+        let error = safe_command(
+            Err(bound),
+            "evidence.test.failed",
+            "project".to_owned(),
+            "Evidence could not run the fixtures.",
+            "Correct the project and rerun test.",
+        )
+        .unwrap_err();
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        assert!(failure.operational);
+        assert_eq!(failure.exit(), report::OPERATIONAL_FAILURE_EXIT);
     }
 
     #[test]
