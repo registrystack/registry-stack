@@ -565,7 +565,8 @@ invariants:
       privilege of the migration role that grants the runtime role TRIGGER
       on the tables it creates. The row
       records the runtime role and the role mode it holds after the grants,
-      read from its ledger and schema-history privileges, ownership,
+      read from its table and column privileges on the ledger and the
+      schema history, ownership,
       membership in the migration role, and superuser or BYPASSRLS
       attributes. A runtime role that owns or is a member of an owner of the
       schema or any scheduling_* relation or function, holds TRIGGER on a

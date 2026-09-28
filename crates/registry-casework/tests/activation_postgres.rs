@@ -1429,9 +1429,10 @@ async fn a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_sta
 
 /// Writing the schema-migration ledger is authority over the activation
 /// ledger as much as writing it, so startup refuses the split activation,
-/// and apply takes the privilege back.
+/// and apply takes the privilege back. A column-level INSERT or UPDATE, or
+/// TRUNCATE, on either ledger counts as a write the same way.
 #[tokio::test]
-async fn schema_ledger_writes_weaken_a_split_activation_until_apply_revokes_them() {
+async fn ledger_writes_weaken_a_split_activation_until_apply_revokes_them() {
     let fixture = Fixture::split("ledgerwrite").await;
     let project = project();
     let first = digest('a');
@@ -1443,6 +1444,11 @@ async fn schema_ledger_writes_weaken_a_split_activation_until_apply_revokes_them
     for grant in [
         "GRANT INSERT ON casework_schema_migrations TO {role}",
         "GRANT UPDATE ON casework_schema_migrations TO {role}",
+        "GRANT INSERT (version) ON casework_schema_migrations TO {role}",
+        "GRANT TRUNCATE ON casework_schema_migrations TO {role}",
+        "GRANT UPDATE (package_digest) ON casework_activations TO {role}",
+        "GRANT INSERT (activation_id) ON casework_activations TO {role}",
+        "GRANT TRUNCATE ON casework_activations TO {role}",
     ] {
         fixture
             .client
