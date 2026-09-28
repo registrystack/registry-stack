@@ -1,9 +1,13 @@
 'use strict';
 
 const { readFileSync, writeFileSync } = require('node:fs');
-const { join } = require('node:path');
+const { join, resolve } = require('node:path');
 
-const loader = join(__dirname, '..', 'index.js');
+// Defaults to the committed loader; `check:types` passes the loader it
+// generates beside it for comparison.
+const loader = process.argv[2] === undefined
+  ? join(__dirname, '..', 'index.js')
+  : resolve(process.argv[2]);
 const source = readFileSync(loader, 'utf8');
 const generatedPattern = /^  if \(!wasiBindingLoaded && \(!__napiWasiFlavorRequested \|\| __napiWasiFlavor === (['"])wasm32-wasi\1\)\) \{$/gm;
 const normalizedPattern = /^  if \(!__napiWasiFlavorRequested \|\| __napiWasiFlavor === (['"])wasm32-wasi\1\) \{$/gm;
