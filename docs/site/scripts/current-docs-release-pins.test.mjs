@@ -39,8 +39,14 @@ const TARGET_RULES = [
     ),
   },
   {
+    // The versioned assets release/scripts/release_candidate.py publishes: platform binaries and
+    // client packages, installers, the SBOM, the security evidence and the docs archive.
     id: 'release-asset-name',
-    pattern: /\b[a-z][a-z0-9-]*-v\d+\.\d+\.\d+-(?:linux|macos)-[a-z0-9]+\b/g,
+    pattern: new RegExp(
+      String.raw`\b[a-z][a-z0-9-]*-v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)[0-9.]*)?`
+        + String.raw`(?:-(?:linux|macos)-[a-z0-9]+|-install\.sh|-security-evidence\.tar\.gz|\.sbom\.spdx\.json|\.tar\.gz)`,
+      'g',
+    ),
   },
 ];
 
@@ -61,17 +67,26 @@ const OPERATOR_PAGES = new Set([
   'reference/relayctl.mdx',
 ]);
 
-// Generated trees are checked at their sources; dated records are historical by nature.
-const EXCLUDED_PREFIXES = ['products/', 'reference/cli/', 'decisions/'];
+// Dated records are historical by nature. Generated pages (products/ from repo-docs.yaml sources,
+// reference/cli/ from the Clap trees) are published current pages, so `npm test` scans what
+// `npm run generate` wrote there under the target rules.
+const EXCLUDED_PREFIXES = ['decisions/'];
+const GENERATED_PREFIXES = ['products/', 'reference/cli/'];
 const EXCLUDED_PAGES = new Set(['changelog.mdx']);
 
 // Repository files outside the docs site that are held to the same policy.
 const EXTRA_OPERATOR_DOCS = ['docker/README.md'];
 
-// Historical mentions that match a target rule but name a past release on purpose. Keep this
-// narrow: every entry needs a reason, and an entry that no longer matches fails the suite.
-// Shape: { file: 'docs/site/src/content/docs/<page>', match: '<flagged text>', reason: '<why>' }.
-const HISTORICAL_ALLOWLIST = [];
+// Mentions that match a target rule on purpose: a past release named as history, or an example
+// version that illustrates a naming scheme. Keep this narrow: every entry needs a reason, and an
+// entry that no longer matches fails the suite.
+const HISTORICAL_ALLOWLIST = [
+  {
+    file: 'docs/site/src/content/docs/products/registry-evidence/index.md',
+    match: 'evidence-v1.2.0-linux-amd64',
+    reason: 'products/evidence/README.md illustrates `<bin>-<tag>-<os>-<arch>` with a fictional v1.2.0',
+  },
+];
 
 function listContentPages(dir = contentRoot) {
   const pages = [];
@@ -87,6 +102,7 @@ function listContentPages(dir = contentRoot) {
 }
 
 function isOperatorPage(page) {
+  if (GENERATED_PREFIXES.some((prefix) => page.startsWith(prefix))) return false;
   return OPERATOR_PAGE_PREFIXES.some((prefix) => page.startsWith(prefix)) || OPERATOR_PAGES.has(page);
 }
 
@@ -137,7 +153,18 @@ test('each release-pin rule flags its install or download target', () => {
   assert.deepEqual(flagged('CASEWORK_VERSION=v0.30.0 bash'), ['installer-version-variable']);
   assert.deepEqual(flagged('pip install "registry-stack-client==0.26.1"'), ['package-install-version']);
   assert.deepEqual(flagged('npm install @registrystack/client@0.26.1'), ['package-install-version']);
-  assert.deepEqual(flagged('take relayctl-v0.26.1-linux-amd64'), ['release-asset-name']);
+  for (const asset of [
+    'relayctl-v0.26.1-linux-amd64',
+    'relayctl-v0.33.0-macos-arm64.tar.gz',
+    'relay-v0.35.0-install.sh',
+    'breg-v0.35.0-rc.1-install.sh',
+    'relay-client-node-v0.35.0-linux-arm64.tgz',
+    'registry-stack-v0.35.0.sbom.spdx.json',
+    'registry-stack-v0.35.0-security-evidence.tar.gz',
+    'registry-docs-v0.35.0.tar.gz',
+  ]) {
+    assert.deepEqual(flagged(`take ${asset}`), ['release-asset-name'], asset);
+  }
 
   const verify = 'https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md';
   assert.deepEqual(flagged(verify, true), ['repository-link-at-release-tag']);
@@ -150,6 +177,7 @@ test('release-pin rules leave tags, latest releases and history alone', () => {
     'curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash',
     'https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md',
     'Starting with v0.33.0, `relayctl-<tag>-macos-arm64.tar.gz` contains the macOS executable.',
+    'curl -fsSLO https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh',
     'The package ships from Registry Stack v0.26.1, so install a v0.26.1 or later release.',
     'python -m pip install "registry-stack-client==${version}"',
     'CASEWORK_VERSION=<tag> bash',
@@ -165,6 +193,12 @@ test('current docs carry no exact release pin as an install or download target',
     documents.some((document) => document.file.endsWith('/operate/index.mdx') && document.operator),
     'the operator landing page must be in scope',
   );
+  for (const prefix of GENERATED_PREFIXES) {
+    assert.ok(
+      documents.some((document) => document.file.startsWith(`docs/site/src/content/docs/${prefix}`)),
+      `generated ${prefix} pages must be in scope; run npm run generate first`,
+    );
+  }
 
   const usedAllowlist = new Set();
   const violations = [];
