@@ -81,6 +81,17 @@ npm run check:types
 cmp ../../LICENSE LICENSE
 ```
 
+These gates leave the working tree clean when `CARGO_TARGET_DIR` is unset or
+absolute. napi-rs runs Cargo from the binding's own directory, so a relative
+`CARGO_TARGET_DIR` resolves there, once per binding, and builds inside the
+tree. `build:debug` builds the addon without writing the committed `index.js`
+or `index.d.ts`, and `check:types` generates both into ignored `.check` files and
+requires them to match the committed ones byte for byte. When a napi-rs CLI bump
+changes that output, `check:types` fails. Run `npm ci && npm run build` in each
+of the five `-client-node` directories, which rewrites both files with the
+pinned CLI (Discovery's loader normalizer included), and commit every
+`index.js` and `index.d.ts` together with the bump.
+
 For Python bindings, run from the changed `-client-py` directory, replacing
 `<product>` with `breg`, `casework`, `discovery`, `evidence`, or `relay`:
 
@@ -88,6 +99,25 @@ For Python bindings, run from the changed `-client-py` directory, replacing
 cargo build --locked -p registry-<product>-client-py --lib --features registry-<product>-client-py/extension-module
 python3 -m unittest discover -s tests/python -v
 cmp ../../LICENSE LICENSE
+```
+
+The Python test bootstraps ask `cargo metadata` for the target directory, so a
+`CARGO_TARGET_DIR`, absolute or relative to the repository root, needs no
+further setup.
+
+On macOS, AWS-LC FIPS is a dynamic library, and System Integrity Protection
+strips `DYLD_*` variables from protected executables such as `/bin/sh`, which
+`npm test` runs through, and the system `python3`. Prepare the runtime library
+path in the shell from the repository root first, then run the Node tests
+directly with `node --test` instead of `npm test`, as
+`.github/workflows/macos-contributor.yml` does. The Python bootstraps preload
+the library from the helper's `REGISTRY_CARGO_RUNTIME_LIBRARY_PATH`.
+
+```sh
+. scripts/cargo-runtime-library-path.sh
+registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
+(cd crates/registry-<product>-client-node && npm run build:debug && node --test __test__/*.test.js)
+(cd crates/registry-<product>-client-py && python3 -m unittest discover -s tests/python -v)
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
