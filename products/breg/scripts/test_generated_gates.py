@@ -171,6 +171,27 @@ class GeneratedGateTests(unittest.TestCase):
         workflow = (SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("run: products/breg/scripts/test-promotion.sh", workflow)
 
+    def test_backup_restore_workflow_proves_the_documented_recovery(self) -> None:
+        proof = SCRIPT_DIR / "test-backup-restore.sh"
+        self.assertTrue(os.access(proof, os.X_OK))
+        source = proof.read_text(encoding="utf-8")
+        for marker in (
+            "BREG_TEST_TLS_CA_PEM_PATH",
+            'if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]',
+            "registry_prepare_cargo_runtime",
+            "pg_dump",
+            "pg_restore --exit-on-error",
+            "startup.instance_claim.mismatch",
+            "instance_claim.acknowledgement.required",
+            "--acknowledge-original-retired",
+            "startup.instance_id.pending_deliveries",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+        self.assertNotIn("--signing-key", source)
+        workflow = (SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("run: products/breg/scripts/test-backup-restore.sh", workflow)
+
     def test_adopter_workflow_uses_public_binaries_database_and_recovery(self) -> None:
         adopter_gate = (SCRIPT_DIR / "test-adopter-workflow.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", adopter_gate)

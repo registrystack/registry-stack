@@ -227,6 +227,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/breg/scripts/test-adopter-workflow.sh",
     ),
     (
+        "Base Registry Engine logical backup and restore",
+        "run: products/breg/scripts/test-backup-restore.sh",
+    ),
+    (
         "Base Registry Engine PostgreSQL 17 / PostGIS 3.5 image pin",
         "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
     ),
@@ -250,6 +254,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Casework product checkpoint wrapper",
         "run: products/casework/scripts/check-checkpoint.sh",
+    ),
+    (
+        "Casework logical backup and restore",
+        "run: products/casework/scripts/test-backup-restore.sh",
     ),
     (
         "Casework HTTP contract drift check",

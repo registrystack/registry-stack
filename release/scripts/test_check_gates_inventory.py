@@ -809,6 +809,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Base Registry Engine adopter workflow",
             ),
             (
+                "run: products/breg/scripts/test-backup-restore.sh",
+                "run: true # Base Registry Engine backup and restore disabled",
+                "Base Registry Engine logical backup and restore",
+            ),
+            (
                 "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
                 "postgis/postgis",
                 "Base Registry Engine PostgreSQL 17 / PostGIS 3.5 image pin",
@@ -842,6 +847,11 @@ class GateInventoryTest(unittest.TestCase):
                 "run: products/casework/scripts/check-checkpoint.sh",
                 "run: true # Casework checkpoint wrapper disabled",
                 "Casework product checkpoint wrapper",
+            ),
+            (
+                "run: products/casework/scripts/test-backup-restore.sh",
+                "run: true # Casework backup and restore disabled",
+                "Casework logical backup and restore",
             ),
             (
                 "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",

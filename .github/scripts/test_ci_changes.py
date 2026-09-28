@@ -1232,6 +1232,40 @@ class CiChangesTest(unittest.TestCase):
                 module_source = (source_dir / f"{module}.rs").read_text()
                 self.assertIn(f"fn {name}()", module_source)
 
+    def test_backup_restore_proofs_run_on_every_input_they_exercise(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text()
+        breg_job = workflow.split("\n  breg-contracts:\n", 1)[1].split(
+            "\n  breg-wasm:\n", 1
+        )[0]
+        casework_job = workflow.split("\n  casework-postgres:\n", 1)[1].split(
+            "\n  scheduling-contracts:\n", 1
+        )[0]
+        self.assertIn(
+            "if: matrix.lane == 'contracts'\n"
+            "        env:\n"
+            '          BREG_SKIP_BUILD: "1"\n'
+            "        run: products/breg/scripts/test-backup-restore.sh",
+            breg_job,
+        )
+        self.assertIn(
+            "run: products/casework/scripts/test-backup-restore.sh", casework_job
+        )
+        # The BReg proof drives bregctl and breg; the Casework proof drives
+        # both development supervisors and both runtimes, so a change to
+        # either product or to either script selects the job that runs it.
+        for path, outputs_required in (
+            ("products/breg/scripts/test-backup-restore.sh", ("breg_contracts",)),
+            ("crates/registry-breg/src/instance_claim.rs", ("breg_contracts", "casework_postgres")),
+            ("crates/registry-bregctl/src/dev/mod.rs", ("breg_contracts", "casework_postgres")),
+            ("products/casework/scripts/test-backup-restore.sh", ("casework_postgres",)),
+            ("crates/registry-caseworkctl/src/dev/mod.rs", ("casework_postgres",)),
+            ("crates/registry-casework/src/activation.rs", ("casework_postgres",)),
+        ):
+            outputs = classify(self.workspace, (path,))
+            for output in outputs_required:
+                with self.subTest(path=path, output=output):
+                    self.assertTrue(outputs[output])
+
     def test_breg_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
         # Each page's tutorial_test frontmatter is the source of truth for
         # which tutorials the gate replays. A replayed page missing here would
@@ -1916,6 +1950,7 @@ class CiChangesTest(unittest.TestCase):
             "products/breg/scripts/test-postgres.sh",
             "products/breg/scripts/test-postgres-tls.sh",
             "products/breg/scripts/test-adopter-workflow.sh",
+            "products/breg/scripts/test-backup-restore.sh",
             "products/breg/quickstart/run.sh --smoke",
         ):
             with self.subTest(entry_point=entry_point):
