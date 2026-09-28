@@ -2065,10 +2065,12 @@ impl AuditSegments {
     /// written in and the order retention deletes them. A name that has a
     /// lock companion is the active file of another stream configured at
     /// that name, never a sealed segment, and is left out. More than
-    /// `maximum` segments is refused rather than listed partially.
+    /// `maximum` segment-shaped names, those left out included, is refused
+    /// while scanning rather than listed partially, so the listing never
+    /// holds more than `maximum` names whatever the directory holds.
     pub fn sealed(&self, maximum: usize) -> Result<Vec<SealedSegment>, AuditError> {
         let mut sealed = Vec::new();
-        for (sequence, path) in self.segment_names()? {
+        for (sequence, path) in self.segment_names(maximum)? {
             // A lock name past the file-name limit cannot exist.
             let lock = lock_path(&path);
             if lock
@@ -2081,11 +2083,6 @@ impl AuditSegments {
                     Err(error) => return Err(AuditError::Io(error)),
                 }
             }
-            if sealed.len() == maximum {
-                return Err(AuditError::Io(io::Error::other(
-                    "audit segment count exceeds the listing bound",
-                )));
-            }
             sealed.push(SealedSegment { sequence, path });
         }
         Ok(sealed)
@@ -2096,24 +2093,44 @@ impl AuditSegments {
     /// sealed, so neither retention nor a shipper removing every sealed
     /// segment can make a restart reuse a name.
     pub fn next_sequence(&self) -> Result<u64, AuditError> {
-        let scanned = self
-            .segment_names()?
-            .pop()
-            .map_or(1, |(sequence, _)| sequence.saturating_add(1));
+        let mut highest = None;
+        self.scan_segment_names(|sequence, _| {
+            highest = highest.max(Some(sequence));
+            Ok(())
+        })?;
+        let scanned = highest.map_or(1, |sequence: u64| sequence.saturating_add(1));
         Ok(read_next_sequence(&self.path)?.map_or(scanned, |recorded| recorded.max(scanned)))
     }
 
-    /// Every name shaped like a sealed segment, oldest first.
-    fn segment_names(&self) -> Result<Vec<(u64, PathBuf)>, AuditError> {
+    /// Every name shaped like a sealed segment, oldest first. More than
+    /// `maximum` names is refused as soon as the scan meets one too many.
+    fn segment_names(&self, maximum: usize) -> Result<Vec<(u64, PathBuf)>, AuditError> {
         let mut names = Vec::new();
+        self.scan_segment_names(|sequence, candidate| {
+            if names.len() == maximum {
+                return Err(AuditError::Io(io::Error::other(
+                    "audit segment count exceeds the listing bound",
+                )));
+            }
+            names.push((sequence, candidate));
+            Ok(())
+        })?;
+        names.sort_unstable_by_key(|(sequence, _)| *sequence);
+        Ok(names)
+    }
+
+    /// Visit every name shaped like a sealed segment, in directory order.
+    fn scan_segment_names(
+        &self,
+        mut visit: impl FnMut(u64, PathBuf) -> Result<(), AuditError>,
+    ) -> Result<(), AuditError> {
         for entry in fs::read_dir(parent(&self.path)?).map_err(AuditError::Io)? {
             let candidate = entry.map_err(AuditError::Io)?.path();
             if let Some(sequence) = segment_sequence(&self.path, &candidate) {
-                names.push((sequence, candidate));
+                visit(sequence, candidate)?;
             }
         }
-        names.sort_unstable_by_key(|(sequence, _)| *sequence);
-        Ok(names)
+        Ok(())
     }
 }
 
@@ -2736,7 +2753,7 @@ mod tests {
 
     /// Every name shaped like a sealed segment of `path`, oldest first.
     fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
-        AuditSegments::new(path).segment_names()
+        AuditSegments::new(path).segment_names(usize::MAX)
     }
 
     fn recorded_torn_recoveries(path: &Path) -> Vec<(PathBuf, u64)> {
@@ -4936,14 +4953,48 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(segments.sealed(2).expect("within the bound"), sealed);
-        segments.sealed(1).expect_err("over the bound");
+        // The bound counts every segment-shaped name the scan meets,
+        // including the one left out for its lock companion.
+        assert_eq!(segments.sealed(3).expect("within the bound"), sealed);
+        segments.sealed(2).expect_err("over the bound");
         // The next sequence passes every sealed-looking name, another
         // stream's included, and the recorded one.
         assert_eq!(segments.next_sequence().expect("next"), 11);
         fs::write(segments.sequence(), "40\n").expect("sequence");
         fs::set_permissions(segments.sequence(), fs::Permissions::from_mode(0o600)).expect("mode");
         assert_eq!(segments.next_sequence().expect("next"), 40);
+    }
+
+    #[test]
+    fn the_segment_listing_refuses_one_segment_shaped_name_past_the_bound() {
+        let directory = directory();
+        let path = directory.path().join("events.jsonl");
+        let segments = AuditSegments::new(&path);
+        for name in [
+            "events.jsonl.00000004",
+            "events.jsonl.00000001",
+            "events.jsonl.00000003",
+            // Skipped from the listing, but counted by the bounded scan.
+            "events.jsonl.00000002",
+            "events.jsonl.00000002.lock",
+        ] {
+            fs::write(directory.path().join(name), "").expect(name);
+        }
+        let refused = segments.sealed(3).expect_err("over the bound");
+        assert_eq!(
+            refused.to_string(),
+            AuditError::Io(io::Error::other(
+                "audit segment count exceeds the listing bound"
+            ))
+            .to_string()
+        );
+        let sequences: Vec<u64> = segments
+            .sealed(4)
+            .expect("within the bound")
+            .into_iter()
+            .map(|sealed| sealed.sequence)
+            .collect();
+        assert_eq!(sequences, [1, 3, 4]);
     }
 
     #[test]
