@@ -721,7 +721,7 @@ the same bytes. Operators must update semantic audit readers to recognize all
 three entry schemas before deploying the request-batch runtime.
 
 The serving process writes those records as line-delimited JSON on standard
-output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
+error, one per served request, and `EVIDENCE_LOG` selects verbosity with a
 default of `info`. Offline commands print their own result and emit no
 operational records. Every response, including responses to unrouted paths,
 carries a W3C `traceparent` header. Evidence reuses a valid inbound trace
@@ -804,9 +804,9 @@ writer treats that as tampering and stops. Copying a sealed file is safe at any
 time, since the writer reads no sealed file after it is sealed.
 
 `audit.destination: stdout` writes each entry as one line on standard output
-and flushes it. The serving process's operational records share that stream;
-a collector tells them apart by the `schema` member, which only audit entries
-carry. Durability, rotation, and retention then belong to the collector, and
+and flushes it. The serving process writes its operational records to
+standard error whatever the destination is, so the stream carries audit entries
+alone, each with its `schema` member. Durability, rotation, and retention then belong to the collector, and
 an entry is accepted once the line is written to the stream. `evidence check
 --require-audit-under` refuses a `stdout` destination, because there is no
 local file to contain, and `evidencectl audit show` has nothing local to read.

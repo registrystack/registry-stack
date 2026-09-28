@@ -80,7 +80,7 @@ governed behavior.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `EVIDENCE_LOG` | Tracing filter for the operational records the serving process writes as line-delimited JSON on standard output. | Defaults to `info`. Read by `evidence serve` only; offline commands install no log subscriber. |
+| `EVIDENCE_LOG` | Tracing filter for the operational records the serving process writes as line-delimited JSON on standard error. | Defaults to `info`. Read by `evidence serve` only; offline commands install no log subscriber. |
 
 Evidence Gateway reads no variable for the runtime path. Every subcommand that reads the runtime
 file takes it as the required `--runtime-config <FILE>` flag after the subcommand, for example

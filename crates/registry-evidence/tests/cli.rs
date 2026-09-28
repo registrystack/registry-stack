@@ -2463,6 +2463,37 @@ fn serve_stops_on_sigterm_and_restarts_on_the_same_audit_file() {
     );
 }
 
+/// A `stdout` audit destination carries audit entries alone: the serving
+/// process writes its operational records to stderr whatever the destination
+/// is, so a collector never meets a log line in the audit stream.
+#[test]
+fn serve_keeps_operational_records_off_a_stdout_audit_destination() {
+    let port = free_port();
+    let deployment = Deployment::stage_on_port("all-definitions", port);
+    deployment.stage_acceptance_secrets();
+    deployment.write_audit_to_stdout();
+    deployment.seal();
+    let service = deployment.serve_capturing();
+    wait_until_ready(port);
+    let (stdout, stderr) = service.stop();
+    deployment.unseal();
+
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.contains("evidence service listening")),
+        "the operational records reach stderr: {stderr}"
+    );
+    for line in stdout.lines() {
+        let entry: serde_json::Value =
+            serde_json::from_str(line).expect("every stdout line is JSON");
+        assert!(
+            entry.get("schema").is_some(),
+            "stdout carried a line that is not an audit entry: {line}"
+        );
+    }
+}
+
 /// The staged verification key identifier, echoed by the protected header.
 const VERIFY_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
 
@@ -3368,6 +3399,26 @@ fn invoke_verify_presentation(
     command.output().expect("evidence binary starts")
 }
 
+/// A service whose standard output and error threads collect everything it
+/// writes until it exits.
+struct CapturedService {
+    child: Child,
+    stdout: std::thread::JoinHandle<String>,
+    stderr: std::thread::JoinHandle<String>,
+}
+
+impl CapturedService {
+    /// Stop the service with SIGTERM and return what it wrote to stdout and
+    /// stderr.
+    fn stop(mut self) -> (String, String) {
+        stop(&mut self.child);
+        (
+            self.stdout.join().expect("stdout drains"),
+            self.stderr.join().expect("stderr drains"),
+        )
+    }
+}
+
 fn stop(service: &mut Child) {
     let pid = rustix::process::Pid::from_raw(
         i32::try_from(service.id()).expect("child identifier is a pid"),
@@ -3641,6 +3692,35 @@ outboundTls:
             .stderr(Stdio::null())
             .spawn()
             .expect("evidence service starts")
+    }
+
+    /// Start `serve` with both output streams drained into memory, so a test
+    /// can read what the process wrote to each.
+    fn serve_capturing(&self) -> CapturedService {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .arg("serve")
+            .arg("--runtime-config")
+            .arg(self.path("runtime.yaml"))
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+            .env_remove("EVIDENCE_LOG")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("evidence service starts");
+        let drain = |mut stream: Box<dyn std::io::Read + Send>| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                stream.read_to_string(&mut text).expect("output reads");
+                text
+            })
+        };
+        let stdout = drain(Box::new(child.stdout.take().expect("stdout")));
+        let stderr = drain(Box::new(child.stderr.take().expect("stderr")));
+        CapturedService {
+            child,
+            stdout,
+            stderr,
+        }
     }
 
     /// Run `check` against the sealed deployment, then restore write access so

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `evidence serve` writes its operational records to standard error instead of
+  standard output, so a `stdout` audit destination carries audit entries alone.
+  A collector that read Evidence logs from standard output reads standard error
+  instead.
+
 - BREAKING: `evidencectl` follows the shared ctl report and exit contract.
   - Under `--format json` every command writes one object on standard output
     and nothing on standard error. It opens with `ok`, `command`, and

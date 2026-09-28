@@ -702,11 +702,12 @@ fn compile_bundle_source_plans(
 
 /// Install the operational log subscriber for the serving process.
 ///
-/// Records are line-delimited JSON on stdout so a collector can read them
-/// without a parsing convention of its own. `EVIDENCE_LOG` selects verbosity
-/// and defaults to `info`, which is the level the request boundary emits at.
-/// Offline commands print their own result and install nothing, so no command
-/// gains log output it did not have.
+/// Records are line-delimited JSON on stderr so a collector can read them
+/// without a parsing convention of its own, and so a `stdout` audit
+/// destination carries audit entries alone, whatever the destination is.
+/// `EVIDENCE_LOG` selects verbosity and defaults to `info`, which is the level
+/// the request boundary emits at. Offline commands print their own result and
+/// install nothing, so no command gains log output it did not have.
 fn install_operational_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_env("EVIDENCE_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -715,6 +716,7 @@ fn install_operational_logging() {
         .with_env_filter(filter)
         .with_current_span(false)
         .with_span_list(false)
+        .with_writer(std::io::stderr)
         .init();
 }
 
