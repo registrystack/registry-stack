@@ -19,6 +19,10 @@
     `packageRevision`, since a client knows the package it holds, not the
     activation the database recorded for it.
   - `bregctl apply` reports `activationId` instead of `packageSequence`.
+  - A destructive activation records each backup it was bound to in the
+    row's `backup_references`: the binding path, the backup file, its SHA-256
+    digest, its byte length, and when it was taken. The ledger keeps the
+    reference, never the backup.
   - An import authority records the activation it was opened under as the
     UUID `activation_id` instead of the text `activation_revision`. Its
     `breg-import-authority-audit/v1` record and the `bregctl

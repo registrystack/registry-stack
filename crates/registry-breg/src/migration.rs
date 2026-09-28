@@ -25,11 +25,12 @@ use crate::package::{
     VerifiedPackage,
 };
 use crate::postgres::{
-    statement_checksum, ActivationPlanKind, ConnectionConfig, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, MaintenanceTransition, MigrationArtifactBinding, MigrationKind,
-    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind, PackageDdlStatement,
-    PostgresFailure, RegistryLockKey, ReviewedExecutionOutcome, ReviewedFieldEncryptionContext,
-    ReviewedPackageExecutionRequest, RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
+    statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceTransition,
+    MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry, MigrationLedgerStep,
+    MigrationLedgerStepKind, PackageDdlStatement, PostgresFailure, RegistryLockKey,
+    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
+    RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -252,6 +253,7 @@ pub(crate) fn package_ledger_entry(
         operator_reference_hash: None,
         statement_checksums: compiler_checksums.to_vec(),
         artifact_bindings: Vec::new(),
+        backup_references: Vec::new(),
         steps: Vec::new(),
     };
     if let (Some(plan), Some(current)) = (package.reviewed_migration_plan(), current) {
@@ -686,8 +688,9 @@ pub async fn apply_verified_package(
     // the binding's metadata and bytes, and retains every descriptor
     // through activation. It never interprets backup contents or grants them
     // package or migration authority.
-    let _retained_backup_evidence =
+    let (_retained_backup_evidence, backup_references) =
         verify_destructive_backup_evidence(reviewed_plan, current, request.backup_evidence).await?;
+    ledger.backup_references = backup_references;
 
     let lock_key =
         RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
@@ -1295,21 +1298,30 @@ async fn verify_destructive_backup_evidence(
     plan: Option<&ValidatedReviewedMigrationPlan>,
     current: Option<&ExpectedRegistryIdentity>,
     evidence: &[DestructiveBackupEvidence<'_>],
-) -> Result<Vec<File>> {
+) -> Result<(Vec<File>, Vec<BackupReference>)> {
     let Some(plan) = plan else {
         return if evidence.is_empty() {
-            Ok(Vec::new())
+            Ok((Vec::new(), Vec::new()))
         } else {
             Err(MigrationError::BackupEvidence)
         };
     };
     let current = current.ok_or(MigrationError::PackageBinding)?;
-    let paired = pair_backup_evidence(&required_backup_binding_paths(plan), evidence)?;
+    let required = required_backup_binding_paths(plan);
+    let paired = pair_backup_evidence(&required, evidence)?;
 
     let mut retained = Vec::with_capacity(paired.len());
-    for local_path in paired {
+    let mut references = Vec::with_capacity(paired.len());
+    for (binding_path, local_path) in required.into_iter().zip(paired) {
         let binding = read_backup_binding(local_path)?;
         check_backup_binding(&binding, current, OffsetDateTime::now_utc())?;
+        references.push(BackupReference {
+            binding_path: binding_path.to_owned(),
+            backup_file: binding.backup_file.clone(),
+            sha256: binding.sha256.clone(),
+            byte_length: binding.byte_length,
+            created_at: binding.created_at.clone(),
+        });
         let path = PathBuf::from(&binding.backup_file);
         retained.push(
             tokio::task::spawn_blocking(move || open_bound_backup(path, &binding))
@@ -1317,7 +1329,7 @@ async fn verify_destructive_backup_evidence(
                 .map_err(|_| MigrationError::BackupEvidence)??,
         );
     }
-    Ok(retained)
+    Ok((retained, references))
 }
 
 #[cfg(unix)]

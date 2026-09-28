@@ -480,6 +480,28 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .await
         .iter()
         .all(|entry| entry.2 == "applied"));
+    // The destructive activation records the backup it was bound to, as the
+    // binding described it, so the ledger names what a restore would use.
+    let backup_references: serde_json::Value = database
+        .admin
+        .query_one(
+            "SELECT backup_references FROM registry_internal.registry_migrations
+              WHERE apply_order = 3",
+            &[],
+        )
+        .await
+        .expect("the ledger reads")
+        .get(0);
+    assert_eq!(
+        backup_references,
+        serde_json::json!([{
+            "bindingPath": binding_path,
+            "backupFile": binding.backup_file,
+            "sha256": binding.sha256,
+            "byteLength": binding.byte_length,
+            "createdAt": binding.created_at,
+        }])
+    );
 
     database.cleanup().await;
 
