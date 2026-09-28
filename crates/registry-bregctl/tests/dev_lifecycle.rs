@@ -555,13 +555,6 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
         docker: installed("docker"),
     };
     session.success(&["init", project.to_str().unwrap()]);
-    let mut registry: Value =
-        serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
-    registry["package"]["environment"] = json!("local");
-    write(
-        &project.join("registry.yaml"),
-        serde_norway::to_string(&registry).unwrap().as_bytes(),
-    );
     let clients = parent.join("clients.yaml");
     write(
         &clients,
