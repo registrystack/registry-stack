@@ -558,9 +558,12 @@ invariants:
     enforcementPoint: >-
       schedulingctl apply compares current_user on the runtime and migration
       connections. When they differ it grants the runtime role its schema,
-      table, sequence, and function access, then revokes TRIGGER on every
-      table and INSERT, UPDATE, DELETE, and TRUNCATE on scheduling_activations and
-      scheduling_schema_migrations, in the activation transaction. The row
+      table, sequence, and function access, then revokes INSERT, UPDATE,
+      DELETE, and TRUNCATE on scheduling_activations and
+      scheduling_schema_migrations, in the activation transaction. It never
+      grants or revokes TRIGGER; before any migration it refuses a default
+      privilege of the migration role that grants the runtime role TRIGGER
+      on the tables it creates. The row
       records the runtime role and the role mode it holds after the grants,
       read from its ledger and schema-history privileges, ownership,
       membership in the migration role, and superuser or BYPASSRLS
@@ -584,7 +587,9 @@ invariants:
       split, or an attached trigger on a scheduling_* table, naming REASSIGN
       OWNED BY then schedulingctl apply, or REVOKE TRIGGER, REVOKE CREATE ON
       SCHEMA (from the grantee it is held through, PUBLIC included), or DROP
-      TRIGGER then a rerun of the refused command.
+      TRIGGER then a rerun of the refused command. Split-mode apply refuses a
+      TRIGGER default privilege naming ALTER DEFAULT PRIVILEGES FOR ROLE
+      <migrator> REVOKE TRIGGER ON TABLES FROM <grantee> then a rerun.
     partialNote: >-
       In single role mode both credentials are one role that can write the
       ledger; plan, apply, and status report the mode and do not refuse it,

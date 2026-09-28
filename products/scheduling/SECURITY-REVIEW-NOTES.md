@@ -436,9 +436,15 @@ transaction.
 `current_user` on the two connections. When they differ (split role mode)
 it grants the runtime role USAGE on the schema, SELECT, INSERT, UPDATE, and
 DELETE on its tables, use of its sequences, and EXECUTE on its functions,
-then revokes TRIGGER on every table, INSERT, UPDATE, DELETE, and TRUNCATE on
-the ledger and on `scheduling_schema_migrations`, and revokes all ledger privileges from
-PUBLIC, all inside the activation transaction. When they are one role
+then revokes INSERT, UPDATE, DELETE, and TRUNCATE on the ledger and on
+`scheduling_schema_migrations`, and revokes all ledger privileges from
+PUBLIC, all inside the activation transaction. It never grants or revokes
+TRIGGER. A TRIGGER privilege the runtime role holds is refused with the
+`REVOKE TRIGGER` to run, and a default privilege of the migration role that
+would grant it TRIGGER on the tables a migration creates is refused before
+any migration, naming `ALTER DEFAULT PRIVILEGES ... REVOKE TRIGGER ON TABLES
+FROM <grantee>`, since a table a refused first apply created is rolled back
+before the operator could revoke anything on it. When they are one role
 (single role mode) the separation does not hold, and `plan`, `apply`, and
 `status` say so rather than refuse it, since a single-role local deployment
 is an ordinary layout. The mode the ledger records is not the comparison of
@@ -543,8 +549,9 @@ after the reassignment, and startup refusing the grants the reassignment
 took until apply reissues them),
 `a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_naming_revoke_create`,
 `a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_split_mode_naming_revoke_trigger`
-(which also shows the grants apply issues removing a TRIGGER default
-privilege, and a TRIGGER held through PUBLIC revoked from PUBLIC; the CREATE
+(which also shows apply refusing a TRIGGER default privilege before any
+migration, naming its `ALTER DEFAULT PRIVILEGES` revoke, and a TRIGGER held
+through PUBLIC revoked from PUBLIC; the CREATE
 test shows the same for CREATE),
 `a_runtime_role_holding_the_migration_role_is_recorded_as_single`, and
 `rotating_the_runtime_role_reapplies_the_active_package`

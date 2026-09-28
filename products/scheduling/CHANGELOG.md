@@ -61,9 +61,12 @@
     refusal names `REASSIGN OWNED BY` then `schedulingctl apply`, or `REVOKE
     TRIGGER`, `REVOKE CREATE ON SCHEMA` (from PUBLIC when that is how the
     runtime role holds it), or `DROP TRIGGER` for each attached trigger, then
-    a rerun of the refused command. Split-mode apply revokes TRIGGER from the
-    runtime role, and re-applies the active package when the runtime role no
-    longer holds every grant apply issues; `scheduling serve` refuses that
+    a rerun of the refused command. Split-mode apply never revokes TRIGGER
+    itself: before any migration it refuses a default privilege of the
+    migration role that would grant the runtime role TRIGGER on the tables
+    it creates, naming `ALTER DEFAULT PRIVILEGES ... REVOKE TRIGGER ON TABLES
+    FROM <grantee>` then a rerun. It re-applies the active package when the
+    runtime role no longer holds every grant apply issues; `scheduling serve` refuses that
     runtime role, naming `schedulingctl apply`.
   - `scheduling migrate` is removed; it exits 2 naming `schedulingctl plan
     --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`.

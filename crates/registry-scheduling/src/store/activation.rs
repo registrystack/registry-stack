@@ -308,6 +308,13 @@ impl PostgresStore {
                 });
             }
         }
+        if request.role_mode == RoleMode::Split {
+            if let Some(weakened) =
+                default_trigger_grant_in(&*transaction, request.runtime_role).await?
+            {
+                return Err(weakened);
+            }
+        }
         schema.check()?;
         let deployed = deployed_policy_in(&*transaction).await?;
         if let Some(deployed) = &deployed {
@@ -721,7 +728,6 @@ async fn split_weakness_in(
     // it, so only that fix needs an apply to reissue them.
     const THEN_APPLY: &str =
         "then run `schedulingctl apply --runtime-config FILE` to reissue the runtime role's grants";
-    const THEN_RERUN: &str = "then rerun the command that refused, or run `schedulingctl plan --runtime-config FILE` to confirm";
     let (cause, fix, then) = match (owner, triggers_on) {
         (Some(owner), _) => (
             format!("{owner} owns an object in the Scheduling schema {schema}"),
@@ -777,6 +783,55 @@ async fn split_weakness_in(
     };
     Ok(Some(StoreError::SplitRoleWeakened(format!(
         "the runtime role {runtime} is not separated from the migration role {migration}: {cause}, so it can write the activation ledger indirectly; run `{fix}` as a database administrator, {then}"
+    ))))
+}
+
+/// What follows a fix that only takes a privilege or a trigger away.
+const THEN_RERUN: &str = "then rerun the command that refused, or run `schedulingctl plan --runtime-config FILE` to confirm";
+
+/// The refusal naming a default privilege of the migration role that
+/// grants `role` TRIGGER on the tables a migration creates, directly,
+/// through PUBLIC, or through a role it holds, or none when no such
+/// default exists. Apply checks it before any migration: the grants it
+/// issues never take TRIGGER away, and a table a refused first apply
+/// created does not survive to have it revoked.
+async fn default_trigger_grant_in(
+    client: &impl GenericClient,
+    role: &str,
+) -> Result<Option<StoreError>, StoreError> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT quote_ident(r.rolname), quote_ident(current_user::text), \
+                 CASE WHEN d.defaclnamespace = 0 THEN '' \
+                      ELSE ' IN SCHEMA ' || quote_ident(n.nspname) END, \
+                 CASE WHEN a.grantee = 0 THEN 'PUBLIC' \
+                      ELSE quote_ident(pg_get_userbyid(a.grantee)) END \
+             FROM pg_roles AS r \
+             CROSS JOIN pg_default_acl AS d \
+             CROSS JOIN LATERAL aclexplode(d.defaclacl) AS a \
+             LEFT JOIN pg_namespace AS n ON n.oid = d.defaclnamespace \
+             WHERE r.rolname = $1::text \
+               AND d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user) \
+               AND d.defaclobjtype = 'r' \
+               AND (d.defaclnamespace = 0 OR n.nspname = current_schema()) \
+               AND a.privilege_type = 'TRIGGER' \
+               AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'USAGE')) \
+             ORDER BY a.grantee = r.oid DESC, a.grantee = 0 DESC, d.defaclnamespace DESC \
+             LIMIT 1",
+            &[&role],
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    let (runtime, migration, scope, grantee): (String, String, String, String) = (
+        row.try_get(0)?,
+        row.try_get(1)?,
+        row.try_get(2)?,
+        row.try_get(3)?,
+    );
+    Ok(Some(StoreError::SplitRoleWeakened(format!(
+        "the runtime role {runtime} is not separated from the migration role {migration}: a default privilege grants {grantee} TRIGGER on every table {migration} creates, so a migration would hand it a table it can attach a trigger to; run `ALTER DEFAULT PRIVILEGES FOR ROLE {migration}{scope} REVOKE TRIGGER ON TABLES FROM {grantee}` as a database administrator, {THEN_RERUN}"
     ))))
 }
 
@@ -1022,7 +1077,6 @@ async fn grant_runtime_role(
              GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO {role};\
              GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {schema} TO {role};\
              GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {schema} TO {role};\
-             REVOKE TRIGGER ON ALL TABLES IN SCHEMA {schema} FROM {role};\
              REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON \
              {schema}.scheduling_activations, {schema}.scheduling_schema_migrations FROM {role};\
              REVOKE ALL ON {schema}.scheduling_activations FROM PUBLIC;"
