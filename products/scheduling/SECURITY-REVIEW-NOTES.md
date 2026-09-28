@@ -498,7 +498,9 @@ TRIGGER <name> ON <schema>.<table>` for each attached trigger, which leave
 the grants in place, it names rerunning the command that refused, or
 `schedulingctl plan --runtime-config FILE` to confirm. The grantee is the
 one the runtime role holds the privilege through: itself, PUBLIC, or a role
-it is a member of.
+it is a member of. Every membership these checks read counts whether it
+inherits the role's privileges or only permits `SET ROLE` to it, since
+either lets the runtime credential act as that role.
 
 **Serialization and identity.** The whole activation (schema versions,
 scheduling-id adoption, policy publication, the ledger row, and the grants)

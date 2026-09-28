@@ -1069,12 +1069,13 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
     assert_eq!(deployment.ledger_rows().await, 1);
     deployment.admin.batch_execute(&drop_trigger).await.unwrap();
 
-    // Membership in a role that owns a Scheduling table counts the same.
+    // Membership in a role that owns a Scheduling table counts the same,
+    // one that grants no inherited privilege but still permits SET ROLE too.
     let owner = format!("{runtime_role}_owner");
     deployment
         .admin
         .batch_execute(&format!(
-            "CREATE ROLE {owner}; GRANT {owner} TO {runtime_role};\
+            "CREATE ROLE {owner}; GRANT {owner} TO {runtime_role} WITH INHERIT FALSE, SET TRUE;\
              ALTER TABLE {schema}.scheduling_meta OWNER TO {owner}"
         ))
         .await
@@ -1281,25 +1282,32 @@ async fn a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_spli
     deployment.drop().await;
 }
 
+/// Membership in the migration role is its authority, whether it is
+/// inherited or only permits `SET ROLE` to it.
 #[tokio::test]
 async fn a_runtime_role_holding_the_migration_role_is_recorded_as_single() {
-    let deployment = Deployment::split("activation_member").await;
-    let (runtime_role, migration_role) = (deployment.roles[0].clone(), deployment.roles[1].clone());
-    deployment
-        .admin
-        .batch_execute(&format!("GRANT {migration_role} TO {runtime_role}"))
-        .await
-        .unwrap();
-    let package = deployment.package("package", POLICY);
-    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    for options in ["", " WITH INHERIT FALSE, SET TRUE"] {
+        let deployment = Deployment::split("activation_member").await;
+        let (runtime_role, migration_role) =
+            (deployment.roles[0].clone(), deployment.roles[1].clone());
+        deployment
+            .admin
+            .batch_execute(&format!(
+                "GRANT {migration_role} TO {runtime_role}{options}"
+            ))
+            .await
+            .unwrap();
+        let package = deployment.package("package", POLICY);
+        let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
 
-    let applied = apply(&config).expect("the package activates");
-    assert_eq!(applied["roleMode"], "single", "{applied}");
-    assert!(applied["roleModeStatement"].is_string());
-    let report = status(&config);
-    assert_eq!(report["history"][0]["roleMode"], "single");
-    assert_eq!(report["roleMode"], "single");
-    deployment.drop().await;
+        let applied = apply(&config).expect("the package activates");
+        assert_eq!(applied["roleMode"], "single", "{options}: {applied}");
+        assert!(applied["roleModeStatement"].is_string());
+        let report = status(&config);
+        assert_eq!(report["history"][0]["roleMode"], "single", "{options}");
+        assert_eq!(report["roleMode"], "single", "{options}");
+        deployment.drop().await;
+    }
 }
 
 #[tokio::test]

@@ -638,9 +638,9 @@ async fn role_mode_in(
                  OR COALESCE(has_any_column_privilege(r.oid, \
                         to_regclass('scheduling_schema_migrations'), \
                         'INSERT, UPDATE'), false) \
-                 OR pg_has_role(r.oid, c.relowner, 'USAGE') \
-                 OR pg_has_role(r.oid, n.nspowner, 'USAGE') \
-                 OR COALESCE(pg_has_role(r.oid, m.oid, 'USAGE'), false) \
+                 OR pg_has_role(r.oid, c.relowner, 'MEMBER') \
+                 OR pg_has_role(r.oid, n.nspowner, 'MEMBER') \
+                 OR COALESCE(pg_has_role(r.oid, m.oid, 'MEMBER'), false) \
                  OR r.rolsuper OR r.rolbypassrls \
              FROM pg_roles AS r \
              CROSS JOIN pg_class AS c \
@@ -689,7 +689,7 @@ async fn split_weakness_in(
                      UNION ALL SELECT p.proowner FROM pg_proc AS p \
                          WHERE p.pronamespace = n.oid AND p.proname LIKE 'scheduling\\_%' \
                  ) AS owners \
-                 WHERE pg_has_role(r.oid, owner, 'USAGE') \
+                 WHERE pg_has_role(r.oid, owner, 'MEMBER') \
                  ORDER BY owner = r.oid DESC, pg_get_userbyid(owner) LIMIT 1), \
                  triggers.relation, triggers.grantee, \
                  has_schema_privilege(r.oid, n.oid, 'CREATE'), \
@@ -697,7 +697,7 @@ async fn split_weakness_in(
                          ELSE quote_ident(pg_get_userbyid(a.grantee)) END \
                      FROM aclexplode(n.nspacl) AS a \
                      WHERE a.privilege_type = 'CREATE' \
-                       AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'USAGE')) \
+                       AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'MEMBER')) \
                      ORDER BY a.grantee = r.oid DESC, a.grantee = 0 DESC LIMIT 1) \
              FROM pg_roles AS r \
              CROSS JOIN pg_class AS c \
@@ -708,7 +708,7 @@ async fn split_weakness_in(
                              ELSE quote_ident(pg_get_userbyid(a.grantee)) END \
                          FROM aclexplode(t.relacl) AS a \
                          WHERE a.privilege_type = 'TRIGGER' \
-                           AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'USAGE')) \
+                           AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'MEMBER')) \
                          ORDER BY a.grantee = r.oid DESC, a.grantee = 0 DESC LIMIT 1) AS grantee \
                  FROM pg_class AS t \
                  WHERE t.relnamespace = n.oid AND t.relname LIKE 'scheduling\\_%' \
@@ -717,7 +717,7 @@ async fn split_weakness_in(
                  ORDER BY t.relname LIMIT 1 \
              ) AS triggers ON true \
              WHERE r.rolname = $1::text AND c.oid = to_regclass('scheduling_activations') \
-               AND NOT pg_has_role(r.oid, c.relowner, 'USAGE') \
+               AND NOT pg_has_role(r.oid, c.relowner, 'MEMBER') \
                AND NOT r.rolsuper",
             &[&role],
         )
@@ -823,7 +823,7 @@ async fn default_trigger_grant_in(
                AND d.defaclobjtype = 'r' \
                AND (d.defaclnamespace = 0 OR n.nspname = current_schema()) \
                AND a.privilege_type = 'TRIGGER' \
-               AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'USAGE')) \
+               AND (a.grantee = 0 OR pg_has_role(r.oid, a.grantee, 'MEMBER')) \
              ORDER BY a.grantee = r.oid DESC, a.grantee = 0 DESC, d.defaclnamespace DESC \
              LIMIT 1",
             &[&role],

@@ -567,7 +567,8 @@ invariants:
       records the runtime role and the role mode it holds after the grants,
       read from its table and column privileges on the ledger and the
       schema history, ownership,
-      membership in the migration role, and superuser or BYPASSRLS
+      membership in the migration role (inherited or only permitting SET
+      ROLE), and superuser or BYPASSRLS
       attributes. A runtime role that owns or is a member of an owner of the
       schema or any scheduling_* relation or function, holds TRIGGER on a
       scheduling_* relation, or holds CREATE on the schema, holds single
