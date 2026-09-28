@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.36.0 - 2026-09-29
+
 - BREAKING: a Casework package is activated in the database by
   `caseworkctl apply --runtime-config FILE`, and `casework serve` only reads
   that activation. `caseworkctl plan` reports, with the runtime credential and

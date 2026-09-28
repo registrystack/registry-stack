@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.36.0 - 2026-09-29
+
 - `evidencectl audit show --last-operation` reads a retained history that
   holds request-batch entries instead of refusing it, and refuses with
   `evidence.audit.request-batch` when the last operation is a batch. An
