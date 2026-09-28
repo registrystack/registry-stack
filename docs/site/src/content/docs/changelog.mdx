@@ -18,6 +18,20 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- The shared audit writer recovers an active file whose final line a crash tore: the next start
+  moves those bytes to the owner-only side file `<audit.path>.torn`, truncates to the last complete
+  line, and logs it, instead of refusing to start. A configured `audit.path` ending in a companion
+  suffix is refused. Evidence Gateway and Scheduling write operational logs to standard error, so a
+  `stdout` audit destination carries audit entries alone, and `evidencectl audit show` reads
+  histories with request-batch entries and names denials, transient failures, and earlier
+  operations left without an outcome. See [Audit retention](../operate/retention-and-persistent-state/#audit-retention)
+  and [Read and ship the Evidence Gateway audit log](../operate/evidence-audit/).
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, recover_torn_tail and
+    reserved_companion_collision; crates/registry-evidence/src/main.rs, install_operational_logging;
+    crates/registry-scheduling/src/main.rs, main; crates/registry-evidencectl/src/audit_view.rs,
+    render_unreleased. */}
+
 - BREAKING: `evidencectl` follows the shared ctl report and exit contract.
   Under `--format json` each command writes one object on standard output
   opening with `ok`, `command`, and `status`, all member names camelCase, and nothing

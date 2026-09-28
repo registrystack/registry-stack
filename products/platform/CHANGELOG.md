@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Recover a torn final line at open instead of refusing to start: the file
+  writer copies the bytes after the last complete line to the owner-only side
+  file `<path>.torn`, syncs it, truncates the active file to its last complete
+  line, and logs the side file's path and byte count, never the bytes. An
+  existing side file holding other bytes is never overwritten and refuses open.
+  `check_writable` accepts what open would recover.
+- Refuse a `FileDestination` whose file name ends in a companion suffix
+  another stream at the shorter name owns (`.lock`, `.seq`, `.seq.tmp`,
+  `.torn`, or a sealed-segment `.<8 digits>`), with
+  `AuditDestinationError::PathNamesReservedCompanion` naming the collision.
+- Add `AuditSegments` and `SealedSegment`, a read-only view of a stream's
+  companion names, sealed segments oldest first, and next sequence, for
+  inspection tooling.
+
 ## v0.35.0 - 2026-09-28
 
 - Add `AuditWriter::begin`, which appends a `request` entry and returns an

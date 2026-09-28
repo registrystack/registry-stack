@@ -83,13 +83,21 @@ Never truncate, rewrite, or reserialize the active audit file as part of cleanup
 treats any external change to it as a fault and stops, and audited requests fail closed until a
 restart. Copy sealed files to append-only storage before `audit.retainDays` deletes them.
 
-A crash or a killed process can leave the active file's final line incomplete (any byte other than
-a newline at end of file). The writer refuses to open a destination that ends this way, so the next
-start of that process, and any `doctor` or companion command checking the same destination, is
-refused instead of appending after the torn entry. Recover the way the writer's own refusal says to:
-archive the file and restart with a fresh `audit.path`. Do not edit the active file to repair it;
-editing it while a writer holds it, or before restarting one, is the same external-change fault
-described above.
+A crash, a killed process, or a full disk can leave the active file's final line incomplete (any
+byte other than a newline at end of file). The next start recovers it without operator action: the
+writer copies the bytes after the last complete line to the owner-only (`0600`) side file
+`<audit.path>.torn`, syncs it, truncates the active file to its last complete line, and logs the
+side file's path and byte count, never its bytes, at error level. An entry is acknowledged only
+after the write holding it is synced, so the torn bytes belong to no acknowledged entry and no
+acknowledged entry is lost. `doctor` and companion checks accept a destination the writer would
+recover this way and change nothing.
+
+Archive the side file with the sealed files, then remove it. The writer never overwrites it: if a
+later torn line finds `<audit.path>.torn` holding other bytes, the start is refused until that file
+is moved. A tail longer than any entry, or a file whose first entry is in another format, is still
+refused unchanged; archive that file and restart with a fresh `audit.path`. Do not edit the active
+file to repair it; editing it while a writer holds it is the same external-change fault described
+above.
 
 ## Evidence Gateway retention
 
@@ -106,8 +114,9 @@ sequence, and never deletes the active file. Retention deletes sealed files in s
 oldest first, and stops at the first one whose last modification is inside `audit.retainDays`, so
 the local directory holds a rolling window, not the whole history. A deletion that fails is logged
 and retried at the next rotation or start; it never stops the writer. Each stream reserves every `<audit.path>.<sequence>` name, plus
-`<audit.path>.lock`, `<audit.path>.seq`, and `<audit.path>.seq.tmp`, so never point another
-stream's `path` at one of them. The `.seq` file records the next sequence at every start and
+`<audit.path>.lock`, `<audit.path>.seq`, `<audit.path>.seq.tmp`, and `<audit.path>.torn`, and a
+`path` whose file name ends in one of those suffixes is refused at startup, so no stream can be
+pointed at another's file. The `.seq` file records the next sequence at every start and
 before every rotation, so a restart after retention or a shipper removed every sealed file
 continues the numbering instead of reusing a name. [Read and ship the Evidence Gateway audit log](../evidence-audit/) describes
 the entry format and the `stdout` destination.
@@ -124,7 +133,8 @@ runtime writes, so three rules keep it safe:
   `time`. Sequence numbers continue across restarts only while `<audit.path>.seq` survives, so a
   fresh or restored directory can seal a file under a name already shipped.
 - Never point a shipper at the active file in a way that renames, truncates, or rewrites it, and
-  never touch `<audit.path>.lock` or `<audit.path>.seq`. Any external replacement or modification of the active file makes
+  never touch `<audit.path>.lock` or `<audit.path>.seq`. Ship `<audit.path>.torn`, when one
+  appears, like a sealed file, then remove it. Any external replacement or modification of the active file makes
   readiness and later appends fail closed. Re-applying its owner-only mode, ACLs, or extended
   attributes, as configuration management does, is not a modification.
 
