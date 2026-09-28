@@ -600,6 +600,60 @@ async fn apply_refuses_the_active_package_and_a_foreign_database_without_writing
     deployment.drop().await;
 }
 
+/// A pending migration that would drop unpublished audit is named by
+/// `plan`, read without a lock, and `apply` refuses the same.
+#[tokio::test]
+async fn plan_reports_the_unpublished_audit_apply_refuses() {
+    let deployment = Deployment::single("activation_plan_outbox").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    apply(&config).expect("the package activates");
+    // The schema head of the release that published audit from an outbox,
+    // holding one record its publisher has not reached.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE {schema}.scheduling_audit_outbox (event_id uuid PRIMARY KEY, \
+                 audit_record jsonb NOT NULL, published_at timestamptz); \
+             INSERT INTO {schema}.scheduling_audit_outbox(event_id, audit_record) \
+                 VALUES('00000000-0000-4000-8000-0000000000c1', '{{}}'); \
+             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=8;",
+            schema = deployment.schema
+        ))
+        .await
+        .expect("simulate the schema before migration 8");
+    let successor = deployment.package("successor", &successor_policy());
+    let config = deployment.config("successor.yaml", &successor, ConfigOptions::default());
+
+    let report = plan(&config);
+    let codes: Vec<&str> = report["refusals"]
+        .as_array()
+        .expect("refusals")
+        .iter()
+        .map(|refusal| refusal["code"].as_str().expect("code"))
+        .collect();
+    assert_eq!(
+        codes,
+        ["schedulingctl.activation.unpublished-audit"],
+        "{report}"
+    );
+    assert!(
+        report["refusals"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("holds 1 audit record(s) that schema migration 8 would drop"),
+        "{report}"
+    );
+
+    let error = refusal(apply(&config));
+    assert!(
+        error.contains("holds 1 audit record(s) that schema migration 8 would drop"),
+        "{error}"
+    );
+    assert_eq!(deployment.ledger_rows().await, 1);
+    deployment.drop().await;
+}
+
 #[tokio::test]
 async fn apply_refuses_to_activate_without_its_audit_destination() {
     let deployment = Deployment::single("activation_audit").await;

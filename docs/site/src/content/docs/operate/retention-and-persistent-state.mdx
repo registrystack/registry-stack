@@ -177,8 +177,9 @@ that holds no old segments; do not point the new runtime at the old chained file
 
 Before upgrading from the PostgreSQL audit-outbox releases, stop new traffic and keep the previous
 runtime running until its publisher has delivered every pending audit row. Casework migration 17
-and Scheduling migration 8 refuse to drop an outbox that still contains unpublished rows. Check
-the pending count with your database tooling:
+and Scheduling migration 8 refuse to drop an outbox that still contains unpublished rows, and
+`caseworkctl plan` and `schedulingctl plan` report that refusal before an apply. Check the pending
+count with your database tooling:
 
 ```sql
 -- Casework database
@@ -201,6 +202,9 @@ for the Casework procedure and command options.
 
 {/* Evidence: crates/registry-casework/src/store.rs;
     crates/registry-scheduling/src/store.rs;
+    crates/registry-scheduling/src/store/activation.rs, refuse_to_drop_unpublished_audit();
+    crates/registry-schedulingctl/tests/activation_postgres.rs,
+    plan_reports_the_unpublished_audit_apply_refuses();
     products/casework/CHANGELOG.md;
     products/scheduling/CHANGELOG.md. */}
 

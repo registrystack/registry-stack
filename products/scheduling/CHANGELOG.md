@@ -45,6 +45,10 @@
     activation ledger with `schedulingctl.activation.ledger-unreadable`, exit
     1, naming `schedulingctl apply --runtime-config FILE` with the migration
     credential to grant it, then `schedulingctl plan --runtime-config FILE`.
+  - `schedulingctl plan` names `schedulingctl.activation.unpublished-audit`
+    when schema migration 8 is pending and the audit outbox still holds
+    unpublished records, counted without a lock; apply counts them again
+    under an exclusive lock and refuses the same.
   - `schedulingctl status --runtime-config FILE` reads the full activation
     history, the schema version, and the role mode.
   - In split role mode the runtime role reads the ledger and the schema

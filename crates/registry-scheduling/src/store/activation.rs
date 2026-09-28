@@ -485,6 +485,15 @@ impl PostgresStore {
                 });
             }
         }
+        if schema.pending.contains(&AUDIT_WRITER_MIGRATION_VERSION) {
+            match refuse_to_drop_unpublished_audit(&*transaction, true).await {
+                Ok(()) => {}
+                Err(refusal @ StoreError::UnpublishedAuditWouldBeDropped { .. }) => {
+                    refusals.push(refusal);
+                }
+                Err(error) => return Err(error),
+            }
+        }
         if let Err(refusal) = schema.check() {
             refusals.push(refusal);
             return Ok(ActivationPlan {
@@ -1018,6 +1027,43 @@ fn activation_from_row(row: &tokio_postgres::Row) -> Result<Activation, StoreErr
     })
 }
 
+/// Refuse schema version 8 while the audit outbox it drops still holds a
+/// record its publisher had not reached. Migration calls it holding the
+/// table exclusively; a plan (`plan` true) reads it without a lock and
+/// passes over an outbox the planning role cannot read, which apply counts
+/// again.
+async fn refuse_to_drop_unpublished_audit(
+    client: &impl GenericClient,
+    plan: bool,
+) -> Result<(), StoreError> {
+    let readable: bool = client
+        .query_one(
+            "SELECT to_regclass('scheduling_audit_outbox') IS NOT NULL \
+             AND (NOT $1 OR has_table_privilege(to_regclass('scheduling_audit_outbox'),'SELECT'))",
+            &[&plan],
+        )
+        .await?
+        .get(0);
+    if !readable {
+        return Ok(());
+    }
+    let rows: i64 = client
+        .query_one(
+            "SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL",
+            &[],
+        )
+        .await?
+        .get(0);
+    if rows == 0 {
+        Ok(())
+    } else {
+        Err(StoreError::UnpublishedAuditWouldBeDropped {
+            version: AUDIT_WRITER_MIGRATION_VERSION,
+            rows,
+        })
+    }
+}
+
 /// The schema versions this database holds and the ones still pending. A
 /// database no migration has touched holds none.
 pub(super) async fn schema_state_in(
@@ -1098,19 +1144,7 @@ pub(super) async fn apply_migrations_in(
                 transaction
                     .batch_execute("LOCK TABLE scheduling_audit_outbox IN ACCESS EXCLUSIVE MODE")
                     .await?;
-                let rows: i64 = transaction
-                    .query_one(
-                        "SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL",
-                        &[],
-                    )
-                    .await?
-                    .get(0);
-                if rows != 0 {
-                    return Err(StoreError::UnpublishedAuditWouldBeDropped {
-                        version: AUDIT_WRITER_MIGRATION_VERSION,
-                        rows,
-                    });
-                }
+                refuse_to_drop_unpublished_audit(&**transaction, false).await?;
                 transaction.batch_execute(AUDIT_WRITER_MIGRATION).await?;
             }
             ACTIVATIONS_MIGRATION_VERSION => {

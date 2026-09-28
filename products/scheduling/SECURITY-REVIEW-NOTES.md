@@ -436,7 +436,11 @@ USAGE on the schema, which would hide the ledger and read the database as
 empty, or without SELECT on `scheduling_activations` or
 `scheduling_schema_migrations`, as a rotated runtime role before apply grants
 it. The refusal names `schedulingctl apply --runtime-config FILE`, then `plan`
-again. A database with no ledger is not refused.
+again. A database with no ledger is not refused. When schema migration 8 is
+pending, `plan` counts the unpublished audit outbox rows it would drop without
+a lock, passing over an outbox the runtime role cannot read, and reports
+`schedulingctl.activation.unpublished-audit`; apply counts them again under an
+exclusive lock inside its transaction before the drop.
 
 **Role separation and the grants apply issues.** Apply compares
 `current_user` on the two connections. When they differ (split role mode)
