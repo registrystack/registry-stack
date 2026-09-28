@@ -1820,6 +1820,61 @@ fn with_outcome(record: &serde_json::Value, phase: &str, outcome: &str) -> serde
     record
 }
 
+/// A role change whose activation fails keeps serving with the role the
+/// ledger still names: the runtime grants it reconciles and the retirement
+/// of the old runtime role commit with the activation or not at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_failed_role_change_activation_keeps_the_serving_runtime_grants() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let runtime = database.runtime_role.as_str();
+    let granted = retired_role_privileges(&database, runtime).await;
+    assert!(granted > 0, "the split runtime role holds its grants");
+    let table = first_model_table(&database).await;
+    // The closed catalog check the activation runs refuses a trigger no
+    // compiled migration creates, after the grants are reconciled.
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.refuse_activation() RETURNS trigger LANGUAGE plpgsql \
+             AS 'BEGIN RETURN NEW; END'; \
+             CREATE TRIGGER refuse_activation BEFORE INSERT ON {table} \
+             FOR EACH ROW EXECUTE FUNCTION public.refuse_activation()"
+        ))
+        .await
+        .expect("the administrator adds a foreign trigger");
+
+    let refused = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &package,
+        deployment(),
+        ApplyPrecondition::RoleChange { current: &initial },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect_err("the activation refuses the foreign trigger");
+    assert_eq!(refused, MigrationError::ApplyFailed);
+
+    assert_eq!(
+        retired_role_privileges(&database, runtime).await,
+        granted,
+        "the runtime role the ledger still names keeps every grant"
+    );
+    let applied = ledger_roles(&database)
+        .await
+        .into_iter()
+        .filter(|row| row.0 == initial.activation_id)
+        .collect::<Vec<_>>();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].5, runtime);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation() {
     let (database, package) = initial_package_database().await;

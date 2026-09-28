@@ -1351,27 +1351,12 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         {
             return fail_and_release(connection, attempt, &target, &ledger).await;
         }
-        if let Err(error) = connection
-            .reconcile_runtime_acl(
+        // The runtime grants, the retirement of the role the activation
+        // stops serving with, and the activation commit together, so a
+        // refused activation leaves the serving runtime role its grants.
+        let superseded = match connection
+            .activate_role_change(
                 request.package.registry(),
-                request.roles.runtime,
-                request.acknowledge_retired_audit_discard,
-            )
-            .await
-        {
-            return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
-        }
-        if let Some(retired) = retired_runtime_role.as_ref() {
-            if let Err(error) = connection
-                .retire_runtime_role(retired, request.roles.migration)
-                .await
-            {
-                return fail_with_error_and_release(connection, attempt, &target, &ledger, error)
-                    .await;
-            }
-        }
-        let Ok(superseded) = connection
-            .activate_verified_package(
                 current,
                 &target,
                 MaintenanceTransition {
@@ -1380,10 +1365,16 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     migration_role: request.roles.migration,
                     runtime_role: request.roles.runtime,
                 },
+                retired_runtime_role.as_ref(),
+                request.acknowledge_retired_audit_discard,
             )
             .await
-        else {
-            return fail_and_release(connection, attempt, &target, &ledger).await;
+        {
+            Ok(superseded) => superseded,
+            Err(error) => {
+                return fail_with_error_and_release(connection, attempt, &target, &ledger, error)
+                    .await;
+            }
         };
         return finish_activation(connection, audit, attempt, superseded, target)
             .await
