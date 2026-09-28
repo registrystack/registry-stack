@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-09-28"
 doc_type: how-to
 persona:
   - operator
@@ -101,11 +101,14 @@ an older public image tag cannot serve this configuration. The release image is 
 distroless nonroot for `linux/amd64`; see
 [platform support](../../explanation/known-limitations/#platform-support) for the artifact matrix.
 Its entrypoint is `/usr/local/bin/breg`, its default arguments are
-`--runtime-config /etc/breg/runtime.yaml`, and it exposes port 8080. The image carries no shell, no
-writable directory, no healthcheck subcommand, and no `bregctl`. Mount a writable volume for the
+`--runtime-config /etc/breg/runtime.yaml`, and it exposes port 8080. Beside the runtime, the image
+carries the matching `bregctl` at `/usr/local/bin/bregctl`; the entrypoint stays `breg`. The image
+carries no shell, no writable directory, and no healthcheck subcommand. Mount a writable volume for the
 file audit destination; mount the runtime configuration and its package and secret files read-only under
 `/etc/breg`. The orchestrator probes `GET /health` or `GET /healthz` for liveness and `GET /ready`
-for readiness. Activation runs on a separate operator host with the matching `bregctl`.
+for readiness. Activation runs either on a separate operator host with the matching `bregctl`, or
+from the same image with its entrypoint overridden, as
+[Activate from the image](#activate-from-the-image) shows.
 
 {/* Evidence: scripts/cargo-runtime-library-path.sh, registry_cargo_build();
     products/breg/scripts/test-adopter-workflow.sh;
@@ -1005,9 +1008,8 @@ existing file.
 
 ## Serve the container image
 
-The release image carries the `breg` binary alone, so the runtime document you activated with is
-not the one the container serves: activation runs on the operator host that holds the migration
-credential and `bregctl`, and the container only serves the package that host already activated.
+The container serves only a package that activation already recorded, and the runtime document
+you activated with on the operator host is not the one the container serves.
 Write a second runtime document for the container, changing exactly four things from the host's:
 `listener.bind`, `secretProviders.file.root`, `package.root`, and the database hostname the resolved connection URL names, because the container mounts its own paths
 and reaches the database over its own network.
@@ -1039,12 +1041,52 @@ docker run --rm \
   "$BREG_IMAGE"
 ```
 
-Run `bregctl verify` and `bregctl doctor` against this exact runtime document from a host that
-reaches the same database and the same mounted package before you rely on the container's
-`GET /ready`.
+Run `bregctl verify` and `bregctl doctor` against this exact runtime document before you rely on
+the container's `GET /ready`, either from a host that reaches the same database and the same
+mounted package, or from the image as the next section shows.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, ListenerConfig and MetricsListenerConfig;
     release/docker/Dockerfile.breg. */}
+
+### Activate from the image
+
+The image carries the `bregctl` built from the same source as its `breg`, so you can plan, apply,
+and read the activation ledger from the image digest you serve, without installing `bregctl` on an
+operator host. Override the entrypoint with `/usr/local/bin/bregctl` and pass the same arguments
+[Activate and serve](#activate-and-serve) uses, with the container's paths:
+
+```sh
+docker run --rm \
+  --entrypoint /usr/local/bin/bregctl \
+  -v /srv/registry/container/runtime.yaml:/etc/breg/runtime.yaml:ro \
+  -v /var/lib/breg/build-1/package:/var/lib/breg/package:ro \
+  -v /etc/breg/container-migration-secrets:/etc/breg/secrets:ro \
+  -v /var/lib/breg/audit:/var/lib/breg/audit:rw \
+  "$BREG_IMAGE" \
+  --format json plan \
+  --runtime-config /etc/breg/runtime.yaml \
+  --package /var/lib/breg/package
+```
+
+Run `apply` the same way, replacing the last three lines with
+`--format json apply --runtime-config /etc/breg/runtime.yaml --package /var/lib/breg/package --initial`,
+then read the ledger with `--format json status --runtime-config /etc/breg/runtime.yaml`.
+`plan`, `apply`, and `status` connect with the migration credential that
+`database.migrationUrlRef` names, so mount a secret directory that holds it beside the files the
+runtime document references, and keep that credential out of the serving container's secret
+directory. Make the image's non-root user, UID 65532, the owner of every secret file, as for the
+serving container, because the resolver refuses a file owned by anyone else. `apply` appends its
+audit entries to a file of its own beside `audit.path`, so the audit volume is mounted writable
+here too. A `--backup` binding file is read inside the container: mount it read-only and name its
+container path. In Kubernetes, run the same
+command as a Job whose container sets `command: ["/usr/local/bin/bregctl"]` and puts the
+subcommand and its flags in `args`.
+
+{/* Evidence: release/docker/Dockerfile.breg, the bregctl install line and the breg ENTRYPOINT;
+    release/scripts/check-debian13-images.py, HTTP_PROBE_DOCKERFILES and check_repository();
+    crates/registry-breg/src/audit.rs, RegistryAudit::open_companion();
+    crates/registry-bregctl/src/apply_lifecycle.rs;
+    crates/registry-bregctl/src/lib.rs, the plan, apply, and status argument definitions. */}
 
 ## Scrape metrics
 

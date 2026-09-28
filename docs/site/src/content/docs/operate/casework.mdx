@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-27"
+last_reviewed: "2026-09-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -88,18 +88,22 @@ and the release also publishes `casework-install.sh` as a movable alias of the p
 
 Each release publishes the container image `ghcr.io/registrystack/casework:<tag>`, built on a
 distroless nonroot base for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
-`--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries the
-runtime binary and its license and nothing else: no shell, no healthcheck command, and no
-`caseworkctl`. `plan`, `apply`, `status`, and `doctor` belong to `caseworkctl`, so they run from a
-separate operator host that has that binary installed and reaches the database. One directory is
+`--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries
+no shell and no healthcheck command. From `v0.36.0` it also carries the matching `caseworkctl` at
+`/usr/local/bin/caseworkctl`, and the entrypoint stays `casework`; an earlier image carries the
+runtime binary alone. `plan`, `apply`, `status`, and `doctor` belong to `caseworkctl`, so they run
+from an operator host that has that binary installed and reaches the database, or, from `v0.36.0`,
+from the image with its entrypoint overridden, as
+[Run plan, apply, and status from the image](#run-plan-apply-and-status-from-the-image) shows. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
 audit file; mount the runtime file, the policy package, and the secret root read-only. The
 release manifest published beside the binaries records the promoted digest of the image; pin that
 digest rather than the movable tag.
 
 {/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework;
-    release/scripts/release_candidate.py, CASEWORK_RUNTIME_IMAGE_NAMES and
-    CASEWORK_RELEASE_MINIMUM_VERSION; release/scripts/build-release-image.sh. */}
+    release/scripts/release_candidate.py, CASEWORK_RUNTIME_IMAGE_NAMES,
+    CASEWORK_RELEASE_MINIMUM_VERSION, OPERATOR_TOOL_MINIMUM_VERSION, and IMAGE_OPERATOR_TOOLS;
+    release/scripts/build-release-image.sh. */}
 
 ## Provision PostgreSQL
 
@@ -581,6 +585,41 @@ source-backed work before upgrading.
     crates/registry-casework/src/runtime.rs, serve_from_path();
     crates/registry-casework/tests/postgres_transactions.rs,
     returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence(). */}
+
+### Run plan, apply, and status from the image
+
+From `v0.36.0` the Casework image carries the `caseworkctl` built from the same source as its
+`casework`, so you can activate the package from the image digest you serve, without installing
+`caseworkctl` on an operator host. Override the entrypoint with `/usr/local/bin/caseworkctl`, mount
+the runtime file, the package, and the secret root read-only at the absolute paths the runtime file
+names, and pass the same arguments as on the operator host:
+
+```sh
+docker run --rm \
+  --entrypoint /usr/local/bin/caseworkctl \
+  -v /etc/registry-casework/runtime.yaml:/etc/registry-casework/runtime.yaml:ro \
+  -v /etc/registry-casework/package:/etc/registry-casework/package:ro \
+  -v /etc/registry-casework/operator-secrets:/etc/registry-casework/secrets:ro \
+  -v /var/lib/registry-casework/audit:/var/lib/registry-casework/audit:rw \
+  "$CASEWORK_IMAGE" \
+  apply --runtime-config /etc/registry-casework/runtime.yaml \
+  --operator-reference CHANGE-1234 --backup pg_dump-2026-09-27
+```
+
+Run `plan --runtime-config /etc/registry-casework/runtime.yaml` and
+`status --runtime-config /etc/registry-casework/runtime.yaml` the same way, changing only the
+arguments after the image. `apply` resolves `migrationUrlRef`, so the secret root mounted here
+holds the migration credential; keep that credential out of the serving container's secret root.
+Make the image's non-root user, UID 65532, the owner of every secret file, because the resolver
+refuses a file owned by anyone else. `apply` writes its audit entries to a file of its own beside
+`audit.path`, so the audit directory is mounted writable. In Kubernetes, run the same command as a
+Job whose container sets `command: ["/usr/local/bin/caseworkctl"]` and puts the subcommand and its
+flags in `args`. Set `CASEWORK_IMAGE` to the promoted digest from the release manifest.
+
+{/* Evidence: release/docker/Dockerfile.casework, the caseworkctl install line and the casework
+    ENTRYPOINT; release/scripts/check-debian13-images.py, HTTP_PROBE_DOCKERFILES and
+    check_repository(); crates/registry-caseworkctl/src/project.rs, with_operator_audit();
+    crates/registry-caseworkctl/src/lib.rs, the plan, apply, and status argument definitions. */}
 
 ### Upgrade Casework and BReg in lock-step
 
