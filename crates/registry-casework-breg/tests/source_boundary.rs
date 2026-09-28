@@ -754,6 +754,36 @@ async fn live_registry_change_refuses_projection_under_the_imported_source_contr
         SourceAdapterError::BindingMoved
     );
 }
+/// A caller read reports BindingMoved only after the source disclosed the
+/// record to that caller: Casework then shows the retained item without
+/// actions. A record read the source answered with a conflict disclosed
+/// nothing, so it is an invalid source response instead.
+#[tokio::test]
+async fn a_conflicting_record_read_is_never_reported_as_a_moved_binding() {
+    for status in [409, 412] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/records/correction/{ID}")))
+            .and(header("authorization", "Bearer alice-token"))
+            .respond_with(ResponseTemplate::new(status).insert_header("traceparent", TRACE))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            adapter(&server.uri())
+                .read_for_caller(
+                    &subject(),
+                    "reviewer",
+                    EphemeralCredential::new("alice-token")
+                )
+                .await
+                .unwrap_err(),
+            SourceAdapterError::Invalid,
+            "{status}"
+        );
+    }
+}
+
 #[test]
 fn caller_disclosure_fields_are_the_imported_api_names_of_the_context_projection() {
     let adapter = adapter_with_context_projection("http://127.0.0.1:9");
