@@ -65,6 +65,18 @@ async fn write_audit_entries() -> Result<(), Box<dyn std::error::Error>> {
   and keeps its files owner-only.
 - A failed write stops the writer until restart, so every later audited request
   fails closed.
+- An active file whose last line was torn by an interrupted write is recovered
+  at open: the bytes after the last complete line are copied to the owner-only
+  side file `<path>.torn`, the active file is truncated to its last complete
+  line, and the recovery is logged with the side file's path and byte count,
+  never the bytes. An entry is acknowledged only after its batch is synced, so
+  no acknowledged entry is lost. An existing side file holding other bytes is
+  never overwritten; open refuses until it is archived.
+- `AuditSegments` names the files a stream owns beside its active file (sealed
+  segments, `.lock`, `.seq`, `.seq.tmp`, `.torn`) and lists sealed segments
+  oldest first, read-only, so inspection tooling reads the namespace the writer
+  manages. A configured path whose file name ends in one of those suffixes is
+  refused, because a stream at the shorter name would own it.
 - `stdout` is best-effort by nature: a flush does not prove the entry reached
   durable storage.
 
