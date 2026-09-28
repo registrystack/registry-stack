@@ -14,6 +14,9 @@ updates:
         update-types:
           - minor
           - patch
+      cargo-major:
+        update-types:
+          - major
     # wasmtime is pinned to an LTS line (=48.0.3 today). Patch updates
     # within the line are wanted; a minor or major proposal is an LTS jump
     # the pin exists to prevent. wasmtime is the only direct
@@ -41,6 +44,9 @@ updates:
         update-types:
           - minor
           - patch
+      cargo-major:
+        update-types:
+          - major
     # wasmtime and wasmtime-wizer are pinned to the same LTS line as the root
     # workspace's wasmtime dependency (=48.0.3 today); a minor or major
     # proposal is the LTS jump the pin exists to prevent. phonenumber is
@@ -83,6 +89,9 @@ updates:
         update-types:
           - minor
           - patch
+      cargo-major:
+        update-types:
+          - major
 
   # Docs site dependencies.
   - package-ecosystem: npm
@@ -98,6 +107,9 @@ updates:
         update-types:
           - minor
           - patch
+      npm-major:
+        update-types:
+          - major
 
   # Unified product client Node.js bindings: thin napi-rs wrappers, each with
   # its own package-lock.json. optionalDependencies seen in these lockfiles
@@ -125,6 +137,16 @@ updates:
         update-types:
           - minor
           - patch
+      npm-major:
+        update-types:
+          - major
+    # @types/node tracks the lowest Node.js these packages support
+    # (engines.node >=22.12.0), so it stays on the 22 line; move it with the
+    # engines floor.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
 
   # Editor extension (VS Code) dependencies.
   - package-ecosystem: npm
@@ -140,6 +162,9 @@ updates:
         update-types:
           - minor
           - patch
+      npm-major:
+        update-types:
+          - major
     # @types/vscode is pinned to the engines.vscode floor: vsce refuses to
     # package when the types are newer than the oldest supported editor.
     # Move both together when the floor is raised.
@@ -160,6 +185,9 @@ updates:
         update-types:
           - minor
           - patch
+      npm-major:
+        update-types:
+          - major
 
   # Pinned GitHub Actions used by the workflows.
   - package-ecosystem: github-actions
