@@ -55,9 +55,9 @@ pub(crate) struct ReconcileLifecycleOutcome {
     pub outcome: &'static str,
     pub executed: bool,
     pub maintenance_status: Option<String>,
-    pub maintenance_target_revision: Option<String>,
-    pub active_package_revision: Option<String>,
-    pub target_package_revision: String,
+    pub maintenance_target_package_digest: Option<String>,
+    pub active_package_digest: Option<String>,
+    pub target_package_digest: String,
     pub target_catalog_finding: Option<&'static str>,
     pub active_catalog_finding: Option<&'static str>,
     pub unresolvable_reason: Option<&'static str>,
@@ -138,9 +138,9 @@ fn outcome_report(report: ReconcileReport) -> ReconcileLifecycleOutcome {
         outcome: report.outcome.as_str(),
         executed: report.executed,
         maintenance_status: report.maintenance_status,
-        maintenance_target_revision: report.maintenance_target_revision,
-        active_package_revision: report.active_package_revision,
-        target_package_revision: report.target_package_revision,
+        maintenance_target_package_digest: report.maintenance_target_package_digest,
+        active_package_digest: report.active_package_digest,
+        target_package_digest: report.target_package_digest,
         target_catalog_finding: report.target_catalog_finding,
         active_catalog_finding: report.active_catalog_finding,
         unresolvable_reason: report.unresolvable_reason,
@@ -164,6 +164,41 @@ fn validate_operator_reference(reference: &str) -> Result<(), ReconcileLifecycle
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_breg::migration_reconcile::ReconcileOutcome;
+
+    #[test]
+    fn the_report_names_package_digests_as_digests() {
+        let digest = |n: u8| format!("sha256:{}", format!("{n:x}").repeat(64));
+        let rendered = serde_json::to_value(outcome_report(ReconcileReport {
+            outcome: ReconcileOutcome::Unresolvable,
+            maintenance_status: Some("failed".to_owned()),
+            maintenance_target_package_digest: Some(digest(2)),
+            active_package_digest: Some(digest(1)),
+            target_package_digest: digest(2),
+            target_catalog_finding: None,
+            active_catalog_finding: None,
+            unresolvable_reason: None,
+            plan_kind: "compiled_additive",
+            migration_step_count: 0,
+            reviewed_plan_closed: None,
+            durable_step_progress: None,
+            executed: false,
+        }))
+        .expect("the report serializes");
+        assert_eq!(rendered["maintenanceTargetPackageDigest"], digest(2));
+        assert_eq!(rendered["activePackageDigest"], digest(1));
+        assert_eq!(rendered["targetPackageDigest"], digest(2));
+        for revision in [
+            "maintenanceTargetRevision",
+            "activePackageRevision",
+            "targetPackageRevision",
+        ] {
+            assert!(
+                rendered.get(revision).is_none(),
+                "{revision} is not reported"
+            );
+        }
+    }
 
     #[test]
     fn the_operator_reference_is_present_bounded_and_free_of_control_characters() {
