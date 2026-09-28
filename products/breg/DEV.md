@@ -69,7 +69,7 @@ file and generates new keys. A successor package prepared for retained records
 cannot initialize an empty database after removal: start refuses before Docker.
 Create a fresh project at package sequence 1 for a separate empty experiment.
 
-Use `--format json` to consume the status, URLs, audience, package revision,
+Use `--format json` to consume the status, URLs, audience, package digest,
 runtime configuration and private credential file references. Keys and access
 tokens never appear in these reports. Use `bregctl dev export-client` to obtain
 the client ID, assertion key, issuer and token endpoint handoff; an OAuth client
@@ -485,7 +485,7 @@ reviewed package lifecycle.
 ## Retained state and recovery
 
 The private `.breg/dev` directory records a random ownership identifier, exact
-Docker container ID, ports, captured authored closure, package revision, seed
+Docker container ID, ports, captured authored closure, package digest, seed
 checkpoints and, for each resolved `breg` and `docker` prerequisite, the
 fully resolved path of the file that ran and the version it reported. It
 contains generated configurations, separate database roles, local TLS material,

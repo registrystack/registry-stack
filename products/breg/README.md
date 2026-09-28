@@ -142,18 +142,40 @@ configured domain or a compatible additive schema change.
    `--revision <text>` optionally records a source label in the hash-covered
    `REVISION` file.
 4. An operator with the migration database credential runs
+   `bregctl plan --runtime-config <file> --package <directory>`, which
+   rehearses the activation and rolls it back, then
    `bregctl apply --runtime-config <file> --package <directory>` and
-   then `bregctl verify --runtime-config <file>`. Initial activation
+   `bregctl status --runtime-config <file>`. Initial activation
    also requires `--initial`.
-5. `breg --runtime-config <file>` verifies `SHA256SUMS` and the optional
-   `package.expectedDigest` pin before it serves the active package. Authorized
+5. `breg --runtime-config <file>` verifies `SHA256SUMS`, the optional
+   `package.expectedDigest` pin, the package closure, and the physical instance
+   claim, then serves only when `identity.databaseId` and the package digest
+   equal what the database's activation ledger records. Authorized
    bulk operations use `bregctl data validate`, `data import`, and
    `data export`, which reuse the packaged plans and normal authenticated API
    paths.
 
+One package is the unit an operator promotes: the same package directory, with
+the same package digest and `registryRevision`, is planned and applied in each
+environment, and only the runtime file's `identity` and database values differ.
+
 For a compatible successor, repeat test, package, and apply with the active
 package directory as `--baseline-package`, then restart the same
-server executable on the successor package. Removing or narrowing an access
+server executable on the successor package.
+
+Each database records its activations in the activation ledger,
+`registry_internal.registry_migrations`: one row per activation, the initial
+one included, keyed by a UUID activation id and ordered by apply order. A row
+names the package digest, the predecessor package digest, the
+`registryRevision`, the plan kind (`initial`, `successor`, or `adopted`), the
+role mode, any backups a destructive migration was bound to, and the keyed
+hash of `--operator-reference`. `apply` accepts a successor only when its
+predecessor digest is the active package, and refuses the active package again
+and any older package. The migration credential authorizes an activation, and
+every activation is audited as `breg-activation-audit/v1`. With separate
+migration and runtime roles, the runtime role cannot write the ledger, so it
+cannot change which package the runtime serves; with one role for both, the
+ledger check catches mistakes but not someone holding that credential. Removing or narrowing an access
 profile removes its obsolete compiled row-security policies during apply;
 activation still requires the exact candidate catalog. Unexpected policies
 remain catalog drift and are not silently deleted. A migration failure after
@@ -258,7 +280,7 @@ legal-entity registrations. Separate change-request fixtures exercise reviewed
 asset corrections and household contact registration without changing those
 baseline direct-write journeys. These are not generated output or implicit
 runtime models. The real-PostgreSQL pilot test executes the baseline fixtures,
-while the public-binary adopter workflow proves signed activation, authenticated
+while the public-binary adopter workflow proves activation, authenticated
 data access, an additive upgrade, failure recovery, and unchanged server bytes
 for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
 for the approval workflows.

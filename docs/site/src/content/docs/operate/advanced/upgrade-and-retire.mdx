@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-27"
+last_reviewed: "2026-09-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -61,10 +61,19 @@ sequence on a restored copy first, as
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** Build the successor package with the new `bregctl`, `apply` it, update the
-   runtime file, run `bregctl verify`, and restart every `breg` process on the new binary; see
-   [Activate the successor](../../breg-changes/#activate-the-successor). Casework reports each
-   BReg source as unavailable from here until step 5 finishes.
+4. **Upgrade BReg.** Rebuild the deployed project unchanged with the new `bregctl package`,
+   point `package.root` at the rebuilt package, check it against the live database with
+   `bregctl plan --package` naming the same directory, `apply` it, run `bregctl verify`, and
+   restart every `breg` process on the new binary; `bregctl status` confirms what the database
+   activated. A model change follows as its own successor; see
+   [Activate the successor](../../breg-changes/#activate-the-successor). From a release before
+   the activation ledger, this first `apply` adopts the database as it stands: `package.root`
+   and `--package` must both name the rebuilt package, which must describe the schema the
+   database runs, `plan` reports `activation` `adopted`, the ledger history the earlier release
+   kept is dropped, and the instance claim is carried over, or recorded when the database had
+   none. A `package.root` that still names the earlier release's package is refused with path
+   `package.root`. Casework reports each BReg source as unavailable from here until step 5
+   finishes.
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
    `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see
    [Migrate and serve](../../casework/#migrate-and-serve).
@@ -80,6 +89,10 @@ sequence on a restored copy first, as
     adapter, restart Evidence, start the adapter);
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
     update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
+    crates/registry-breg/src/postgres/interlock.rs, adopt_pre_ledger_database();
+    crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
+    crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
+    lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
 
 ## Roll back

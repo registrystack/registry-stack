@@ -98,7 +98,7 @@ retained task subjects, under the existing operator retention boundary.
 Terminal and refusal records for a request carrying a verified task grant include
 an `authorization` object using the shared authorization audit fields. Grant,
 principal, client and approver identifiers are keyed pseudonyms, scoped to the
-package revision. The object also records the source issuer and grant deadline.
+activation that serves the request. The object also records the source issuer and grant deadline.
 It contains no subjects, bounds values or purpose value. BREG continues
 to record purpose presence separately. Later human review remains a separate
 actor, and the retained original grant continues to govern status checks.
