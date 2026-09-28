@@ -89,6 +89,12 @@
   reports it as `roleMode`; in single mode both say the activation ledger
   check catches mistakes but not someone holding that credential.
 
+- `bregctl dev` and the quickstart serve the local registry with one database
+  role, the migration role; the schema-test rehearsal keeps a separate runtime
+  role. A local session retained from an earlier release keeps its split
+  runtime file, which `bregctl dev stop --remove` does not replace; remove the
+  project's `.breg/dev` directory to start one that serves with one role.
+
 - `bregctl apply --operator-reference TEXT` binds an operator's change
   reference to the activation. The text must be 1 to 512 bytes without control
   characters, and the audit profile must be keyed: the ledger row records only
