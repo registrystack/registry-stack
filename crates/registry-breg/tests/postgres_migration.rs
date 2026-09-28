@@ -491,11 +491,31 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_non_ready_target(&database, &required_active, &destructive_package, "failed").await;
     assert_restored_prior_schema_and_rows(&database, &required, &required_active, 5).await;
 
+    // The retry verifies a backup of its own, taken after the restore, so the
+    // ledger must name that backup rather than the one the failed attempt
+    // started with.
+    let retry_backup_path = backup_root.path().join("retry-canary.backup");
+    fs::write(&retry_backup_path, &backup_bytes).expect("retry backup artifact writes");
+    fs::set_permissions(&retry_backup_path, fs::Permissions::from_mode(0o600))
+        .expect("retry backup evidence permissions close");
+    let retry_binding = ExternalBackupBinding {
+        backup_file: retry_backup_path
+            .to_str()
+            .expect("UTF-8 retry backup path")
+            .to_owned(),
+        ..binding.clone()
+    };
+    let retry_binding_file =
+        write_backup_binding(backup_root.path(), "retry-binding.json", &retry_binding);
+    let retry_evidence = [DestructiveBackupEvidence::new(
+        binding_path,
+        &retry_binding_file,
+    )];
     let destructive_active = apply_with_evidence(
         &database,
         &destructive_package,
         &required_active,
-        &valid_evidence,
+        &retry_evidence,
     )
     .await
     .expect("the exact reviewed failed target performs the bound fix-forward step and activates");
@@ -506,8 +526,9 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         .await
         .iter()
         .all(|entry| entry.2 == "applied"));
-    // The destructive activation records the backup it was bound to, as the
-    // binding described it, so the ledger names what a restore would use.
+    // The destructive activation records the backup the applying attempt was
+    // bound to, as the binding described it, so the ledger names what a
+    // restore would use.
     let backup_references: serde_json::Value = database
         .admin
         .query_one(
@@ -522,10 +543,10 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         backup_references,
         serde_json::json!([{
             "bindingPath": binding_path,
-            "backupFile": binding.backup_file,
-            "sha256": binding.sha256,
-            "byteLength": binding.byte_length,
-            "createdAt": binding.created_at,
+            "backupFile": retry_binding.backup_file,
+            "sha256": retry_binding.sha256,
+            "byteLength": retry_binding.byte_length,
+            "createdAt": retry_binding.created_at,
         }])
     );
 
