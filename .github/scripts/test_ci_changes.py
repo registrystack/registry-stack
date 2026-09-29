@@ -1755,6 +1755,18 @@ class CiChangesTest(unittest.TestCase):
             )["editors"]
         )
 
+    def test_editor_configuration_follows_its_copied_product_schemas(self) -> None:
+        for path in (
+            "products/breg/generated/authoring/registry-project.schema.json",
+            "products/breg/generated/runtime/runtime.schema.json",
+            "products/casework/generated/runtime/runtime.schema.json",
+            "products/scheduling/generated/runtime/runtime.schema.json",
+            "products/messaging/generated/runtime/runtime.schema.json",
+            "products/discovery/schemas/origins.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["editors"])
+
     def test_a_relay_v2_contract_change_runs_its_compiler_editor_and_host_cli(self) -> None:
         outputs = classify(
             self.workspace,

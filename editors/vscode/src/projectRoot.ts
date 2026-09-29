@@ -3,33 +3,35 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-// Relay V2 is a governed project family with its own contract marker.
+// Product-owned markers mirror root discovery in registry-language-server.
+// registry.yaml serves two families, so its content must distinguish them.
 export const RELAY_V2_MARKER_FILE = 'registry.yaml';
-// The two keys a governed contract declares itself by. registry.yaml is also
-// what the Base Registry Engine calls its project document, so the file name
-// alone says nothing about which product wrote the directory, and a client
-// that started Relay's language server over a Base Registry Engine project
-// would fill the author's editor with sentences about a grammar their build
-// never applies. This mirrors declares_root() in
-// crates/registry-language-server/src/relay_v2/index.rs, including the rule
-// that either key is enough: an author part way through writing a contract may
-// have typed one and not the other.
 export const RELAY_V2_API_VERSION_PREFIX = 'relay.registrystack.org/';
 export const RELAY_V2_CONTRACT_KIND = 'RegistryContract';
-// Evidence project root: the marker written by newer projects, or the
-// pre-marker pair of an OpenAPI description and a questions directory. This
-// mirrors declares_root() in crates/registry-language-server/src/evidence/mod.rs.
 export const EVIDENCE_MARKER_FILE = 'evidence-project.yaml';
 export const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
 export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
 
-// How much of a registry.yaml is read to find its discriminator. The two keys
-// are written at the top of the document, and this is the same ceiling the
-// language server holds one project document to.
+const PRODUCT_MARKERS = [
+  ['registry.yaml', 'kind', 'RegistryProject', 'apiVersion', 'registry.registrystack.org/v1alpha1', true],
+  ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'registry.registrystack.org/casework/'],
+  ['scheduling.yaml', 'kind', 'SchedulingPolicyPackage', 'apiVersion', 'registry.registrystack.org/scheduling-policy-package/'],
+  ['messaging.yaml', 'kind', 'MessagingPackage', 'apiVersion', 'registry.registrystack.org/messaging-package/'],
+  ['origins.yaml', '', '', 'schemaVersion', 'registry-discovery/origins/'],
+  ['manifest.yaml', 'kind', 'RenderBundle', 'apiVersion', 'render.registrystack.org/'],
+  ['metadata.yaml', '', '', 'schema_version', 'registry-manifest/v1', true],
+] as const;
+
+// Product discriminators are top-level keys. Match the language server's
+// authored-document ceiling before reading a marker or declared document.
 const MAX_MARKER_BYTES = 1024 * 1024;
 
 export function isProjectRoot(directory: string): boolean {
-  if (declaresRelayV2(path.join(directory, RELAY_V2_MARKER_FILE))) {
+  if (
+    declaresRelayV2(path.join(directory, RELAY_V2_MARKER_FILE)) ||
+    declaresProduct(directory) ||
+    declaresExplicitProduct(directory)
+  ) {
     return true;
   }
   if (isFile(path.join(directory, EVIDENCE_MARKER_FILE))) {
@@ -50,20 +52,8 @@ function declaresRelayV2(candidate: string): boolean {
   if (!isFile(candidate)) {
     return false;
   }
-  let text: string;
-  try {
-    const handle = fs.openSync(candidate, fs.constants.O_RDONLY);
-    try {
-      if (fs.fstatSync(handle).size > MAX_MARKER_BYTES) {
-        return false;
-      }
-      const buffer = Buffer.alloc(MAX_MARKER_BYTES);
-      const read = fs.readSync(handle, buffer, 0, MAX_MARKER_BYTES, 0);
-      text = buffer.subarray(0, read).toString('utf8');
-    } finally {
-      fs.closeSync(handle);
-    }
-  } catch {
+  const text = readMarker(candidate);
+  if (text === undefined) {
     return false;
   }
   const kind = topLevelScalar(text, 'kind');
@@ -72,6 +62,83 @@ function declaresRelayV2(candidate: string): boolean {
     kind === RELAY_V2_CONTRACT_KIND ||
     (apiVersion !== undefined && apiVersion.startsWith(RELAY_V2_API_VERSION_PREFIX))
   );
+}
+
+function declaresProduct(directory: string): boolean {
+  return PRODUCT_MARKERS.some(([file, kindKey, kind, versionKey, version, exact]) => {
+    const text = readMarker(path.join(directory, file));
+    if (text === undefined) {
+      return false;
+    }
+    const declaredVersion = topLevelScalar(text, versionKey);
+    return (
+      (kindKey !== '' && topLevelScalar(text, kindKey) === kind) ||
+      (declaredVersion !== undefined &&
+        (exact ? declaredVersion === version : declaredVersion.startsWith(version)))
+    );
+  });
+}
+
+function readMarker(candidate: string): string | undefined {
+  if (!isFile(candidate)) {
+    return undefined;
+  }
+  try {
+    const handle = fs.openSync(candidate, fs.constants.O_RDONLY);
+    try {
+      if (fs.fstatSync(handle).size > MAX_MARKER_BYTES) {
+        return undefined;
+      }
+      const buffer = Buffer.alloc(MAX_MARKER_BYTES);
+      const read = fs.readSync(handle, buffer, 0, MAX_MARKER_BYTES, 0);
+      return buffer.subarray(0, read).toString('utf8');
+    } finally {
+      fs.closeSync(handle);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+// Manifest and wallet-delivery configuration can have adopter-chosen names.
+// The shared editor configurator records the product explicitly rather than
+// guessing from a generic runtime.yaml shared by several products.
+function declaresExplicitProduct(directory: string): boolean {
+  const markerDirectory = path.join(directory, '.registry-stack-editor');
+  if (!isDirectory(markerDirectory)) {
+    return false;
+  }
+  const text = readMarker(path.join(markerDirectory, 'project.json'));
+  if (text === undefined) {
+    return false;
+  }
+  try {
+    const marker = JSON.parse(text);
+    if (
+      marker === null ||
+      (marker.product !== 'manifest' && marker.product !== 'evidence-oid4vci') ||
+      typeof marker.document !== 'string' ||
+      marker.document.includes('\\') ||
+      path.isAbsolute(marker.document) ||
+      !['.yaml', '.yml'].includes(path.extname(marker.document))
+    ) {
+      return false;
+    }
+    const components = marker.document.split('/');
+    if (components.some((component: string) => component === '' || component === '.' || component === '..')) {
+      return false;
+    }
+    let parent = directory;
+    for (const component of components.slice(0, -1)) {
+      parent = path.join(parent, component);
+      if (!isDirectory(parent)) {
+        return false;
+      }
+    }
+    return readMarker(path.join(directory, marker.document)) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 // The value of one top-level key, when the document writes it as a plain or

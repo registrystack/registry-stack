@@ -24,6 +24,7 @@ use crate::{
 pub enum SymbolKind {
     RelayV2(RelayV2Kind),
     Evidence(EvidenceKind),
+    Product(crate::products::ProductKind, &'static str),
 }
 
 impl SymbolKind {
@@ -31,6 +32,7 @@ impl SymbolKind {
         match self {
             Self::RelayV2(kind) => kind.label(),
             Self::Evidence(kind) => kind.label(),
+            Self::Product(_, label) => label,
         }
     }
 
@@ -38,6 +40,8 @@ impl SymbolKind {
         match self {
             Self::RelayV2(kind) => kind.lsp_kind(),
             Self::Evidence(kind) => kind.lsp_kind(),
+            Self::Product(_, "authored file") => LspSymbolKind::FILE,
+            Self::Product(_, _) => LspSymbolKind::OBJECT,
         }
     }
 
@@ -49,6 +53,8 @@ impl SymbolKind {
     /// array, and the kinds that would have used one fall back to the word beside it.
     pub fn lsp_completion_kind(self) -> CompletionItemKind {
         match self {
+            Self::Product(_, "authored file") => CompletionItemKind::FILE,
+            Self::Product(_, _) => CompletionItemKind::REFERENCE,
             Self::RelayV2(RelayV2Kind::Registry | RelayV2Kind::Source) => {
                 CompletionItemKind::MODULE
             }
@@ -88,6 +94,7 @@ impl SymbolKind {
         match self {
             Self::RelayV2(kind) => Some(format!("relay-v2/{rule}-{}", kind.slug())),
             Self::Evidence(kind) => Some(format!("evidence/{rule}-{}", kind.slug())),
+            Self::Product(product, _) => Some(format!("{}/{rule}", product.name())),
         }
     }
 
@@ -102,6 +109,7 @@ impl SymbolKind {
         match self {
             Self::RelayV2(kind) => kind.scope_label(),
             Self::Evidence(_) => "question",
+            Self::Product(_, _) => "authoring scope",
         }
     }
 
@@ -494,6 +502,21 @@ pub struct ProjectIndex {
 }
 
 impl ProjectIndex {
+    /// Load an explicitly selected current product authoring project.
+    pub fn load_product(root: &Path, product: crate::products::ProductKind) -> Result<Self> {
+        let root = root.canonicalize()?;
+        let loaded = crate::products::load_documents(&root, product, &BTreeMap::new())?;
+        if loaded.indexing_ceiling_path.is_some() {
+            return Ok(Self::diagnostics_only(&root, loaded.diagnostics));
+        }
+        Ok(Self::from_documents_with_diagnostics(
+            ProjectFamily::Product(product),
+            &root,
+            &loaded.documents,
+            loaded.diagnostics,
+        ))
+    }
+
     /// Loads and indexes one Evidence authoring project, the counterpart to [`Self::load`].
     pub fn load_evidence(root: &Path) -> Result<Self> {
         let root = root
@@ -650,11 +673,23 @@ impl ProjectIndex {
     /// Where the symbol or reference under a position is defined. `path` is canonical.
     pub fn definitions_at(&self, path: &Path, position: Position) -> Vec<IndexedLocation> {
         if let Some(reference) = self.reference_at(path, position) {
-            return self
-                .definitions_for(&reference.target)
-                .into_iter()
+            let references = self.references.iter().filter(|candidate| {
+                std::ptr::eq(*candidate, reference)
+                    || (matches!(reference.target.kind, SymbolKind::Product(_, _))
+                        && candidate.location == reference.location)
+            });
+            let mut locations = references
+                .flat_map(|reference| self.definitions_for(&reference.target))
                 .map(|symbol| symbol.location.clone())
-                .collect();
+                .collect::<Vec<_>>();
+            locations.sort_by(|left, right| {
+                left.path
+                    .cmp(&right.path)
+                    .then_with(|| left.range.start.line.cmp(&right.range.start.line))
+                    .then_with(|| left.range.start.character.cmp(&right.range.start.character))
+            });
+            locations.dedup();
+            return locations;
         }
 
         self.symbol_at(path, position)
@@ -673,7 +708,15 @@ impl ProjectIndex {
             .symbol_at(path, position)
             .filter(|symbol| symbol.resolvable)
         {
-            vec![symbol.key.clone()]
+            if matches!(symbol.kind, SymbolKind::Product(..)) {
+                self.symbols
+                    .iter()
+                    .filter(|other| other.resolvable && other.location == symbol.location)
+                    .map(|other| other.key.clone())
+                    .collect()
+            } else {
+                vec![symbol.key.clone()]
+            }
         } else if let Some(reference) = self.reference_at(path, position) {
             self.definitions_for(&reference.target)
                 .into_iter()

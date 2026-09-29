@@ -1,28 +1,41 @@
 # Registry Stack for VS Code
 
-This beta integration is installed from a Registry Stack source release.
-It is not yet published to the VS Code Marketplace and no release VSIX is provided.
-For the stable beta path, run
-`evidencectl tooling editor <directory>` for an Evidence authoring project or
-`relayctl tooling editor <directory>` for Relay V2, and use the
-generated YAML schema settings. Install this integration for optional semantic navigation.
+This beta integration follows the Registry Stack release version and is installed from its source
+release. It is not yet published to the VS Code Marketplace and no release VSIX is provided.
+The shared language server provides semantic navigation for all current Registry Stack products.
 
-This extension activates when a workspace contains a Registry Stack project marker at its root or
-below it. A Relay V2 root contains a `registry.yaml` that declares a governed contract, which is how
-a Base Registry Engine project of the same file name is left to its own tooling. An Evidence
-authoring project root contains `evidence-project.yaml`, or the pre-marker pair of a
-`source.openapi.yaml` and a `questions` directory. A workspace folder that is itself a project
-starts its language server immediately. For a project nested below a workspace folder, opening its
-first YAML document starts one language server for the containing workspace folder; the server then
-discovers the project by walking upward from that document. This avoids recursively scanning the
-workspace from the extension. It adds cross-file definitions, references, workspace/document
-symbols, and Registry Stack reference diagnostics. Red Hat YAML remains responsible for YAML
-syntax, schema validation, completion, formatting, and ordinary hover information.
+Project roots use each product's own authoring marker:
+
+| Product | Marker |
+|---|---|
+| Base Registry Engine | `registry.yaml` declaring `RegistryProject` |
+| Registry Relay V2 | `registry.yaml` declaring `RegistryContract` |
+| Evidence | `evidence-project.yaml`, or `source.openapi.yaml` beside `questions/` |
+| Registry Casework | `casework.yaml` declaring `CaseworkProject` |
+| Registry Scheduling | `scheduling.yaml` declaring `SchedulingPolicyPackage` |
+| Registry Messaging | `messaging.yaml` declaring `MessagingPackage` |
+| Registry Discovery | `origins.yaml` declaring the Discovery origins schema |
+| Registry Render | `manifest.yaml` declaring `RenderBundle` |
+| Registry Manifest | `metadata.yaml` declaring `registry-manifest/v1`, or an explicit editor marker |
+| Evidence OID4VCI | An explicit editor marker naming its configuration document |
+
+An explicit marker is `.registry-stack-editor/project.json` with a `product` of `manifest` or
+`evidence-oid4vci` and a `document` naming an existing YAML file relative to the project.
+The shared editor configurator writes it for adopter-chosen filenames. A generic `runtime.yaml`
+alone cannot distinguish products. Markers and declared document paths must be regular local files
+and directories.
+
+A workspace folder that is itself a project starts its language server immediately. For a project
+nested below a workspace folder, opening its first YAML or JSON document starts one language server
+for the containing workspace folder; the server discovers the project by walking upward from that
+document. This avoids recursively scanning the workspace from the extension. The server adds
+cross-file definitions, references, workspace/document symbols, and product reference diagnostics.
+Red Hat YAML remains responsible for YAML syntax, schema validation, completion, formatting, and
+ordinary hover information. Product CLI checks remain responsible for complete package validation.
 
 Multi-root workspaces are supported. The extension starts at most one isolated language-server
 process for each eligible local workspace folder and responds when workspace folders are added or
-removed. One process serves every project discovered inside that folder across both families, so a
-workspace holding a Relay project and an Evidence project needs no separate configuration. Because
+removed. One process serves every product project discovered inside that folder. Because
 the server executes a local binary and reads local files, the extension is disabled in untrusted
 and virtual workspaces.
 
@@ -30,6 +43,19 @@ and virtual workspaces.
 
 Prerequisites are Node.js 22 or newer, the `code` command-line tool, and a matching
 `evidencectl` or `relayctl`. Both embed the same language server.
+
+Configure the project's maintained schemas and native validation task from the repository root:
+
+```console
+python3 editors/configure.py breg /path/to/project
+```
+
+Use the product name from the [shared setup guide](../README.md). For a project nested below the
+opened workspace folder, add `--workspace /path/to/workspace`. Manifest files with a custom name use
+`--document custom.yaml`; Evidence OID4VCI requires `--document wallet-config.yaml`. The configurator
+writes the explicit marker for those two families, adds available schema mappings, and preserves
+existing editor settings and tasks. Relay and Evidence schema setup runs through their matching
+adopter CLI. See the shared guide for products whose validation remains a native CLI check.
 
 1. From the repository root, install the integration into the active VS Code profile:
 
@@ -64,11 +90,14 @@ Prerequisites are Node.js 22 or newer, the `code` command-line tool, and a match
 The source VSIX contains the extension runtime and the verified path to the CLI the installer
 selected, not a platform server binary. Its server discovery order is: the explicit
 `registryStack.languageServer.path` setting, the installer-selected CLI,
-`registry-language-server` on `PATH`, then a matching `evidencectl` or `relayctl` on `PATH`.
-Every tier but the standalone server runs `<cli> tooling language-server`.
-A CLI found on `PATH` is asked whether it hosts the server before it is used, so one built before
-the subcommand existed is passed over rather than taken as the answer, and the CLI behind it is
-still reached. A manually packaged VSIX omits the local path metadata and retains the PATH-based
+`evidencectl` or `relayctl` on `PATH` matching the extension release version.
+A source build reporting the same version with `-dev` is also accepted.
+The explicit setting runs the executable directly. Installer-selected and PATH adopter CLIs run
+`<cli> tooling language-server`; the standalone server runs directly.
+Installer metadata and PATH candidates are checked for a matching version and the hosted-server
+subcommand before use. Replacing the installer-selected executable with a different release therefore
+falls through to PATH discovery. A standalone development build has no version probe; select it
+explicitly with `registryStack.languageServer.path`. A manually packaged VSIX omits the local path metadata and retains the PATH-based
 discovery behavior.
 
 ## Manual packaging
@@ -97,20 +126,22 @@ and verifies that the VSIX contains no external `node_modules` runtime.
 - Run `npm test` after building `registry-language-server` to launch the Extension Host test for
   multi-root behavior and declared workspace capabilities. On headless Linux, use
   `xvfb-run -a npm test`.
+- For a macOS source build linked to a dynamic AWS-LC FIPS library, set
+  `REGISTRY_STACK_TEST_LIBRARY_PATH` to its Cargo build artifact directory when running `npm test`.
+  Test-only launcher wrappers restore that loader path after Electron strips `DYLD_*` variables.
+  Installed release CLIs use their packaged libraries.
 
 ## Troubleshooting
 
-- If activation does not occur, confirm the workspace contains `registry.yaml`,
-  `evidence-project.yaml`, or a `source.openapi.yaml` beside a `questions` directory, and that VS
-  Code trusts the workspace. For a project below the workspace-folder root, open one of that
-  project's YAML documents to start its folder's language server. Select **Workspaces: Manage
+- If activation does not occur, confirm the workspace contains a product marker from the table
+  above and that VS Code trusts the workspace. For a project below the workspace-folder root, open one of that
+  project's YAML or JSON documents to start its folder's language server. Select **Workspaces: Manage
   Workspace Trust**, trust the reviewed project, and run **Registry Stack: Restart Language
   Server** if needed.
 - If startup reports that no server was found, set `registryStack.languageServer.path` to the
-  standalone executable built for source iteration. Otherwise, add `registry-language-server` to
-  `PATH`, or ensure a matching `evidencectl` or `relayctl` is on the environment inherited by VS
+  standalone executable built for source iteration. Otherwise, ensure a matching `evidencectl` or `relayctl` is on the environment inherited by VS
   Code and restart the language server. The output message names the project folder that failed.
-- If navigation is absent, confirm the file's VS Code language mode is YAML and inspect the output
+- If navigation is absent, confirm the file's VS Code language mode is YAML or JSON and inspect the output
   channel named for that workspace folder.
 - Red Hat YAML still owns schema validation, completion, hover, formatting, and syntax errors. Its
   diagnostics do not indicate a Registry Stack language-server failure.

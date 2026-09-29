@@ -123,7 +123,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-relay-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-relayctl` | Relay V2 adopter tooling and the `relayctl` binary |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
-| `crates/registry-language-server` | Editor language server for Relay V2 and Evidence authoring documents, hosted for adopters by `evidencectl` and `relayctl` |
+| `crates/registry-language-server` | Editor language server for Registry Stack product authoring documents, hosted for adopters by `evidencectl` and `relayctl`; product navigation rules add no runtime dependencies |
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |

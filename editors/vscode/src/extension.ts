@@ -11,7 +11,11 @@ import {
 } from 'vscode-languageclient/node';
 
 import { isProjectRoot } from './projectRoot.js';
-import { findLanguageServerOnPath, isExecutableFile } from './serverCommand.js';
+import {
+  findLanguageServerOnPath,
+  hostsMatchingLanguageServer,
+  isExecutableFile,
+} from './serverCommand.js';
 
 const clients = new Map<string, LanguageClient>();
 let lifecycle = Promise.resolve();
@@ -30,7 +34,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await enqueueLifecycle(() => reconcileClients(context));
     }),
     vscode.workspace.onDidOpenTextDocument(async (document) => {
-      if (document.uri.scheme === 'file' && document.languageId === 'yaml') {
+      if (document.uri.scheme === 'file' && isAuthoringDocument(document)) {
         await enqueueLifecycle(() => reconcileClients(context));
       }
     }),
@@ -88,7 +92,15 @@ async function startClient(
           language: 'yaml',
           pattern: {
             baseUri: projectFolder.uri.toString(),
-            pattern: '**/*.yaml',
+            pattern: '**/*.{yaml,yml}',
+          },
+        },
+        {
+          scheme: 'file',
+          language: 'json',
+          pattern: {
+            baseUri: projectFolder.uri.toString(),
+            pattern: '**/*.json',
           },
         },
       ],
@@ -141,7 +153,7 @@ function findProjectFolders(): vscode.WorkspaceFolder[] {
 function hasOpenDocumentInProject(folder: vscode.WorkspaceFolder): boolean {
   const folderPath = path.resolve(folder.uri.fsPath);
   return vscode.workspace.textDocuments.some((document) => {
-    if (document.uri.scheme !== 'file' || document.languageId !== 'yaml') {
+    if (document.uri.scheme !== 'file' || !isAuthoringDocument(document)) {
       return false;
     }
     const relative = path.relative(folderPath, document.uri.fsPath);
@@ -175,6 +187,10 @@ function folderKey(folder: vscode.WorkspaceFolder): string {
   return folder.uri.toString();
 }
 
+function isAuthoringDocument(document: vscode.TextDocument): boolean {
+  return document.languageId === 'yaml' || document.languageId === 'json';
+}
+
 function resolveServerCommand(
   context: vscode.ExtensionContext,
   projectFolder: vscode.WorkspaceFolder,
@@ -205,12 +221,12 @@ function resolveServerCommand(
       args: ['tooling', 'language-server'],
     };
   }
-  const onPath = findLanguageServerOnPath();
+  const onPath = findLanguageServerOnPath(context.extension.packageJSON.version);
   if (onPath !== undefined) {
     return onPath;
   }
   throw new Error(
-    'No Registry Stack language server was found. Reinstall the integration with a matching evidencectl or relayctl; set registryStack.languageServer.path to an executable; add registry-language-server to PATH; or add a matching adopter CLI to PATH so it can run "<cli> tooling language-server".',
+    `No Registry Stack ${context.extension.packageJSON.version} language server was found. Reinstall the integration with a matching evidencectl or relayctl; set registryStack.languageServer.path to a standalone executable for source development; or add a matching adopter CLI to PATH so it can run "<cli> tooling language-server".`,
   );
 }
 
@@ -218,7 +234,12 @@ function findPackagedRegistryStackCli(context: vscode.ExtensionContext): string 
   const metadataPath = context.asAbsolutePath(path.join('dist', 'registry-stack-cli-path'));
   try {
     const candidate = fs.readFileSync(metadataPath, 'utf8').trim();
-    if (candidate !== '' && path.isAbsolute(candidate) && isExecutableFile(candidate)) {
+    if (
+      candidate !== '' &&
+      path.isAbsolute(candidate) &&
+      isExecutableFile(candidate) &&
+      hostsMatchingLanguageServer(candidate, context.extension.packageJSON.version)
+    ) {
       return candidate;
     }
   } catch {

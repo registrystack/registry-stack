@@ -28,8 +28,9 @@ Options:
 The installer never trusts a workspace automatically. Installing for VS Code
 updates the active profile unless --profile selects an existing profile. Zed
 requires one final command-palette action because its CLI cannot install a
-local development extension. Project configuration remains a separate
-evidencectl or relayctl tooling editor operation.
+local development extension. Configure a product separately with:
+  python3 editors/configure.py <product> <project>
+Evidence and Relay also provide their own tooling editor command.
 EOF
 }
 
@@ -116,8 +117,8 @@ verify_registry_stack_cli() {
   [[ -n "${expected_version}" ]] ||
     fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
 
-  # Evidence and Relay V2 are the supported product families for this shared
-  # editor integration. Keep their adopter CLIs in deterministic order.
+  # These two adopter CLIs embed the shared server for every supported product.
+  # The other product CLIs remain independent of its dependency closure.
   local -a candidate_names=(evidencectl relayctl)
   local -a candidate_errors=()
   local candidate_name
@@ -220,7 +221,7 @@ install_vscode() {
   code "${profile_args[@]}" --install-extension "${vsix}" --force
 
   printf '\nRegistry Stack editor support is installed for VS Code.\n'
-  printf 'Project setup remains a separate evidencectl or relayctl operation.\n'
+  printf 'Project setup: python3 editors/configure.py <product> <project>\n'
   printf 'Workspace trust remains your decision when a project opens.\n'
   if [[ -n "${open_path}" ]]; then
     printf 'Opening %s with the VS Code %s.\n' "${open_path}" "${profile_label}"
@@ -253,7 +254,7 @@ install_zed() {
   fi
 
   printf '\nRegistry Stack editor support is prepared for Zed.\n'
-  printf 'Project setup remains a separate evidencectl or relayctl operation.\n'
+  printf 'Project setup: python3 editors/configure.py <product> <project>\n'
   printf 'Zed requires one manual installation step:\n'
   printf '  1. Run "Zed: Install Dev Extension" from the command palette.\n'
   printf '  2. Select %s\n' "${zed_root}"

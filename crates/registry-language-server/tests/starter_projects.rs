@@ -31,7 +31,7 @@ fn acceptance_project(relative: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn a_breg_project_root_is_claimed_by_no_family_this_server_serves() {
+async fn a_breg_project_root_is_claimed_by_its_own_family() {
     let root = acceptance_project("breg/acceptance/business");
     let registry = root.join("registry.yaml");
     let document = fs::read_to_string(&registry).expect("registry.yaml reads");
@@ -41,8 +41,8 @@ async fn a_breg_project_root_is_claimed_by_no_family_this_server_serves() {
 
     assert_eq!(
         session.published_diagnostics(&registry),
-        None,
-        "a Base Registry Engine project is not a Relay V2 project and gets no Relay V2 sentence"
+        Some(Vec::<Value>::new()),
+        "a Base Registry Engine project is indexed cleanly by its own family"
     );
 }
 

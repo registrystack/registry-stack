@@ -2,14 +2,15 @@
 
 This beta integration is installed from a Registry Stack source release.
 It is not yet listed in Zed Extensions and no release artifact is provided.
-For the stable beta path, run `evidencectl tooling editor` or
-`relayctl tooling editor <project>` and use the generated YAML schema settings.
-Install this integration for optional semantic navigation.
+Set up a project with `python3 editors/configure.py <product> <project>` before
+opening it. The helper uses the current product's maintained schemas and check
+commands where they exist. For Evidence and Relay, it runs their existing
+`tooling editor` command. Install this integration for semantic navigation.
 
-This extension attaches `registry-language-server` to Zed's built-in YAML language. It adds
-cross-file definitions, references, workspace/document symbols, and Registry Stack reference
-diagnostics. Zed's YAML language server remains responsible for YAML syntax, schema validation,
-completion, formatting, and ordinary hover information.
+This extension attaches the shared Registry Stack language server to Zed's built-in YAML and JSON languages.
+It provides cross-file definitions, references, workspace/document symbols, and Registry Stack
+reference diagnostics for the current product authoring projects. Zed's YAML language server
+remains responsible for YAML syntax, schema validation, formatting, and ordinary hover information.
 
 ## Install and launch
 
@@ -46,27 +47,49 @@ It does not read or change a project.
 The installer cannot approve the development extension on the user's behalf. This is a deliberate
 Zed trust boundary, not missing automation.
 
-## Evidence projects
+## Supported projects
 
-This extension attaches to an Evidence authoring project the same way it attaches to a Relay
-project: one language-server client per worktree, found through the same
-`registry-language-server` / `evidencectl` / `relayctl` fallback chain described above.
-`evidencectl new` and `evidencectl tooling editor` create and configure Evidence projects.
+The shared server covers Base Registry Engine, Casework, Scheduling, Messaging, Discovery,
+Manifest, Render, Evidence OID4VCI, Evidence, and Relay authoring projects. Run
+`python3 editors/configure.py <product> <project>` from this source checkout to set up
+editor settings and check tasks. Manifest and Evidence OID4VCI projects with an arbitrary
+authored YAML filename need `--document <project-relative.yaml>`; the helper writes a
+project marker so the language server can identify that file.
+
+The Zed extension launches the same language server for every product. A matching
+`evidencectl` or `relayctl` supplies it for all project families; the launcher does not
+need a separate server binary for each product.
 
 Rhai request-preparation and derivation scripts (`*.rhai`) get no support from this extension: no
 `tree-sitter-rhai` grammar is bundled or referenced here, so an open `.rhai` file gets neither
 syntax highlighting nor a language server from Registry Stack. This is a known gap in the current
 integration, not a defect to work around.
 
-Zed's extension API has no worktree-root predicate, so this extension cannot itself distinguish a
-Relay worktree from an Evidence worktree before attaching; see the note at the end of this file for
-what that means in practice.
+Zed's extension API has no worktree-root predicate, so this extension cannot identify a
+Registry Stack worktree before attaching; see the note at the end of this file for what that
+means in practice.
 
 ## Iterate
 
 - After changing the Rust server, run `cargo build --locked -p registry-language-server`, then
-  put `target/debug` first on the environment inherited by Zed, then run
-  `editor: restart language server`.
+  set the worktree's `.zed/settings.json` to the absolute path of that build and run
+  `editor: restart language server`:
+
+  ```json
+  {
+    "lsp": {
+      "registry-stack": {
+        "binary": {
+          "path": "/absolute/path/to/registry-stack/target/debug/registry-language-server"
+        }
+      }
+    }
+  }
+  ```
+
+  If the server runs through an adopter CLI instead, set `path` to that CLI and
+  `arguments` to `["tooling", "language-server"]`. Zed also accepts `binary.env` for
+  per-worktree environment overrides. Clear the `binary` setting to return to PATH selection.
 - After changing the Zed launcher, install the development extension again from the same directory
   and restart the language server.
 
@@ -75,24 +98,26 @@ what that means in practice.
 - If the development extension does not compile, confirm `rustup` owns the active Rust installation
   and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
-  terminal. The launcher first looks for `registry-language-server`, which it trusts by name because
-  it has no subcommand to ask about. Failing that it asks `evidencectl` and `relayctl` on
-  `PATH` whether they answer `tooling language-server --help`, and runs the first that does. The executables must
-  come from the same checkout or beta build that you are testing.
+  terminal. The launcher tries `evidencectl` and then `relayctl` on `PATH`, accepts only a CLI
+  reporting this extension's version (or that version with `-dev`), and checks that it answers
+  `tooling language-server --help`. If the first CLI is old or lacks the server, the second can
+  still serve the worktree. A standalone `registry-language-server` has no version command; select
+  it through `lsp.registry-stack.binary.path` when iterating on source.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
   `zed: open log` for extension errors. For verbose extension output, close Zed and relaunch it with
   `zed --foreground "$REGISTRY_STACK_SMOKE_PROJECT"`.
-- Confirm the project root contains `registry.yaml`, or an Evidence marker and the active file language is YAML.
+- Confirm the project has its product's authored root file or the helper's
+  `.registry-stack-editor/project.json` marker, and the active file language is YAML or JSON.
 
 The Extensions page identifies a successful local install as a development extension. Remove it
 from that page after the smoke test if you do not want the override to remain active.
 
 Zed does not permit shipping an external language server inside the extension.
 The current Zed extension API registers a language server against a language name, but has no
-worktree-root predicate for `registry.yaml`, or `evidence-project.yaml`.
-The integration therefore attaches to YAML while the development extension remains installed.
+worktree-root predicate for Registry Stack authoring markers.
+The integration therefore attaches to YAML and JSON while the development extension remains installed.
 It has no Registry Stack behavior without a server binary, but Zed can log a missing-server error
-when you open unrelated YAML in another worktree.
+when you open unrelated YAML or JSON in another worktree.
 Keep the development extension installed only while using a Registry Stack project, and remove
 it afterwards to avoid that noise.
 See Zed's official
