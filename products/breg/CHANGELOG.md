@@ -35,6 +35,19 @@
   `503 source.unavailable` before. A profile that does not declare the path
   is still refused as `404 resource.not_found`, like an unknown path.
 
+- Align the citizen MCP gateway and review page with the shared runtime
+  configuration and audit primitives before their first release. Listener
+  binds are explicit; configuration uses the bounded shared YAML loader,
+  secret providers, and audit key block. Gateway key sets use `jwksSource`.
+  File audit streams rotate at 100 MiB and retain sealed files for 90 days
+  by default; archive draft chained files and start on a fresh path.
+  Admitted operations record a request before protected I/O and a response
+  before result release, including failed sign-in callbacks and sign-out.
+  A lost submit response can be retried from the same live review session
+  with its retained action and idempotency key; gateway stale-update retries
+  remain refused. Import is included in the standing-agent direct-write
+  ceiling.
+
 ## v0.36.0 - 2026-09-29
 
 - BREAKING: package signing is removed. Upgrade to v0.35.0 before this
@@ -418,19 +431,6 @@
     `breg` refuses to serve it after the first successor apply on this
     release until the operator runs `bregctl instance-claim adopt
     --acknowledge-original-retired` once against its runtime configuration.
-
-- Align the citizen MCP gateway and review page with the shared runtime
-  configuration and audit primitives before their first release. Listener
-  binds are explicit; configuration uses the bounded shared YAML loader,
-  secret providers, and audit key block. Gateway key sets use `jwksSource`.
-  File audit streams rotate at 100 MiB and retain sealed files for 90 days
-  by default; archive draft chained files and start on a fresh path.
-  Admitted operations record a request before protected I/O and a response
-  before result release, including failed sign-in callbacks and sign-out.
-  A lost submit response can be retried from the same live review session
-  with its retained action and idempotency key; gateway stale-update retries
-  remain refused. Import is included in the standing-agent direct-write
-  ceiling.
 
 - Answer every audited request entry. A read, mutation, action, or request
   action that ends after its attempt without a terminal or refusal entry,
