@@ -465,6 +465,7 @@ Beyond the shared keys, an `http-json` source declares:
 |---|---|---|
 | `connection` | no | Explicit `sourceConnections` owner. Every copied endpoint, authentication, TLS and concurrency value must equal that owner at startup. |
 | `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions' revisions independently of export provenance. |
+| `forwardAccessAttribution` | no | Defaults to `false`. When `true`, Rust sends the verified authorized requester and purpose as base64url UTF-8 in the reserved `Registry-Access-Requester` and `Registry-Access-Purpose` headers. The authenticated source must independently trust this Evidence service as an intermediary; the headers grant no source authority. |
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
@@ -1822,6 +1823,7 @@ sources.*.connection
 sources.*.extractProfile
 sources.*.extractScript
 sources.*.factSchema
+sources.*.forwardAccessAttribution
 sources.*.maximumExtractAgeSeconds
 sources.*.posture
 sources.*.request

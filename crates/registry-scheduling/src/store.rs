@@ -48,9 +48,9 @@ use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
 use registry_scheduling_core::{
     assess_window_record_impact, evaluate_exact_time_admission, evaluate_hold_state,
-    evaluate_window_admission, AdmissionRefusal, ExactTimeContext, LedgerClaim, LedgerKind,
-    LedgerSnapshot, PolicyCheckReason, PoolMember, PublishedWindow, SchedulingDiagnostic,
-    SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
+    evaluate_window_admission, AdmissionRefusal, ExactTimeContext, ExternalReference, LedgerClaim,
+    LedgerKind, LedgerSnapshot, PolicyCheckReason, PoolMember, PublishedWindow,
+    SchedulingDiagnostic, SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
     APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
 };
 use serde::{Deserialize, Serialize};
@@ -87,9 +87,12 @@ const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0008_audit_writ
 const AUDIT_WRITER_MIGRATION_VERSION: i64 = 8;
 const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0009_activations.sql");
 const ACTIVATIONS_MIGRATION_VERSION: i64 = 9;
+const EXTERNAL_REFERENCES_MIGRATION: &str =
+    include_str!("../migrations/0010_external_references.sql");
+const EXTERNAL_REFERENCES_MIGRATION_VERSION: i64 = 10;
 
 /// Every schema version in ledger order.
-const SCHEMA_VERSIONS: [i64; 9] = [
+const SCHEMA_VERSIONS: [i64; 10] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
@@ -99,6 +102,7 @@ const SCHEMA_VERSIONS: [i64; 9] = [
     DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
     AUDIT_WRITER_MIGRATION_VERSION,
     ACTIVATIONS_MIGRATION_VERSION,
+    EXTERNAL_REFERENCES_MIGRATION_VERSION,
 ];
 
 /// Serializes schema migration and package activation on one transaction
@@ -506,6 +510,8 @@ pub struct ClaimRow {
     pub occupied_end: DateTime<Utc>,
     pub units: i32,
     pub duplicate_key: Option<String>,
+    #[serde(default)]
+    pub external_references: Vec<ExternalReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hold_expires_at: Option<DateTime<Utc>>,
     pub revision: i64,
@@ -1107,6 +1113,32 @@ impl PostgresStore {
         row.map(map_claim_row).transpose()
     }
 
+    /// Appointments owned by `actor` that carry exactly the requested opaque
+    /// reference, ordered by identifier for stable cursor paging.
+    pub async fn list_appointments_by_external_reference(
+        &self,
+        actor: &str,
+        reference: &ExternalReference,
+        after_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<Vec<ClaimRow>, StoreError> {
+        let client = self.client().await?;
+        let reference = serde_json::to_value([reference]).map_err(|_| StoreError::Corrupt)?;
+        let rows = client
+            .query(
+                "SELECT claim_id, kind, state, offering, supply_id, channel, \
+                 displayed_start, displayed_end, occupied_start, occupied_end, units, duplicate_key, \
+                 external_references, hold_expires_at, revision, policy_revision, actor, reason, \
+                 created_at, closed_at FROM scheduling_claims \
+                 WHERE kind='booking' AND actor=$1 AND external_references @> $2::jsonb \
+                   AND ($3::uuid IS NULL OR claim_id > $3) \
+                 ORDER BY claim_id LIMIT $4",
+                &[&actor, &reference, &after_id, &limit],
+            )
+            .await?;
+        rows.into_iter().map(map_claim_row).collect()
+    }
+
     /// The offering as the policy revision `policy_revision` published it.
     ///
     /// Every claim names the revision it was committed under, and every
@@ -1326,6 +1358,7 @@ impl PostgresStore {
                 occupied_end: admission.occupied_end,
                 units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
                 duplicate_key: request.duplicate_key.as_deref(),
+                external_references: &request.external_references,
                 hold_expires_at: Some(expires_at),
                 revision: 1,
                 policy_revision: commitment.policy_revision,
@@ -1418,6 +1451,7 @@ impl PostgresStore {
                 occupied_end: admission.occupied_end,
                 units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
                 duplicate_key: request.duplicate_key.as_deref(),
+                external_references: &request.external_references,
                 hold_expires_at: None,
                 revision: 1,
                 policy_revision: commitment.policy_revision,
@@ -1544,6 +1578,7 @@ impl PostgresStore {
                 occupied_end: hold.occupied_end,
                 units: hold.units,
                 duplicate_key: hold.duplicate_key.as_deref(),
+                external_references: &hold.external_references,
                 hold_expires_at: None,
                 revision: 1,
                 policy_revision: commitment.policy_revision,
@@ -2273,7 +2308,7 @@ impl PostgresStore {
 
 const SELECT_CLAIM: &str = "SELECT claim_id, kind, state, offering, supply_id, channel, \
      displayed_start, displayed_end, occupied_start, occupied_end, units, duplicate_key, \
-     hold_expires_at, revision, policy_revision, actor, reason, created_at, closed_at \
+     external_references, hold_expires_at, revision, policy_revision, actor, reason, created_at, closed_at \
      FROM scheduling_claims WHERE claim_id=$1";
 
 /// The consuming-claim filter, with hold expiry evaluated in the query. This
@@ -2313,13 +2348,15 @@ fn map_claim_row(row: Row) -> Result<ClaimRow, StoreError> {
         occupied_end: row.get(9),
         units: row.get(10),
         duplicate_key: row.get(11),
-        hold_expires_at: row.get(12),
-        revision: row.get(13),
-        policy_revision: row.get(14),
-        actor: row.get(15),
-        reason: row.get(16),
-        created_at: row.get(17),
-        closed_at: row.get(18),
+        external_references: serde_json::from_value(row.get(12))
+            .map_err(|_| StoreError::Corrupt)?,
+        hold_expires_at: row.get(13),
+        revision: row.get(14),
+        policy_revision: row.get(15),
+        actor: row.get(16),
+        reason: row.get(17),
+        created_at: row.get(18),
+        closed_at: row.get(19),
     })
 }
 
@@ -3332,6 +3369,7 @@ struct NewClaim<'c> {
     occupied_end: DateTime<Utc>,
     units: i32,
     duplicate_key: Option<&'c str>,
+    external_references: &'c [ExternalReference],
     hold_expires_at: Option<DateTime<Utc>>,
     revision: i64,
     policy_revision: i64,
@@ -3452,8 +3490,8 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             .query_one(
                 "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
                  channel, displayed_start, displayed_end, occupied_start, occupied_end, units, \
-                 duplicate_key, hold_expires_at, revision, policy_revision, actor, reason) \
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
+                 duplicate_key, external_references, hold_expires_at, revision, policy_revision, actor, reason) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) \
                  RETURNING created_at",
                 &[
                     &claim.claim_id,
@@ -3468,6 +3506,7 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                     &claim.occupied_end,
                     &claim.units,
                     &claim.duplicate_key,
+                    &serde_json::to_value(claim.external_references).map_err(|_| StoreError::Corrupt)?,
                     &claim.hold_expires_at,
                     &claim.revision,
                     &claim.policy_revision,
@@ -3489,6 +3528,7 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             occupied_end: claim.occupied_end,
             units: claim.units,
             duplicate_key: claim.duplicate_key.map(str::to_owned),
+            external_references: claim.external_references.to_vec(),
             hold_expires_at: claim.hold_expires_at,
             revision: claim.revision,
             policy_revision: claim.policy_revision,

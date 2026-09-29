@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP surface compiled from one immutable Registry inventory.
 
+mod access_log;
 mod actions;
 mod attachments;
 #[cfg(test)]
@@ -77,8 +78,10 @@ use crate::record_profile::{self, RecordRepresentation};
 use uuid::Uuid;
 
 use crate::artifacts::{
+    access_log_path, openapi_access_log_operation, openapi_access_log_response_schema,
     openapi_components, openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
     openapi_request_action_input_schema, OpenApiAccessProfiles, OpenApiOperationSpec,
+    ACCESS_LOG_RESPONSE_SCHEMA_ID,
 };
 
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -198,7 +201,8 @@ fn route_set(service: Arc<HttpService>) -> Router {
         }
     }
 
-    app.merge(attachments::routes(&service))
+    app.merge(access_log::routes(&service))
+        .merge(attachments::routes(&service))
         .merge(gis::routes())
         .merge(ingestion::routes(&service))
         .fallback(not_found)
@@ -361,6 +365,7 @@ async fn openapi(
     let mut writable_by_input_schema: BTreeMap<String, (String, BTreeSet<String>)> =
         BTreeMap::new();
     let mut action_input_schemas = Map::new();
+    let mut has_access_log = false;
     for surface in &visible {
         let path = paths
             .entry(surface.route.path.clone())
@@ -386,6 +391,26 @@ async fn openapi(
                 ),
             }),
         );
+        if surface.route.operation == Operation::Get
+            && surface.read_path.is_none()
+            && surface.entity.access_log.is_some()
+        {
+            let access_log = paths
+                .entry(access_log_path(surface.route))
+                .or_insert_with(|| Value::Object(Map::new()));
+            access_log
+                .as_object_mut()
+                .expect("OpenAPI paths are objects")
+                .insert(
+                    "get".to_owned(),
+                    openapi_access_log_operation(
+                        surface.route,
+                        surface.entity,
+                        OpenApiAccessProfiles::Selected(surface.context.selected_profile()),
+                    ),
+                );
+            has_access_log = true;
+        }
         readable_by_entity
             .entry(surface.response_entity.id.clone())
             .and_modify(|fields| {
@@ -434,6 +459,12 @@ async fn openapi(
     ));
     let has_request_actions = !action_input_schemas.is_empty();
     schemas.extend(action_input_schemas);
+    if has_access_log {
+        schemas.insert(
+            ACCESS_LOG_RESPONSE_SCHEMA_ID.to_owned(),
+            openapi_access_log_response_schema(),
+        );
+    }
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
     if service.review_completions.is_some() {
         crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
@@ -621,7 +652,7 @@ async fn read_dispatch(
             .await;
         }
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         let response = audited_read_concealment(
             &service,
             &route,
@@ -633,6 +664,14 @@ async fn read_dispatch(
         .await;
         return response;
     };
+    if surface
+        .context
+        .bind_access_attribution(surface.response_entity, &headers)
+        .is_err()
+    {
+        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
+            .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -901,10 +940,18 @@ async fn lookup_dispatch(
             .await;
         }
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
+    if surface
+        .context
+        .bind_access_attribution(surface.response_entity, &headers)
+        .is_err()
+    {
+        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
+            .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -1082,7 +1129,7 @@ async fn revision_dispatch(
             .await;
         }
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_revision_concealment(
             revisions.as_ref(),
             &route,
@@ -1093,6 +1140,21 @@ async fn revision_dispatch(
         )
         .await;
     };
+    if surface
+        .context
+        .bind_access_attribution(surface.response_entity, &headers)
+        .is_err()
+    {
+        return audited_revision_refusal(
+            revisions.as_ref(),
+            &route,
+            &surface,
+            None,
+            concealed(),
+            &correlation,
+        )
+        .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -1224,10 +1286,18 @@ async fn snapshot_dispatch(
             .await;
         }
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
+    if surface
+        .context
+        .bind_access_attribution(surface.response_entity, &headers)
+        .is_err()
+    {
+        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
+            .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }

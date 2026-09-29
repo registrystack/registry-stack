@@ -76,7 +76,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertEqual(entry["description"], properties["detail"]["const"])
             self.assertEqual(entry["httpStatuses"][0], properties["status"]["const"])
         self.assertEqual(32, len(self.contract["entries"]))
-        self.assertEqual(59, len(self.openapi["components"]["schemas"]))
+        self.assertEqual(61, len(self.openapi["components"]["schemas"]))
 
     def test_every_operation_answers_exactly_the_problems_it_was_mapped(self) -> None:
         for key, expected in GENERATOR.OPERATION_PROBLEMS.items():
@@ -198,6 +198,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             ("POST", "/v1/holds"): "task-grant",
             ("DELETE", "/v1/holds/{hold_id}"): "task-grant",
             ("POST", "/v1/appointments"): "task-grant",
+            ("GET", "/v1/appointments"): "reads-scope",
             ("GET", "/v1/appointments/{appointment_id}"): "reads-scope",
             ("POST", "/v1/appointments/{appointment_id}/reschedule"): "task-grant",
             ("POST", "/v1/appointments/{appointment_id}/cancel"): "task-grant",
@@ -218,7 +219,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(1, authorities.count("explain-scope"))
         self.assertEqual(2, authorities.count("unauthenticated"))
         self.assertEqual(5, authorities.count("task-grant"))
-        self.assertEqual(8, authorities.count("reads-scope"))
+        self.assertEqual(9, authorities.count("reads-scope"))
 
     def test_an_idempotency_key_is_demanded_exactly_where_the_handler_reads_it(self) -> None:
         expected = {
@@ -471,7 +472,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertNotIn("tags", self.openapi)
         self.assertEqual("3.1.0", self.openapi["openapi"])
         self.assertEqual("Registry Scheduling API", self.openapi["info"]["title"])
-        self.assertEqual("v1alpha1", self.openapi["info"]["version"])
+        self.assertEqual("v1alpha2", self.openapi["info"]["version"])
         self.assertEqual(
             [{
                 "url": "https://scheduling.example.test",

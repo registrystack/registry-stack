@@ -1,5 +1,87 @@
 {
   "$defs": {
+    "AccessLogExemptionSource": {
+      "additionalProperties": false,
+      "description": "Delayed subject disclosure for reads under one access profile.",
+      "properties": {
+        "delayDays": {
+          "description": "Days after the read when the entry becomes visible to the subject.",
+          "format": "uint16",
+          "maximum": 3649,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Bounded policy reason retained and audited with each delayed entry.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sourceEntity": {
+          "description": "Entity whose access profile authorizes the read. Omitted for direct reads of the logged entity.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "reason",
+        "delayDays"
+      ],
+      "type": "object"
+    },
+    "AccessLogSource": {
+      "additionalProperties": false,
+      "description": "Governed subject-facing access-log policy for an entity.",
+      "properties": {
+        "exemptions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccessLogExemptionSource"
+          },
+          "description": "Access profiles whose entries become subject-visible only after a policy delay.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "retentionDays": {
+          "default": 90,
+          "description": "Days each entry remains available before bounded background erasure.",
+          "format": "uint16",
+          "maximum": 3650,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "subjectField": {
+          "description": "Required plaintext string or text field matched to the subject's verified principal.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "type": "string"
+        },
+        "trustedIntermediaries": {
+          "description": "Verified intermediary client IDs allowed to forward original requester attribution.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "subjectField"
+      ],
+      "type": "object"
+    },
     "AccessRequirementsSource": {
       "additionalProperties": false,
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
@@ -2199,6 +2281,17 @@
     "EntitySource": {
       "additionalProperties": false,
       "properties": {
+        "accessLog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccessLogSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Subject-facing record access history, separate from the operational audit."
+        },
         "accessRequirements": {
           "anyOf": [
             {

@@ -104,6 +104,13 @@ Gateway. That default does not make an older strict client able to read the new
 response or understand its new verification fields. Do not upgrade Evidence
 Gateway first while an older client or adapter remains in service.
 
+The fixed HTTP source contract also adds optional
+`forwardAccessAttribution`, defaulting to `false`. Enabling it requires a
+Gateway version that emits the reserved base64url requester and purpose
+headers and a source that explicitly trusts the authenticated Evidence service
+to supply them. Existing source files retain their prior wire behavior when the
+member is absent.
+
 All schemas use source-neutral identifiers. Names of compatibility targets may
 appear only below `../fixtures/source-shapes/`. Acceptance-case vocabulary is
 confined to test-only bundles below `../fixtures/acceptance/`; it is not core

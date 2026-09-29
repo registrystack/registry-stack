@@ -4,7 +4,7 @@ ownership:
   governed_bundle:
     - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
     - the gated acquisition kinds and source-call optimizations the bundle declares it uses
-    - each source's fixed origin, acquisition posture, authentication kind, logical secret references, and optional exact unresolved Problem Details tuple
+    - each source's fixed origin, acquisition posture, authentication kind, logical secret references, explicit access-attribution forwarding choice, and optional exact unresolved Problem Details tuple
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
     - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
     - preparation channel policy and bounds, response projection, redirect denial, timeout, response byte limit, and concurrency limit
@@ -140,8 +140,19 @@ evidence_data_request:
       - x-original-url
       - x-rewrite-url
       - x-original-method
+      - registry-access-requester
+      - registry-access-purpose
     core_headers: Rust owns authentication and framing and adds Content-Type application/json for a JSON body.
     script_authority: prohibited
+  access_attribution:
+    configuration: Each http-json source independently opts in with forwardAccessAttribution true; omission is false. SQLite sources have no outbound attribution channel.
+    authority: Rust constructs attribution only after token verification and the complete Evidence authorization and selector decision. Caller fields, fixed headers, authentication header names, RequestParts, and Rhai cannot supply or replace it.
+    headers:
+      requester: Registry-Access-Requester
+      purpose: Registry-Access-Purpose
+      encoding: Each value is the base64url encoding without padding of its complete UTF-8 bytes. Each decoded value is non-blank, contains no control character, and is at most 512 bytes.
+    recipient_trust: The authenticated source decides whether its authenticated Evidence service identity is permitted to assert the forwarded values. Forwarded attribution creates no source read authority and does not replace service authentication.
+    request_batch: Sequential and optimized HTTP batch calls carry the one verified requester and common authorized purpose of the outer request.
   url_security:
     production: HTTPS only.
     deterministic_local_mock: HTTP only when the parsed host is a numeric address in 127.0.0.0/8 or exactly ::1.

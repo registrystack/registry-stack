@@ -279,6 +279,20 @@ impl PostgresRevisionReadService {
             &mut context_visibility,
         )
         .await?;
+        if !rows.is_empty() {
+            crate::subject_access_log::record_reads(
+                transaction.transaction(),
+                &plan.entity,
+                &request.entity_id,
+                &request.context,
+                std::slice::from_ref(&request.record_id),
+                &request.operation_id,
+                &self.expected,
+                &request.correlation,
+                &self.audit,
+            )
+            .await?;
+        }
         transaction
             .commit()
             .await

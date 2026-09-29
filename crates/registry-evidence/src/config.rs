@@ -2863,6 +2863,7 @@ impl SourceConnectionConfig {
 /// `extract_script`, `fact_schema`, `statement`, `prepare_script`, `adapter_parameters`,
 /// `adapter_parameters_schema`, `selector_inputs`, `selector_bindings`,
 /// `prior_fact_bindings`, `fixed_headers`, `projection`,
+/// `forwards_access_attribution`,
 /// `timeout_milliseconds`, `maximum_response_bytes`, and `concurrency_limit`.
 ///
 /// The tag is internal, so a field belonging to one transport is an unknown
@@ -2884,6 +2885,11 @@ pub enum SourceConfig {
         /// unrelated export provenance and whole-provider package changes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         behavior_revision: Option<String>,
+        /// Forward the verified, authorized Evidence requester and purpose in
+        /// Rust-owned reserved headers to a source that is explicitly prepared
+        /// to account for an intermediary read.
+        #[serde(default, skip_serializing_if = "is_false")]
+        forward_access_attribution: bool,
         posture: AcquisitionPosture,
         /// Optional exact upstream Problem Details tuple which means that the
         /// source deliberately did not resolve this lookup. The transport
@@ -3231,6 +3237,18 @@ impl SourceConfig {
         match self {
             Self::HttpJson { request, .. } => &request.fixed_headers,
             Self::SqliteExtract { .. } => &[],
+        }
+    }
+
+    /// Whether this fixed HTTP source receives the verified requester and
+    /// authorized purpose as host-owned access-attribution headers.
+    pub fn forwards_access_attribution(&self) -> bool {
+        match self {
+            Self::HttpJson {
+                forward_access_attribution,
+                ..
+            } => *forward_access_attribution,
+            Self::SqliteExtract { .. } => false,
         }
     }
 
@@ -5179,13 +5197,17 @@ pub(crate) fn is_http_token_byte(byte: u8) -> bool {
         )
 }
 
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// The complete closed set of header names no bundle may configure.
 ///
 /// Authentication, host and routing, cookie, framing, hop-by-hop, forwarding,
 /// proxy, and tracing headers are owned by Rust or by the operator's network
 /// path. A bundle that could set them could redirect a source request, forge a
 /// client identity, or smuggle a second request past the reviewed contract.
-const RESERVED_HEADER_NAMES: [&str; 38] = [
+const RESERVED_HEADER_NAMES: [&str; 40] = [
     "authorization",
     "proxy-authorization",
     "www-authenticate",
@@ -5224,6 +5246,8 @@ const RESERVED_HEADER_NAMES: [&str; 38] = [
     "x-original-url",
     "x-rewrite-url",
     "x-original-method",
+    "registry-access-requester",
+    "registry-access-purpose",
 ];
 
 /// The complete closed set of reserved header-name prefix families.
@@ -5246,7 +5270,7 @@ const RESERVED_HEADER_PREFIXES: [&str; 7] = [
 /// Both the startup configuration contract and the source plan compiler are
 /// tested against this one list, which is how their shared classifier is
 /// proven to be a single closed deny set rather than two drifting copies.
-pub const RESERVED_HEADER_CONTRACT_CASES: [&str; 51] = [
+pub const RESERVED_HEADER_CONTRACT_CASES: [&str; 53] = [
     "Authorization",
     "authorization",
     "AUTHORIZATION",
@@ -5298,6 +5322,8 @@ pub const RESERVED_HEADER_CONTRACT_CASES: [&str; 51] = [
     "X-Envoy-External-Address",
     "X-Datadog-Trace-Id",
     "Sec-Fetch-Mode",
+    "Registry-Access-Requester",
+    "Registry-Access-Purpose",
 ];
 
 /// The one closed reserved-header classifier.

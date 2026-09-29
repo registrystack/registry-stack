@@ -826,6 +826,7 @@ mod tests {
             change_request: None,
             classification: Classification::Restricted,
             access_requirements: None,
+            access_log: None,
             geojson: None,
             physical_table: "e_membership".to_owned(),
             temporal: Some(CompiledTemporal {

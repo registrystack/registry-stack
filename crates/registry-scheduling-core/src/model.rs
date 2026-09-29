@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 
 use registry_platform_calendar::{CalendarException, CalendarExceptionKind};
 
+use crate::wire::ExternalReference;
+
 /// Lifecycle of a temporary hold. An expired hold stops consuming capacity the
 /// moment it expires, whether or not a cleanup worker has run since.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -338,6 +340,10 @@ pub struct AdmissionRequest {
     /// The party's held prerequisite references, matched against the
     /// offering's requirements.
     pub prerequisites: Vec<String>,
+    /// Opaque record links Scheduling retains with the hold or booking. Their
+    /// order is not significant.
+    #[serde(default)]
+    pub external_references: Vec<ExternalReference>,
 }
 
 /// The idempotent hash of an admission request.
@@ -347,29 +353,50 @@ pub struct AdmissionRequest {
 /// the same idempotency key with a different payload hashes differently, which
 /// is exactly the distinction a retry must be able to make.
 ///
-/// Capabilities and prerequisites are sets the caller happens to send in an
-/// order, so they are sorted before hashing: two spellings of one set are one
-/// request, and a retry that reorders them replays rather than executing a
-/// second time. Repeats are kept, because a hash never edits its input.
+/// Capabilities, prerequisites, and external references are sets the caller
+/// happens to send in an order, so they are sorted before hashing: two
+/// spellings of one set are one request, and a retry that reorders them
+/// replays rather than executing a second time. Repeats are kept, because a
+/// hash never edits its input; the HTTP edge refuses repeated references.
 #[must_use]
 pub fn admission_request_hash(request: &AdmissionRequest) -> String {
     let mut capabilities = request.capabilities.clone();
     capabilities.sort();
     let mut prerequisites = request.prerequisites.clone();
     prerequisites.sort();
-    let fixed = (
-        &request.offering,
-        request.start.to_rfc3339(),
-        request.party.recipients,
-        request.party.attendees,
-        &request.channel,
-        &request.duplicate_key,
-        request.policy_revision,
-        request.window_revision,
-        &capabilities,
-        &prerequisites,
-    );
-    let value = serde_json::to_value(&fixed).expect("the fixed tuple always serializes");
+    let mut external_references = request.external_references.clone();
+    external_references.sort();
+    // Preserve the pre-external-reference tuple for requests without links.
+    // Their stored idempotency hashes must remain replayable across upgrade.
+    let value = if external_references.is_empty() {
+        serde_json::to_value((
+            &request.offering,
+            request.start.to_rfc3339(),
+            request.party.recipients,
+            request.party.attendees,
+            &request.channel,
+            &request.duplicate_key,
+            request.policy_revision,
+            request.window_revision,
+            &capabilities,
+            &prerequisites,
+        ))
+    } else {
+        serde_json::to_value((
+            &request.offering,
+            request.start.to_rfc3339(),
+            request.party.recipients,
+            request.party.attendees,
+            &request.channel,
+            &request.duplicate_key,
+            request.policy_revision,
+            request.window_revision,
+            &capabilities,
+            &prerequisites,
+            &external_references,
+        ))
+    }
+    .expect("the fixed tuple always serializes");
     let canonical = registry_platform_canonical_json::canonicalize_json(&value)
         .expect("the fixed tuple always canonicalizes");
     let digest = Sha256::digest(&canonical);
@@ -409,6 +436,7 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
+            external_references: Vec::new(),
         }
     }
 
@@ -626,6 +654,11 @@ mod tests {
             admission_request_hash(&request()).len(),
             "sha256:".len() + 64
         );
+        assert_eq!(
+            admission_request_hash(&request()),
+            "sha256:2e9fc6fb84480aff3532f84255ef1ac3a40d46ac60d4eb528671fae633852f69",
+            "an empty external-reference set preserves the pre-upgrade idempotency hash"
+        );
     }
 
     /// AT-06, pure half: a changed payload under the same caller-visible key
@@ -725,19 +758,33 @@ mod tests {
         );
     }
 
-    /// Capabilities and prerequisites are sets the caller happens to send in
-    /// an order. Two spellings of the same set are the same request, so a
-    /// retry that reorders them replays instead of executing again.
+    /// Capabilities, prerequisites, and external references are sets the
+    /// caller happens to send in an order. Two spellings of the same set are
+    /// the same request, so a retry that reorders them replays instead of
+    /// executing again.
     #[test]
     fn set_order_never_changes_the_request_hash() {
         let ordered = AdmissionRequest {
             capabilities: vec!["cap-a".to_owned(), "cap-b".to_owned()],
             prerequisites: vec!["proof-a".to_owned(), "proof-b".to_owned()],
+            external_references: vec![
+                ExternalReference {
+                    product: "registry-casework".to_owned(),
+                    record_type: "case".to_owned(),
+                    identifier: "case:1".to_owned(),
+                },
+                ExternalReference {
+                    product: "registry-breg".to_owned(),
+                    record_type: "record".to_owned(),
+                    identifier: "record:2".to_owned(),
+                },
+            ],
             ..request()
         };
         let reordered = AdmissionRequest {
             capabilities: vec!["cap-b".to_owned(), "cap-a".to_owned()],
             prerequisites: vec!["proof-b".to_owned(), "proof-a".to_owned()],
+            external_references: ordered.external_references.iter().rev().cloned().collect(),
             ..request()
         };
         assert_eq!(
@@ -754,6 +801,19 @@ mod tests {
         assert_ne!(
             admission_request_hash(&ordered),
             admission_request_hash(&widened)
+        );
+
+        let relinked = AdmissionRequest {
+            external_references: vec![ExternalReference {
+                product: "registry-casework".to_owned(),
+                record_type: "case".to_owned(),
+                identifier: "case:3".to_owned(),
+            }],
+            ..ordered.clone()
+        };
+        assert_ne!(
+            admission_request_hash(&ordered),
+            admission_request_hash(&relinked)
         );
     }
 }

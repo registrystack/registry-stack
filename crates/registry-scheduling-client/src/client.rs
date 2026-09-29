@@ -11,10 +11,10 @@ use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers,
 };
 use registry_scheduling_core::{
-    type_uri, valid_identifier, AdmissionRequest, AppointmentDocument,
+    type_uri, valid_identifier, valid_reference, AdmissionRequest, AppointmentDocument,
     AppointmentHistoryEntryDocument, AvailabilityEntry, CancelAppointmentRequest,
-    CreateAppointmentRequest, ExplainDocument, HoldDocument, LocationDocument, OfferingDocument,
-    PageDocument, ProblemCode, RescheduleAppointmentRequest, ResourceDocument,
+    CreateAppointmentRequest, ExplainDocument, ExternalReference, HoldDocument, LocationDocument,
+    OfferingDocument, PageDocument, ProblemCode, RescheduleAppointmentRequest, ResourceDocument,
     SchedulingServiceDocument, ServiceDocument, APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH,
     AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
     LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH,
@@ -38,6 +38,9 @@ const MAXIMUM_IDENTIFIER_BYTES: usize = 128;
 const OFFERING_QUERY_PARAMETER: &str = "offering";
 const START_QUERY_PARAMETER: &str = "start";
 const END_QUERY_PARAMETER: &str = "end";
+const EXTERNAL_REFERENCE_PRODUCT_QUERY_PARAMETER: &str = "externalReferenceProduct";
+const EXTERNAL_REFERENCE_RECORD_TYPE_QUERY_PARAMETER: &str = "externalReferenceRecordType";
+const EXTERNAL_REFERENCE_IDENTIFIER_QUERY_PARAMETER: &str = "externalReferenceIdentifier";
 
 pub struct SchedulingClient {
     http: reqwest::Client,
@@ -214,6 +217,45 @@ impl SchedulingClient {
         validate_identifier(appointment_id, "the appointment identifier is invalid")?;
         self.get_json(&auth, &format!("{APPOINTMENTS_PATH}/{appointment_id}"), &[])
             .await
+    }
+
+    pub async fn list_appointments(
+        &self,
+        auth: SchedulingAuth<'_>,
+        reference: &ExternalReference,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<SchedulingComplete<PageDocument<AppointmentDocument>>, SchedulingClientError> {
+        validate_external_reference(reference)?;
+        validate_cursor(cursor)?;
+        validate_limit(limit)?;
+        let mut query = vec![
+            (
+                EXTERNAL_REFERENCE_PRODUCT_QUERY_PARAMETER,
+                reference.product.clone(),
+            ),
+            (
+                EXTERNAL_REFERENCE_RECORD_TYPE_QUERY_PARAMETER,
+                reference.record_type.clone(),
+            ),
+            (
+                EXTERNAL_REFERENCE_IDENTIFIER_QUERY_PARAMETER,
+                reference.identifier.clone(),
+            ),
+        ];
+        if let Some(cursor) = cursor {
+            query.push((CURSOR_QUERY_PARAMETER, cursor.to_owned()));
+        }
+        if let Some(limit) = limit {
+            query.push((LIMIT_QUERY_PARAMETER, limit.to_string()));
+        }
+        let request = self.authorized(
+            self.http
+                .get(self.url_from_constant(APPOINTMENTS_PATH)?)
+                .query(&query),
+            &auth,
+        );
+        self.send_json(request, StatusCode::OK).await
     }
 
     pub async fn reschedule_appointment(
@@ -586,12 +628,28 @@ fn validate_availability(
 ) -> Result<(), SchedulingClientError> {
     validate_offering(offering)?;
     validate_cursor(cursor)?;
-    if limit.is_some_and(|value| value == 0) {
+    validate_limit(limit)
+}
+
+fn validate_limit(limit: Option<u32>) -> Result<(), SchedulingClientError> {
+    if limit == Some(0) {
         return Err(SchedulingClientError::invalid_request(
             "the page size is outside the accepted range",
         ));
     }
     Ok(())
+}
+
+fn validate_external_reference(reference: &ExternalReference) -> Result<(), SchedulingClientError> {
+    if valid_identifier(&reference.product)
+        && valid_identifier(&reference.record_type)
+        && valid_reference(&reference.identifier)
+    {
+        return Ok(());
+    }
+    Err(SchedulingClientError::invalid_request(
+        "the external reference is invalid",
+    ))
 }
 
 #[cfg(test)]

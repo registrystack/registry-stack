@@ -98,6 +98,7 @@ impl FixtureAdmissionRequest {
             window_revision: *window_revision,
             capabilities: capabilities.clone(),
             prerequisites: prerequisites.clone(),
+            external_references: Vec::new(),
         }
     }
 }

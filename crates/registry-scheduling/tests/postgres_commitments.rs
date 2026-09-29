@@ -802,6 +802,201 @@ async fn booked(fx: &Fixture, from_minutes: i64, to_minutes: i64, key: &str) -> 
     )
 }
 
+fn case_reference(identifier: &str) -> Value {
+    json!({
+        "product": "registry-casework",
+        "recordType": "case",
+        "identifier": identifier,
+    })
+}
+
+fn appointments_by_reference_uri(identifier: &str, limit: usize, cursor: Option<&str>) -> String {
+    let mut uri = format!(
+        "/v1/appointments?externalReferenceProduct=registry-casework&externalReferenceRecordType=case&externalReferenceIdentifier={identifier}&limit={limit}"
+    );
+    if let Some(cursor) = cursor {
+        uri.push_str("&cursor=");
+        uri.push_str(cursor);
+    }
+    uri
+}
+
+#[tokio::test]
+async fn external_references_survive_the_lifecycle_and_filter_only_owned_appointments() {
+    let fx = fixture().await;
+    let reference = case_reference("case-1764");
+
+    let held_slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut hold_admission = admission(&fx, OFFERING, held_slot);
+    hold_admission["externalReferences"] = json!([reference.clone()]);
+    let (status, hold) = fx
+        .post("/v1/holds", &fx.agent, "referenced-hold", hold_admission)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    assert_eq!(hold["externalReferences"], json!([reference.clone()]));
+    let hold_id = hold["holdId"].as_str().expect("a hold identifier");
+
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "referenced-confirmation",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{confirmed}");
+    assert_eq!(confirmed["externalReferences"], json!([reference.clone()]));
+    let confirmed_id = confirmed["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier")
+        .to_owned();
+
+    let moved_slot = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{confirmed_id}/reschedule"),
+            &fx.agent,
+            "referenced-reschedule",
+            json!({
+                "observedRevision": confirmed["revision"],
+                "admission": admission(&fx, OFFERING, moved_slot),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["externalReferences"], json!([reference.clone()]));
+
+    let mut relink_admission = admission(&fx, OFFERING, moved_slot);
+    relink_admission["externalReferences"] = json!([case_reference("case-relinked")]);
+    let (status, relink_refusal) = fx
+        .post(
+            &format!("/v1/appointments/{confirmed_id}/reschedule"),
+            &fx.agent,
+            "referenced-reschedule-relink",
+            json!({
+                "observedRevision": moved["revision"],
+                "admission": relink_admission,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{relink_refusal}");
+    assert_eq!(relink_refusal["code"], "request.unprocessable");
+
+    let direct_slot = first_slot(&fx, OFFERING, 660, 800).await;
+    let mut direct_admission = admission(&fx, OFFERING, direct_slot);
+    direct_admission["externalReferences"] = json!([reference.clone()]);
+    let direct_body = json!({"hold": null, "admission": direct_admission});
+    let (status, direct) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "referenced-direct",
+            direct_body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{direct}");
+    assert_eq!(direct["externalReferences"], json!([reference.clone()]));
+    let direct_id = direct["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier")
+        .to_owned();
+
+    let (status, replayed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "referenced-direct",
+            direct_body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert_eq!(replayed, direct, "an exact retry retains the references");
+    let mut relinked = direct_body;
+    relinked["admission"]["externalReferences"] = json!([case_reference("case-other")]);
+    let (status, reused) = fx
+        .post("/v1/appointments", &fx.agent, "referenced-direct", relinked)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{reused}");
+    assert_eq!(reused["code"], "idempotency.key-reused");
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{direct_id}/cancel"),
+            &fx.agent,
+            "referenced-cancel",
+            json!({"observedRevision": direct["revision"], "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
+    assert_eq!(cancelled["externalReferences"], json!([reference.clone()]));
+
+    let first_uri = appointments_by_reference_uri("case-1764", 1, None);
+    let (status, first_page) = fx.get(&first_uri, &fx.agent).await;
+    assert_eq!(status, StatusCode::OK, "{first_page}");
+    assert_eq!(first_page["items"].as_array().map(Vec::len), Some(1));
+    let cursor = first_page["nextCursor"]
+        .as_str()
+        .expect("two matching appointments mint a continuation");
+    let (status, second_page) = fx
+        .get(
+            &appointments_by_reference_uri("case-1764", 1, Some(cursor)),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{second_page}");
+    assert!(second_page["nextCursor"].is_null());
+    let mut listed = vec![
+        first_page["items"][0]["appointmentId"].as_str().unwrap(),
+        second_page["items"][0]["appointmentId"].as_str().unwrap(),
+    ];
+    listed.sort_unstable();
+    let mut expected = vec![confirmed_id.as_str(), direct_id.as_str()];
+    expected.sort_unstable();
+    assert_eq!(listed, expected);
+    for appointment in [&first_page["items"][0], &second_page["items"][0]] {
+        assert_eq!(
+            appointment["externalReferences"],
+            json!([reference.clone()])
+        );
+    }
+
+    let other_actor = agent_token_for("principal-other");
+    let (status, hidden) = fx.get(&first_uri, &other_actor).await;
+    assert_eq!(status, StatusCode::OK, "{hidden}");
+    assert_eq!(
+        hidden["items"],
+        json!([]),
+        "owner scope hides both appointments"
+    );
+    let (status, foreign_cursor) = fx
+        .get(
+            &appointments_by_reference_uri("case-1764", 1, Some(cursor)),
+            &other_actor,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{foreign_cursor}");
+    assert_eq!(foreign_cursor["code"], "cursor.invalid");
+    let (status, foreign_filter) = fx
+        .get(
+            &appointments_by_reference_uri("case-other", 1, Some(cursor)),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{foreign_filter}");
+    assert_eq!(foreign_filter["code"], "cursor.invalid");
+
+    let no_read_scope = token(json!({
+        "sub": "principal-no-read",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-explain",
+        "registry_actor_kind": "service",
+    }));
+    let (status, blocked) = fx.get(&first_uri, &no_read_scope).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{blocked}");
+    assert_eq!(blocked["code"], "profile.not-authorized");
+}
+
 async fn hook_fixture() -> Fixture {
     hook_fixture_at("http://127.0.0.1:9/scheduling-hooks").await
 }
@@ -853,6 +1048,7 @@ async fn appointment_hooks_capture_matching_lifecycle_rows_with_bounded_projecti
     let first = first_slot(&fx, OFFERING, 300, 440).await;
     let mut create = admission(&fx, OFFERING, first);
     create["duplicateKey"] = json!("HOOK_DUPLICATE_CANARY");
+    create["externalReferences"] = json!([case_reference("HOOK_REFERENCE_CANARY")]);
     let (status, confirmed) = fx
         .post(
             "/v1/appointments",
@@ -966,12 +1162,20 @@ async fn appointment_hooks_capture_matching_lifecycle_rows_with_bounded_projecti
         for canary in [
             "HOOK_DUPLICATE_CANARY",
             "HOOK_REASON_CANARY",
+            "HOOK_REFERENCE_CANARY",
             "principal-agent",
             "registry_grant_id",
         ] {
             assert!(!spelled.contains(canary), "payload leaked {canary}");
         }
-        for excluded in ["actor", "reason", "duplicateKey", "resource", "channel"] {
+        for excluded in [
+            "actor",
+            "reason",
+            "duplicateKey",
+            "externalReferences",
+            "resource",
+            "channel",
+        ] {
             assert!(
                 envelope.data.get(excluded).is_none(),
                 "projection exposed {excluded}"
@@ -6621,6 +6825,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         window_revision: None,
         capabilities: Vec::new(),
         prerequisites: Vec::new(),
+        external_references: Vec::new(),
     };
     let commitment = Commitment {
         now: pinned_now(),

@@ -226,6 +226,7 @@ async fn download(
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Response {
     let claims = claims
         .map(|Extension(value)| value)
@@ -243,7 +244,7 @@ async fn download(
                 && record_id.is_some_and(|id| valid_canonical_record_uuid(id))
                 && surface.readable_fields.contains(&binding.slot)
         });
-    let Some(surface) = surface else {
+    let Some(mut surface) = surface else {
         return audited_known_read_refusal(
             &service,
             &attachment_route,
@@ -254,6 +255,21 @@ async fn download(
         )
         .await;
     };
+    if surface
+        .context
+        .bind_access_attribution(surface.response_entity, &headers)
+        .is_err()
+    {
+        return audited_known_read_refusal(
+            &service,
+            &attachment_route,
+            &claims,
+            record_id,
+            concealed(),
+            &correlation,
+        )
+        .await;
+    }
     let (_, version) = parsed.expect("authorized parsed attachment query");
     let request = RecordReadRequest {
         entity_id: route.entity_id.clone(),

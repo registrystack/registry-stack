@@ -1883,6 +1883,7 @@ fn openapi_document(
 ) -> Value {
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
+    let mut has_access_log = false;
     for route in &routes.routes {
         // An import grant is exercised only through the ingestion-run
         // surface, which the static document does not describe.
@@ -1926,6 +1927,21 @@ fn openapi_document(
                 access_profiles: OpenApiAccessProfiles::All,
             }),
         );
+        if route.operation == Operation::Get
+            && read_path_for_route(route, entity).is_none()
+            && entity.access_log.is_some()
+        {
+            let path = paths
+                .entry(access_log_path(route))
+                .or_insert_with(|| Value::Object(Map::new()));
+            path.as_object_mut()
+                .expect("OpenAPI path entries are objects")
+                .insert(
+                    "get".to_owned(),
+                    openapi_access_log_operation(route, entity, OpenApiAccessProfiles::All),
+                );
+            has_access_log = true;
+        }
     }
     for route in &routes.routes {
         if !matches!(route.operation, Operation::Get | Operation::Patch)
@@ -2023,6 +2039,12 @@ fn openapi_document(
         .map(|(id, schema)| (id.clone(), schema.clone()))
         .collect();
     component_schemas.extend(input_schemas);
+    if has_access_log {
+        component_schemas.insert(
+            ACCESS_LOG_RESPONSE_SCHEMA_ID.to_owned(),
+            openapi_access_log_response_schema(),
+        );
+    }
     append_review_completion_openapi(&mut paths, &mut component_schemas);
     let has_request_actions = routes
         .routes
@@ -2033,6 +2055,149 @@ fn openapi_document(
         "info": {"title": registry_id, "version": version},
         "paths": paths,
         "components": openapi_components(component_schemas, has_request_actions, has_immediate_actions)
+    })
+}
+
+pub(crate) const ACCESS_LOG_RESPONSE_SCHEMA_ID: &str = "SubjectAccessLogPage";
+
+pub(crate) fn access_log_path(route: &CompiledRoute) -> String {
+    format!("{}/access-log", route.path)
+}
+
+pub(crate) fn openapi_access_log_operation(
+    route: &CompiledRoute,
+    entity: &CompiledEntity,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Value {
+    debug_assert_eq!(route.operation, Operation::Get);
+    debug_assert!(entity.access_log.is_some());
+    let mut operation = Map::from_iter([
+        (
+            "operationId".to_owned(),
+            json!(format!("{}.access-log", route.id)),
+        ),
+        ("x-registry-entity".to_owned(), json!(entity.id)),
+        ("x-registry-operation".to_owned(), json!("access_log")),
+        (
+            "x-registry-responseShape".to_owned(),
+            json!("BRegSubjectAccessLogV1"),
+        ),
+        (
+            "description".to_owned(),
+            json!("Return the subject-facing access history for this record. The selected profile must currently grant get, and the record's configured subject field must exactly match the verified principal. Other records are concealed as 404."),
+        ),
+        ("security".to_owned(), json!([{"bearerAuth": []}])),
+    ]);
+    match access_profiles {
+        OpenApiAccessProfiles::All => {
+            operation.insert(
+                "x-registry-accessProfiles".to_owned(),
+                json!(route.access_profiles),
+            );
+        }
+        OpenApiAccessProfiles::Selected(profile) => {
+            operation.insert("x-registry-accessProfile".to_owned(), json!(profile));
+        }
+    }
+    operation.insert(
+        "parameters".to_owned(),
+        json!([
+            path_parameter(
+                "record_id",
+                json!({"type": "string", "format": "uuid"}),
+                "Canonical record UUID owned by the verified subject."
+            ),
+            header_parameter(
+                "traceparent",
+                false,
+                traceparent_schema(),
+                "Optional W3C trace context. Responses carry Registry trace context for the request."
+            ),
+            access_profile_parameter(route.default_access_profile.is_none()),
+            query_parameter(
+                "limit",
+                false,
+                false,
+                json!({"type": "integer", "minimum": 1, "maximum": 100, "default": 50}),
+                "Maximum visible access events returned in this page."
+            ),
+            query_parameter(
+                "cursor",
+                false,
+                false,
+                json!({"type": "string", "format": "uuid"}),
+                "Opaque event cursor from the preceding page, scoped to this record and verified subject."
+            )
+        ]),
+    );
+    operation.insert(
+        "responses".to_owned(),
+        json!({
+            "200": {
+                "description": "Subject-facing access events returned",
+                "headers": {
+                    "traceparent": traceparent_header("Trace context for this response."),
+                    "Cache-Control": no_store_header()
+                },
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": format!("#/components/schemas/{ACCESS_LOG_RESPONSE_SCHEMA_ID}")}
+                    }
+                }
+            },
+            "400": access_log_problem_response("The query or cursor is invalid."),
+            "404": access_log_problem_response("The record or subject-owned access log was not found."),
+            "503": access_log_problem_response("The subject access-log service is unavailable.")
+        }),
+    );
+    Value::Object(operation)
+}
+
+fn access_log_problem_response(description: &str) -> Value {
+    json!({
+        "description": description,
+        "headers": {
+            "traceparent": traceparent_header("Trace context for this problem response."),
+            "Cache-Control": no_store_header()
+        },
+        "content": {
+            "application/problem+json": {
+                "schema": {"$ref": "#/components/schemas/Problem"}
+            }
+        }
+    })
+}
+
+pub(crate) fn openapi_access_log_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["events", "nextCursor"],
+        "properties": {
+            "events": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "id", "accessedAt", "requester", "serviceClient", "purpose",
+                        "operationId", "visibleAfter", "exemptionReason"
+                    ],
+                    "properties": {
+                        "id": {"type": "string", "format": "uuid"},
+                        "accessedAt": {"type": "string", "format": "date-time"},
+                        "requester": {"type": "string", "minLength": 1, "maxLength": 512},
+                        "serviceClient": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+                        "purpose": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+                        "operationId": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "visibleAfter": {"type": "string", "format": "date-time"},
+                        "exemptionReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+                    }
+                }
+            },
+            "nextCursor": {"type": ["string", "null"], "format": "uuid"}
+        }
     })
 }
 

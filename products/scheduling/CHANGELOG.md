@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: publish the `v1alpha2` HTTP contract with typed opaque
+  `externalReferences` on hold and appointment
+  documents and to hold or direct-booking admissions. Hold confirmation,
+  reschedule, cancellation, reads, and idempotent replays retain the reference
+  set. Add the owner-scoped `GET /v1/appointments` filter over one exact
+  product, record type, and record identifier tuple, with bounded paging whose
+  cursor is bound to both the caller and filter.
+
 ## v0.37.0 - 2026-09-29
 
 - Read each request's `now`, and the hold-expiry, retention, and reminder

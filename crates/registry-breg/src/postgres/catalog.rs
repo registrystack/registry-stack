@@ -124,6 +124,18 @@ pub struct ExpectedManagedCatalog {
 }
 
 impl ExpectedManagedCatalog {
+    /// Exact catalog of the release before subject access-log storage existed.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn without_subject_access_log_for_test(mut self) -> Self {
+        self.objects.retain(|object| {
+            object.name != "registry_internal.registry_subject_access_log"
+                && object.name != "registry_internal.expire_subject_access_log()"
+        });
+        self
+    }
+
     /// Explicit compatibility inventory for the W2 feasibility kernel.
     #[must_use]
     pub fn kernel() -> Self {
@@ -149,6 +161,17 @@ impl ExpectedManagedCatalog {
     #[must_use]
     pub fn compiled(registry: &CompiledRegistry) -> Self {
         let mut catalog = Self::base();
+        catalog.table(
+            "registry_internal.registry_subject_access_log",
+            ["SELECT", "INSERT"],
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        catalog.function(
+            "registry_internal.expire_subject_access_log()",
+            Some("EXECUTE"),
+            None,
+        );
         if registry.ddl().requires_postgis {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
@@ -1198,7 +1221,7 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
                      WHERE n.nspname = ANY($1::text[])
                        AND NOT (
-                           n.nspname = 'registry_context'
+                           (n.nspname = 'registry_context'
                            AND ((p.proname IN ('evaluation_date', 'spatial_bbox_geometry')
                                  AND pg_catalog.pg_get_function_identity_arguments(p.oid) = '')
                                 OR (p.proname ~ '^membership_[0-9a-f]{24}$'
@@ -1212,7 +1235,15 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                     AND p.prorettype = 'uuid'::regtype
                                     AND p.proretset
                                     AND NOT p.prosecdef
-                                    AND p.provolatile = 's'))
+                                    AND p.provolatile = 's')))
+                           OR (n.nspname = 'registry_internal'
+                               AND p.proname = 'expire_subject_access_log'
+                               AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
+                               AND p.prorettype = 'bigint'::regtype
+                               AND NOT p.proretset AND p.prosecdef
+                               AND p.provolatile = 'v'
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
                        )
                  ),
                  EXISTS (

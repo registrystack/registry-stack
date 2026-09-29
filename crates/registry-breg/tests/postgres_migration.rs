@@ -72,6 +72,131 @@ journeys:
         expect: {outcome: success, status: 200, count: 0}
 "#;
 
+/// An existing activation gains the product-owned access-log storage through
+/// normal successor apply. Later disabling collection retains its rows and the
+/// bounded expiry authority instead of treating the log as disposable schema.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subject_access_log_upgrades_an_existing_catalog_and_survives_disabled_collection() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .unwrap();
+    let prior = compile_variant(Variant::SubjectWithoutLog);
+    let fingerprint = initial_fingerprint(&database, &prior).await;
+    let initial =
+        prepare_and_load_initial_variant(Variant::SubjectWithoutLog, &prior, &fingerprint);
+    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .unwrap();
+
+    // Reproduce the exact pre-feature catalog and recorded package binding.
+    // This fixture surgery represents an already deployed older binary; every
+    // upgrade and subsequent policy change below uses the maintained apply API.
+    let (migration, task) = database.connect_migration().await;
+    migration.batch_execute("DROP FUNCTION registry_internal.expire_subject_access_log(); DROP TABLE registry_internal.registry_subject_access_log;").await.unwrap();
+    let old_fingerprint = managed_schema_fingerprint(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&prior).without_subject_access_log_for_test(),
+    )
+    .await
+    .unwrap();
+    let old_package =
+        prepare_and_load_initial_variant(Variant::SubjectWithoutLog, &prior, &old_fingerprint);
+    active.schema_fingerprint = old_fingerprint;
+    active.package_digest = old_package.package_digest().to_owned();
+    migration.execute("UPDATE registry_internal.registry_state SET active_package_digest=$1, schema_fingerprint=$2 WHERE singleton", &[&active.package_digest,&active.schema_fingerprint]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_migrations SET package_digest=$1 WHERE activation_id=$2::text::uuid", &[&active.package_digest,&active.activation_id]).await.unwrap();
+    drop(migration);
+    task.abort();
+
+    let enabled = compile_variant(Variant::SubjectWithLog);
+    // The log policy changes the package contract, not its entity DDL; the
+    // fresh catalog fingerprint includes the new product-owned log objects.
+    let target_fingerprint = fingerprint;
+    let successor = publish_and_load(
+        prepare_package(build_request(
+            Variant::SubjectWithLog,
+            Some(&active.package_digest),
+            &target_fingerprint,
+            PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new(prior.clone()),
+            },
+        ))
+        .unwrap(),
+        local_context(),
+    );
+    let enabled_active = apply(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .unwrap();
+    database.admin.execute("INSERT INTO registry_internal.registry_subject_access_log
+        (event_id,entity_id,record_id,requester,operation_id,authority_entity,access_profile,package_revision,request_id,visible_after,expires_at)
+        VALUES ($1,'asset',$2,'requesting-service','records.asset.get','asset','reader',$3,$4,transaction_timestamp(),transaction_timestamp()+interval '1 day')",
+        &[&Uuid::new_v4(),&Uuid::new_v4(),&enabled_active.activation_id,&Uuid::new_v4()]).await.unwrap();
+
+    let disabled = publish_and_load(
+        prepare_package(build_request(
+            Variant::SubjectWithoutLog,
+            Some(&enabled_active.package_digest),
+            &target_fingerprint,
+            PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new(enabled),
+            },
+        ))
+        .unwrap(),
+        local_context(),
+    );
+    let disabled_active = apply(
+        &database,
+        &disabled,
+        ApplyPrecondition::Successor {
+            current: &enabled_active,
+        },
+    )
+    .await
+    .unwrap();
+    assert_ready_target(&database, &disabled_active).await;
+    let pool = database.runtime_config.build_pool().unwrap();
+    let runtime = pool.get_for_test().await.unwrap();
+    let retained: i64 = runtime
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_subject_access_log",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(retained, 1);
+    let removed: i64 = runtime
+        .query_one("SELECT registry_internal.expire_subject_access_log()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        removed, 0,
+        "disabling collection never erases unexpired entries"
+    );
+    database.admin.batch_execute("UPDATE registry_internal.registry_subject_access_log SET accessed_at=accessed_at-interval '2 days',visible_after=visible_after-interval '2 days',expires_at=expires_at-interval '2 days'").await.unwrap();
+    let removed: i64 = runtime
+        .query_one("SELECT registry_internal.expire_subject_access_log()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        removed, 1,
+        "the runtime retains only expired-entry erasure authority"
+    );
+    drop(runtime);
+    drop(pool);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_and_activation_closed(
 ) {
@@ -4730,6 +4855,8 @@ fn assert_flip_value_free(error: &MigrationError, canaries: &[String]) {
 #[derive(Clone, Copy)]
 enum Variant {
     Base,
+    SubjectWithoutLog,
+    SubjectWithLog,
     RankRequired,
     LegacyRemoved,
     BatchAddedRequired,
@@ -5060,6 +5187,18 @@ fn project_bytes(digest: &str) -> Vec<u8> {
 }
 
 fn module_bytes(variant: Variant) -> Vec<u8> {
+    if matches!(
+        variant,
+        Variant::SubjectWithoutLog | Variant::SubjectWithLog
+    ) {
+        let mut source: serde_json::Value =
+            serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
+        source["entities"][0]["fields"][0]["required"] = serde_json::json!(true);
+        if matches!(variant, Variant::SubjectWithLog) {
+            source["entities"][0]["accessLog"] = serde_json::json!({"subjectField":"code"});
+        }
+        return serde_json::to_vec(&source).unwrap();
+    }
     let rank_required = if matches!(variant, Variant::RankRequired | Variant::LegacyRemoved) {
         r#","required":true"#
     } else {

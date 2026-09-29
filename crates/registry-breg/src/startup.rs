@@ -528,6 +528,7 @@ pub struct PreparedServer {
     webhook_worker: Option<WebhookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
+    access_log_retention_pool: Option<RuntimePool>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -598,6 +599,7 @@ impl PreparedServer {
             webhook_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
+            access_log_retention_pool: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -624,6 +626,7 @@ impl PreparedServer {
             webhook_worker: Some(webhook_worker),
             attachment_verification_worker: None,
             review_worker: None,
+            access_log_retention_pool: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -1130,6 +1133,7 @@ async fn finish_prepared_server(
     // Captured before `pool` moves into the mutation service, so the metrics
     // listener can sample live pool gauges at scrape time.
     let telemetry_pool = pool.clone();
+    let access_log_retention_pool = Some(pool.clone());
     let event_destinations = Arc::new(
         config
             .activate_event_destinations(&registry)
@@ -1409,6 +1413,7 @@ async fn finish_prepared_server(
         webhook_worker,
         attachment_verification_worker,
         review_worker,
+        access_log_retention_pool,
         metrics,
         postgres_advisories,
         role_mode: RoleMode::from_roles(
@@ -1617,6 +1622,7 @@ pub async fn serve_until_shutdown(
         webhook_worker,
         attachment_verification_worker,
         review_worker,
+        access_log_retention_pool,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -1642,6 +1648,12 @@ pub async fn serve_until_shutdown(
         .map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
     let mut review_worker =
         review_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
+    let mut access_log_worker = access_log_retention_pool.map(|pool| {
+        tokio::spawn(crate::subject_access_log::run_retention(
+            pool,
+            worker_shutdown_rx.clone(),
+        ))
+    });
     let mut worker = webhook_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx)));
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let (metrics_shutdown_tx, metrics_shutdown_rx) = oneshot::channel::<()>();
@@ -1687,6 +1699,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = review_worker.as_mut() {
             let _ = worker.await;
         }
+        if let Some(worker) = access_log_worker.as_mut() {
+            let _ = worker.await;
+        }
         if let Some(metrics_server) = metrics_server.as_mut() {
             let _ = metrics_server.await;
         }
@@ -1712,6 +1727,10 @@ pub async fn serve_until_shutdown(
                 let _ = worker.await;
             }
             if let Some(worker) = review_worker.as_mut() {
+                worker.abort();
+                let _ = worker.await;
+            }
+            if let Some(worker) = access_log_worker.as_mut() {
                 worker.abort();
                 let _ = worker.await;
             }

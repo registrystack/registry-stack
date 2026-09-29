@@ -333,6 +333,8 @@ impl fmt::Debug for VerifiedRowBoundary {
 pub struct AuthorizedRequestContext {
     principal: Option<String>,
     purpose: Option<String>,
+    requester_client: Option<String>,
+    forwarded_access_attribution: Option<crate::subject_access_log::ForwardedAccessAttribution>,
     selected_profile: String,
     row_boundaries: Vec<VerifiedRowBoundary>,
     request_actions: Vec<VerifiedRequestAction>,
@@ -354,6 +356,8 @@ impl AuthorizedRequestContext {
         Self {
             principal,
             purpose,
+            requester_client: None,
+            forwarded_access_attribution: None,
             selected_profile,
             row_boundaries,
             request_actions: Vec::new(),
@@ -388,7 +392,28 @@ impl AuthorizedRequestContext {
     pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
         self.grant_audit = crate::audit::GrantAuditContext::from_claims(claims);
         self.human_identity = claims.human_identity().cloned();
+        self.requester_client = claims.requester_client().map(str::to_owned);
         self
+    }
+
+    pub(crate) fn requester_client(&self) -> Option<&str> {
+        self.requester_client.as_deref()
+    }
+
+    pub(crate) fn forwarded_access_attribution(
+        &self,
+    ) -> Option<&crate::subject_access_log::ForwardedAccessAttribution> {
+        self.forwarded_access_attribution.as_ref()
+    }
+
+    pub(crate) fn bind_access_attribution(
+        &mut self,
+        entity: &crate::model::CompiledEntity,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<(), ()> {
+        self.forwarded_access_attribution =
+            crate::subject_access_log::forwarded_attribution(entity, self, headers)?;
+        Ok(())
     }
     pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
         self.grant_audit.as_ref()

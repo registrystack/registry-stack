@@ -44,6 +44,12 @@
               }
             ]
           },
+          "externalReferences": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalReference"
+            },
+            "type": "array"
+          },
           "offering": {
             "type": "string"
           },
@@ -123,6 +129,12 @@
             "format": "date-time",
             "type": "string"
           },
+          "externalReferences": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalReference"
+            },
+            "type": "array"
+          },
           "offering": {
             "type": "string"
           },
@@ -167,7 +179,8 @@
           "revision",
           "state",
           "policyRevision",
-          "createdAt"
+          "createdAt",
+          "externalReferences"
         ],
         "type": "object"
       },
@@ -217,6 +230,32 @@
           "items": {
             "items": {
               "$ref": "#/components/schemas/AppointmentHistoryEntryDocument"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "AppointmentPage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AppointmentDocument"
             },
             "type": "array"
           },
@@ -430,6 +469,26 @@
         ],
         "type": "object"
       },
+      "ExternalReference": {
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "recordType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "product",
+          "recordType",
+          "identifier"
+        ],
+        "type": "object"
+      },
       "HoldDocument": {
         "additionalProperties": true,
         "properties": {
@@ -440,6 +499,12 @@
           "expiresAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "externalReferences": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalReference"
+            },
+            "type": "array"
           },
           "holdId": {
             "type": "string"
@@ -478,7 +543,8 @@
           "end",
           "units",
           "expiresAt",
-          "policyRevision"
+          "policyRevision",
+          "externalReferences"
         ],
         "type": "object"
       },
@@ -1647,6 +1713,7 @@
       },
       "RescheduleAppointmentRequest": {
         "additionalProperties": false,
+        "description": "Fresh admission facts for the new time. externalReferences must be omitted; the appointment retains the immutable set established by its hold or direct booking.",
         "properties": {
           "admission": {
             "$ref": "#/components/schemas/AdmissionRequest"
@@ -1830,7 +1897,7 @@
       "name": "Apache-2.0"
     },
     "title": "Registry Scheduling API",
-    "version": "v1alpha1"
+    "version": "v1alpha2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1998,6 +2065,243 @@
       }
     },
     "/v1/appointments": {
+      "get": {
+        "description": "Lists only the authenticated caller's appointments carrying the exact opaque reference. The 15-minute cursor is bound to both the caller and the reference, and ownership is rechecked on every page. Scheduling stores the tuple without calling the referenced product.",
+        "operationId": "listAppointmentsByExternalReference",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Product identifier that owns the referenced record.",
+            "in": "query",
+            "name": "externalReferenceProduct",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Record type within the referenced product.",
+            "in": "query",
+            "name": "externalReferenceRecordType",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque identifier of the referenced record.",
+            "in": "query",
+            "name": "externalReferenceIdentifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this listing. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired, and the listing restarts from its first page. Deduplicate entries by id.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List owned appointments by external reference",
+        "x-scheduling-authority": "reads-scope"
+      },
       "post": {
         "description": "Carries exactly one of hold or admission. Confirming transfers the hold's own reservation, so capacity is re-checked only for identity: the hold must still be active and unexpired, its policy revision still current, and its holder still the caller. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create.",
         "operationId": "createAppointment",
@@ -3085,7 +3389,7 @@
     },
     "/v1/appointments/{appointment_id}/reschedule": {
       "post": {
-        "description": "Re-books the appointment under the task grant that names appointment.reschedule, with a fresh admission evaluation; the appointment it replaces is excluded from the conflict checks, so a reschedule never competes with itself. The policy guard wins over the revision guard: a caller whose observed revision is also stale learns the policy moved first.",
+        "description": "Re-books the appointment under the task grant that names appointment.reschedule, with a fresh admission evaluation while retaining its original externalReferences; supplying externalReferences is request.unprocessable. The appointment it replaces is excluded from the conflict checks, so a reschedule never competes with itself. The policy guard wins over the revision guard: a caller whose observed revision is also stale learns the policy moved first.",
         "operationId": "rescheduleAppointment",
         "parameters": [
           {

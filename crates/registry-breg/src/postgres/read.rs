@@ -2,6 +2,8 @@
 
 //! Concrete PostgreSQL record read service with durable audit release gates.
 
+#[path = "access_log.rs"]
+mod access_log;
 #[path = "request_read.rs"]
 mod request_read;
 
@@ -393,6 +395,23 @@ impl PostgresRecordReadService {
             Ok(None) => (TerminalAuditOutcome::Empty, 0, None),
             Err(_) => (TerminalAuditOutcome::Refused, 0, None),
         };
+        if count > 0 {
+            let record_id = target_record(&request.kind)
+                .ok_or(ReadServiceError::Unavailable)?
+                .to_owned();
+            crate::subject_access_log::record_reads(
+                transaction.transaction(),
+                &plan.entity,
+                &request.entity_id,
+                &request.context,
+                &[record_id],
+                &request.operation_id,
+                &self.expected,
+                &request.correlation,
+                &self.audit,
+            )
+            .await?;
+        }
         let terminal = self.terminal(&request, &claims, &plan, outcome, count, revision)?;
         let entry = crate::audit::attachment_terminal_entry(
             self.audit.profile(),
@@ -879,6 +898,18 @@ impl PostgresRecordReadService {
                 }
             }
         }
+        crate::subject_access_log::record_reads(
+            transaction.transaction(),
+            &plan.entity,
+            &request.entity_id,
+            &request.context,
+            &rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+            &request.operation_id,
+            &self.expected,
+            &request.correlation,
+            &self.audit,
+        )
+        .await?;
         transaction
             .commit()
             .await
@@ -1000,6 +1031,15 @@ fn summarize_query_plan_for_test(plan: &Value, nodes: &mut Vec<Value>) {
 }
 
 impl RecordReadService for PostgresRecordReadService {
+    fn access_log(
+        &self,
+        request: RecordReadRequest,
+        cursor: Option<String>,
+        limit: u16,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(self.read_access_log(request, cursor, limit))
+    }
+
     fn get(
         &self,
         request: RecordReadRequest,

@@ -280,13 +280,30 @@ async fn items(
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     Path(collection): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let claims = claims
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
-    let Some(authorized) = authorize_gis_collection(&service, &claims, &collection) else {
+    let Some(mut authorized) = authorize_gis_collection(&service, &claims, &collection) else {
         return concealed();
     };
+    if authorized
+        .surface
+        .context
+        .bind_access_attribution(authorized.surface.response_entity, &headers)
+        .is_err()
+    {
+        return audited_read_refusal(
+            &service,
+            authorized.route,
+            &authorized.surface,
+            None,
+            concealed(),
+            &correlation,
+        )
+        .await;
+    }
     // The feature surface speaks its own parameter names, so a refusal here
     // stays unlocated rather than naming a native query parameter.
     let query = match parse_items_query(raw_query.as_deref()) {

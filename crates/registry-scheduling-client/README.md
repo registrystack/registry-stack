@@ -14,3 +14,7 @@ validated against the pinned bound before any network input or output.
 Responses are read under a bounded byte ceiling, and exactly validated
 product problems surface as their typed `ProblemCode`; every other failure
 is a caller-side request defect, a transport failure, or a protocol failure.
+
+Appointments and holds may carry typed opaque external record references. The
+client can list the authenticated caller's appointments by one exact reference;
+Scheduling stores the tuple and never contacts the product it names.

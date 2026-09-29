@@ -3005,6 +3005,50 @@ async fn an_encodable_path_selector_value_still_reaches_the_source() {
 }
 
 #[tokio::test]
+async fn authorized_runtime_forwards_verified_requester_and_purpose_only_to_opted_source() {
+    let server = MockServer::start().await;
+    let requester = "agence-citoyenne:José";
+    let purpose = "fixture-eligibility";
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .and(header(
+            "registry-access-requester",
+            URL_SAFE_NO_PAD.encode(requester.as_bytes()),
+        ))
+        .and(header(
+            "registry-access-purpose",
+            URL_SAFE_NO_PAD.encode(purpose.as_bytes()),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| enable_access_attribution(bundle_root, "source-a"),
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime with attributed source initializes");
+
+    runtime
+        .evaluate(
+            "operation-source-access-attribution",
+            &access_token_for(requester, None),
+            &adult_request(),
+        )
+        .await
+        .expect("authorized request succeeds");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn missing_principal_never_falls_back_to_client_id_or_azp() {
     let fixture = acceptance_runtime().await;
     let now = Utc::now().timestamp();
@@ -10408,6 +10452,16 @@ fn declare_unresolved_problem(bundle_root: &Path, source_id: &str) {
     );
     replace_exact(&mut config, &source, &declared, 1);
     fs::write(path, config).expect("declared unresolved source config is written");
+}
+
+fn enable_access_attribution(bundle_root: &Path, source_id: &str) {
+    let path = bundle_root.join("evidence.yaml");
+    let mut config = fs::read_to_string(&path).expect("source config is readable");
+    let source = format!("  {source_id}:\n    transport: http-json\n");
+    let attributed =
+        format!("  {source_id}:\n    transport: http-json\n    forwardAccessAttribution: true\n");
+    replace_exact(&mut config, &source, &attributed, 1);
+    fs::write(path, config).expect("attributed source config is written");
 }
 
 fn declared_unresolved_response(trace_id: &str) -> ResponseTemplate {

@@ -800,6 +800,17 @@ pub enum ReadServiceError {
 /// projection, result bound, and row boundaries in the database transaction;
 /// the HTTP response projection is only defense in depth.
 pub trait RecordReadService: Send + Sync {
+    /// Read the separate access log only after current GET and subject ownership
+    /// have both been established. The default backend releases nothing.
+    fn access_log(
+        &self,
+        _request: RecordReadRequest,
+        _cursor: Option<String>,
+        _limit: u16,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(async { Err(ReadServiceError::Unavailable) })
+    }
+
     fn get(
         &self,
         request: RecordReadRequest,

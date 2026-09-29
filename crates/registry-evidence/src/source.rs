@@ -47,6 +47,9 @@ const PROJECTED_RESPONSE_MAXIMUM_BYTES: usize = 65_536;
 const JSON_MEDIA_TYPE: &str = "application/json";
 const GRAPHQL_JSON_MEDIA_TYPE: &str = "application/graphql-response+json";
 const PROBLEM_JSON_MEDIA_TYPE: &str = "application/problem+json";
+const ACCESS_REQUESTER_HEADER: &str = "registry-access-requester";
+const ACCESS_PURPOSE_HEADER: &str = "registry-access-purpose";
+const MAXIMUM_ACCESS_ATTRIBUTION_BYTES: usize = 512;
 /// Scheme used when a source states no other, and the only scheme RFC 6750
 /// admits for an access token the runtime acquired itself.
 const DEFAULT_AUTHORIZATION_SCHEME: &str = "Bearer";
@@ -82,6 +85,45 @@ pub struct ResolvedSourceSelector {
     pub role: String,
     pub profile: String,
     pub values: BTreeMap<String, SelectorValue>,
+}
+
+/// Verified, authorized caller context that an explicitly opted-in HTTP source
+/// receives for its own subject-facing access accounting.
+///
+/// Values are validated and encoded when an opted-in HTTP source builds its
+/// headers, so arbitrary UTF-8 identities cannot become header syntax. The
+/// type has no `Debug` implementation because it contains the requester's
+/// direct identity.
+pub struct SourceAccessAttribution {
+    requester: String,
+    purpose: String,
+}
+
+impl SourceAccessAttribution {
+    pub fn new(requester: &str, purpose: &str) -> Self {
+        Self {
+            requester: requester.to_owned(),
+            purpose: purpose.to_owned(),
+        }
+    }
+
+    fn encoded(value: &str) -> Result<HeaderValue, SourceError> {
+        if value.trim().is_empty()
+            || value.len() > MAXIMUM_ACCESS_ATTRIBUTION_BYTES
+            || value.chars().any(char::is_control)
+        {
+            return Err(SourceError::InvalidPlan);
+        }
+        let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+        HeaderValue::from_bytes(value.as_bytes()).map_err(|_| SourceError::InvalidPlan)
+    }
+
+    fn headers(&self) -> Result<(HeaderValue, HeaderValue), SourceError> {
+        Ok((
+            Self::encoded(&self.requester)?,
+            Self::encoded(&self.purpose)?,
+        ))
+    }
 }
 
 /// A safe status category that does not retain a response or request URL.
@@ -576,6 +618,7 @@ struct RequestPlan {
     path: SourcePath,
     method: HttpMethod,
     fixed_headers: HeaderMap,
+    forward_access_attribution: bool,
     selector_inputs: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
     allowed_selector_sets: Vec<SourceSelectorSet>,
     posture: AcquisitionPosture,
@@ -881,8 +924,31 @@ impl SourceExecutor {
         request: &PreparedSourceRequest,
         evaluation_instant: DateTime<Utc>,
     ) -> Result<SourceResponse, SourceError> {
-        self.execute_with_prior_facts(selectors, &BTreeMap::new(), request, evaluation_instant)
-            .await
+        self.execute_with_prior_facts_and_attribution(
+            selectors,
+            &BTreeMap::new(),
+            request,
+            evaluation_instant,
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_attributed(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        request: &PreparedSourceRequest,
+        evaluation_instant: DateTime<Utc>,
+        attribution: &SourceAccessAttribution,
+    ) -> Result<SourceResponse, SourceError> {
+        self.execute_with_prior_facts_and_attribution(
+            selectors,
+            &BTreeMap::new(),
+            request,
+            evaluation_instant,
+            Some(attribution),
+        )
+        .await
     }
 
     /// Execute one already-selected optimized HTTP batch request.
@@ -895,11 +961,28 @@ impl SourceExecutor {
         &self,
         request: &PreparedSourceBatchRequest,
     ) -> Result<SourceResponse, SourceError> {
+        self.execute_batch_with_attribution(request, None).await
+    }
+
+    pub async fn execute_batch_attributed(
+        &self,
+        request: &PreparedSourceBatchRequest,
+        attribution: &SourceAccessAttribution,
+    ) -> Result<SourceResponse, SourceError> {
+        self.execute_batch_with_attribution(request, Some(attribution))
+            .await
+    }
+
+    async fn execute_batch_with_attribution(
+        &self,
+        request: &PreparedSourceBatchRequest,
+        attribution: Option<&SourceAccessAttribution>,
+    ) -> Result<SourceResponse, SourceError> {
         let SourceTransport::Http(http) = &self.transport else {
             return Err(SourceError::InvalidPlan);
         };
         let materialized = http.materialize_batch_request(request.parts())?;
-        http.execute_batch(&materialized, self.observer.as_ref())
+        http.execute_batch(&materialized, attribution, self.observer.as_ref())
             .await
     }
 
@@ -910,11 +993,48 @@ impl SourceExecutor {
         request: &PreparedSourceRequest,
         evaluation_instant: DateTime<Utc>,
     ) -> Result<SourceResponse, SourceError> {
+        self.execute_with_prior_facts_and_attribution(
+            selectors,
+            prior_facts,
+            request,
+            evaluation_instant,
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_with_prior_facts_attributed(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        prior_facts: &BTreeMap<String, JsonValue>,
+        request: &PreparedSourceRequest,
+        evaluation_instant: DateTime<Utc>,
+        attribution: &SourceAccessAttribution,
+    ) -> Result<SourceResponse, SourceError> {
+        self.execute_with_prior_facts_and_attribution(
+            selectors,
+            prior_facts,
+            request,
+            evaluation_instant,
+            Some(attribution),
+        )
+        .await
+    }
+
+    async fn execute_with_prior_facts_and_attribution(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        prior_facts: &BTreeMap<String, JsonValue>,
+        request: &PreparedSourceRequest,
+        evaluation_instant: DateTime<Utc>,
+        attribution: Option<&SourceAccessAttribution>,
+    ) -> Result<SourceResponse, SourceError> {
         let materialized =
             self.materialize_request_with_prior_facts(selectors, prior_facts, request)?;
         match &self.transport {
             SourceTransport::Http(http) => {
-                http.execute(&materialized, self.observer.as_ref()).await
+                http.execute(&materialized, attribution, self.observer.as_ref())
+                    .await
             }
             SourceTransport::Statement(statement) => statement
                 .execute(&materialized, evaluation_instant)
@@ -1026,6 +1146,7 @@ impl HttpTransport {
             request: configured_request,
             batch,
             unresolved_problem,
+            forward_access_attribution,
             ..
         } = source
         else {
@@ -1070,6 +1191,7 @@ impl HttpTransport {
             *posture,
             base_url,
             &resources.authentication,
+            *forward_access_attribution,
         )?;
         let batch_projection = batch
             .as_deref()
@@ -1087,22 +1209,29 @@ impl HttpTransport {
     async fn execute(
         &self,
         materialized: &MaterializedSourceRequest,
+        attribution: Option<&SourceAccessAttribution>,
         observer: Option<&SourceObserver>,
     ) -> Result<SourceResponse, SourceError> {
-        self.execute_with_projection(materialized, &self.request.projection, observer)
-            .await
+        self.execute_with_projection(
+            materialized,
+            &self.request.projection,
+            attribution,
+            observer,
+        )
+        .await
     }
 
     async fn execute_batch(
         &self,
         materialized: &MaterializedSourceRequest,
+        attribution: Option<&SourceAccessAttribution>,
         observer: Option<&SourceObserver>,
     ) -> Result<SourceResponse, SourceError> {
         let projection = self
             .batch_projection
             .as_ref()
             .ok_or(SourceError::InvalidPlan)?;
-        self.execute_with_projection(materialized, projection, observer)
+        self.execute_with_projection(materialized, projection, attribution, observer)
             .await
     }
 
@@ -1110,10 +1239,16 @@ impl HttpTransport {
         &self,
         materialized: &MaterializedSourceRequest,
         projection: &ProjectionNode,
+        attribution: Option<&SourceAccessAttribution>,
         observer: Option<&SourceObserver>,
     ) -> Result<SourceResponse, SourceError> {
         let MaterializedSourceRequest::Http { url, .. } = materialized else {
             return Err(SourceError::InvalidPlan);
+        };
+        let attribution_headers = match (self.request.forward_access_attribution, attribution) {
+            (true, Some(attribution)) => Some(attribution.headers()?),
+            (true, None) => return Err(SourceError::InvalidPlan),
+            (false, _) => None,
         };
         let _permit = acquire_source_slot(
             &self.resources.concurrency,
@@ -1134,6 +1269,11 @@ impl HttpTransport {
             self.resources.authentication_header().await?
         {
             request = request.header(authentication_name, authentication_value);
+        }
+        if let Some((requester, purpose)) = attribution_headers {
+            request = request
+                .header(ACCESS_REQUESTER_HEADER, requester)
+                .header(ACCESS_PURPOSE_HEADER, purpose);
         }
         if !self.request.fixed_headers.contains_key(ACCEPT) {
             request = request.header(ACCEPT, HeaderValue::from_static(JSON_MEDIA_TYPE));
@@ -1632,6 +1772,7 @@ fn compile_request(
     posture: AcquisitionPosture,
     base_url: Url,
     authentication: &AuthenticationPlan,
+    forward_access_attribution: bool,
 ) -> Result<RequestPlan, SourceError> {
     if request.method == HttpMethod::GET
         && request.preparation_limits.json_body != PreparationChannelPolicy::Forbidden
@@ -1650,6 +1791,7 @@ fn compile_request(
         path,
         method: request.method,
         fixed_headers,
+        forward_access_attribution,
         selector_inputs,
         allowed_selector_sets,
         posture,

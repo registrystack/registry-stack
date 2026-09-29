@@ -234,6 +234,9 @@ route mapping.
 
 For atomic interval corrections, saved historical queries and their access and
 retention boundaries, see [Corrections and historical queries](HISTORY.md).
+For the opt-in log that lets a record subject see named reads of that record,
+including retention, intermediary attribution, and delayed disclosure, see
+[Subject-facing access logs](ACCESS-LOG.md).
 For the entity `events` to `hooks` rewrite, see
 [Breaking authoring change: entity hooks](HISTORY.md).
 

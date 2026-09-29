@@ -437,6 +437,7 @@ pub fn export_evidence_source(
     ));
     artifacts.push(document(format!("sources/{prefix}.yaml"),&json!({
         "transport":"http-json","connection":options.connection,"behaviorRevision":behavior_revision,"posture":"field-projected",
+        "forwardAccessAttribution":entity.access_log.is_some(),
         "unresolvedProblem":{"status":404,"type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),"code":"lookup.unresolved"},
         "request":{"method":"POST","path":route.path,"fixedHeaders":[{"name":"Accept","value":"application/json"}],
             "selectorInputs":[{"role":"subject","alternatives":alternatives}],"prepareScript":format!("adapters/{prefix}-prepare.rhai"),
@@ -515,7 +516,7 @@ fn selected_behavior(
         .map(|boundary| &boundary.field)
         .map(|id| field(entity, id).map(|field| json!(field)))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut behavior = json!({"protocol":"breg-evidence-lookup-v1","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"anonymous":access.anonymous,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
+    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"anonymous":access.anonymous,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
     let membership = membership_behavior(registry, entity, &options.access_profile)?;
     if !membership.is_empty() {
         behavior["access"]["membershipBoundaries"] = json!(membership);

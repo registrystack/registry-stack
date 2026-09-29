@@ -20,10 +20,11 @@ use super::{
     refuse_combined_conflicts, PolicyPublication, PostgresStore, StoreError, ACTIVATIONS_MIGRATION,
     ACTIVATIONS_MIGRATION_VERSION, AUDIT_WRITER_MIGRATION, AUDIT_WRITER_MIGRATION_VERSION,
     DUPLICATE_LOOKUP_INDEX_MIGRATION, DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
-    FACTS_REVISION_MIGRATION, HOOK_DELIVERY_MIGRATION_VERSION, MIGRATION_LOCK_KEY,
-    POLICY_DOCUMENT_MIGRATION, POLICY_DOCUMENT_MIGRATION_VERSION, SCHEDULING_MIGRATION,
-    SCHEMA_VERSIONS, WINDOW_RECORDS_MIGRATION, WINDOW_RECORDS_MIGRATION_VERSION,
-    WINDOW_REVISION_HEADS_MIGRATION, WINDOW_REVISION_HEADS_MIGRATION_VERSION,
+    EXTERNAL_REFERENCES_MIGRATION, EXTERNAL_REFERENCES_MIGRATION_VERSION, FACTS_REVISION_MIGRATION,
+    HOOK_DELIVERY_MIGRATION_VERSION, MIGRATION_LOCK_KEY, POLICY_DOCUMENT_MIGRATION,
+    POLICY_DOCUMENT_MIGRATION_VERSION, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
+    WINDOW_RECORDS_MIGRATION, WINDOW_RECORDS_MIGRATION_VERSION, WINDOW_REVISION_HEADS_MIGRATION,
+    WINDOW_REVISION_HEADS_MIGRATION_VERSION,
 };
 
 /// Said wherever the effective role mode is `single`.
@@ -1163,6 +1164,11 @@ pub(super) async fn apply_migrations_in(
             ACTIVATIONS_MIGRATION_VERSION => {
                 transaction.batch_execute(ACTIVATIONS_MIGRATION).await?;
             }
+            EXTERNAL_REFERENCES_MIGRATION_VERSION => {
+                transaction
+                    .batch_execute(EXTERNAL_REFERENCES_MIGRATION)
+                    .await?;
+            }
             _ => return Err(StoreError::Corrupt),
         }
         transaction
@@ -1245,12 +1251,12 @@ mod tests {
     #[test]
     fn a_newer_schema_version_names_the_release_that_applied_it() {
         let state = SchemaState {
-            applied: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            applied: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             pending: Vec::new(),
         };
         assert!(matches!(
             state.check(),
-            Err(StoreError::SchemaNewer { version: 10 })
+            Err(StoreError::SchemaNewer { version: 11 })
         ));
         let damaged = SchemaState {
             applied: vec![0],

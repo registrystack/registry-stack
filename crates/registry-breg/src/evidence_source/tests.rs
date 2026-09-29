@@ -75,6 +75,7 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     assert_eq!(source["request"]["path"], "/v1/records/records:lookup");
     assert_eq!(source["request"]["method"], "POST");
     assert_eq!(source["connection"], "registry");
+    assert_eq!(source["forwardAccessAttribution"], false);
     assert!(source.get("authentication").is_none());
     assert!(source.get("baseUrl").is_none());
     assert_eq!(
@@ -128,6 +129,23 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     assert!(!String::from_utf8(serde_json::to_vec(&manifest).unwrap())
         .unwrap()
         .contains("rowBoundaries"));
+}
+
+#[test]
+fn logged_entity_export_enables_attribution_and_binds_policy_into_behavior_revision() {
+    let original = project();
+    let before = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
+    let mut logged = original.clone();
+    logged["entities"][0]["accessLog"] = json!({
+        "subjectField": "code",
+        "retentionDays": 90,
+        "trustedIntermediaries": ["evidence-service"]
+    });
+    let after = export_evidence_source(&compiled(&logged, SQL), &options()).unwrap();
+    let source = yaml(&after, "sources/registry-status.yaml");
+
+    assert_eq!(source["forwardAccessAttribution"], true);
+    assert_ne!(before.behavior_revision, after.behavior_revision);
 }
 
 #[test]

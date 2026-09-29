@@ -113,6 +113,7 @@ sources:
   source-a:
     transport: http-json
     baseUrl: https://source.example
+    forwardAccessAttribution: true
     posture: record-transformed
     authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
     request:
@@ -433,6 +434,16 @@ body framing, content length/type, connection, forwarding, proxy, or tracing
 headers. Rust adds `Content-Type: application/json` for a JSON body and owns all
 authentication and framing headers. Header names and values are bounded and
 reject controls, CR, and LF. Scripts cannot observe or modify headers.
+
+`forwardAccessAttribution: true` is an explicit per-source choice for an
+authenticated source that keeps its own subject-facing access history. After
+the complete Evidence authorization and selector decision, Rust sends
+`Registry-Access-Requester` and `Registry-Access-Purpose`. Each value is the
+base64url encoding without padding of its bounded, non-control UTF-8 value.
+Both names are reserved from `fixedHeaders` and API-key authentication, and
+Rhai has no header channel. Omission forwards no attribution. The source must
+separately trust the authenticated Evidence service to assert these values;
+they grant no read authority.
 
 The governed bundle and operator runtime split, the Basic, static-Authorization,
 static-API-key, and OAuth profiles, the local-only credential-free loopback
