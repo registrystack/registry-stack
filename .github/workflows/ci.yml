@@ -233,6 +233,22 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform_coverage == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # --all-features enables registry-platform-dispatch/postgres-test, whose
+    # suite fails rather than skips without its database.
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: dispatch
+          POSTGRES_USER: dispatch
+          POSTGRES_PASSWORD: dispatch_test
+        options: >-
+          --health-cmd "pg_isready -U dispatch -d dispatch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -253,6 +269,8 @@ jobs:
           tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
 
       - name: Enforce platform line coverage
+        env:
+          DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
         run: >-
           cargo llvm-cov --locked
           -p 'registry-platform-*'
