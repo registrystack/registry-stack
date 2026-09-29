@@ -18,8 +18,9 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-- BREAKING: BReg refuses to compile a standing agent profile, one with
-  `actorKind: agent` and no `taskGrant`, that holds `submit_request`,
+- BREAKING: Base Registry Engine (BReg) refuses to compile a standing
+  agent profile, one with `actorKind: agent` and no `taskGrant`, that
+  holds `submit_request`,
   `revise_request`, `cancel_request`, or `apply_request`, with
   `access_profile.standing_agent.operation_forbidden`, or that holds
   `create` or `patch` on an entity without a `changeRequest`, or
@@ -97,7 +98,6 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_task_grants.rs;
     products/breg/TASK_GRANTS.md. */}
 
-
 - `breg-mcp` is a new supporting service beside BReg: an MCP gateway a chat
   host uses to act for one verified citizen. It reads the citizen's own
   record and creates or patches change-request drafts for it, and has no
@@ -164,6 +164,7 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-platform-httpsec/src/server.rs, CspBuilder;
     crates/registry-platform-audit/src/authorization.rs, AuthorizationAuditEvent::without_purpose;
     crates/registry-platform-testing/src/authorization_server.rs, TestAuthorizationServer. */}
+
 ## v0.36.0 beta-48
 
 - BREAKING: Base Registry Engine (BReg) records every activation in a database ledger and ships
