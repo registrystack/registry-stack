@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Release roster decisions shared by the release scripts and workflows.
 
+``RENDER_FIRST_RELEASE`` and ``EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`` name the
+first release that ships the Registry Render binary and image and the
+Evidence OID4VCI adapter image, respectively. The adapter binary predates its
+image and remains in every historical payload that already shipped it.
+
 ``BREG_SERVICES_FIRST_RELEASE`` is the single place that decides which release
 first ships the two Base Registry Engine supporting services, the citizen MCP
 gateway ``breg-mcp`` and the citizen review page ``breg-review``. It is
@@ -35,6 +40,10 @@ BREG_SERVICES_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = None
 
+RENDER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+
+EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+
 VERSION_PATTERN = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
 
@@ -63,6 +72,20 @@ def messaging_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def render_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships Registry Render."""
+
+    first_release = RENDER_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
+def evidence_oid4vci_image_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships the OID4VCI image."""
+
+    first_release = EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
 def version_argument(value: str) -> tuple[int, int, int]:
     try:
         return parse_version(value)
@@ -85,6 +108,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     messaging.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     messaging.set_defaults(in_release=messaging_in_release)
+    render = commands.add_parser(
+        "render-in-release",
+        help="print true when the release version ships Registry Render, else false",
+    )
+    render.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    render.set_defaults(in_release=render_in_release)
+    evidence_oid4vci_image = commands.add_parser(
+        "evidence-oid4vci-image-in-release",
+        help="print true when the release version ships the Evidence OID4VCI image, else false",
+    )
+    evidence_oid4vci_image.add_argument(
+        "version", type=version_argument, help="release version as X.Y.Z"
+    )
+    evidence_oid4vci_image.set_defaults(
+        in_release=evidence_oid4vci_image_in_release
+    )
     args = parser.parse_args(argv)
     print("true" if args.in_release(args.version) else "false")
     return 0

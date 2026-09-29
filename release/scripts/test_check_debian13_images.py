@@ -56,6 +56,8 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             {
                 Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
+                Path("release/docker/Dockerfile.evidence-oid4vci"),
+                Path("release/docker/Dockerfile.registry-render"),
                 Path("release/docker/Dockerfile.breg"),
                 Path("release/docker/Dockerfile.breg-mcp"),
                 Path("release/docker/Dockerfile.breg-review"),
@@ -70,6 +72,8 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             {
                 Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
+                Path("release/docker/Dockerfile.evidence-oid4vci"),
+                Path("release/docker/Dockerfile.registry-render"),
                 Path("release/docker/Dockerfile.breg"),
                 Path("release/docker/Dockerfile.breg-mcp"),
                 Path("release/docker/Dockerfile.breg-review"),

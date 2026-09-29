@@ -71,6 +71,23 @@ messaging_in_release="$(python3 "${script_dir}/release_roster.py" \
 if [[ "${messaging_in_release}" == true ]]; then
   include_messaging=1
 fi
+# Registry Render first ships as both a release binary and image in the release
+# named by release_roster.py.
+include_render=0
+render_in_release="$(python3 "${script_dir}/release_roster.py" \
+  render-in-release "${version}")"
+if [[ "${render_in_release}" == true ]]; then
+  include_render=1
+fi
+# The Evidence OID4VCI binary predates its image. Keep publishing the binary for
+# historical versions and stage it as image input only from its first image
+# release.
+include_evidence_oid4vci_image=0
+evidence_oid4vci_image_in_release="$(python3 "${script_dir}/release_roster.py" \
+  evidence-oid4vci-image-in-release "${version}")"
+if [[ "${evidence_oid4vci_image_in_release}" == true ]]; then
+  include_evidence_oid4vci_image=1
+fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
 # the release floor. The builder carries a much newer glibc, and without this
@@ -219,6 +236,17 @@ build_payload() {
     cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence dist/image-bin/evidence
+    if [[ "${include_evidence_oid4vci_image}" -eq 1 ]]; then
+      cp target/release/evidence-oid4vci dist/image-bin/evidence-oid4vci
+    fi
+
+    if [[ "${include_render}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-render --bin registry-render
+      cp target/release/registry-render \
+        "dist/bin/registry-render-${RELEASE_TAG}-linux-amd64"
+      cp target/release/registry-render dist/image-bin/registry-render
+    fi
 
     if [[ "${include_discovery}" -eq 1 ]]; then
       cargo build --release --locked \
@@ -408,6 +436,8 @@ docker run --rm \
   --env RELEASE_INCLUDE_SCHEDULING="${include_scheduling}" \
   --env RELEASE_INCLUDE_OPERATOR_TOOLS="${include_operator_tools}" \
   --env RELEASE_INCLUDE_MESSAGING="${include_messaging}" \
+  --env RELEASE_INCLUDE_RENDER="${include_render}" \
+  --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -497,6 +527,13 @@ if [[ "${group}" == all || "${group}" == core ]]; then
     "relayctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(evidence relay)
+  if [[ "${include_evidence_oid4vci_image}" -eq 1 ]]; then
+    image_bin_binaries+=(evidence-oid4vci)
+  fi
+  if [[ "${include_render}" -eq 1 ]]; then
+    bin_assets+=("registry-render-${tag}-linux-amd64")
+    image_bin_binaries+=(registry-render)
+  fi
 fi
 
 for asset in "${bin_assets[@]}"; do

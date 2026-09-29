@@ -2582,7 +2582,7 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|breg|breg-mcp|breg-review|casework|scheduling|messaging|relay)",
+            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|relay)",
             image_recipe,
         )
         self.assertNotIn("registry-relay)", image_recipe)
@@ -2976,6 +2976,8 @@ class RegistryReleaseTest(TestCase):
             inventory = {name: version for name in previous}
             if tuple(int(part) for part in version.split(".")) >= (0, 36, 0):
                 inventory["schedulingctl"] = version
+            if module.release_roster.render_in_release(tuple(map(int, version.split(".")))):
+                inventory["registry-render"] = version
             return inventory
 
         # No version ships Messaging while the roster names no first release.
@@ -3099,6 +3101,8 @@ class RegistryReleaseTest(TestCase):
         for version in ("0.36.0", "0.37.0", "1.0.0"):
             with self.subTest(version=version, roster=None):
                 current = {name: version for name in published}
+                if module.release_roster.render_in_release(tuple(map(int, version.split(".")))):
+                    current["registry-render"] = version
                 self.assertEqual(
                     [], module.artifact_inventory_errors(version, current)
                 )
@@ -4714,6 +4718,8 @@ def write_manifest(
     if load_release_roster().breg_services_in_release(version_tuple):
         artifacts["breg-mcp"] = version
         artifacts["breg-review"] = version
+    if load_release_roster().render_in_release(version_tuple):
+        artifacts["registry-render"] = version
     if load_release_roster().messaging_in_release(version_tuple):
         artifacts["messaging"] = version
         artifacts["messagingctl"] = version

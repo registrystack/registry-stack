@@ -65,6 +65,8 @@ def security_evidence_members(
         "relay",
         "scheduling",
         "messaging",
+        "evidence-oid4vci",
+        "registry-render",
     ),
 ) -> dict[str, bytes]:
     refs = {
@@ -423,6 +425,8 @@ class ReleaseCandidateTest(TestCase):
             "relay",
             "scheduling",
             "messaging",
+            "evidence-oid4vci",
+            "registry-render",
         )
         evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
@@ -962,6 +966,39 @@ class ReleaseCandidateTest(TestCase):
             },
         )
 
+    def test_render_and_oid4vci_images_join_only_the_v0_38_roster(self) -> None:
+        historical_images = self.module._candidate_image_names("0.37.99")
+        current_images = self.module._candidate_image_names("0.38.0")
+        self.assertNotIn("registry-render", historical_images)
+        self.assertNotIn("evidence-oid4vci", historical_images)
+        self.assertEqual(
+            historical_images | {"registry-render", "evidence-oid4vci"},
+            current_images,
+        )
+
+        historical_payloads = self.module._relay_v2_payload_inventory("0.37.99")
+        current_payloads = self.module._relay_v2_payload_inventory("0.38.0")
+        self.assertNotIn(
+            "registry-render-v0.37.99-linux-amd64", historical_payloads
+        )
+        self.assertEqual(
+            "binary", current_payloads["registry-render-v0.38.0-linux-amd64"]
+        )
+        self.assertEqual(
+            "binary", current_payloads["evidence-oid4vci-v0.38.0-linux-amd64"]
+        )
+
+        required = self.module._security_evidence_required_files(current_images)
+        for image in ("registry-render", "evidence-oid4vci"):
+            with self.subTest(image=image):
+                self.assertTrue(
+                    {
+                        f"image-sbom/{image}.spdx.json",
+                        f"syft/{image}.syft.json",
+                        f"grype/{image}.grype.json",
+                    }.issubset(required)
+                )
+
     def test_image_operator_tools_join_only_the_v0_36_images(self) -> None:
         for version in ("0.33.0", "0.35.0", "0.35.9"):
             with self.subTest(version=version):
@@ -1044,8 +1081,18 @@ class ReleaseCandidateTest(TestCase):
         ):
             for version in ("0.35.0", "0.36.0", "1.0.0"):
                 with self.subTest(version=version):
+                    parsed = tuple(int(part) for part in version.split("."))
+                    expected_images = set(self.module.SCHEDULING_RUNTIME_IMAGE_NAMES)
+                    if self.module.release_roster.render_in_release(parsed):
+                        expected_images |= self.module.RENDER_RUNTIME_IMAGE_NAMES
+                    if self.module.release_roster.evidence_oid4vci_image_in_release(
+                        parsed
+                    ):
+                        expected_images |= (
+                            self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+                        )
                     self.assertEqual(
-                        self.module.SCHEDULING_RUNTIME_IMAGE_NAMES,
+                        expected_images,
                         self.module._candidate_image_names(version),
                     )
                     self.assertFalse(
@@ -1121,8 +1168,18 @@ class ReleaseCandidateTest(TestCase):
         ):
             for version in ("0.36.0", "0.37.0", "1.0.0"):
                 with self.subTest(version=version):
+                    parsed = tuple(int(part) for part in version.split("."))
+                    expected_images = set(self.module.SCHEDULING_RUNTIME_IMAGE_NAMES)
+                    if self.module.release_roster.render_in_release(parsed):
+                        expected_images |= self.module.RENDER_RUNTIME_IMAGE_NAMES
+                    if self.module.release_roster.evidence_oid4vci_image_in_release(
+                        parsed
+                    ):
+                        expected_images |= (
+                            self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+                        )
                     self.assertEqual(
-                        self.module.SCHEDULING_RUNTIME_IMAGE_NAMES,
+                        expected_images,
                         self.module._candidate_image_names(version),
                     )
                     self.assertFalse(
@@ -1142,10 +1199,11 @@ class ReleaseCandidateTest(TestCase):
                     names = stdout.getvalue().split()
                     self.assertNotIn("breg-mcp", names)
                     self.assertNotIn("breg-review", names)
-                    self.assertEqual(
-                        self.module._candidate_image_names(version),
-                        self.module.check_image_onboarding(ROOT, version),
-                    )
+                    if parsed < (0, 38, 0):
+                        self.assertEqual(
+                            self.module._candidate_image_names(version),
+                            self.module.check_image_onboarding(ROOT, version),
+                        )
 
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
@@ -1177,6 +1235,11 @@ class ReleaseCandidateTest(TestCase):
                 "0.37.0",
                 "breg breg-mcp breg-review casework discovery evidence messaging "
                 "relay scheduling\n",
+            ),
+            (
+                "0.38.0",
+                "breg breg-mcp breg-review casework discovery evidence "
+                "evidence-oid4vci messaging registry-render relay scheduling\n",
             ),
         )
         for version, expected in cases:
@@ -1329,6 +1392,48 @@ class ReleaseCandidateTest(TestCase):
             ),
         )
 
+    def test_v0_38_new_images_stay_closed_until_external_setup(self) -> None:
+        self.hold_out("BREG_SERVICES_FIRST_RELEASE")
+        self.hold_out("MESSAGING_FIRST_RELEASE")
+        root = self.onboarding_repository()
+        for relative_path in (
+            "release/docker/Dockerfile.scheduling",
+            "release/security/scheduling-advisory-baseline.json",
+            "release/docker/Dockerfile.evidence-oid4vci",
+            "release/docker/Dockerfile.registry-render",
+        ):
+            shutil.copy2(ROOT / relative_path, root / relative_path)
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "evidence-oid4vci advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.38.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain evidence-oid4vci-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.38.0", allow_missing_baseline=True
+            )
+
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "evidence-candidate",\n',
+                '    "evidence-candidate",\n'
+                '    "evidence-oid4vci-candidate",\n'
+                '    "registry-render-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.38.0"),
+            self.module.check_image_onboarding(
+                root, "0.38.0", allow_missing_baseline=True
+            ),
+        )
+
     def test_breg_services_onboarding_stays_closed_until_external_setup(
         self,
     ) -> None:
@@ -1420,7 +1525,8 @@ class ReleaseCandidateTest(TestCase):
         recipe = root / "release/scripts/build-release-image.sh"
         recipe.write_text(
             recipe.read_text(encoding="utf-8").replace(
-                "discovery|evidence|breg|breg-mcp|breg-review|casework|scheduling|messaging|relay",
+                "discovery|evidence|evidence-oid4vci|registry-render|breg|"
+                "breg-mcp|breg-review|casework|scheduling|messaging|relay",
                 "discovery|evidence|mint|relay",
             ),
             encoding="utf-8",
@@ -1747,6 +1853,8 @@ class ReleaseCandidateTest(TestCase):
         required = self.module._security_evidence_required_files(
             self.module.MESSAGING_RUNTIME_IMAGE_NAMES
             | self.module.BREG_SERVICES_RUNTIME_IMAGE_NAMES
+            | self.module.RENDER_RUNTIME_IMAGE_NAMES
+            | self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
         )
         for missing in sorted(required):
             with self.subTest(missing=missing):

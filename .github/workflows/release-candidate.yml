@@ -416,6 +416,32 @@ jobs:
               "messagingctl ${{ needs.validate.outputs.version }}"
           fi
 
+          render_in_release="$(python3 release/scripts/release_roster.py \
+            render-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${render_in_release}" == true ]]; then
+            render_binary="${GITHUB_WORKSPACE}/dist/bin/registry-render-${{ needs.validate.outputs.tag }}-linux-amd64"
+            typst_pin="$(sed -n 's/^pub const TYPST_PIN: &str = "\([^" ]*\)";$/\1/p' crates/registry-render/src/lib.rs)"
+            test -n "${typst_pin}"
+            expected_render_version="registry-render ${{ needs.validate.outputs.version }} (typst ${typst_pin})"
+            test "$("${render_binary}" --version)" = "${expected_render_version}"
+            test "$(dist/image-bin/registry-render --version)" = "${expected_render_version}"
+            render_project="${RUNNER_TEMP}/release-render-project"
+            render_package="${RUNNER_TEMP}/release-render-package"
+            "${render_binary}" init "${render_project}"
+            "${render_binary}" check --bundle "${render_project}"
+            "${render_binary}" package --bundle "${render_project}" --output "${render_package}"
+            "${render_binary}" compile --bundle "${render_package}" --type letter \
+              --data "${render_project}/fixtures/data.json" --issued-at 2026-01-01T00:00:00Z \
+              --strict --out "${RUNNER_TEMP}/release-render-letter.pdf"
+            test -s "${RUNNER_TEMP}/release-render-letter.pdf"
+          fi
+          oid4vci_image_in_release="$(python3 release/scripts/release_roster.py \
+            evidence-oid4vci-image-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${oid4vci_image_in_release}" == true ]]; then
+            test "$(dist/image-bin/evidence-oid4vci --version)" = \
+              "evidence-oid4vci ${{ needs.validate.outputs.version }}"
+          fi
+
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

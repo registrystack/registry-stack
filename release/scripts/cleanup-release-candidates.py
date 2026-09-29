@@ -35,6 +35,8 @@ PUBLIC_PACKAGES = (
     "registry-relay",
     "discovery",
     "evidence",
+    "evidence-oid4vci",
+    "registry-render",
     "mint",
     "breg",
     "breg-mcp",

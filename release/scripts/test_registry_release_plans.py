@@ -200,6 +200,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("breg-mcp", "breg-review")
     if REGISTRY_RELEASE.release_roster.messaging_in_release(version_tuple):
         inventory += ("messaging", "messagingctl")
+    if REGISTRY_RELEASE.release_roster.render_in_release(version_tuple):
+        inventory += ("registry-render",)
     data = {
         "stack": {
             "release": release_id,
@@ -665,6 +667,21 @@ class RegistryReleasePlanTest(unittest.TestCase):
                     [],
                     owner.artifact_inventory_errors(version, document["artifacts"]),
                 )
+
+    def test_render_artifact_joins_only_the_v0_38_manifest_inventory(self) -> None:
+        owner = _load_registry_release()
+        historical = manifest("0.37.99", "beta-fixture", "v0.37.99", "candidate")
+        current = manifest("0.38.0", "beta-fixture", "v0.38.0", "candidate")
+        self.assertNotIn("registry-render", historical["artifacts"])
+        self.assertIn("registry-render", current["artifacts"])
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.37.99", historical["artifacts"]),
+        )
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
+        )
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
