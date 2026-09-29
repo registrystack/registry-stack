@@ -5882,7 +5882,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5936,7 +5936,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-client"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "axum",
  "registry-messaging-core",
@@ -5952,7 +5952,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-client-node"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5965,7 +5965,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-client-py"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5978,7 +5978,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-core"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -5993,7 +5993,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messagingctl"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -6134,7 +6134,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-dispatch"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -6237,7 +6237,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ratelimit"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "thiserror 2.0.21",
  "tokio",

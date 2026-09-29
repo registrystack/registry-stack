@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/messaging-client-native",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "Internal Node.js native binding used by @registrystack/client.",
   "private": true,
   "license": "Apache-2.0",
@@ -19,13 +19,13 @@
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build:debug": "napi build --platform --no-js --dts index.d.ts.check && rm -f index.d.ts.check",
     "test": "node --test __test__/*.test.js",
-    "check:types": "napi build --platform --release --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts __test__/facade.test-d.ts"
+    "check:types": "napi build --platform --js index.js.check --dts index.d.ts.check && cmp index.js index.js.check && cmp index.d.ts index.d.ts.check && rm -f index.js.check index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts __test__/facade.test-d.ts"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.8.2",
-    "@types/node": "22.20.1",
+    "@napi-rs/cli": "3.10.5",
+    "@types/node": "22.20.4",
     "typescript": "6.0.3"
   }
 }
