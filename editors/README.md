@@ -1,27 +1,94 @@
 # Registry Stack editor integrations
 
-Semantic navigation for VS Code and Zed is installable from a Registry Stack source release.
+Semantic navigation for VS Code and Zed is installable from a Registry Stack source checkout.
 The integrations are beta features and are not yet marketplace extensions or release assets.
-Use `evidencectl tooling editor` or `relayctl tooling editor` and its generated
-schema setup as the stable beta path for YAML validation, completion, hover,
-and formatting.
-Install the editor integration when you also want optional cross-file semantic navigation.
+The integrations follow the workspace version in `Cargo.toml`. Build the
+adopter CLI from the same source as the extension when using unreleased main.
+Install an integration for definitions, references, symbols, reference-value
+completion, and hover across the current products' authored YAML and JSON. Schema
+validation, mapping-key completion, and formatting remain with the editor's
+YAML language server.
 
 The Registry Stack editor support is split into one reusable language server and thin editor
 launchers:
 
-- `../crates/registry-language-server` owns project indexing, navigation, symbols, and Registry
-  Stack reference diagnostics.
+- `../crates/registry-language-server` owns project indexing, navigation, symbols,
+  and Registry Stack reference diagnostics for every product family below.
 - `vscode` launches the server through VS Code's language-client API.
 - `zed` launches the same server through Zed's extension API.
 
 These integrations intentionally run alongside each editor's YAML language server.
-The generated `.vscode/settings.json` and `.zed/settings.json` files continue to provide
-version-matched schema validation and YAML completion without duplicating that behavior here.
+Project setup writes `.vscode/settings.json` and `.zed/settings.json` with
+version-matched schemas where the product publishes them. Product validators
+remain authoritative for rules that require compilation or runtime configuration.
 
-The language server watches Registry Stack YAML paths for changes made by generators, Git, or
+The language server watches Registry Stack authored files for changes made by generators, Git, or
 other tools. An open editor buffer remains authoritative until it is closed, so a filesystem event
 cannot replace unsaved content.
+
+## Product coverage
+
+| Product | Project entry | Semantic navigation |
+|---|---|---|
+| Base Registry Engine | `registry.yaml` declaring `RegistryProject` | Entities, fields, access profiles, actions, and authored modules |
+| Registry Casework | `casework.yaml` | Sources, queues, routing, review policies, and directory references |
+| Registry Scheduling | `scheduling.yaml` | Services, locations, offerings, opening patterns, holiday sets, and fixture references |
+| Registry Messaging | `messaging.yaml` | Templates and versions, access profiles, providers, and template files |
+| Registry Discovery | `origins.yaml` | Origin and mapping declarations across the project |
+| Registry Manifest | `metadata.yaml`, or an explicitly selected document | Datasets, entities, fields, codelists, services, forms, and their references |
+| Registry Render | `manifest.yaml` declaring `RenderBundle` | Documents and their template, schema, and locale files |
+| Evidence wallet delivery | Explicitly selected configuration | Configuration sections and contained, configuration-relative key-file navigation |
+| Evidence | `evidence-project.yaml`, or the legacy OpenAPI/questions pair | Questions, sources, selectors, policies, facts, and authored file references |
+| Registry Relay | `registry.yaml` declaring `RegistryContract` | Governed resources, operations, profiles, bindings, and file references |
+
+Each family uses its own names and scopes. A BReg `registry.yaml` never receives
+Relay diagnostics. Discovery's remote vocabulary identifiers are not unresolved
+local references. The server does not fetch remote descriptions, execute scripts,
+query databases, or read private key bytes. Navigation to a contained key file
+opens it only when the author requests that editor action.
+
+See the [language-server reference](../crates/registry-language-server/README.md)
+for the indexed relationships and their boundaries. These integrations navigate
+YAML references to scripts and templates; they do not implement the scripting
+languages' own language servers.
+
+## Configure a project
+
+From the source checkout, use Python 3.10 or newer to prepare both editors:
+
+```console
+python3 editors/configure.py breg /path/to/registry-project
+python3 editors/configure.py scheduling /path/to/scheduling-project
+python3 editors/configure.py manifest /path/to/metadata-project --document publication.yaml
+python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/wallet.yaml
+```
+
+The product argument also accepts `casework`, `messaging`, `discovery`,
+`render`, `evidence`, and `relay`. Manifest and wallet-delivery setup records the
+selected document in `.registry-stack-editor/project.json`, so an arbitrary
+configuration filename can be recognized without claiming unrelated YAML.
+
+Setup copies maintained schemas from this checkout and adds a **Registry Stack:
+check** task where the product supplies a validation command. Use **Tasks: Run
+Task** in VS Code or **task: spawn** in Zed. No validator is run automatically
+when a file opens. Casework, Scheduling, and Messaging currently publish runtime
+schemas; their policy/package validation comes from their check task.
+Manifest, Render, and wallet delivery have no maintained authoring JSON schema.
+
+For multiple product directories in one workspace, pass `--workspace` with the
+ancestor directory. Schema mappings name the specific project's paths so one
+product's `runtime.yaml` does not inherit another's grammar. Setup preserves
+unrelated JSON settings and tasks and refreshes its own unchanged entries. It
+refuses edited managed files or JSONC it cannot merge without losing comments;
+the error identifies the file to resolve before retrying. Rerun setup from the
+matching checkout after upgrading. The generated setup contains local paths;
+regenerate it when moving a workspace.
+
+Evidence and Relay retain their canonical `tooling editor` schema generators.
+The shared helper invokes the matching CLI for those products. Relay's generator
+supports project-local settings only, so use its project directory as the workspace.
+Schema setup and
+CLI tasks can be used without installing the semantic extension.
 
 ## Install
 
@@ -47,6 +114,8 @@ fails either check does not stop the one behind it. VS Code is packaged and inst
 `--profile <existing-name>` to select another VS Code profile. The local VSIX records the verified
 CLI path, so an already-running VS Code process does not need to inherit the installer's `PATH`.
 Zed is compiled, then requires the command-palette selection that its CLI cannot perform.
+At startup both launchers check that a CLI still matches the extension version,
+including the matching `-dev` version, and skip older candidates.
 
 The installer does not trust a project or approve a development extension. Those decisions stay
 with the user. Pass `--open <existing-directory>` only as a convenience to open a directory after
@@ -55,8 +124,8 @@ installation. It does not configure that directory. Use `--help` for the complet
 ## Evidence projects
 
 The same language server and editor launchers also serve an Evidence authoring project. There is
-no separate Evidence editor integration: one client per workspace folder covers both project
-families, and neither `vscode` nor `zed` branches on which one a folder is.
+no separate Evidence editor integration: one client per workspace folder covers
+the product families it contains.
 
 A folder is an Evidence project root when it contains the `evidence-project.yaml` marker, or, for
 a project created before the marker existed, the legacy pair of a `source.openapi.yaml` file and a
@@ -147,8 +216,9 @@ Use the following checks in either editor:
    must report an unknown Relay V2 source reference. Restore `registry` and
    confirm that the diagnostic clears.
 
-The YAML language server may report additional schema or syntax diagnostics. Those are expected
-and are separate from diagnostics whose source is `registry-stack`.
+The YAML language server may report additional schema or syntax diagnostics.
+Semantic diagnostics identify their product in the source, such as `relay-v2`,
+`evidence`, or `breg`.
 
 ### Automated checks
 
@@ -156,10 +226,18 @@ The same core behavior has non-GUI coverage:
 
 ```console
 bash editors/tests/install_test.sh
+python3 -m unittest discover -s editors/tests -p 'test_*.py'
 cargo test --locked -p registry-language-server
 cargo test --locked -p registry-relayctl --test language_server
 cargo build --locked -p registry-language-server
 cd editors/vscode && npm ci && npm test
+```
+
+Check the Zed launcher from the repository root:
+
+```console
+cargo test --locked --manifest-path editors/zed/Cargo.toml
+cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
 ```
 
 The VS Code test launches the minimum supported VS Code release line in an Extension Host. It
@@ -182,3 +260,9 @@ cargo build --locked -p registry-language-server
 
 Follow the editor-specific iteration instructions to point the editor at
 `target/debug/registry-language-server` and restart it.
+The standalone development server has no version probe and is selected through
+an explicit editor setting. It is not selected automatically from `PATH`.
+
+When opening a new workspace release version, update the VS Code package and
+lockfile plus the Zed extension, crate, and lockfile versions together. VSIX
+packaging checks the extension version against the source workspace version.

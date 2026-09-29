@@ -165,7 +165,7 @@ assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <run> <packag
 assert_contains "code <--profile> <Registry Stack Test> <--install-extension> <${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix> <--force>" "${COMMAND_LOG}"
 assert_not_contains '<--new-window>' "${COMMAND_LOG}"
 assert_contains 'Workspace trust remains your decision' "${vscode_output}"
-assert_contains 'Project setup remains a separate evidencectl or relayctl operation' "${vscode_output}"
+assert_contains 'Project setup: python3 editors/configure.py <product> <project>' "${vscode_output}"
 assert_contains 'Using evidencectl 0.16.3' "${vscode_output}"
 
 # A registryctl on PATH is ignored, and Relay V2 can install from relayctl

@@ -96,19 +96,32 @@ impl DocumentCeiling {
 pub(crate) enum ProjectFamily {
     RelayV2,
     Evidence,
+    Product(crate::products::ProductKind),
 }
 
 impl ProjectFamily {
     /// Every family discovery tests, in the order it tests them. The order decides a directory that
     /// somehow answers for two families, so it is fixed here rather than left to whichever test
     /// runs first.
-    const ALL: &'static [Self] = &[Self::RelayV2, Self::Evidence];
+    const ALL: &'static [Self] = &[
+        Self::RelayV2,
+        Self::Evidence,
+        Self::Product(crate::products::ProductKind::Breg),
+        Self::Product(crate::products::ProductKind::Casework),
+        Self::Product(crate::products::ProductKind::Scheduling),
+        Self::Product(crate::products::ProductKind::Messaging),
+        Self::Product(crate::products::ProductKind::Discovery),
+        Self::Product(crate::products::ProductKind::Manifest),
+        Self::Product(crate::products::ProductKind::Render),
+        Self::Product(crate::products::ProductKind::EvidenceOid4vci),
+    ];
 
     /// Whether this family claims a directory as one of its roots.
     fn declares_root(self, directory: &Path) -> bool {
         match self {
             Self::RelayV2 => relay_v2::declares_root(directory),
             Self::Evidence => evidence::declares_root(directory),
+            Self::Product(product) => crate::products::declares_root(directory, product),
         }
     }
 
@@ -116,6 +129,9 @@ impl ProjectFamily {
         match self {
             Self::RelayV2 => relay_v2::load_project_documents(root),
             Self::Evidence => evidence::load_project_documents(root),
+            Self::Product(product) => {
+                crate::products::load_documents(root, product, &BTreeMap::new())
+            }
         }
     }
 
@@ -130,7 +146,7 @@ impl ProjectFamily {
         match self {
             // Relay V2 builds only from the entry documents and the governed closure already held
             // by the root. Saving an unrelated path cannot affect that closure.
-            Self::RelayV2 => false,
+            Self::RelayV2 | Self::Product(_) => false,
             Self::Evidence => evidence::is_read_by_a_build(root, path),
         }
     }
@@ -142,7 +158,7 @@ impl ProjectFamily {
     /// refuses for its size is a document the editor refuses for the same size.
     fn document_ceiling(self, root: &Path, path: &Path) -> DocumentCeiling {
         match self {
-            Self::RelayV2 => DocumentCeiling::project_document(),
+            Self::RelayV2 | Self::Product(_) => DocumentCeiling::project_document(),
             Self::Evidence => evidence::document_ceiling(root, path),
         }
     }
@@ -159,7 +175,7 @@ impl ProjectFamily {
     /// resolves cannot become an unresolved reference on screen.
     fn bounded_directory_of(self, root: &Path, path: &Path) -> Option<PathBuf> {
         match self {
-            Self::RelayV2 => None,
+            Self::RelayV2 | Self::Product(_) => None,
             Self::Evidence => evidence::bounded_directory_of(root, path),
         }
     }
@@ -172,7 +188,7 @@ impl ProjectFamily {
         path: &Path,
     ) -> Result<Option<evidence::ScannedDirectory>> {
         match self {
-            Self::RelayV2 => Ok(None),
+            Self::RelayV2 | Self::Product(_) => Ok(None),
             Self::Evidence => evidence::scan_bounded_directory(root, path),
         }
     }
@@ -198,6 +214,7 @@ impl ProjectFamily {
         match self {
             Self::RelayV2 => relay_v2::build_index(root, documents, parsed),
             Self::Evidence => evidence::build_index(root, documents, parsed, dropped),
+            Self::Product(product) => crate::products::build_index(root, product, parsed),
         }
     }
 
@@ -210,6 +227,7 @@ impl ProjectFamily {
         match self {
             Self::RelayV2 => "relay-v2",
             Self::Evidence => "evidence",
+            Self::Product(product) => product.name(),
         }
     }
 
@@ -219,6 +237,7 @@ impl ProjectFamily {
         match self {
             Self::RelayV2 => Some(format!("{}/{rule}", self.diagnostic_source())),
             Self::Evidence => Some(format!("{}/{rule}", self.diagnostic_source())),
+            Self::Product(_) => Some(format!("{}/{rule}", self.diagnostic_source())),
         }
     }
 
@@ -228,6 +247,9 @@ impl ProjectFamily {
     pub(crate) fn parses_as_yaml(self, path: &Path) -> bool {
         match self {
             Self::Evidence => true,
+            Self::Product(_) => path
+                .extension()
+                .is_some_and(|value| value == "yaml" || value == "yml" || value == "json"),
             Self::RelayV2 => path.extension().is_some_and(|extension| {
                 matches!(extension.to_str(), Some("yaml" | "yml" | "json"))
             }),
@@ -337,6 +359,10 @@ impl RootState {
                 ),
             );
         }
+        if matches!(self.family, ProjectFamily::Product(_)) {
+            let _ = self.reload_product_with_open_documents();
+            return;
+        }
         if self.family == ProjectFamily::RelayV2 {
             // An exact-closure reload owns both the success and failure transitions for Relay.
             // Falling through after an error would rebuild the partially mutated pre-reload map
@@ -390,6 +416,9 @@ impl RootState {
                 relay_v2::is_project_document(&self.root, path, &self.documents)
             }
             ProjectFamily::Evidence => evidence::is_safe_authored_file(&self.root, path),
+            ProjectFamily::Product(product) => {
+                crate::products::is_project_document(&self.root, path, product, &self.documents)
+            }
         }
     }
 
@@ -459,6 +488,9 @@ impl RootState {
     /// after a batch is applied, a bounded directory holds what a first scan of the same tree would
     /// hold.
     fn reload_watched_batch(&mut self, paths: &[PathBuf]) -> Result<()> {
+        if matches!(self.family, ProjectFamily::Product(_)) {
+            return self.reload_product_with_open_documents();
+        }
         if self.family == ProjectFamily::RelayV2 {
             // The recursive watcher is only a notification mechanism. Its path is not authority
             // to read that file: resolving the entry documents and their governed closure is the
@@ -523,6 +555,10 @@ impl RootState {
     }
 
     fn reload_from_disk(&mut self, path: &Path) {
+        if matches!(self.family, ProjectFamily::Product(_)) {
+            let _ = self.reload_product_with_open_documents();
+            return;
+        }
         if self.family == ProjectFamily::RelayV2 {
             let _ = self.reload_relay_v2_with_open_documents();
             return;
@@ -540,7 +576,60 @@ impl RootState {
     /// Disk state is loaded through the same bounded first-scan path. Text still owned by the
     /// client is then overlaid where it remains available, and the aggregate ceiling is weighed
     /// again before anything is parsed.
+    fn reload_product_with_open_documents(&mut self) -> Result<()> {
+        let ProjectFamily::Product(product) = self.family else {
+            unreachable!()
+        };
+        let overrides = self
+            .open_versions
+            .keys()
+            .filter_map(|path| {
+                self.documents
+                    .get(path)
+                    .or_else(|| self.absent_buffers.get(path))
+                    .map(|text| (path.clone(), text.clone()))
+            })
+            .collect();
+        let loaded = match crate::products::load_documents(&self.root, product, &overrides) {
+            Ok(loaded) => loaded,
+            Err(_) => {
+                self.absent_buffers.extend(overrides);
+                self.documents.clear();
+                self.indexing_ceiling_path = None;
+                self.disk_diagnostics = vec![document_rule_diagnostic(
+                    &crate::products::entry_path(&self.root,product).unwrap_or_else(||self.root.clone()),
+                    Some(format!("{}/document-read",product.name())),
+                    "Cannot read the complete authoring project; restore file permissions and save or refresh to retry",
+                )];
+                self.rebuild();
+                return Ok(());
+            }
+        };
+        for (path, text) in &overrides {
+            if !loaded.documents.contains_key(path) {
+                self.absent_buffers.insert(path.clone(), text.clone());
+            } else {
+                self.absent_buffers.remove(path);
+            }
+        }
+        self.documents = loaded.documents;
+        self.disk_diagnostics = loaded.diagnostics;
+        self.indexing_ceiling_path = loaded.indexing_ceiling_path;
+        for path in self
+            .open_versions
+            .keys()
+            .filter(|path| !overrides.contains_key(*path))
+        {
+            self.documents.remove(path);
+        }
+        self.rebuild();
+        Ok(())
+    }
+
     fn reload_project_from_disk(&mut self) -> Result<()> {
+        if matches!(self.family, ProjectFamily::Product(_)) {
+            return self.reload_product_with_open_documents();
+        }
         if self.family == ProjectFamily::RelayV2 {
             return self.reload_relay_v2_with_open_documents();
         }

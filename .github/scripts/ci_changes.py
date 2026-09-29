@@ -1211,6 +1211,20 @@ def classify(
     editors = (
         complete
         or any(path.startswith("editors/") for path in paths)
+        # The shared editor configurator copies these product-owned schemas.
+        # Exercise its real settings generation when a copied contract changes.
+        or any(
+            path.startswith(prefix)
+            for path in paths
+            for prefix in (
+                "products/breg/generated/authoring/",
+                "products/breg/generated/runtime/",
+                "products/casework/generated/runtime/",
+                "products/scheduling/generated/runtime/",
+                "products/messaging/generated/runtime/",
+                "products/discovery/schemas/",
+            )
+        )
         or "registry-language-server" in affected
     )
     # Reverse dependents, not changed paths: bindings are Cargo path dependents

@@ -1,23 +1,31 @@
 # Registry Stack language server
 
-`registry-language-server` adds Registry Stack project semantics to YAML editors through the
+`registry-language-server` adds Registry Stack project semantics to YAML and JSON editors through the
 Language Server Protocol. It provides go to definition, find references, workspace symbols, document
 symbols, completion and hover on the names one document writes and another spells back, and errors
 for missing, duplicate, or ambiguous references. It deliberately leaves syntax, schemas, mapping-key
-completion, and formatting to the editor's YAML language server: the authoring form's JSON Schemas
-already complete the keys through the project-local `yaml.schemas` mapping `evidencectl` writes, and
-a second list of the same keys would be a second list to disagree with the first.
+completion, and formatting to the editor's existing language servers. The
+[shared editor setup](../../editors/README.md#configure-a-project) configures
+version-matched schemas wherever the product publishes them.
 
 ## Document families
 
-The server reads unrelated authoring surfaces and keeps them apart. Each root belongs to exactly
+The server reads product authoring surfaces and keeps their indexes apart. Each root belongs to exactly
 one family, and a diagnostic names the family that produced it in its `source` field, so a workspace
-holding both can be read without guessing which tool is talking.
+holding several products can be read without guessing which tool is talking.
 
 | Family | A directory is a root when it holds | Diagnostic source |
 |---|---|---|
-| Relay V2 | `registry.yaml` | `relay-v2` |
+| Relay V2 | `registry.yaml` with a Relay V2 discriminator | `relay-v2` |
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
+| BReg | `registry.yaml`: `RegistryProject` or BReg `apiVersion` | `breg` |
+| Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
+| Scheduling | `scheduling.yaml`: `SchedulingPolicyPackage` or Scheduling `apiVersion` | `scheduling` |
+| Messaging | `messaging.yaml`: `MessagingPackage` or Messaging `apiVersion` | `messaging` |
+| Discovery | `origins.yaml` with a Discovery origins `schemaVersion` | `discovery` |
+| Manifest | `metadata.yaml` with `schema_version: registry-manifest/v1`, or an explicit project marker | `manifest` |
+| Render | `manifest.yaml`: `RenderBundle` or Render `apiVersion` | `render` |
+| Evidence OID4VCI | an explicit project marker | `evidence-oid4vci` |
 
 Evidence accepts the second marker because an authoring project has always carried one OpenAPI
 description and a directory of questions. A project written before the marker file existed is still
@@ -89,10 +97,45 @@ optional `runtime.yaml`, and exact governed closure. Those are the same strict
 types and compiler checks `relayctl check` uses. The editor never opens SQLite
 or observes source rows.
 
+### Current product authoring
+
+The additional products use explicit contract-derived declarations and references over the same
+syntax index. They add no dependencies on product runtimes. All support definitions, references,
+symbols, completion, and hover for their modeled local authoring edges.
+
+| Product | Indexed relationships |
+|---|---|
+| BReg | Authored modules, entities and extensions, fields including implicit `id`, selectors, constraints, read paths, entity and project access profiles, action inputs/effects, vocabularies, Manifest projection names, and governed script/WASM/SQL files. Module assets resolve relative to the module. |
+| Casework | Queues, access profiles, review kinds/stages/outcomes/producers, clocks/calendars, source bindings and imported request fields, task templates, runtime source names, and development directory clients. |
+| Scheduling | Services/offerings/openings/holiday sets, local location/pool/window records, exception reopening targets scoped to location, and fixture offering names. |
+| Messaging | Providers, sender profiles, template identities and version-specific metadata files, access profiles, runtime providers, locale/fallback/part names and their Jinja body files, provider scripts, and fixed template schema/sample file symbols. |
+| Discovery | Origin, mapping, requirement, and evidence-type-list declarations. External evidence type identifiers are not treated as local references. |
+| Manifest | Catalog, dataset, service, distribution, codelist, entity and field names; dataset/service/distribution relationships, entity-scoped identifiers, requirements and evidence lists, and Registry Evidence evaluation profiles. |
+| Render | Document identifiers, governed entry/schema files, and locale label files. |
+| Evidence OID4VCI | Native configuration section symbols and `tokenClient.privateKeyFile` navigation. Key contents are never read or indexed. |
+
+For arbitrary Manifest and OID4VCI configuration filenames, create
+`.registry-stack-editor/project.json` containing `{"product":"manifest","document":"config/metadata.yaml"}`
+or the product `evidence-oid4vci`. The document must be an existing regular `.yaml` or `.yml` file
+inside the project, using a relative path without traversal or symbolic links. The shared
+`python3 editors/configure.py` command writes this marker and configures both editors.
+
+Name scopes follow the owning document contract. An entity field does not complete fields from a
+different entity, and Manifest fields also retain their dataset scope. References to separately
+deployed records or remote identifiers do not produce invented missing-local-name errors. Product
+validation remains the owning CLI's responsibility; these new indexes report syntax and modeled
+local reference errors, rather than claiming full compiler validation. Rhai, Jinja, Typst, SQL, and
+private-key contents remain with their native tooling.
+
+For ordinary asset paths, completion can repair a missing filename using contained sibling files
+with the same extension. It checks at most 1,024 directory entries and reads no candidate contents.
+Private-key references do not enumerate neighboring keys. BReg modules are indexed from the authored
+module directory, including modules awaiting a lock entry; `bregctl check` owns lock validation.
+
 ## Diagnostics
 
-Every diagnostic this server publishes has severity `Error`. Semantic diagnostics carry what the
-compiler refuses. The separately named indexing-ceiling diagnostics explain when the editor cannot
+Every diagnostic this server publishes has severity `Error`. Relay and Evidence semantic diagnostics carry what their authoring readers or compilers refuse.
+The additional products diagnose their explicitly modeled local authoring relationships. The separately named indexing-ceiling diagnostics explain when the editor cannot
 safely build an index and do not claim that the compiler applies the same operational budget.
 
 Evidence diagnostics carry a code naming the rule, such as `evidence/unknown-source`,
@@ -109,14 +152,12 @@ lie inside one of the declared folders. A session that declares no folders has n
 root to and accepts whatever the upward walk reaches; a session whose declared folders do not
 resolve on this filesystem accepts nothing.
 
-Only regular files in the documented project layouts are indexed. Symbolic links, files outside the
-project root, unrelated YAML files, and documents past the per-role byte ceiling are ignored, and
-those ceilings are the authoring form's own rather than the editor's, so a document `evidencectl`
-refuses for its size is one the editor refuses for the same size. How many documents a directory
-contributes follows two layers. An Evidence root first applies the authoring form's 128-document
-limits to `questions/` and `access/policies/`; both families retain their existing per-document byte
-limits. Every root then applies an editor-only aggregate budget of 1,024 indexed documents or 16
-MiB across the YAML documents it parses. A project past either aggregate limit gets one
+Only regular files admitted by a family's authoring layout or declared file references are indexed.
+Symbolic links, files outside the project root, and unrelated documents are excluded. Evidence
+retains its authoring form's per-role byte ceilings and 128-document limits for `questions/` and
+`access/policies/`. Relay and the additional products use a 1 MiB editor ceiling per indexed
+document. Every root also applies an editor-only aggregate budget of 1,024 indexed documents or 16
+MiB across the YAML and JSON documents it parses. A project past either aggregate limit gets one
 project-ceiling diagnostic and no partial index, so the editor does not invent unresolved-reference
 errors for documents it deliberately left out. Evidence names that rule
 `evidence/project-ceiling`; Relay follows its existing unnumbered diagnostic convention. Reduce the
@@ -133,11 +174,10 @@ in-progress edit in one file never blinds the rest of the project.
 ## Run
 
 ```console
-cargo run -p registry-language-server
+cargo run --locked -p registry-language-server
 ```
 
-The same server is available from a release installation through the
-supported adopter CLIs:
+The same server is also hosted by these adopter CLIs from the same source version:
 
 ```console
 evidencectl tooling language-server

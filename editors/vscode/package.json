@@ -1,8 +1,8 @@
 {
   "name": "registry-stack",
   "displayName": "Registry Stack",
-  "description": "Cross-file navigation and reference diagnostics for Registry Stack YAML projects.",
-  "version": "0.2.0",
+  "description": "Cross-file navigation and reference diagnostics for Registry Stack YAML authoring projects.",
+  "version": "0.37.0",
   "publisher": "registrystack",
   "license": "Apache-2.0",
   "repository": {
@@ -29,6 +29,20 @@
     "workspaceContains:**/evidence-project.yaml",
     "workspaceContains:source.openapi.yaml",
     "workspaceContains:**/source.openapi.yaml",
+    "workspaceContains:casework.yaml",
+    "workspaceContains:**/casework.yaml",
+    "workspaceContains:scheduling.yaml",
+    "workspaceContains:**/scheduling.yaml",
+    "workspaceContains:messaging.yaml",
+    "workspaceContains:**/messaging.yaml",
+    "workspaceContains:origins.yaml",
+    "workspaceContains:**/origins.yaml",
+    "workspaceContains:manifest.yaml",
+    "workspaceContains:**/manifest.yaml",
+    "workspaceContains:metadata.yaml",
+    "workspaceContains:**/metadata.yaml",
+    "workspaceContains:.registry-stack-editor/project.json",
+    "workspaceContains:**/.registry-stack-editor/project.json",
     "onCommand:registryStack.restartLanguageServer"
   ],
   "extensionKind": [
@@ -57,7 +71,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the registry-language-server executable. Relative paths resolve from the workspace folder whose language server is starting. When empty, the extension uses the installer-selected adopter CLI when available, then searches PATH for registry-language-server, evidencectl, or relayctl."
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the workspace folder whose language server is starting. When empty, the extension uses the installer-selected adopter CLI when available, then searches PATH for evidencectl or relayctl matching this extension version. Use an explicit path for the standalone development server."
         }
       }
     }

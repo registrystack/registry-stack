@@ -1,5 +1,7 @@
 .github/**
 .vscode-test.*
+.vscode-test
+.vscode-test/**
 .gitignore
 package-lock.json
 src/**
@@ -8,5 +10,6 @@ scripts/**
 out/**
 tsconfig.json
 tsconfig.test.json
+tsconfig.unit.json
 node_modules/.cache/**
 **/*.map

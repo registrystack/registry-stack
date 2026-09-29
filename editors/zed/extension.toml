@@ -1,11 +1,11 @@
 id = "registry-stack"
 name = "Registry Stack"
-version = "0.2.0"
+version = "0.37.0"
 schema_version = 1
 authors = ["Registry Stack contributors"]
-description = "Cross-file navigation and reference diagnostics for Registry Stack YAML projects."
+description = "Cross-file navigation and reference diagnostics for Registry Stack authoring projects."
 repository = "https://github.com/registrystack/registry-stack"
 
 [language_servers.registry-stack]
 name = "Registry Stack Language Server"
-languages = ["YAML"]
+languages = ["YAML", "JSON"]

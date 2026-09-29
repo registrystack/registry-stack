@@ -34,33 +34,33 @@ export function isExecutableFile(candidate: string): boolean {
   }
 }
 
-export function findExecutableOnPath(executable: string): string | undefined {
+function findExecutablesOnPath(executable: string): string[] {
   const pathEntries = process.env.PATH?.split(path.delimiter) ?? [];
+  const candidates = new Set<string>();
   for (const entry of pathEntries) {
     if (entry === '') {
       continue;
     }
     const candidate = path.join(entry, executable);
     if (isExecutableFile(candidate)) {
-      return candidate;
+      candidates.add(candidate);
     }
   }
-  return undefined;
+  return [...candidates];
 }
 
 // The first PATH candidate that can actually serve this workspace, or nothing.
 // A name on PATH is not the answer on its own: an adopter can hold a CLI built
 // before the language server was hosted in it, and the presence of that one
 // must not hide a later CLI standing beside it.
-export function findLanguageServerOnPath(): ServerCommand | undefined {
-  const standalone = findExecutableOnPath(platformExecutable('registry-language-server'));
-  if (standalone !== undefined) {
-    return { command: standalone, args: [] };
-  }
+export function findLanguageServerOnPath(expectedVersion: string): ServerCommand | undefined {
+  // The standalone development binary has no version contract. It remains
+  // available through the explicit setting, where the author selects a build.
   for (const name of HOSTING_CLI_NAMES) {
-    const candidate = findExecutableOnPath(platformExecutable(name));
-    if (candidate !== undefined && hostsLanguageServer(candidate)) {
-      return { command: candidate, args: [...HOSTED_SERVER_ARGUMENTS] };
+    for (const candidate of findExecutablesOnPath(platformExecutable(name))) {
+      if (hostsMatchingLanguageServer(candidate, expectedVersion)) {
+        return { command: candidate, args: [...HOSTED_SERVER_ARGUMENTS] };
+      }
     }
   }
   return undefined;
@@ -73,7 +73,23 @@ function platformExecutable(name: string): string {
 // Whether this command hosts the language server, asked of the command rather
 // than inferred from its name. The probe is the CLI's own help for the
 // subcommand, so it starts no server and reads no project.
-function hostsLanguageServer(command: string): boolean {
+export function hostsMatchingLanguageServer(command: string, expectedVersion: string): boolean {
+  const version = spawnSync(command, ['--version'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: PROBE_TIMEOUT_MILLISECONDS,
+    maxBuffer: 4096,
+  });
+  if (version.error !== undefined || version.status !== 0) {
+    return false;
+  }
+  const [name, reportedVersion] = version.stdout.trim().split(/\s+/);
+  if (
+    !HOSTING_CLI_NAMES.includes(name) ||
+    (reportedVersion !== expectedVersion && reportedVersion !== `${expectedVersion}-dev`)
+  ) {
+    return false;
+  }
   const probe = spawnSync(command, [...HOSTED_SERVER_ARGUMENTS, '--help'], {
     stdio: 'ignore',
     timeout: PROBE_TIMEOUT_MILLISECONDS,

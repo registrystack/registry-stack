@@ -2263,7 +2263,9 @@ jobs:
           cache-dependency-path: editors/vscode/package-lock.json
 
       - name: Test editor installer
-        run: bash editors/tests/install_test.sh
+        run: |
+          bash editors/tests/install_test.sh
+          python3 -m unittest discover -s editors/tests -p 'test_*.py'
 
       - name: Package and test VS Code integration
         working-directory: editors/vscode
@@ -2279,6 +2281,7 @@ jobs:
 
       - name: Check Zed extension
         run: |
+          cargo test --locked --manifest-path editors/zed/Cargo.toml
           cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
           cmp LICENSE editors/zed/LICENSE
 

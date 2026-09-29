@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { defineConfig } = require('@vscode/test-cli');
+const extensionVersion = require('./package.json').version;
 
 const testRunDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-stack-vscode-'));
 const trustedUserData = path.join(testRunDirectory, 'trusted-user-data');
@@ -70,6 +71,12 @@ function writeToolingLanguageServerWrapper(wrapperPath) {
     wrapperPath,
     [
       '#!/bin/sh',
+      // macOS strips DYLD_* variables while launching Electron and /bin/sh.
+      // Restore the local Cargo library path inside the test-only wrapper.
+      ...(process.platform === 'darwin' && process.env.REGISTRY_STACK_TEST_LIBRARY_PATH
+        ? [`export DYLD_LIBRARY_PATH=${shellQuote(process.env.REGISTRY_STACK_TEST_LIBRARY_PATH)}`]
+        : []),
+      `if [ "$1" = "--version" ]; then printf '%s\\n' '${path.basename(wrapperPath)} ${extensionVersion}'; exit 0; fi`,
       'if [ "$1" != "tooling" ] || [ "$2" != "language-server" ]; then',
       '  exit 64',
       'fi',
