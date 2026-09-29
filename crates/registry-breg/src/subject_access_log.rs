@@ -17,6 +17,11 @@ use crate::postgres::{ExpectedRegistryIdentity, RuntimePool, RuntimeRevoke, SqlI
 pub(crate) const REQUESTER_HEADER: &str = "registry-access-requester";
 pub(crate) const PURPOSE_HEADER: &str = "registry-access-purpose";
 const MAX_VALUE_BYTES: usize = 512;
+/// Rows one `expire_subject_access_log()` call erases at most.
+const EXPIRY_BATCH_ROWS: i64 = 1_000;
+/// Batches one retention tick erases before it yields to the next tick, so a
+/// backlog drains without one tick running unbounded.
+const MAX_EXPIRY_BATCHES_PER_TICK: u32 = 100;
 
 /// Provenance only. It never enters a claim context, row policy, or purpose grant.
 #[derive(Clone, Eq, PartialEq)]
@@ -114,7 +119,7 @@ pub(crate) async fn install(
                 WITH expired AS (
                     SELECT event_id FROM registry_internal.registry_subject_access_log
                     WHERE expires_at <= transaction_timestamp()
-                    ORDER BY expires_at LIMIT 1000 FOR UPDATE SKIP LOCKED
+                    ORDER BY expires_at LIMIT {EXPIRY_BATCH_ROWS} FOR UPDATE SKIP LOCKED
                 ), removed AS (
                     DELETE FROM registry_internal.registry_subject_access_log AS entry
                     USING expired WHERE entry.event_id = expired.event_id RETURNING 1
@@ -260,7 +265,7 @@ pub(crate) async fn run_retention(
             }
             _ = interval.tick() => {
                 if let Ok(client) = pool.get().await {
-                    if client.query_one("SELECT registry_internal.expire_subject_access_log()", &[]).await.is_err() {
+                    if expire_tick(&**client, MAX_EXPIRY_BATCHES_PER_TICK).await.is_err() {
                         tracing::error!("subject access log expiry failed");
                     }
                 } else {
@@ -269,6 +274,72 @@ pub(crate) async fn run_retention(
             }
         }
     }
+}
+
+struct ExpiryTick {
+    erased: i64,
+    bound_reached: bool,
+}
+
+/// Erases expired entries batch by batch until a batch comes back short, or
+/// until `max_batches` batches ran. Each batch commits on its own, so a long
+/// drain never holds one large transaction. Reaching the bound logs the
+/// remaining backlog, counted up to one further tick's worth of rows.
+async fn expire_tick(
+    client: &impl GenericClient,
+    max_batches: u32,
+) -> Result<ExpiryTick, tokio_postgres::Error> {
+    let mut erased = 0;
+    for _ in 0..max_batches {
+        let removed: i64 = client
+            .query_one("SELECT registry_internal.expire_subject_access_log()", &[])
+            .await?
+            .get(0);
+        erased += removed;
+        if removed < EXPIRY_BATCH_ROWS {
+            return Ok(ExpiryTick {
+                erased,
+                bound_reached: false,
+            });
+        }
+    }
+    let cap = i64::from(MAX_EXPIRY_BATCHES_PER_TICK) * EXPIRY_BATCH_ROWS;
+    let remaining: i64 = client
+        .query_one(
+            "SELECT count(*) FROM (
+                SELECT 1 FROM registry_internal.registry_subject_access_log
+                 WHERE expires_at <= transaction_timestamp() LIMIT $1
+             ) AS backlog",
+            &[&cap],
+        )
+        .await?
+        .get(0);
+    tracing::warn!(
+        erased,
+        remaining_expired = remaining,
+        remaining_count_capped = remaining >= cap,
+        "subject access log expiry reached its per-tick bound; expired entries remain"
+    );
+    Ok(ExpiryTick {
+        erased,
+        bound_reached: true,
+    })
+}
+
+/// Runs one retention tick, bounded by `max_batches` when given.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn expire_subject_access_log_for_test(
+    pool: &RuntimePool,
+    max_batches: Option<u32>,
+) -> Result<(i64, bool), tokio_postgres::Error> {
+    let client = pool.get_for_test().await.expect("test pool connection");
+    let tick = expire_tick(
+        &**client,
+        max_batches.unwrap_or(MAX_EXPIRY_BATCHES_PER_TICK),
+    )
+    .await?;
+    Ok((tick.erased, tick.bound_reached))
 }
 
 #[cfg(test)]

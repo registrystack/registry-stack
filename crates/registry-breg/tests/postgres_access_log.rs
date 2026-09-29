@@ -741,3 +741,70 @@ async fn a_failed_subject_access_log_insert_prevents_record_release() {
     drop(idp);
     db.cleanup().await;
 }
+
+async fn seed_access_log_rows(db: &TestDatabase, rows: i32, expired: bool) {
+    let expires_at = if expired {
+        "transaction_timestamp() - interval '1 day'"
+    } else {
+        "transaction_timestamp() + interval '1 day'"
+    };
+    db.admin
+        .execute(
+            &format!(
+                "INSERT INTO registry_internal.registry_subject_access_log
+                    (event_id, entity_id, record_id, requester, operation_id, authority_entity,
+                     access_profile, package_revision, request_id, accessed_at, visible_after,
+                     expires_at)
+                 SELECT gen_random_uuid(), 'entry', $1::text::uuid, 'agency', 'seeded-read',
+                        'entry', 'reader', 'seeded-package', gen_random_uuid(),
+                        transaction_timestamp() - interval '100 days',
+                        transaction_timestamp() - interval '100 days', {expires_at}
+                   FROM generate_series(1, $2)"
+            ),
+            &[&RECORD_A, &rows],
+        )
+        .await
+        .unwrap();
+}
+
+async fn access_log_rows(db: &TestDatabase) -> i64 {
+    db.admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_subject_access_log",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+#[tokio::test]
+async fn one_retention_tick_erases_every_expired_batch_and_reports_a_bounded_backlog() {
+    let (db, app, idp) = setup().await;
+    // More expired rows than one erasure batch, plus a live row that must stay.
+    seed_access_log_rows(&db, 2_500, true).await;
+    seed_access_log_rows(&db, 1, false).await;
+    let pool = db.runtime_config.build_pool().unwrap();
+
+    let (erased, bound_reached) = registry_breg::expire_subject_access_log_for_test(&pool, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(erased, 1_000);
+    assert!(
+        bound_reached,
+        "a tick that stops at its bound reports the backlog"
+    );
+    assert_eq!(access_log_rows(&db).await, 1_501);
+
+    let (erased, bound_reached) = registry_breg::expire_subject_access_log_for_test(&pool, None)
+        .await
+        .unwrap();
+    assert_eq!(erased, 1_500, "one tick keeps erasing until a short batch");
+    assert!(!bound_reached);
+    assert_eq!(access_log_rows(&db).await, 1, "the live entry is retained");
+
+    drop(pool);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
