@@ -415,10 +415,14 @@ Both sections are optional:
 
 Startup refuses a `maximumPendingSignIns` smaller than the sign-ins `globalSignIn` admits within
 `signInLifetimeSeconds`: its burst plus its rate over that lifetime. A session ends at
-`maximumLifetimeSeconds` or when the citizen's access token expires, whichever comes first.
+`maximumLifetimeSeconds` or when the citizen's access token expires, whichever comes first. One
+citizen holds at most three sessions at once: signing in a fourth time ends their oldest session
+rather than take another slot, so one citizen takes at most three of the `maximumSessions` slots.
+A full store answers a `sessions-exhausted` page.
 
 {/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, CALLBACK_PATH,
     default_per_citizen(), default_global_sign_in(), PendingSignInsFillable;
+    crates/registry-breg-review/src/session.rs, MAXIMUM_SESSIONS_PER_CITIZEN, Store::insert;
     crates/registry-breg-review/src/lib.rs, router(), FetchUrlPolicy;
     crates/registry-breg-review/README.md. */}
 

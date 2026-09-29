@@ -1313,6 +1313,64 @@ async fn a_sign_in_when_sessions_are_full_records_no_succeeded_sign_in() {
     assert_eq!(refused_sign_ins, 1, "{journal}");
 }
 
+/// How many sessions one citizen holds at once, as the README states.
+const SESSIONS_PER_CITIZEN: usize = 3;
+
+#[tokio::test]
+async fn one_citizen_signing_in_again_and_again_holds_a_bounded_share_of_sessions() {
+    // Room for one citizen's share and one more session.
+    let harness = limited_sessions(u32::try_from(SESSIONS_PER_CITIZEN + 1).unwrap()).await;
+
+    // Every sign-in past the share replaces the citizen's oldest session
+    // rather than take another slot, so none of them is refused.
+    for attempt in 0..3 * SESSIONS_PER_CITIZEN {
+        let page = harness.sign_in_page(CITIZEN_A).await;
+        assert_eq!(
+            page.status,
+            StatusCode::OK,
+            "attempt {attempt}: {}",
+            page.body
+        );
+        assert!(page.set_cookie("breg-review-session").is_some());
+    }
+
+    // The one slot beyond that share is still free for another citizen.
+    let other = harness.sign_in_page(CITIZEN_B).await;
+    assert_eq!(other.status, StatusCode::OK, "{}", other.body);
+    assert!(other.set_cookie("breg-review-session").is_some());
+
+    // The first citizen holds exactly their share: with the store now
+    // full, a third citizen is refused.
+    let third = harness.sign_in_page("citizen-c").await;
+    assert_eq!(
+        third.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        third.body
+    );
+    assert_eq!(third.error_code(), Some("sessions-exhausted"));
+}
+
+#[tokio::test]
+async fn a_session_replaced_by_the_same_citizen_signing_in_again_is_refused() {
+    let harness = Harness::start().await;
+    let mut cookies = Vec::new();
+    for _ in 0..=SESSIONS_PER_CITIZEN {
+        cookies.push(cookie_pair(&harness.sign_in(CITIZEN_A).await));
+    }
+    let calls = harness.environment.registry.total_calls();
+
+    let evicted = harness.get(&review_path(), Some(&cookies[0])).await;
+    assert_eq!(evicted.status, StatusCode::SEE_OTHER, "{}", evicted.body);
+    assert_eq!(evicted.location(), sign_in_location());
+    assert_eq!(harness.environment.registry.total_calls(), calls);
+
+    for cookie in &cookies[1..] {
+        let live = harness.get(&review_path(), Some(cookie)).await;
+        assert_eq!(live.status, StatusCode::OK, "{}", live.body);
+    }
+}
+
 #[tokio::test]
 async fn an_audit_failure_during_sign_in_leaves_no_session_behind() {
     use std::os::unix::fs::PermissionsExt;

@@ -91,6 +91,10 @@ The page is an OpenID Connect relying party and a confidential OAuth client.
    from the provider, the callback answers with a short page that continues to
    the review page from the page's own origin.
 
+One person holds at most three sessions at once, enough for a phone, a
+computer, and a spare. Signing in a fourth time ends that person's oldest
+session, and its cookie then leads back to sign-in.
+
 A session ends at `maximumLifetimeSeconds` or when the access token expires,
 whichever comes first; a token that states no expiry opens no session. When
 the registry stops accepting the token, the session ends and the person is sent
@@ -151,6 +155,11 @@ refuses the draft's precondition.
   than the sign-ins `globalSignIn` admits in that lifetime (its burst plus its
   rate over the lifetime), so the limit, not a full store, is what refuses a
   sign-in. A full store would still answer a `sign-ins-exhausted` page.
+- Every session is held in memory, at most `maximumSessions` of them. One
+  person holds at most three: a sign-in past that share ends their oldest
+  session before the store's bound is checked, so signing in again and again
+  cannot fill the store: one person takes at most three of the
+  `maximumSessions` slots. A full store answers a `sessions-exhausted` page.
 - The audit stream records a `request` before each admitted sign-in, read,
   submit, and sign-out and a correlated `response` with its outcome. An
   interrupted or uncertain operation records `unfinished`. It names people

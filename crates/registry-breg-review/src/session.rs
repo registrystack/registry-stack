@@ -8,6 +8,7 @@
 //! person's access token lives only in the session's registry client.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,12 @@ pub(crate) const TOKEN_LENGTH: usize = 43;
 /// How many rendered views one session remembers. A person with more open
 /// tabs than this re-confirms the oldest one.
 const MAXIMUM_VIEWS: usize = 16;
+
+/// How many sessions one citizen holds at once: enough for a phone and a
+/// computer and a spare, few enough that one person signing in again and
+/// again cannot fill the store. A sign-in past this share ends that
+/// citizen's oldest session.
+pub(crate) const MAXIMUM_SESSIONS_PER_CITIZEN: usize = 3;
 
 /// A fresh base64url encoding of 32 bytes from the operating system.
 pub(crate) fn random_token() -> Result<String, getrandom::Error> {
@@ -96,6 +103,9 @@ pub(crate) struct Session {
     pub csrf: String,
     pub expires_at: Instant,
     views: VecDeque<View>,
+    /// The order the store admitted this session in, so a citizen's oldest
+    /// session is the one with the smallest value.
+    admitted: u64,
 }
 
 impl Session {
@@ -111,6 +121,7 @@ impl Session {
             csrf,
             expires_at,
             views: VecDeque::new(),
+            admitted: 0,
         }
     }
 }
@@ -132,6 +143,8 @@ pub(crate) struct Store {
     pending: Mutex<HashMap<[u8; 32], PendingSignIn>>,
     maximum_sessions: usize,
     maximum_pending: usize,
+    /// How many sessions the store has admitted, which orders them.
+    admitted: AtomicU64,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -149,6 +162,7 @@ impl Store {
             pending: Mutex::new(HashMap::new()),
             maximum_sessions,
             maximum_pending,
+            admitted: AtomicU64::new(0),
         }
     }
 
@@ -176,15 +190,31 @@ impl Store {
         (pending.expires_at > Instant::now()).then_some(pending)
     }
 
-    pub(crate) fn insert(&self, cookie: &str, session: Session) -> Result<(), Exhausted> {
+    /// Admit `session` under `cookie`. The citizen's own share is made first:
+    /// their expired sessions go, and at [`MAXIMUM_SESSIONS_PER_CITIZEN`] their
+    /// oldest one ends, views and all. Only then is the store's own bound
+    /// checked, so a citizen signing in again never takes another slot.
+    pub(crate) fn insert(&self, cookie: &str, mut session: Session) -> Result<(), Exhausted> {
         let mut sessions = lock(&self.sessions);
+        let now = Instant::now();
+        sessions.retain(|_, held| held.citizen != session.citizen || held.expires_at > now);
+        let mut held: Vec<(u64, [u8; 32])> = sessions
+            .iter()
+            .filter(|(_, held)| held.citizen == session.citizen)
+            .map(|(key, held)| (held.admitted, *key))
+            .collect();
+        held.sort_unstable();
+        let excess = (held.len() + 1).saturating_sub(MAXIMUM_SESSIONS_PER_CITIZEN);
+        for (_, key) in held.into_iter().take(excess) {
+            sessions.remove(&key);
+        }
         if sessions.len() >= self.maximum_sessions {
-            let now = Instant::now();
             sessions.retain(|_, session| session.expires_at > now);
         }
         if sessions.len() >= self.maximum_sessions {
             return Err(Exhausted);
         }
+        session.admitted = self.admitted.fetch_add(1, Ordering::Relaxed);
         sessions.insert(digest(cookie), session);
         Ok(())
     }
@@ -280,5 +310,47 @@ mod tests {
         );
         store.begin_sign_in("a", expired).expect("room");
         assert!(store.finish_sign_in("a").is_none());
+    }
+
+    fn session(citizen: &str) -> Session {
+        let registry =
+            BaseRegistryClient::new(registry_breg_client::BaseRegistryClientConfig::new(
+                url::Url::parse("https://registry.example").unwrap(),
+            ))
+            .unwrap();
+        Session::new(
+            citizen.to_owned(),
+            Arc::new(registry),
+            "csrf".to_owned(),
+            Instant::now() + Duration::from_secs(60),
+        )
+    }
+
+    #[test]
+    fn a_citizen_signing_in_again_replaces_their_oldest_session() {
+        let store = Store::new(MAXIMUM_SESSIONS_PER_CITIZEN + 1, 1);
+        let cookies: Vec<String> = (0..3 * MAXIMUM_SESSIONS_PER_CITIZEN)
+            .map(|index| format!("a{index}"))
+            .collect();
+        for cookie in &cookies {
+            store
+                .insert(cookie, session("a"))
+                .expect("the citizen's own share");
+        }
+
+        let (replaced, held) = cookies.split_at(cookies.len() - MAXIMUM_SESSIONS_PER_CITIZEN);
+        assert!(replaced
+            .iter()
+            .all(|cookie| store.current(cookie).is_none()));
+        assert!(held.iter().all(|cookie| store.current(cookie).is_some()));
+        store
+            .insert("b", session("b"))
+            .expect("room for another citizen");
+        assert!(store.insert("c", session("c")).is_err());
+        store
+            .insert("a-again", session("a"))
+            .expect("a full store still replaces");
+        assert!(store.current(&held[0]).is_none());
+        assert!(store.current("b").is_some());
     }
 }
