@@ -1064,9 +1064,12 @@ follows. Do not wait for the next release PR to make this change.
 The release manifest, notes, changelogs, and documentation archive stay with
 that release PR.
 
-The prepare commit of the release just published names the surfaces to move:
-its version-bearing files, not its manifest, notes, changelogs, or
-documentation archive. The release is closed only once this PR and the
+The surfaces to move are the ones `registry-release prepare` holds equal to
+the workspace version in its `workspace-versions`, `client-package-versions`,
+`excluded-fuzz-locks`, and `openapi-versions` checks: path dependencies and
+`Cargo.lock`, the native client packages and generated loaders, the lockfiles
+in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, and the committed OpenAPI documents.
+The release is closed only once this PR and the
 documentation promotion below have merged. The one exception is a next
 release already in preparation when `verify-public` passes: its release PR
 then carries the bump.
