@@ -2462,7 +2462,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence relay breg casework; do
+          for client in discovery evidence relay breg casework messaging; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done

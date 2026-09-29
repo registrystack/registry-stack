@@ -1160,6 +1160,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("node-root-registry", node_smoke)
         self.assertIn("smoke-registry-client-package.js", node_smoke)
         self.assertIn("smoke-registry-client-package.mjs", node_smoke)
+        self.assertIn('messaging-in-release "${CLIENT_VERSION}"', node_smoke)
+        self.assertIn(
+            'if [[ "${messaging_in_release}" == true ]]; then\n'
+            '      expected_addons=$((expected_addons + 1))\n'
+            "    fi",
+            node_smoke,
+        )
         self.assertIn(
             "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
             node_smoke,
@@ -1296,6 +1303,45 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("registry_stack_client-*.whl", seal)
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
+
+    def test_candidate_client_smoke_counts_and_internal_wheel_names(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        node = step_run(document, "clients", "Smoke Node client packages")
+        count = node.split("expected_addons=4", 1)[1].split('test "$(find', 1)[0]
+        for admitted, expected in (("false", "5"), ("true", "6")):
+            with self.subTest(messaging_in_release=admitted):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f"include_casework=1\nmessaging_in_release={admitted}\n"
+                        f"expected_addons=4{count}\nprintf '%s' \"${{expected_addons}}\"",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(expected, result.stdout)
+        python = step_run(document, "clients", "Build Python client wheels")
+        stem = python.split('wheel_stem="registry_${client}_client"', 1)[1].split(
+            'wheel="${wheel_stem}', 1
+        )[0]
+        for product in ("breg", "casework", "messaging", "discovery", "evidence", "relay"):
+            with self.subTest(product=product):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f"client={product}\n"
+                        'wheel_stem="registry_${client}_client"'
+                        f"{stem}\nprintf '%s' \"${{wheel_stem}}\"",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                suffix = "_native" if product in {"breg", "casework", "messaging"} else ""
+                self.assertEqual(f"registry_{product}_client{suffix}", result.stdout)
 
     def test_scopes_canonical_cache_to_exact_builder_recipe(self) -> None:
         text, document = workflow("release-candidate.yml")

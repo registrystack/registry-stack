@@ -95,7 +95,7 @@ tree. `build:debug` builds the addon without writing the committed `index.js`
 or `index.d.ts`, and `check:types` generates both into ignored `.check` files and
 requires them to match the committed ones byte for byte. When a napi-rs CLI bump
 changes that output, `check:types` fails. Run `npm ci && npm run build` in each
-of the five `-client-node` directories, which rewrites both files with the
+of the six `-client-node` directories, which rewrites both files with the
 pinned CLI (Discovery's loader normalizer included), and commit every
 `index.js` and `index.d.ts` together with the bump.
 
@@ -129,8 +129,10 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, and Relay bindings.
-The Messaging bindings stay out of them until Messaging joins a release.
+are generated from the BReg, Casework, Discovery, Evidence, Messaging, and Relay
+bindings. Published packages include Messaging from v0.38.0; earlier release
+assembly preserves its version-selected inventory. Source CI uses the explicit
+local `--include-messaging` override when assembling the current six bindings.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
@@ -149,7 +151,7 @@ python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 Where this assembly exists, regenerate the Node facade with
 `sync-registry-client-node.py` when its source bindings change; do not hand-edit
 copied product wrappers. Python assembly
-combines five version-matched internal native wheels with the public facade;
+combines the version-selected internal native wheels with the public facade;
 the facade directory is not built directly. Follow current release inventory
 for publication instead of assuming standalone package instructions apply.
 For a checkout without unified native assembly, use the product binding checks
