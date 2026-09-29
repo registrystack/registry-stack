@@ -6,6 +6,9 @@
   release before subject access-log storage activated, without an apply. The
   next successor apply installs the storage.
 
+- Publish `breg-mcp` and its paired `breg-review` service as release binaries
+  and Docker images from v0.38.0.
+
 ## v0.37.0 - 2026-09-29
 
 - BREAKING: a record or query `400` names the member or parameter at fault

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: source deployments must set `identity.databaseId` and activate
+  their package with `messagingctl apply` before starting the runtime. Use
+  `messagingctl plan` to inspect changes and `messagingctl status` to inspect
+  activation history. These commands replace `messaging migrate` and the old
+  preview-or-write behavior of `messagingctl apply`; activation `apply` no
+  longer takes `--apply`.
+  Existing package history is retained as an inert legacy ledger. Activation
+  atomically applies migrations, records the package and database identity,
+  and establishes runtime grants. Startup and readiness refuse a missing or
+  mismatched activation or insufficient runtime privileges (#1731).
+- Add Linux amd64 runtime and operator binaries, a Docker image, and Messaging
+  exports in the unified Node.js and Python clients from v0.38.0.
 - BREAKING: every `messagingctl --format json` report opens with `ok`,
   `command`, and `status`, in that order, as `caseworkctl` and
   `schedulingctl` reports do. `ok` is true exactly when the exit code is 0,
