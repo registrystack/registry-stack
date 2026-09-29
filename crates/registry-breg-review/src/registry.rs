@@ -54,8 +54,17 @@ pub(crate) struct Review {
     pub target_label: String,
     pub current: Vec<Item>,
     pub proposed: Vec<Item>,
+    /// The target record revision whose values `current` shows.
+    pub target: RecordRevision,
     /// The submit action the registry advertises on the draft right now.
     pub submit: Option<BRegLifecycleAction>,
+}
+
+/// One revision of one record, as the registry identified it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecordRevision {
+    pub record: String,
+    pub revision: String,
 }
 
 pub(crate) struct Profile<'a> {
@@ -158,6 +167,10 @@ pub(crate) async fn load(
         target_label: target_get.entity_label().to_owned(),
         current: items(target_get, &target, None),
         proposed: items(request_get, &draft, Some(profile.target_field)),
+        target: RecordRevision {
+            record: target.data.record_identifier.clone(),
+            revision: target.data.revision_identifier.clone(),
+        },
         submit,
     })
 }
