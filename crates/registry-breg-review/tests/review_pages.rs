@@ -429,8 +429,19 @@ async fn review_shows_current_values_beside_proposed_ones() {
     assert!(!page.body.contains(ADDRESS_A));
 }
 
+#[tokio::test]
+async fn the_target_read_is_the_profile_get_whatever_reference_comes_first() {
+    let harness = Harness::start().await;
+    harness.environment.registry.publish_target_list_first();
+    let (_, page) = harness.review().await;
+    assert!(page.body.contains(CURRENT_LINE_A), "{}", page.body);
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 1);
+}
+
 #[test]
 fn the_mock_registry_answers_valid_caller_filtered_metadata() {
+    let bytes = serde_json::to_vec(&support::metadata_with_target_list_first()).unwrap();
+    registry_breg_client::BRegMetadata::from_slice(&bytes).unwrap();
     let bytes = serde_json::to_vec(&support::metadata()).unwrap();
     let metadata = registry_breg_client::BRegMetadata::from_slice(&bytes).unwrap();
     let get = metadata

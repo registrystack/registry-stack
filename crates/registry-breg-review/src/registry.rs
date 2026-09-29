@@ -100,18 +100,23 @@ pub(crate) async fn load(
                 "the registry metadata does not describe the configured target field".to_owned(),
             )
         })?;
+    // A reference may name several reads for the profile, such as a list
+    // and a lookup beside the get, so the kind decides which one is taken.
     let target_get = target_field
         .reference()
         .and_then(|reference| {
             reference
                 .operations()
                 .iter()
-                .find(|operation| operation.access_profile() == profile.access_profile)
-        })
-        .and_then(|reference| metadata.operation(reference.operation_identifier()))
-        .filter(|operation| {
-            matches!(operation.kind(), BRegOperationKind::Get)
-                && operation.access_profile() == profile.access_profile
+                .filter(|candidate| candidate.access_profile() == profile.access_profile)
+                .find_map(|candidate| {
+                    metadata
+                        .operation(candidate.operation_identifier())
+                        .filter(|operation| {
+                            matches!(operation.kind(), BRegOperationKind::Get)
+                                && operation.access_profile() == profile.access_profile
+                        })
+                })
         })
         .ok_or_else(|| {
             Refusal::Unavailable(
