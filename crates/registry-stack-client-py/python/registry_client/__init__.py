@@ -5,6 +5,7 @@ import registry_client.casework as casework
 import registry_client.discovery as discovery
 import registry_client.evidence as evidence
 import registry_client.relay as relay
+import registry_client.messaging as messaging
 
-__all__ = ["breg", "casework", "discovery", "evidence", "relay"]
+__all__ = ["breg", "casework", "discovery", "evidence", "messaging", "relay"]
 __version__ = "0.38.0"

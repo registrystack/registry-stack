@@ -16,6 +16,14 @@ runtime and into `caseworkctl apply`, records each activation in the
 `casework migrate` and `caseworkctl db migrate`
 (`crates/registry-casework/src/activation.rs`, `caseworkctl plan|apply|status`).
 
+`registry-platform-activation` now owns the product-neutral ledger reads and
+appends, `databaseId` and active-package comparisons, role observation,
+runtime grants, indirect-authority and default-privilege checks, and lost
+acknowledgement read-back. Casework retains its migrations, lock order,
+stranded-work and source-generation hooks, audit wording, and refusal mapping
+inside the same activation transaction. This moves implementation ownership;
+the Casework invariants and executable tests below remain the product contract.
+
 ### Threat
 
 Before the change, the runtime migrated the schema, registered source

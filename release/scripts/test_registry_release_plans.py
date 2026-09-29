@@ -178,6 +178,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             inventory += ("discovery-client-node", "discovery-client-python")
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory += ("discovery",)
+    if REGISTRY_RELEASE.release_roster.discoveryctl_in_release(version_tuple):
+        inventory += ("discoveryctl",)
     if version_tuple >= BREG_RELEASE_MINIMUM_VERSION:
         inventory += (
             "breg",
@@ -674,6 +676,8 @@ class RegistryReleasePlanTest(unittest.TestCase):
         current = manifest("0.38.0", "beta-fixture", "v0.38.0", "candidate")
         self.assertNotIn("registry-render", historical["artifacts"])
         self.assertIn("registry-render", current["artifacts"])
+        self.assertNotIn("discoveryctl", historical["artifacts"])
+        self.assertIn("discoveryctl", current["artifacts"])
         self.assertEqual(
             [],
             owner.artifact_inventory_errors("0.37.99", historical["artifacts"]),

@@ -220,15 +220,39 @@ effective limit.
     crates/registry-breg-review/src/lib.rs, SIGTERM;
     crates/registry-breg-review/README.md. */}
 
-## Run the service images
+## Install the services or run their images
 
-No release publishes a `breg-mcp` or `breg-review` image or binary yet. The repository carries
-a Dockerfile for each, and each image carries its binary alone, on a distroless base with no shell.
-Until the services join a release, build the images from a checkout and pin the digest you
-built instead of a movable tag.
+The first release eligible to publish the paired services is v0.38.0. For a published release at
+or after that boundary, choose `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), download the
+`breg-mcp-<tag>-linux-amd64` and `breg-review-<tag>-linux-amd64` assets, and authenticate both
+through the shared `SHA256SUMS` procedure at
+`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`. Install the exact
+pair from one tag:
 
-{/* Evidence: release/docker/Dockerfile.breg-mcp; release/docker/Dockerfile.breg-review;
-    release/scripts/release_roster.py, BREG_SERVICES_FIRST_RELEASE; release/OPERATIONS.md. */}
+```sh
+tag="${TAG:?set TAG to a published tag that includes breg-mcp and breg-review}"
+mkdir -p ~/.local/bin
+for binary in breg-mcp breg-review; do
+  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
+done
+export PATH="$HOME/.local/bin:$PATH"
+breg-mcp --version
+breg-review --version
+```
+
+The install replaces either file already at that destination. Preserve the old pair first when
+you need a rollback path. Build both services from a checkout when no published release contains
+them or when you need another platform.
+
+The same release publishes `ghcr.io/registrystack/breg-mcp:<tag>` and
+`ghcr.io/registrystack/breg-review:<tag>`. Each image carries one binary on Distroless
+`cc-debian13` as the `nonroot` user. Authenticate the image digests through the release manifest
+and deploy the digest for each service rather than the tag alone.
+
+{/* Evidence: release/scripts/release_roster.py, BREG_SERVICES_FIRST_RELEASE and
+    breg_services_in_release; release/scripts/release_candidate.py, _relay_v2_payload_inventory;
+    release/docker/Dockerfile.breg-mcp; release/docker/Dockerfile.breg-review. */}
 
 Mount the runtime configuration and the secrets read-only, and give the journal a writable
 directory the image user owns. Inside a container, bind the listener on `0.0.0.0`, which requires
@@ -249,7 +273,7 @@ A gateway container then looks like this, with the review page following the sam
 {/* Evidence: release/docker/Dockerfile.breg-mcp, WORKDIR, EXPOSE, ENTRYPOINT, and CMD. */}
 
 ```sh
-BREG_MCP_IMAGE='<registry>/breg-mcp@sha256:<digest-of-the-image-you-built>'
+BREG_MCP_IMAGE='ghcr.io/registrystack/breg-mcp@sha256:<verified-digest>'
 docker run --rm \
   --mount type=bind,source=/etc/breg-mcp/runtime.yaml,target=/etc/breg-mcp/runtime.yaml,readonly \
   --mount type=bind,source=/run/secrets/breg-mcp,target=/run/secrets/breg-mcp,readonly \

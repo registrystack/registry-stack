@@ -26,10 +26,8 @@ SPEC.loader.exec_module(MODULE)
 VERSION = "0.31.0"
 ARCHIVE_VERSION = "0.33.0"
 OPERATOR_TOOL_VERSION = "0.36.0"
-# breg-mcp and breg-review have not joined a release
-# (release_roster.BREG_SERVICES_FIRST_RELEASE is None). The inclusion test
-# patches a hypothetical first release so their build path stays covered
-# without any production knob.
+# A hypothetical earlier boundary tests that the native inclusion path reads
+# the shared release roster rather than hard-coding the first release.
 HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)
 SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"],
@@ -725,10 +723,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         for name in expected:
             self.assertEqual(0o644, stat.S_IMODE((merged / "platform" / name).stat().st_mode))
 
-    def test_no_version_builds_the_breg_services_until_the_roster_names_one(
+    def test_historical_versions_do_not_build_the_breg_services(
         self,
     ) -> None:
-        self.assertIsNone(MODULE.release_roster.BREG_SERVICES_FIRST_RELEASE)
         for version in ("0.35.0", "0.36.0", "0.37.0"):
             with self.subTest(version=version):
                 result, output, calls = self.build(

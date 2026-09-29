@@ -1,0 +1,31 @@
+[package]
+name = "registry-platform-activation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared PostgreSQL package activation ledger and role boundary for Registry Stack runtimes."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+postgres-test = []
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+serde.workspace = true
+thiserror.workspace = true
+tokio-postgres.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tokio.workspace = true
+
+[[test]]
+name = "postgres_activation"
+path = "tests/postgres_activation.rs"
+required-features = ["postgres-test"]

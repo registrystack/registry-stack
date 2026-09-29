@@ -15,6 +15,7 @@ use uuid::Uuid;
 pub const MESSAGING_AUDIT_SCHEMA: &str = "registry-messaging-audit/v1";
 const PRINCIPAL_PSEUDONYM_CLASS: &str = "messaging-principal-v1";
 const RECIPIENT_REFERENCE_CLASS: &str = "messaging-recipient-v1";
+const ACTIVATION_REFERENCE_CLASS: &str = "messaging-activation-reference-v1";
 
 #[derive(Debug, Error)]
 pub enum PseudonymError {
@@ -111,6 +112,18 @@ impl MessagingAudit {
             RECIPIENT_REFERENCE_CLASS,
             recipient.channel().as_str(),
             &normalized,
+        )
+    }
+
+    pub fn activation_reference(
+        &self,
+        activation_id: Uuid,
+        reference: &str,
+    ) -> Result<String, AuditReferenceHashError> {
+        self.keys.audit_reference_hash(
+            ACTIVATION_REFERENCE_CLASS,
+            &activation_id.to_string(),
+            reference,
         )
     }
 }

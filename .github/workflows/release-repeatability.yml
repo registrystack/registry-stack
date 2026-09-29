@@ -158,6 +158,9 @@ jobs:
 
           import yaml
 
+          sys.path.insert(0, "verifier/release/scripts")
+          import release_roster
+
           root, tag = sys.argv[1:]
           version = tag.removeprefix("v")
           matches = []
@@ -171,6 +174,7 @@ jobs:
           artifacts = matches[0].get("artifacts", {})
           binary_names = {
               "discovery": "discovery",
+              "discoveryctl": "discoveryctl",
               "evidence": "evidence",
               "evidencectl": "evidencectl",
               "evidence-oid4vci": "evidence-oid4vci",
@@ -190,6 +194,8 @@ jobs:
               "relay": "relay",
               "relayctl": "relayctl",
           }
+          if release_roster.scheduling_binary_in_release(release_roster.parse_version(version)):
+              binary_names["scheduling"] = "scheduling"
           for artifact, asset in sorted(binary_names.items()):
               if artifact in artifacts:
                   print(f"{asset}-{tag}-linux-amd64")

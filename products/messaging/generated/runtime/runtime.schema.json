@@ -950,6 +950,21 @@
     "database": {
       "$ref": "#/$defs/DatabaseConfig"
     },
+    "identity": {
+      "additionalProperties": false,
+      "description": "The logical database identity this deployment owns. It is independent of\nthe connection URL and PostgreSQL database name.",
+      "properties": {
+        "databaseId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "databaseId"
+      ],
+      "type": "object"
+    },
     "kind": {
       "const": "MessagingRuntimeConfig",
       "type": "string"

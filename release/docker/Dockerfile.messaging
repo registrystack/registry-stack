@@ -27,9 +27,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
         /workspace/runtime-root/usr/local/bin \
         /workspace/runtime-root/var/lib/registry-messaging/audit \
     && install -m 0755 /workspace/image-bin/messaging /workspace/runtime-root/usr/local/bin/messaging \
-    && if [ -e /workspace/image-bin/messagingctl ]; then \
-        install -m 0755 /workspace/image-bin/messagingctl /workspace/runtime-root/usr/local/bin/messagingctl; \
-    fi \
+    && install -m 0755 /workspace/image-bin/messagingctl /workspace/runtime-root/usr/local/bin/messagingctl \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/messaging/LICENSE \
     && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/messaging/THIRD_PARTY_NOTICES \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-messaging \

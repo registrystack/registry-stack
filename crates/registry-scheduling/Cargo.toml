@@ -36,6 +36,7 @@ futures.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 registry-scheduling-core.workspace = true
+registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true

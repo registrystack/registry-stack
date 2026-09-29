@@ -28,14 +28,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
+use registry_messaging::activation::ApplyRequest;
 use registry_messaging::config::RuntimeConfig;
 use registry_messaging::dispatch::Transports;
 use registry_messaging::package::{
     load_package, load_project, package_inputs, write_package_inputs, LoadedPackage,
 };
-use registry_messaging::runtime::{
-    apply_package, migrate_from_path, operational_log_level, serve_from_path,
-};
+use registry_messaging::runtime::{apply_activation, operational_log_level, serve_from_path};
 use registry_messaging_core::READY_PATH;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
@@ -549,15 +548,12 @@ fn run_session(
                 "the runtime configuration could not be written: {error}"
             ))
         })?;
-        migrate_from_path(&runtime_config)
-            .await
-            .map_err(|error| failed(format!("the database could not be migrated: {error}")))?;
         let checked = RuntimeConfig::load(&runtime_config).map_err(|error| {
             failed(format!(
                 "the generated runtime configuration was refused: {error}"
             ))
         })?;
-        apply_package(&checked, true)
+        apply_activation(&checked, &ApplyRequest::default())
             .await
             .map_err(|error| failed(format!("the package could not be applied: {error}")))?;
         let mut serve = tokio::spawn(serve_from_path(runtime_config.clone(), Transports::new()));

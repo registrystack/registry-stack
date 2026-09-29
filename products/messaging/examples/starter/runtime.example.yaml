@@ -1,5 +1,5 @@
 # A complete Messaging runtime configuration: the document
-# `messaging migrate --runtime-config` and `messaging serve --runtime-config`
+# `messagingctl plan/apply/status --runtime-config` and `messaging serve --runtime-config`
 # read, and `messagingctl check --runtime-config` checks offline. Copy it to
 # runtime.yaml, set every absolute path to this deployment's real location,
 # and point the secret references at secrets the configured provider can
@@ -13,6 +13,8 @@
 # Unknown keys are refused, with the path of the first one found.
 apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
 kind: MessagingRuntimeConfig
+identity:
+  databaseId: messaging-production
 package:
   # The immutable directory produced by `messagingctl package`. Setting
   # `expectedDigest` to the sha256: digest the package command reports pins

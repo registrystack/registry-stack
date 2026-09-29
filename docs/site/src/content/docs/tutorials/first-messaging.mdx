@@ -33,8 +33,11 @@ delivered, then send an email and read it in Mailpit.
 
 ## Get messagingctl
 
-Registry Messaging is unreleased, so build `messagingctl` from a Registry Stack checkout and put it
-on your `PATH`:
+This tutorial builds `messagingctl` from a Registry Stack checkout so the same journey works on
+Linux amd64, Linux arm64, and macOS on Apple Silicon. The
+[deployment guide](../../operate/messaging/#install-or-build-the-binaries) covers the published
+Linux amd64 asset when a release contains Messaging. Build the tutorial binary and put it on your
+`PATH`:
 
 ```sh
 cargo build --release --locked -p registry-messagingctl
@@ -86,7 +89,7 @@ created: tutorial-work/notices
   templates/appointment-reminder/1/schema.json
   templates/appointment-reminder/1/template.yaml
 next: Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
-next: Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messaging migrate, then messagingctl apply --apply, then messaging serve.
+next: Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messagingctl plan, then messagingctl apply, then messaging serve.
 ```
 
 The first `next:` line describes the local journey below. The second describes packaging and deployment.

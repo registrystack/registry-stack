@@ -30,10 +30,27 @@ on your machine with `messagingctl dev`.
 
 ## Get `messagingctl`
 
-Registry Messaging is unreleased, so `messagingctl` is built from a Registry Stack checkout:
+The first release eligible to publish `messagingctl` is v0.38.0, after image-package
+onboarding is complete. For a published release that contains
+Messaging, choose `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), authenticate
+the `messagingctl-<tag>-linux-amd64` asset through `release/VERIFY.md` at that tag, then install it:
+
+```sh
+tag="${TAG:?set TAG to a published tag that includes Registry Messaging}"
+mkdir -p ~/.local/bin
+install -m 0755 "messagingctl-${tag}-linux-amd64" ~/.local/bin/messagingctl
+export PATH="$HOME/.local/bin:$PATH"
+messagingctl --version
+```
+
+The install replaces an existing `~/.local/bin/messagingctl`. Preserve that file first when you
+need a rollback path. Until a published release contains Messaging, or for another platform,
+build `messagingctl` from a Registry Stack checkout:
 
 ```sh
 cargo build --release --locked -p registry-messagingctl
+export PATH="$PWD/target/release:$PATH"
 ```
 
 On macOS, Cargo builds the FIPS crypto library as a dynamic library the shell cannot find on its
@@ -42,12 +59,13 @@ own. Build through the repository's helper instead, in the terminal you run the 
 ```sh
 . scripts/cargo-runtime-library-path.sh
 registry_cargo_build "$PWD" --release --locked -p registry-messagingctl
+export PATH="$PWD/target/release:$PATH"
 ```
 
-The binary is `target/release/messagingctl`. It reads files and prints reports; `check` and
-`preview` open no connection. Every command takes `--format human|json` and exits 0 on success, 1
-on a refusal, 2 on a usage error, and 3 when a file, secret, or database could not be reached. Run
-`messagingctl <command> --help` for each command's arguments.
+A source build writes `target/release/messagingctl`. The command reads files and prints reports;
+`check` and `preview` open no connection. Every command takes `--format human|json` and exits 0 on
+success, 1 on a refusal, 2 on a usage error, and 3 when a file, secret, or database could not be
+reached. Run `messagingctl <command> --help` for each command's arguments.
 
 A human failure is one `error[CODE] PATH: MESSAGE` line on standard error, followed by a `next:`
 line naming what to do. With `--format json`, every report opens with `ok`, `command`, and
@@ -59,7 +77,8 @@ HTTP preview answers, unwrapped.
     products/messaging/README.md, Running locally;
     scripts/cargo-runtime-library-path.sh, registry_cargo_build; CONTRIBUTING.md. */}
 
-{/* messaging-release: once the first release that carries Messaging publishes, name the released messagingctl linux-amd64 release binary before the source build. */}
+{/* Evidence: release/scripts/release_roster.py, MESSAGING_FIRST_RELEASE and messaging_in_release;
+    release/scripts/release_candidate.py, _relay_v2_payload_inventory. */}
 
 ## Start from the starter
 
@@ -91,7 +110,7 @@ created: ./notices
   templates/appointment-reminder/1/schema.json
   templates/appointment-reminder/1/template.yaml
 next: Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
-next: Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messaging migrate, then messagingctl apply --apply, then messaging serve.
+next: Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messagingctl plan, then messagingctl apply, then messaging serve.
 ```
 
 The directory is an editable project. `messaging.yaml`, `templates/`, and `providers/` describe
@@ -458,7 +477,8 @@ explicit source provenance. Give the operator the installed directory and its re
 The directory contains the shared checksum envelope, product configuration, providers, and templates,
 with no runtime credentials or development state.
 
-The operator records the digest with `messagingctl apply --apply` and restarts onto it. The runtime
+The operator reviews `messagingctl plan`, records the digest with `messagingctl apply`, and restarts
+onto it. The runtime
 verifies the package and optional `package.expectedDigest` before database work, then uses only the
 verified file buffers. Editing the authoring project never changes what a running deployment sends.
 

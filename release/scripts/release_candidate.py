@@ -452,6 +452,8 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             ] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"
+    if release_roster.discoveryctl_in_release(version_tuple):
+        inventory[f"discoveryctl-{tag}-linux-amd64"] = "binary"
     if version_tuple >= BREG_RELEASE_MINIMUM_VERSION:
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"breg-{tag}-{platform}"] = "binary"
@@ -469,9 +471,11 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         inventory[f"casework-{tag}-install.sh"] = "installer"
         inventory["casework-install.sh"] = "installer"
     if version_tuple >= OPERATOR_TOOL_MINIMUM_VERSION:
-        # The Scheduling runtime ships only inside its image.
+        # Scheduling runtime binaries join after the existing operator tool.
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"schedulingctl-{tag}-{platform}"] = "binary"
+    if release_roster.scheduling_binary_in_release(version_tuple):
+        inventory[f"scheduling-{tag}-linux-amd64"] = "binary"
     if release_roster.messaging_in_release(version_tuple):
         inventory[f"messaging-{tag}-linux-amd64"] = "binary"
         inventory[f"messagingctl-{tag}-linux-amd64"] = "binary"

@@ -235,6 +235,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
                 expected_inventory.update({"discovery-client-node", "discovery-client-python"})
         if parsed_version >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
             expected_inventory.add("discovery")
+        if release_roster.discoveryctl_in_release(parsed_version):
+            expected_inventory.add("discoveryctl")
         if parsed_version >= BREG_RELEASE_MINIMUM_VERSION:
             expected_inventory.update(
                 {

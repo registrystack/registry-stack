@@ -416,6 +416,15 @@ security-sensitive in the sense AGENTS.md names. Matrix rows
 SCHEDULING-SEC-29 to SCHEDULING-SEC-32 and recorded decisions
 SCHEDULING-DEC-09 and SCHEDULING-DEC-10 carry it.
 
+`registry-platform-activation` now owns the product-neutral ledger reads and
+appends, `databaseId` and active-package comparisons, role observation,
+runtime grants, indirect-authority and default-privilege checks, and lost
+acknowledgement read-back. Scheduling retains its migrations, lock order,
+unpublished-audit guard, policy-publication hooks, audit wording, and refusal
+mapping inside the same activation transaction. This moves implementation
+ownership; the Scheduling invariants and executable tests below remain the
+product contract.
+
 **What authorizes an activation.** Holding the migration credential
 (`database.migrationUrlRef`) and running `schedulingctl apply` with a
 package that verifies against its `SHA256SUMS` and passes the authoring

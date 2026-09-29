@@ -1,4 +1,4 @@
-import { breg, casework, discovery, evidence, relay } from '..'
+import { breg, casework, discovery, evidence, messaging, relay } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -10,6 +10,7 @@ const evidenceClient = new evidence.EvidenceClient({
 })
 const relayClient = new relay.RelayClient({ baseUrl: 'https://relay.example.invalid/' })
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
+const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
 breg.verifyWebhookDelivery({
@@ -41,6 +42,11 @@ void caseworkClient.saveReviewTaskDraft(
 void caseworkClient.deleteReviewTaskDraft(
   'header.payload.signature', 'staff', 'task-1', 2, 'draft-2', 'source-reviewer',
 )
+void messagingClient.submit('header.payload.signature', 'reminder-1', {
+  senderProfile: 'reminders-sms',
+  to: { phone: '+15550100' },
+  content: { text: 'Appointment tomorrow' },
+})
 
 // The progressive request surface refines the generated declaration: it names
 // the request shape and discriminates the result on its response format.
@@ -62,6 +68,7 @@ type EvidenceHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof evidence>>
 type RelayHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof relay>>
 type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
 type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
+type MessagingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof messaging>>
 
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })

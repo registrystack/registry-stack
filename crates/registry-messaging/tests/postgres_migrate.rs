@@ -16,9 +16,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use registry_messaging::activation::ApplyRequest;
 use registry_messaging::config::{DatabaseConfig, RuntimeConfig};
 use registry_messaging::package::{package_inputs, write_package_inputs};
-use registry_messaging::runtime::{apply_package, migrate_from_path, serve_from_path};
+use registry_messaging::runtime::{apply_activation, serve_from_path};
 use registry_messaging::store::{PostgresStore, StoreError};
 use registry_messaging_client::{MessagingClient, MessagingClientConfig};
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -104,13 +105,13 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [1]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [1]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
@@ -222,6 +223,7 @@ fn write_runtime(
     let runtime = json!({
         "apiVersion": registry_messaging_core::MESSAGING_RUNTIME_API_VERSION,
         "kind": registry_messaging_core::MESSAGING_RUNTIME_KIND,
+        "identity": {"databaseId": "messaging-test"},
         "package": {"root": package},
         "listener": {"bind": public.to_string(), "tlsTermination": "development-loopback"},
         "metricsListener": {"bind": metrics.to_string()},
@@ -262,13 +264,10 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     );
     let runtime_config = root.path().join("runtime.yaml");
 
-    migrate_from_path(&runtime_config)
-        .await
-        .expect("messaging migrate");
     let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
-    apply_package(&config, true)
+    apply_activation(&config, &ApplyRequest::default())
         .await
-        .expect("messagingctl apply --apply");
+        .expect("messagingctl apply");
     let served = tokio::spawn(serve_from_path(
         runtime_config.clone(),
         registry_messaging::dispatch::Transports::new(),
@@ -329,13 +328,10 @@ async fn a_stdout_audit_destination_never_carries_operational_logs() {
         json!({"destination": "stdout"}),
     );
     let runtime_config = root.path().join("runtime.yaml");
-    migrate_from_path(&runtime_config)
-        .await
-        .expect("messaging migrate");
     let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
-    apply_package(&config, true)
+    apply_activation(&config, &ApplyRequest::default())
         .await
-        .expect("messagingctl apply --apply");
+        .expect("messagingctl apply");
 
     // The secrets the configuration names are this process's environment,
     // which the binary inherits.
