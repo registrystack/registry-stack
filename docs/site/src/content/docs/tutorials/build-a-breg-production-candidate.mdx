@@ -32,14 +32,14 @@ environments: you plan and apply it in each, and confirm that both serve the sam
   outcome="A package built from your project, accepted by bregctl verify, and activated in a staging and a production database that serve the same registry revision."
   time="About 45 minutes"
   level="Production build with synthetic data and a local issuer key"
-  prerequisites={['The source-built bregctl and breg pair', 'Docker', 'OpenSSL 3', 'curl and jq']}
+  prerequisites={['The bregctl and breg pair from one release', 'Docker', 'OpenSSL 3', 'curl and jq']}
 />
 
 ## Before you start
 
-The runtime configuration in this source-preview tutorial uses the unreleased shared audit writer.
-Use the [matching source-built tool pair](../../operate/breg/#obtain-the-runtime) before continuing;
-the released installer from the earlier tutorial does not supply this contract.
+This tutorial runs both `bregctl` and `breg`. The installer from
+[Create and query your first registry](../first-breg/) installs the two together from one release;
+[Obtain the runtime](../../operate/breg/#obtain-the-runtime) shows how to pin that release.
 
 Open a terminal in the directory that holds `tutorial-work`, or in any directory you want to work
 in. Create the project this tutorial builds from:
