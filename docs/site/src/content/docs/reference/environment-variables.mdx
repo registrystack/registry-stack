@@ -167,6 +167,8 @@ preserves the previous set. It does not verify release authenticity.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-breg/src/main.rs; crates/registry-breg/src/runtime_config.rs. */}
 
+<DocsetProduct product="registry-breg-services">
+
 ## Base Registry Engine citizen gateway
 
 `breg-mcp` and `breg-review` are supporting services beside the Base Registry Engine: an MCP gateway a chat host uses to read a citizen's own data and prepare a change-request draft, and a review page the citizen submits it from. Each reads one fixed variable for its operational log level.
@@ -188,6 +190,8 @@ from their declared `secret:env/` or `secret:file/` provider. See
     crates/registry-breg-review/src/config.rs, RuntimeConfigLoader;
     crates/registry-platform-config/src/loader.rs. */}
 
+</DocsetProduct>
+
 ## Source
 
 The fixed environment variable names in this reference are transcribed from the CLI definitions, binary entry points, and install
@@ -200,6 +204,6 @@ secret grammar in `config.rs`, and secret resolution in `registry-platform-confi
 with logging and dispatch in `main.rs`. Base Registry Engine logging is in
 `crates/registry-breg/src/main.rs` and `startup.rs`, runtime-file expansion and the secret grammar in
 `runtime_config.rs` over `registry-platform-config`, and its installer is
-`crates/registry-breg/install.sh`. Citizen gateway logging is in
+`crates/registry-breg/install.sh`.<DocsetProduct product="registry-breg-services"> Citizen gateway logging is in
 `crates/registry-breg-mcp/src/main.rs`; review page logging is in
-`crates/registry-breg-review/src/main.rs`.
+`crates/registry-breg-review/src/main.rs`.</DocsetProduct>

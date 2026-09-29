@@ -14,6 +14,13 @@
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const PRODUCT_PAGES = Object.freeze({
+  // The Base Registry Engine citizen services, breg-mcp and breg-review. The
+  // Base Registry Engine itself is published by every docset.
+  'registry-breg-services': Object.freeze([
+    'tutorials/first-citizen-mcp',
+    'configure/breg-mcp',
+    'operate/breg-mcp',
+  ]),
   'registry-messaging': Object.freeze([
     'start/messaging',
     'tutorials/first-messaging',
@@ -29,6 +36,7 @@ export const PRODUCT_PAGES = Object.freeze({
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const PRODUCT_CLI_BINARIES = Object.freeze({
+  'registry-breg-services': Object.freeze(['breg-mcp', 'breg-review']),
   'registry-messaging': Object.freeze(['messaging', 'messagingctl']),
 });
 

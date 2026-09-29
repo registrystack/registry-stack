@@ -111,6 +111,7 @@ const sidebarFactory = new Function(
   'hasScheduling',
   'hasRender',
   'hasMessaging',
+  'hasBregServices',
   'selectedDocset',
   `return [${sidebarSource}];`,
 );
@@ -132,9 +133,10 @@ const everyProductDocset = {
     'registry-scheduling': {},
     'registry-render': {},
     'registry-messaging': {},
+    'registry-breg-services': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, everyProductDocset);
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, everyProductDocset);
 
 const messagingPageRoutes = [
   '/start/messaging/',
@@ -274,33 +276,41 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
       // A docset that carries Messaging without Scheduling, so the Messaging
       // operations are not the last of every registered schema.
-      { id: 'v0.31.0', status: 'archived', availability: 'candidate', path: '/v/0.31.0/', products: { 'registry-casework': { ref: 'v0.31.0' }, 'registry-messaging': { ref: 'v0.31.0' } } },
+      // It also carries the Base Registry Engine citizen services.
+      { id: 'v0.31.0', status: 'archived', availability: 'candidate', path: '/v/0.31.0/', products: { 'registry-casework': { ref: 'v0.31.0' }, 'registry-messaging': { ref: 'v0.31.0' }, 'registry-breg-services': { ref: 'v0.31.0' } } },
     ],
   };
-  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging] of [
-    ['latest', {}, true, true, true, false],
-    ['v0.29.0', {}, false, false, false, false],
-    ['v0.30.0', {}, true, false, false, false],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false],
-    ['v0.31.0', {}, true, false, false, true],
+  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices] of [
+    ['latest', {}, true, true, true, false, false],
+    ['v0.29.0', {}, false, false, false, false, false],
+    ['v0.30.0', {}, true, false, false, false, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false],
+    ['v0.31.0', {}, true, false, false, true, true],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     assert.equal(context.hasCasework, hasCasework, id);
     assert.equal(context.hasScheduling, hasScheduling, id);
     assert.equal(context.hasRender, hasRender, id);
     assert.equal(context.hasMessaging, hasMessaging, id);
+    assert.equal(context.hasBregServices, hasBregServices, id);
     const docsetSidebar = sidebarFactory(
       ...sidebarArguments,
       context.hasCasework,
       context.hasScheduling,
       context.hasRender,
       context.hasMessaging,
+      context.hasBregServices,
       context.selectedDocset,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Render'), hasRender, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Messaging'), hasMessaging, id);
+    // The citizen services are seated inside the Base Registry Engine section,
+    // which every docset publishes.
+    const docsetBreg = docsetSidebar.find((item) => item.label === 'Base Registry Engine');
+    assert.ok(docsetBreg, id);
+    assert.equal(docsetBreg.items.some((item) => item.label === 'Citizen chat assistant'), hasBregServices, id);
     const docsetSchemas = apiSchemaFactory(
       context.hasCasework,
       context.hasScheduling,
@@ -324,6 +334,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasScheduling,
       context.hasRender,
       context.hasMessaging,
+      context.hasBregServices,
       context.selectedDocset,
     ).find((item) => item.label === 'Registry Messaging');
     if (hasMessaging) {

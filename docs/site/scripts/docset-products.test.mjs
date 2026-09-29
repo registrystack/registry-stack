@@ -23,6 +23,8 @@ const siteRoot = resolve(import.meta.dirname, '..');
 const docsRoot = resolve(siteRoot, 'src/content/docs');
 const withMessaging = { products: { 'registry-messaging': { ref: 'HEAD' } } };
 const withoutMessaging = { products: { 'registry-casework': { ref: 'HEAD' } } };
+const withBregServices = { products: { 'registry-breg-services': { ref: 'HEAD' } } };
+const withoutBregServices = withoutMessaging;
 
 // Registry Messaging is merged but not released: until an activation change
 // adds it to the latest docset, nothing published may describe it.
@@ -36,8 +38,19 @@ test('the latest docset does not publish Registry Messaging', () => {
   assert.throws(() => selectedDocset(manifest, { DOCS_DOCSET: 'missing' }), /"missing" not found/);
 });
 
+// breg-mcp and breg-review are merged but held out of releases
+// (release_roster.BREG_SERVICES_FIRST_RELEASE). The prepared release docset
+// copies the current docset's products, so no docset may name them until the
+// change that admits them to a release.
+test('no docset publishes the Base Registry Engine citizen services', () => {
+  const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  for (const docset of manifest.docsets) {
+    assert.equal(docset.products?.['registry-breg-services'], undefined, docset.id);
+  }
+});
+
 test('every gated page exists and maps to its route', () => {
-  for (const id of PRODUCT_PAGES['registry-messaging']) {
+  for (const id of Object.values(PRODUCT_PAGES).flat()) {
     const candidates = ['.md', '.mdx'].map((extension) => resolve(docsRoot, `${id}${extension}`));
     assert.ok(
       candidates.some((path) => {
@@ -57,6 +70,11 @@ test('every gated page exists and maps to its route', () => {
     '/configure/messaging/',
     '/operate/messaging/',
     '/reference/apis/registry-messaging/',
+  ]);
+  assert.deepEqual(productRoutes('registry-breg-services'), [
+    '/tutorials/first-citizen-mcp/',
+    '/configure/breg-mcp/',
+    '/operate/breg-mcp/',
   ]);
   assert.deepEqual(productRoutes('registry-unknown'), []);
 });
@@ -82,8 +100,31 @@ test('drops a gated product\'s pages and CLI references from the docs collection
   ]) {
     assert.equal(isEntryGatedOut(id, withoutMessaging), false, id);
   }
-  assert.deepEqual(omittedCliBinaries(withoutMessaging), ['messaging', 'messagingctl']);
-  assert.deepEqual(omittedCliBinaries(withMessaging), []);
+  assert.deepEqual(omittedCliBinaries(withoutMessaging), ['breg-mcp', 'breg-review', 'messaging', 'messagingctl']);
+  assert.deepEqual(omittedCliBinaries(withMessaging), ['breg-mcp', 'breg-review']);
+});
+
+test('drops the citizen services\' pages and CLI references from the docs collection', () => {
+  for (const id of [
+    ...PRODUCT_PAGES['registry-breg-services'],
+    'reference/cli/breg-mcp',
+    'reference/cli/breg-mcp/serve',
+    'reference/cli/breg-review',
+    'reference/cli/breg-review/check',
+  ]) {
+    assert.equal(isEntryGatedOut(id, withoutBregServices), true, id);
+    assert.equal(isEntryGatedOut(id, withBregServices), false, id);
+  }
+  for (const id of [
+    'configure/breg',
+    'operate/breg',
+    'reference/cli/breg',
+    'reference/cli/breg/serve',
+    'reference/cli/bregctl',
+  ]) {
+    assert.equal(isEntryGatedOut(id, withoutBregServices), false, id);
+  }
+  assert.deepEqual(omittedCliBinaries(withBregServices), ['messaging', 'messagingctl']);
 });
 
 function region(type, children, { absent = false, product = 'registry-messaging' } = {}) {
@@ -206,5 +247,18 @@ for (const page of ['index.mdx', 'reference/client-api.mdx']) {
     assert.doesNotMatch(resolved, /DocsetProduct/, 'every region must be closed and unnested');
     assert.doesNotMatch(resolved, /messaging/i);
     assert.doesNotMatch(resolveDocsetProductRegions(source, withMessaging), /DocsetProduct/);
+  });
+}
+
+// The same rule for the Base Registry Engine citizen services: a docset that
+// does not publish them keeps no link to their pages and no description of them.
+for (const page of ['configure/breg.mdx', 'reference/environment-variables.mdx', 'changelog.mdx']) {
+  test(`${page} mentions the citizen services only inside DocsetProduct regions`, () => {
+    const source = readFileSync(resolve(docsRoot, page), 'utf8');
+    assert.match(source, /<DocsetProduct product="registry-breg-services">/);
+    const resolved = resolveDocsetProductRegions(source, withoutBregServices);
+    assert.doesNotMatch(resolved, /DocsetProduct/, 'every region must be closed and unnested');
+    assert.doesNotMatch(resolved, /breg-mcp|breg-review|first-citizen-mcp|citizen chat assistant|citizen gateway|review page/i);
+    assert.doesNotMatch(resolveDocsetProductRegions(source, withBregServices), /DocsetProduct/);
   });
 }
