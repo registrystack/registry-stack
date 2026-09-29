@@ -41,7 +41,9 @@ chat:    ask again -> reports the current status
 
 The chat host always reports the state BReg reports (prepared, submitted,
 under review, approved, rejected, applied, or cancelled), never a state
-either service remembers on its own.
+either service remembers on its own. Cancelled is the request's own state: a
+review that was cancelled leaves the request submitted, with revise and cancel
+still offered, so the chat host reports it as under review.
 
 ## Boundaries
 

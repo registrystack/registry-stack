@@ -93,12 +93,16 @@ impl ApplicationStatus {
             (BRegRequestState::Cancelled, _) => Self::Cancelled,
             (BRegRequestState::Applied, _) => Self::Applied,
             (BRegRequestState::Submitted, None) => Self::Submitted,
+            // `cancelled` is the request's own state only. A cancelled review
+            // leaves the request submitted, and BReg still offers revise,
+            // rebase, and cancel on it, as it does after an answered or
+            // superseded review.
             (BRegRequestState::Submitted, Some((submission, result))) => match result {
                 BRegExternalReviewResultState::Approved => Self::Approved,
                 BRegExternalReviewResultState::Rejected => Self::Rejected,
-                BRegExternalReviewResultState::Cancelled => Self::Cancelled,
                 BRegExternalReviewResultState::ChangesRequested
                 | BRegExternalReviewResultState::Answered
+                | BRegExternalReviewResultState::Cancelled
                 | BRegExternalReviewResultState::Superseded => Self::UnderReview,
                 BRegExternalReviewResultState::Pending => match submission {
                     BRegExternalReviewSubmissionState::Accepted => Self::UnderReview,

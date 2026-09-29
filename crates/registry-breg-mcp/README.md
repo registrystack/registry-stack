@@ -58,6 +58,12 @@ The halves share no code path and no configuration section:
 | `prepare_review` | Returns `<reviewBaseUrl>/requests/<id>` for the citizen to review and submit | metadata, linked list lookup, read |
 | `get_application_status` | `prepared`, `submitted`, `under_review`, `approved`, `rejected`, `applied`, or `cancelled`, as the registry reports it | metadata, linked list lookup, read |
 
+`cancelled` is the request's own state. A review that was cancelled, answered,
+or superseded, or that asked for changes, leaves the request submitted and open,
+so its status is `under_review`. Only `rejected`, `applied`, and `cancelled` are
+closed, and an identical `start_application` returns an identical application
+that is still open instead of creating another.
+
 Tool input schemas come from the registry's caller-filtered metadata for the
 configured agent access profile, so a field the profile cannot write is never
 offered.

@@ -564,6 +564,47 @@ async fn a_start_after_a_closed_application_opens_a_new_one() {
 }
 
 #[tokio::test]
+async fn a_submitted_application_whose_review_was_cancelled_stays_open() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
+    let first = started_identifier(&start().await);
+    let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    fixture.registry.set_request(
+        first,
+        json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
+        "effectDigest": digest,
+        "review": {
+            "submission": {"state": "accepted", "authority": "casework",
+                "requestId": "8a1f3c52-6d4e-4b7a-9c0d-1e2f3a4b5c6d", "submissionDigest": digest,
+                "recoveryDeadline": "2026-09-26T01:00:00Z",
+                "policy": {"id": "address-review", "version": "1", "digest": digest}},
+            "result": {"state": "cancelled", "resultId": "2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091",
+                "completedAt": "2026-09-19T01:00:00Z", "availableUntil": "2026-10-19T01:00:00Z"},
+            "delivery": {"state": "received", "eventId": "3c4d5e6f-7081-4923-8b4c-5d6e7f8091a2",
+                "receivedAt": "2026-09-19T01:00:01Z"},
+            "application": {"mode": "manual", "state": "blocked"},
+            "recovery": {"state": "none"},
+        }}),
+    );
+
+    let status = fixture
+        .call(
+            &caller,
+            GET_APPLICATION_STATUS,
+            json!({"applicationId": first.to_string()}),
+        )
+        .await;
+    assert_eq!(status["application"]["status"], "under_review", "{status}");
+
+    // Still open, so an identical start returns it rather than a second draft.
+    let retried = start().await;
+    assert_eq!(started_identifier(&retried), first, "{retried}");
+    assert_eq!(retried["application"]["status"], "under_review");
+    assert_eq!(fixture.registry.applications().len(), 1);
+}
+
+#[tokio::test]
 async fn a_retried_start_answers_with_the_drafts_current_state() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
@@ -815,10 +856,12 @@ fn request_state_maps_to_one_citizen_status() {
             Some((Submission::Accepted, Result::Rejected)),
             "rejected",
         ),
+        // A cancelled review leaves the request submitted: BReg still
+        // offers revise, rebase, and cancel on it, so it is not closed.
         (
             State::Submitted,
             Some((Submission::Accepted, Result::Cancelled)),
-            "cancelled",
+            "under_review",
         ),
         (State::Cancelled, None, "cancelled"),
         (State::Applied, None, "applied"),
