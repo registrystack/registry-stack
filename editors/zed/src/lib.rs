@@ -170,20 +170,28 @@ mod tests {
 
     #[test]
     fn cli_version_must_match_this_extension() {
+        let version = env!("CARGO_PKG_VERSION");
+        let dev_version = format!("{version}-dev");
         assert_eq!(
-            parse_cli_version(b"relayctl 0.37.0\n", "relayctl"),
-            Some("0.37.0")
+            parse_cli_version(format!("relayctl {version}\n").as_bytes(), "relayctl"),
+            Some(version)
         );
         assert_eq!(
-            parse_cli_version(b"relayctl 0.37.0-dev (abc)\n", "relayctl"),
-            Some("0.37.0-dev")
+            parse_cli_version(
+                format!("relayctl {dev_version} (abc)\n").as_bytes(),
+                "relayctl"
+            ),
+            Some(dev_version.as_str())
         );
-        assert_eq!(parse_cli_version(b"evidencectl 0.37.0\n", "relayctl"), None);
+        assert_eq!(
+            parse_cli_version(format!("evidencectl {version}\n").as_bytes(), "relayctl"),
+            None
+        );
         assert_eq!(parse_cli_version(b"relayctl\n", "relayctl"), None);
-        assert!(version_matches("0.37.0", env!("CARGO_PKG_VERSION")));
-        assert!(version_matches("0.37.0-dev", env!("CARGO_PKG_VERSION")));
-        assert!(!version_matches("0.36.0", env!("CARGO_PKG_VERSION")));
-        assert!(!version_matches("0.37.0-pre", env!("CARGO_PKG_VERSION")));
+        assert!(version_matches(version, version));
+        assert!(version_matches(&dev_version, version));
+        assert!(!version_matches("0.36.0", version));
+        assert!(!version_matches(&format!("{version}-pre"), version));
     }
 
     #[test]

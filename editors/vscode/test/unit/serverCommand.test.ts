@@ -9,7 +9,11 @@ import { afterEach, test } from 'node:test';
 import { findLanguageServerOnPath, hostsMatchingLanguageServer } from '../../src/serverCommand.js';
 
 const originalPath = process.env.PATH;
-const expectedVersion = '0.37.0';
+// The compiled test runs from out/unit/test/unit; the manifest is the
+// extension's own, so the fixtures follow the release version.
+const expectedVersion: string = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../../../package.json'), 'utf8'),
+).version;
 
 afterEach(() => {
   process.env.PATH = originalPath;

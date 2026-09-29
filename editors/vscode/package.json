@@ -2,7 +2,7 @@
   "name": "registry-stack",
   "displayName": "Registry Stack",
   "description": "Cross-file navigation and reference diagnostics for Registry Stack YAML authoring projects.",
-  "version": "0.37.0",
+  "version": "0.38.0",
   "publisher": "registrystack",
   "license": "Apache-2.0",
   "repository": {
