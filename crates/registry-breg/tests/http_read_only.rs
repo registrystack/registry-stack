@@ -976,6 +976,16 @@ async fn query_refusals_name_the_fixed_parameter_even_for_malformed_encoding() {
         ("/v1/records/assignments:snapshot?$expand=household", None),
         ("/v1/records/assignments?$top=%ZZ", Some("$top")),
         ("/v1/records/assignments?%ZZ=1", None),
+        ("/v1/records/assignments?snapshot=a", Some("snapshot")),
+        (
+            "/v1/records/assignments?validAt=2026-06-05",
+            Some("validAt"),
+        ),
+        (
+            "/v1/records/assignments:snapshot?requestHistoryAfterProposalVersion=1",
+            Some("requestHistoryAfterProposalVersion"),
+        ),
+        ("/v1/records/assignments?limit=10", None),
     ] {
         let response = send_to(
             &app,

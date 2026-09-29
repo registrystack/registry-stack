@@ -587,8 +587,9 @@ where
 }
 
 /// Parse like [`parse_read_query`], and on refusal also name the fixed query
-/// parameter at fault. An unrecognized or disallowed parameter name comes
-/// from the caller and is never named; neither is a payload over the bound.
+/// parameter at fault, including one this route does not accept, such as
+/// `snapshot`. A parameter name outside [`QUERY_PARAMETERS`] comes from the
+/// caller and is never named; neither is a payload over the bound.
 pub fn parse_read_query_located<I, K, V>(
     pairs: I,
 ) -> Result<ParsedReadQuery, (QueryParseError, Option<&'static str>)>
@@ -635,12 +636,11 @@ pub const QUERY_PARAMETERS: [&str; 12] = [
     "requestHistoryAfterProposalVersion",
 ];
 
-/// The fixed name of `key`, when a refusal while reading it is its own.
+/// The fixed name of `key`, when a refusal while reading it is its own. A
+/// fixed name the route does not accept is still that name; any other name
+/// is the caller's and stays unnamed.
 fn parameter_at_fault(error: QueryParseError, key: &str) -> Option<&'static str> {
-    if matches!(
-        error,
-        QueryParseError::UnknownOption | QueryParseError::PayloadTooLarge
-    ) {
+    if error == QueryParseError::PayloadTooLarge {
         return None;
     }
     QUERY_PARAMETERS
