@@ -138,6 +138,11 @@ pub(crate) struct Current {
 #[derive(Debug)]
 pub(crate) struct Exhausted;
 
+/// The citizen's sessions an insert ended to keep their share, held so a
+/// sign-in that fails afterwards can put them back.
+#[must_use]
+pub(crate) struct Replaced(Vec<([u8; 32], Session)>);
+
 pub(crate) struct Store {
     sessions: Mutex<HashMap<[u8; 32], Session>>,
     pending: Mutex<HashMap<[u8; 32], PendingSignIn>>,
@@ -193,8 +198,10 @@ impl Store {
     /// Admit `session` under `cookie`. The citizen's own share is made first:
     /// their expired sessions go, and at [`MAXIMUM_SESSIONS_PER_CITIZEN`] their
     /// oldest one ends, views and all. Only then is the store's own bound
-    /// checked, so a citizen signing in again never takes another slot.
-    pub(crate) fn insert(&self, cookie: &str, mut session: Session) -> Result<(), Exhausted> {
+    /// checked, so a citizen signing in again never takes another slot. A
+    /// refused insert changes nothing; an admitted one returns the sessions
+    /// it ended, for [`Store::restore`].
+    pub(crate) fn insert(&self, cookie: &str, mut session: Session) -> Result<Replaced, Exhausted> {
         let mut sessions = lock(&self.sessions);
         let now = Instant::now();
         sessions.retain(|_, held| held.citizen != session.citizen || held.expires_at > now);
@@ -205,18 +212,26 @@ impl Store {
             .collect();
         held.sort_unstable();
         let excess = (held.len() + 1).saturating_sub(MAXIMUM_SESSIONS_PER_CITIZEN);
-        for (_, key) in held.into_iter().take(excess) {
-            sessions.remove(&key);
-        }
-        if sessions.len() >= self.maximum_sessions {
+        if sessions.len() - excess >= self.maximum_sessions {
             sessions.retain(|_, session| session.expires_at > now);
         }
-        if sessions.len() >= self.maximum_sessions {
+        if sessions.len() - excess >= self.maximum_sessions {
             return Err(Exhausted);
         }
+        let replaced = held
+            .into_iter()
+            .take(excess)
+            .filter_map(|(_, key)| sessions.remove_entry(&key))
+            .collect();
         session.admitted = self.admitted.fetch_add(1, Ordering::Relaxed);
         sessions.insert(digest(cookie), session);
-        Ok(())
+        Ok(Replaced(replaced))
+    }
+
+    /// Put back the sessions an insert replaced, once the session that
+    /// replaced them has been removed.
+    pub(crate) fn restore(&self, replaced: Replaced) {
+        lock(&self.sessions).extend(replaced.0);
     }
 
     /// The live session behind `cookie`. An expired session is removed: a
@@ -333,9 +348,10 @@ mod tests {
             .map(|index| format!("a{index}"))
             .collect();
         for cookie in &cookies {
-            store
+            let replaced = store
                 .insert(cookie, session("a"))
                 .expect("the citizen's own share");
+            assert!(replaced.0.len() <= 1);
         }
 
         let (replaced, held) = cookies.split_at(cookies.len() - MAXIMUM_SESSIONS_PER_CITIZEN);
@@ -343,13 +359,15 @@ mod tests {
             .iter()
             .all(|cookie| store.current(cookie).is_none()));
         assert!(held.iter().all(|cookie| store.current(cookie).is_some()));
-        store
+        let replaced = store
             .insert("b", session("b"))
             .expect("room for another citizen");
+        assert!(replaced.0.is_empty());
         assert!(store.insert("c", session("c")).is_err());
-        store
+        let replaced = store
             .insert("a-again", session("a"))
             .expect("a full store still replaces");
+        assert_eq!(replaced.0.len(), 1);
         assert!(store.current(&held[0]).is_none());
         assert!(store.current("b").is_some());
     }
