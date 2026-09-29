@@ -18,38 +18,40 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::journal::{Action, Operation, Outcome};
-use crate::session::{random_token, tokens_match, PendingSignIn, Session, Store};
+use crate::session::{random_token, tokens_match, PendingSignIn, Replaced, Session, Store};
 use crate::{canonical_uuid, cookie, App, Problem};
 
 /// The only path a sign-in may return to is a request page.
 const RETURN_PREFIX: &str = "/requests/";
 
 /// Removes a newly inserted session if the callback is cancelled or terminal
-/// audit fails before the browser receives its cookie.
+/// audit fails before the browser receives its cookie, and puts back the
+/// citizen's sessions that inserting it replaced.
 struct SessionRollback<'a> {
     sessions: &'a Store,
     cookie: &'a str,
-    armed: bool,
+    replaced: Option<Replaced>,
 }
 
 impl<'a> SessionRollback<'a> {
-    fn armed(sessions: &'a Store, cookie: &'a str) -> Self {
+    fn armed(sessions: &'a Store, cookie: &'a str, replaced: Replaced) -> Self {
         Self {
             sessions,
             cookie,
-            armed: true,
+            replaced: Some(replaced),
         }
     }
 
     fn disarm(mut self) {
-        self.armed = false;
+        self.replaced = None;
     }
 }
 
 impl Drop for SessionRollback<'_> {
     fn drop(&mut self) {
-        if self.armed {
+        if let Some(replaced) = self.replaced.take() {
             self.sessions.remove(self.cookie);
+            self.sessions.restore(replaced);
         }
     }
 }
@@ -306,19 +308,15 @@ async fn complete(
     // after this point removes the session again rather than leave it
     // behind unconfirmed.
     let registry = Arc::new(app.registry.with_bearer_token(redeemed.into_access_token()));
-    if app
-        .sessions
-        .insert(
-            &session_cookie,
-            Session::new(citizen.clone(), registry, csrf, expires_at),
-        )
-        .is_err()
-    {
+    let Ok(replaced) = app.sessions.insert(
+        &session_cookie,
+        Session::new(citizen.clone(), registry, csrf, expires_at),
+    ) else {
         return Err(
             finish_problem(app, operation, Outcome::Refused, Problem::SessionsExhausted).await,
         );
-    }
-    let rollback = SessionRollback::armed(&app.sessions, &session_cookie);
+    };
+    let rollback = SessionRollback::armed(&app.sessions, &session_cookie, replaced);
     if let Err(error) = operation.finish(Outcome::Ok, Some(&citizen)).await {
         tracing::error!(%error, "the sign-in could not be audited");
         return Err(app.problem(Problem::AuditUnavailable));
@@ -367,6 +365,7 @@ mod tests {
     use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
 
     use super::*;
+    use crate::session::MAXIMUM_SESSIONS_PER_CITIZEN;
 
     const ID: &str = "3f6c8a3e-0b8e-4c52-9d0e-6a4f1c2b7d10";
 
@@ -398,7 +397,7 @@ mod tests {
             url::Url::parse("https://registry.example").unwrap(),
         ))
         .unwrap();
-        store
+        let replaced = store
             .insert(
                 &cookie,
                 Session::new(
@@ -411,7 +410,7 @@ mod tests {
             .unwrap();
 
         let mut cancelled = Box::pin(async {
-            let _rollback = SessionRollback::armed(&store, &cookie);
+            let _rollback = SessionRollback::armed(&store, &cookie, replaced);
             pending::<()>().await;
         });
         tokio::select! {
@@ -422,5 +421,39 @@ mod tests {
         drop(cancelled);
 
         assert!(store.current(&cookie).is_none());
+    }
+
+    #[test]
+    fn a_rolled_back_sign_in_past_the_share_restores_the_session_it_replaced() {
+        let store = Store::new(10, 1);
+        let session = || {
+            let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+                url::Url::parse("https://registry.example").unwrap(),
+            ))
+            .unwrap();
+            Session::new(
+                "citizen".to_owned(),
+                Arc::new(registry),
+                "csrf".to_owned(),
+                std::time::Instant::now() + Duration::from_secs(60),
+            )
+        };
+        let held: Vec<String> = (0..MAXIMUM_SESSIONS_PER_CITIZEN)
+            .map(|_| random_token().unwrap())
+            .collect();
+        for cookie in &held {
+            drop(store.insert(cookie, session()).unwrap());
+        }
+
+        // The terminal audit fails, so the armed rollback is dropped on the
+        // way out, exactly as the callback's early return drops it.
+        let cookie = random_token().unwrap();
+        let replaced = store.insert(&cookie, session()).unwrap();
+        drop(SessionRollback::armed(&store, &cookie, replaced));
+
+        assert!(store.current(&cookie).is_none());
+        for cookie in &held {
+            assert!(store.current(cookie).is_some());
+        }
     }
 }
