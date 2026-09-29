@@ -135,7 +135,9 @@ with a notice instead of submitting.
     never slow anyone else.
   - `limits.globalSignIn` is one limit shared by everyone on `/signin` and
     `/signin/callback`. It bounds the sign-in work the page does, and a flood
-    of sign-in starts can use it up for everyone until it refills.
+    of sign-in starts can use it up for everyone until it refills. A callback
+    it refuses still ends that sign-in, its cookie and its pending entry
+    together, so the person opens their link again to sign in.
 - Per-client limiting belongs at the edge proxy, and operators must configure
   it there: the page's global sign-in limit is a ceiling, not a defense for
   any one person.

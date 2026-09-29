@@ -1164,6 +1164,60 @@ async fn the_global_cap_still_limits_sign_in_starts() {
     assert_eq!(page.status, StatusCode::OK, "{}", page.body);
 }
 
+#[tokio::test]
+async fn a_throttled_callback_ends_the_sign_in_whose_cookie_it_clears() {
+    // Two sign-in requests in a burst, refilling one a second.
+    let harness = Harness::start_with(Options {
+        extra_document: "limits:\n  globalSignIn: { requestsPerMinute: 60, burst: 2 }\n".to_owned(),
+        ..Options::default()
+    })
+    .await;
+    let start = harness.get(&sign_in_location(), None).await;
+    assert_eq!(start.status, StatusCode::SEE_OTHER, "{}", start.body);
+    let sign_in_cookie = cookie_pair(&start.set_cookie("breg-review-signin").unwrap());
+    let redirected = harness
+        .http
+        .get(format!("{}&login_hint={CITIZEN_A}", start.location()))
+        .send()
+        .await
+        .unwrap();
+    let callback = redirected.headers()["location"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let send_callback = || async {
+        support::page(
+            harness
+                .http
+                .get(&callback)
+                .header("cookie", &sign_in_cookie)
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await
+    };
+    // Someone else's sign-in start spends the rest of the burst.
+    let other = harness.get(&sign_in_location(), None).await;
+    assert_eq!(other.status, StatusCode::SEE_OTHER, "{}", other.body);
+
+    let throttled = send_callback().await;
+    assert_eq!(throttled.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(throttled.error_code(), Some("rate-limited"));
+    let retry_after: u64 = throttled.header("retry-after").unwrap().parse().unwrap();
+    let cleared = throttled.set_cookie("breg-review-signin").unwrap();
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+
+    // The browser no longer holds the cookie, so the pending sign-in behind
+    // it must be gone too: presenting it once the limit refills finds
+    // nothing to complete.
+    tokio::time::sleep(Duration::from_secs(retry_after)).await;
+    let retried = send_callback().await;
+    assert_eq!(retried.status, StatusCode::BAD_REQUEST, "{}", retried.body);
+    assert_eq!(retried.error_code(), Some("sign-in-refused"));
+    assert!(retried.set_cookie("breg-review-session").is_none());
+}
+
 /// A page whose session store holds at most `maximum_sessions` sessions.
 async fn limited_sessions(maximum_sessions: u32) -> Harness {
     Harness::start_with(Options {

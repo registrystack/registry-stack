@@ -157,7 +157,8 @@ async fn begin(app: &App, query: Option<&str>) -> Result<Response, Response> {
 }
 
 /// `GET /signin/callback`: redeem the code, verify the ID token, and open a
-/// session. The sign-in cookie is cleared whatever the outcome.
+/// session. The sign-in cookie is cleared, and the pending sign-in behind it
+/// consumed, whatever the outcome.
 pub(crate) async fn callback(
     State(app): State<Arc<App>>,
     RawQuery(query): RawQuery,
@@ -178,13 +179,16 @@ async fn complete(
     query: Option<&str>,
     headers: &HeaderMap,
 ) -> Result<Response, Response> {
+    // Taking the pending sign-in consumes it, so a replayed callback finds
+    // nothing, whatever it carries. It is taken before the sign-in limit
+    // admits the callback: every answer clears the sign-in cookie, so a
+    // throttled callback ends the flow behind it too, rather than leave an
+    // entry no browser can present.
+    let pending =
+        cookie(headers, app.cookies.sign_in).and_then(|value| app.sessions.finish_sign_in(value));
     app.admit_sign_in().await?;
     let refused = || app.problem(Problem::SignInRefused);
-    // Taking the pending sign-in consumes it, so a replayed callback finds
-    // nothing, whatever it carries.
-    let pending = cookie(headers, app.cookies.sign_in)
-        .and_then(|value| app.sessions.finish_sign_in(value))
-        .ok_or_else(refused)?;
+    let pending = pending.ok_or_else(refused)?;
     let pairs = query.and_then(single_valued).ok_or_else(refused)?;
     let state = parameter(&pairs, "state").ok_or_else(refused)?;
     if !tokens_match(state, &pending.state) {
