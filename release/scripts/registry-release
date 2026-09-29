@@ -20,6 +20,7 @@ from typing import Any
 import advisory_renewal
 import release_candidate
 import release_notes
+import release_roster
 import verify_latest_published_release
 import verify_public_release
 import prepare_release_docs
@@ -65,7 +66,6 @@ SCHEDULING_RELEASE_MINIMUM_VERSION = (0, 33, 0)
 SCHEDULINGCTL_RELEASE_MINIMUM_VERSION = (
     release_candidate.OPERATOR_TOOL_MINIMUM_VERSION
 )
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CANDIDATE_VERIFICATION_PLAN_SCHEMA = "registry-release.candidate-verification.v3"
@@ -225,7 +225,7 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
                     "breg-installer",
                 }
             )
-        if parsed_version >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+        if release_roster.breg_services_in_release(parsed_version):
             expected_inventory.update({"breg-mcp", "breg-review"})
         if parsed_version >= CASEWORK_RELEASE_MINIMUM_VERSION:
             expected_inventory.update(

@@ -18,6 +18,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import release_roster  # noqa: E402
+
 
 V2_SCHEMA_VERSION = "registry-stack.release-candidate.v2"
 TAG_BINDING_HEADER = "registry-stack-release-candidate-v2"
@@ -70,8 +76,8 @@ IMAGE_OPERATOR_TOOLS = {
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
 }
-# The citizen MCP gateway and its review page ship in the BReg release set.
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)
+# The citizen MCP gateway and its review page join the release set from the
+# release that release_roster.BREG_SERVICES_FIRST_RELEASE names.
 BREG_SERVICES_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {
     "breg-mcp",
     "breg-review",
@@ -147,9 +153,9 @@ def _candidate_image_names(version: str) -> set[str]:
         return CASEWORK_RUNTIME_IMAGE_NAMES | {"mint"}
     if parsed < SCHEDULING_RELEASE_MINIMUM_VERSION:
         return CASEWORK_RUNTIME_IMAGE_NAMES
-    if parsed < BREG_SERVICES_RELEASE_MINIMUM_VERSION:
-        return SCHEDULING_RUNTIME_IMAGE_NAMES
-    return BREG_SERVICES_RUNTIME_IMAGE_NAMES
+    if release_roster.breg_services_in_release(parsed):
+        return BREG_SERVICES_RUNTIME_IMAGE_NAMES
+    return SCHEDULING_RUNTIME_IMAGE_NAMES
 
 
 def image_operator_tools(version: str) -> dict[str, str]:
@@ -434,7 +440,7 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"bregctl-{tag}-{platform}"] = "binary"
         inventory[f"breg-{tag}-install.sh"] = "installer"
         inventory["breg-install.sh"] = "installer"
-    if version_tuple >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+    if release_roster.breg_services_in_release(version_tuple):
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"breg-mcp-{tag}-{platform}"] = "binary"
             inventory[f"breg-review-{tag}-{platform}"] = "binary"

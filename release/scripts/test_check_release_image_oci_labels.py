@@ -721,6 +721,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                                 "evidence",
                                 "discovery",
                                 "breg",
+                                "breg-mcp",
+                                "breg-review",
                                 "bregctl",
                                 "casework",
                                 "caseworkctl",

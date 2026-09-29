@@ -46,9 +46,6 @@ SCHEDULING_RELEASE_MINIMUM_VERSION = (
 SCHEDULINGCTL_RELEASE_MINIMUM_VERSION = (
     REGISTRY_RELEASE.SCHEDULINGCTL_RELEASE_MINIMUM_VERSION
 )
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (
-    REGISTRY_RELEASE.BREG_SERVICES_RELEASE_MINIMUM_VERSION
-)
 MINT_RETIREMENT_VERSION = REGISTRY_RELEASE.release_candidate.MINT_RETIREMENT_VERSION
 FIXTURE_IDENTIFIER_CATALOG = {
     "version": 1,
@@ -162,7 +159,7 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("scheduling",)
     if version_tuple >= SCHEDULINGCTL_RELEASE_MINIMUM_VERSION:
         inventory += ("schedulingctl",)
-    if version_tuple >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+    if REGISTRY_RELEASE.release_roster.breg_services_in_release(version_tuple):
         inventory += ("breg-mcp", "breg-review")
     data = {
         "stack": {

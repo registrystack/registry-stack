@@ -247,6 +247,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "Cargo.lock",
             "release/scripts/build-release-binaries.sh",
             "release/scripts/merge-release-binary-shards.py",
+            "release/scripts/release_roster.py",
             "release/docker/Dockerfile.builder",
             "release/requirements/ziglang-0.12.1.txt",
             "release/glibc-floor.env",
@@ -907,6 +908,7 @@ class SourceCheckoutIndependenceTest(unittest.TestCase):
         self.scripts = self.root / "release/scripts"
         self.scripts.mkdir(parents=True)
         shutil.copy2(BINARY_RECIPE, self.scripts / BINARY_RECIPE.name)
+        shutil.copy2(ROOT / "release/scripts/release_roster.py", self.scripts)
         self.recipe = (self.scripts / BINARY_RECIPE.name).read_text(encoding="utf-8")
 
     def staged(self, name: str, content: bytes) -> Path:

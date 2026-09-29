@@ -7,10 +7,12 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +26,11 @@ SPEC.loader.exec_module(MODULE)
 VERSION = "0.31.0"
 ARCHIVE_VERSION = "0.33.0"
 OPERATOR_TOOL_VERSION = "0.36.0"
+# breg-mcp and breg-review have not joined a release
+# (release_roster.BREG_SERVICES_FIRST_RELEASE is None). The inclusion test
+# patches a hypothetical first release so their build path stays covered
+# without any production knob.
+HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)
 SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"],
     cwd=ROOT,
@@ -262,6 +269,38 @@ if path.suffix != ".dylib":
         self.fake_codesign.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.fake_codesign.chmod(0o755)
 
+    def roster_shim(
+        self, stem: str, first_release: tuple[int, int, int]
+    ) -> Path:
+        """Return a directory whose python3 answers the roster as if it named
+        ``first_release``, and runs every other command unchanged."""
+        shim_dir = self.root / f"{stem}-roster-shim"
+        shim_dir.mkdir()
+        shim = shim_dir / "python3"
+        shim.write_text(
+            f"""#!{sys.executable}
+import importlib.util
+import os
+import sys
+
+args = sys.argv[1:]
+if (
+    len(args) >= 2
+    and args[0].endswith("/release_roster.py")
+    and args[1] == "breg-services-in-release"
+):
+    spec = importlib.util.spec_from_file_location("release_roster", args[0])
+    roster = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(roster)
+    roster.BREG_SERVICES_FIRST_RELEASE = {first_release!r}
+    sys.exit(roster.main(args[1:]))
+os.execv({sys.executable!r}, [{sys.executable!r}, *args])
+""",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        return shim_dir
+
     def build(
         self,
         group: str,
@@ -273,6 +312,7 @@ if path.suffix != ".dylib":
         binary_version: str | None = None,
         include_casework: bool = False,
         fips_shared: bool = False,
+        breg_services_first_release: tuple[int, int, int] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path, list[list[str]]]:
         stem = name or group
         output = self.root / stem
@@ -293,6 +333,9 @@ if path.suffix != ".dylib":
             environment["FAKE_CARGO_FAIL_CALL"] = str(fail_call)
         if binary_version is not None:
             environment["FAKE_BINARY_VERSION"] = binary_version
+        if breg_services_first_release is not None:
+            shim_dir = self.roster_shim(stem, breg_services_first_release)
+            environment["PATH"] = f"{shim_dir}{os.pathsep}{environment['PATH']}"
         parsed = tuple(int(part) for part in version.split("."))
         if fips_shared or parsed >= (0, 33, 0):
             environment["FAKE_OTOOL_FIPS_SHARED"] = "1"
@@ -682,31 +725,65 @@ if path.suffix != ".dylib":
         for name in expected:
             self.assertEqual(0o644, stat.S_IMODE((merged / "platform" / name).stat().st_mode))
 
-    def test_breg_services_join_the_bregctl_shard_from_v0_36_0(self) -> None:
+    def test_no_version_builds_the_breg_services_until_the_roster_names_one(
+        self,
+    ) -> None:
+        self.assertIsNone(MODULE.release_roster.BREG_SERVICES_FIRST_RELEASE)
+        for version in ("0.35.0", "0.36.0", "0.37.0"):
+            with self.subTest(version=version):
+                result, output, calls = self.build(
+                    "bregctl", version=version, name=f"services-held-{version}"
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual([BREGCTL_ARGS], calls)
+                self.assertEqual(
+                    [f"bregctl-v{version}-macos-arm64.tar.gz"],
+                    sorted(path.name for path in (output / "platform").iterdir()),
+                )
+                self.assertEqual(
+                    [f"bregctl-v{version}-macos-arm64.tar.gz"],
+                    MODULE.rosters(version)["bregctl"],
+                )
+
+    def test_breg_services_join_the_bregctl_shard_from_the_first_release(
+        self,
+    ) -> None:
+        first_release = HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE
+        roster_patch = mock.patch.object(
+            MODULE.release_roster, "BREG_SERVICES_FIRST_RELEASE", first_release
+        )
+        roster_patch.start()
+        self.addCleanup(roster_patch.stop)
         before, before_output, before_calls = self.build(
-            "bregctl", version="0.35.0", name="services-before"
+            "bregctl",
+            version="0.36.0",
+            name="services-before",
+            breg_services_first_release=first_release,
         )
         self.assertEqual(0, before.returncode, before.stderr)
         self.assertEqual([BREGCTL_ARGS], before_calls)
         self.assertEqual(
-            ["bregctl-v0.35.0-macos-arm64.tar.gz"],
+            ["bregctl-v0.36.0-macos-arm64.tar.gz"],
             sorted(path.name for path in (before_output / "platform").iterdir()),
         )
 
-        version = "0.36.0"
+        version = "0.37.0"
         expected = [
-            "bregctl-v0.36.0-macos-arm64.tar.gz",
-            "breg-mcp-v0.36.0-macos-arm64.tar.gz",
-            "breg-review-v0.36.0-macos-arm64.tar.gz",
+            "bregctl-v0.37.0-macos-arm64.tar.gz",
+            "breg-mcp-v0.37.0-macos-arm64.tar.gz",
+            "breg-review-v0.37.0-macos-arm64.tar.gz",
         ]
         self.assertEqual(expected, MODULE.rosters(version)["bregctl"])
         self.assertEqual(
-            ["breg-v0.36.0-macos-arm64.tar.gz"], MODULE.rosters(version)["breg"]
+            ["breg-v0.37.0-macos-arm64.tar.gz"], MODULE.rosters(version)["breg"]
         )
         shards = {}
-        for group in ("core", "breg", "bregctl", "casework"):
+        for group in ("core", "breg", "bregctl", "casework", "scheduling"):
             result, shard, calls = self.build(
-                group, version=version, name=f"services-{group}"
+                group,
+                version=version,
+                name=f"services-{group}",
+                breg_services_first_release=first_release,
             )
             self.assertEqual(0, result.returncode, result.stderr)
             shards[group] = shard
@@ -736,6 +813,7 @@ if path.suffix != ".dylib":
             breg=shards["breg"],
             bregctl=shards["bregctl"],
             casework=shards["casework"],
+            scheduling=shards["scheduling"],
             output=merged,
         )
         merged_names = {path.name for path in (merged / "platform").iterdir()}
@@ -746,6 +824,7 @@ if path.suffix != ".dylib":
             version=version,
             name="services-wrong-version",
             binary_version="0.0.0",
+            breg_services_first_release=first_release,
         )
         self.assertNotEqual(0, failed.returncode)
         self.assertEqual([BREGCTL_ARGS], failed_calls)
