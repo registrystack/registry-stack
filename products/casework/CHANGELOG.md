@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+- BREAKING: the `Registry-Source-Profile` header is the only input that
+  selects the source profile on `POST /v1/work-items/{itemId}/decisions` and
+  both attempt recovery routes, as on every other source-backed route.
+  `DecideRequest` no longer carries `sourceProfileId`, and
+  `RecoverAttemptRequest` is a closed empty object (`{}`); a body that still
+  sends `sourceProfileId` is refused with 422 `request.unprocessable`. The
+  Rust client, the Node and Python bindings, and the unified clients follow.
+  Callers, App Kit included, that send `sourceProfileId` in a decision or
+  recovery body must drop it and send the value in `Registry-Source-Profile`
+  (#1443).
+- `GET /v1/review-tasks` sent without `Registry-Source-Profile` answers 400
+  `source-profile.required` when the page would be empty, has no
+  `nextCursor`, and at least one candidate was skipped only because that
+  header is absent, instead of a silent empty page. A page that lists
+  anything, such as submitted-context tasks, is unchanged, and an empty page
+  cut short by the source-read budget, candidate scan, or page deadline
+  keeps its `nextCursor` and `status` (#1443).
+- `caseworkctl dev token` writes the client's `Registry-Casework-Profile`
+  line beneath `Authorization` in `secrets/<client>.header` for a client
+  bound to a Casework access profile, so the file is usable as-is with
+  `curl --header @file`; an integration client's file keeps only
+  `Authorization`. A caller that also passes that
+  header itself sends it twice (#1443).
+- New closed problem code `request.limit-out-of-range` (400) for a zero or
+  over-maximum `limit` on a paged route. Its detail names the parameter and
+  the accepted ranges, 1 to 100, and 1 to 1000 on the directory absence
+  list. It was `request.invalid`. The review result feed and review history
+  default to the inbox policy's `defaultPageSize` instead of 25 (#1467).
+- `ReviewTaskPage` gains a required `status`, the `PageStatus` the work-item
+  page already reports: `complete`; `budget_exhausted` when the source-read
+  budget, candidate scan, or page deadline stopped the page before it
+  filled; or `source_unavailable` when a bound source did not answer in
+  time. Either of the last two comes with a `nextCursor`. Review cursors are
+  unchanged (#1467).
+- A plain `GET /v1/work-items/{itemId}`, its history, and its clocks return
+  the retained item without actions or routing copy when the source's
+  binding generation moved or the adapter refused the caller read as a moved
+  binding; without a caller view the display reference is withheld too. They
+  answered 409 `work-item.proposal-changed`. In those two cases a superseded
+  item answers 409 `work-item.superseded`; a superseded item read within one
+  binding generation still returns its historical record without actions.
+  Mutations still refuse a moved binding.
+  Current source visibility still gates every read (#1467).
+- A runtime source binding that breaks an adapter rule is refused at load
+  with the member's key path, `sources.<id>.<member>`, and a static reason
+  naming the rule and its bound, instead of "the binding does not meet the
+  source adapter's accepted range". The configured value is never repeated.
+  The timeout-ordering refusal now names
+  `sources.<id>.requestTimeoutMilliseconds` (#1467).
+- `caseworkctl check`, `explain`, `simulate`, and `package` no longer tell you
+  to repeat `source add` when `casework.yaml` names a `projection`,
+  `contextProjection`, or `displayReference` field the source description
+  does not publish; the refusal names the policy key path and the field. A
+  description that drifted from the adapter contract keeps the existing
+  refusal (#1467).
+- BREAKING: every mutating route parses its JSON body with the workspace's
+  strict parser, so a duplicate object member at any depth, including inside
+  free-form members such as a review draft body or a decision result, is
+  refused with 422 `request.unprocessable` instead of the last occurrence
+  winning. The same parser refuses, with 422 `request.unprocessable`, a
+  well-formed raw JSON integer that IEEE 754 binary64 cannot represent
+  exactly, such as `9007199254740993` (above 2^53); send such a value as a
+  string. Media-type parsing is stricter: the whole `Content-Type` value must
+  parse as `application/json` or `application/*+json` with every parameter a
+  `name=token` or `name="quoted-string"` pair, so a value such as
+  `application/json; charset` is refused with 415
+  `request.unsupported-media-type`. The rejection classes are otherwise
+  those of the previous extractor: 413 over the body limit, 400
+  `request.invalid` for malformed JSON, and 422 for a document that does not
+  match the request type (#1209).
+- Each review-producer operation lists only the problems it can return: the
+  reads no longer list initiator or idempotency codes, and every producer
+  operation lists `profile.not-human` (#1340).
+- `caseworkctl attempt mark-uncertain` refuses an item that is not awaiting
+  its source outcome with its own sentence instead of settle's, and the Node
+  `AttemptUncertainHistoryEntry` detail types the operator marking and
+  definitive-refusal keys (#1367).
+
 ## v0.36.0 - 2026-09-29
 
 - BREAKING: a Casework package is activated in the database by
@@ -129,83 +207,6 @@
 - The Casework image carries `caseworkctl` at `/usr/local/bin/caseworkctl`
   beside the runtime. The entrypoint stays `casework`; run `plan`, `apply`,
   and `status` from the image by overriding the entrypoint.
-- BREAKING: the `Registry-Source-Profile` header is the only input that
-  selects the source profile on `POST /v1/work-items/{itemId}/decisions` and
-  both attempt recovery routes, as on every other source-backed route.
-  `DecideRequest` no longer carries `sourceProfileId`, and
-  `RecoverAttemptRequest` is a closed empty object (`{}`); a body that still
-  sends `sourceProfileId` is refused with 422 `request.unprocessable`. The
-  Rust client, the Node and Python bindings, and the unified clients follow.
-  Callers, App Kit included, that send `sourceProfileId` in a decision or
-  recovery body must drop it and send the value in `Registry-Source-Profile`
-  (#1443).
-- `GET /v1/review-tasks` sent without `Registry-Source-Profile` answers 400
-  `source-profile.required` when the page would be empty, has no
-  `nextCursor`, and at least one candidate was skipped only because that
-  header is absent, instead of a silent empty page. A page that lists
-  anything, such as submitted-context tasks, is unchanged, and an empty page
-  cut short by the source-read budget, candidate scan, or page deadline
-  keeps its `nextCursor` and `status` (#1443).
-- `caseworkctl dev token` writes the client's `Registry-Casework-Profile`
-  line beneath `Authorization` in `secrets/<client>.header` for a client
-  bound to a Casework access profile, so the file is usable as-is with
-  `curl --header @file`; an integration client's file keeps only
-  `Authorization`. A caller that also passes that
-  header itself sends it twice (#1443).
-- New closed problem code `request.limit-out-of-range` (400) for a zero or
-  over-maximum `limit` on a paged route. Its detail names the parameter and
-  the accepted ranges, 1 to 100, and 1 to 1000 on the directory absence
-  list. It was `request.invalid`. The review result feed and review history
-  default to the inbox policy's `defaultPageSize` instead of 25 (#1467).
-- `ReviewTaskPage` gains a required `status`, the `PageStatus` the work-item
-  page already reports: `complete`; `budget_exhausted` when the source-read
-  budget, candidate scan, or page deadline stopped the page before it
-  filled; or `source_unavailable` when a bound source did not answer in
-  time. Either of the last two comes with a `nextCursor`. Review cursors are
-  unchanged (#1467).
-- A plain `GET /v1/work-items/{itemId}`, its history, and its clocks return
-  the retained item without actions or routing copy when the source's
-  binding generation moved or the adapter refused the caller read as a moved
-  binding; without a caller view the display reference is withheld too. They
-  answered 409 `work-item.proposal-changed`. In those two cases a superseded
-  item answers 409 `work-item.superseded`; a superseded item read within one
-  binding generation still returns its historical record without actions.
-  Mutations still refuse a moved binding.
-  Current source visibility still gates every read (#1467).
-- A runtime source binding that breaks an adapter rule is refused at load
-  with the member's key path, `sources.<id>.<member>`, and a static reason
-  naming the rule and its bound, instead of "the binding does not meet the
-  source adapter's accepted range". The configured value is never repeated.
-  The timeout-ordering refusal now names
-  `sources.<id>.requestTimeoutMilliseconds` (#1467).
-- `caseworkctl check`, `explain`, `simulate`, and `package` no longer tell you
-  to repeat `source add` when `casework.yaml` names a `projection`,
-  `contextProjection`, or `displayReference` field the source description
-  does not publish; the refusal names the policy key path and the field. A
-  description that drifted from the adapter contract keeps the existing
-  refusal (#1467).
-- BREAKING: every mutating route parses its JSON body with the workspace's
-  strict parser, so a duplicate object member at any depth, including inside
-  free-form members such as a review draft body or a decision result, is
-  refused with 422 `request.unprocessable` instead of the last occurrence
-  winning. The same parser refuses, with 422 `request.unprocessable`, a
-  well-formed raw JSON integer that IEEE 754 binary64 cannot represent
-  exactly, such as `9007199254740993` (above 2^53); send such a value as a
-  string. Media-type parsing is stricter: the whole `Content-Type` value must
-  parse as `application/json` or `application/*+json` with every parameter a
-  `name=token` or `name="quoted-string"` pair, so a value such as
-  `application/json; charset` is refused with 415
-  `request.unsupported-media-type`. The rejection classes are otherwise
-  those of the previous extractor: 413 over the body limit, 400
-  `request.invalid` for malformed JSON, and 422 for a document that does not
-  match the request type (#1209).
-- Each review-producer operation lists only the problems it can return: the
-  reads no longer list initiator or idempotency codes, and every producer
-  operation lists `profile.not-human` (#1340).
-- `caseworkctl attempt mark-uncertain` refuses an item that is not awaiting
-  its source outcome with its own sentence instead of settle's, and the Node
-  `AttemptUncertainHistoryEntry` detail types the operator marking and
-  definitive-refusal keys (#1367).
 
 ## v0.35.0 - 2026-09-28
 
