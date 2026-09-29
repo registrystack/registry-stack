@@ -288,6 +288,49 @@ async fn check_refuses_an_invalid_configuration_without_echoing_it() {
     assert!(!stdout.contains("is valid"), "{stdout}");
 }
 
+/// A client key that parses but cannot authenticate the sign-in client, here
+/// one without a key identifier, is refused by `check` exactly as `serve`
+/// refuses it, and neither echoes the key.
+#[tokio::test]
+async fn check_refuses_a_client_key_serve_would_refuse() {
+    let environment = Environment::prepare(free_address().await, &Options::default()).await;
+    let key_path = environment.directory.path().join("secrets/client-key.jwk");
+    let mut key: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+    let private = key["d"].as_str().unwrap().to_owned();
+    assert!(key.as_object_mut().unwrap().remove("kid").is_some());
+    std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+
+    let checked = run(&environment, "check");
+    // `serve` fetches discovery from the in-process provider, so it runs off
+    // the test's runtime thread.
+    let config_path = environment.config_path.clone();
+    let served = tokio::task::spawn_blocking(move || {
+        Command::new(BINARY)
+            .arg("--runtime-config")
+            .arg(config_path)
+            .arg("serve")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run breg-review")
+    })
+    .await
+    .unwrap();
+
+    for output in [&checked, &served] {
+        assert_eq!(output.status.code(), Some(1));
+        let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+        let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+        assert!(
+            stderr.contains("the client key must carry a key identifier"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains(&private), "{stderr}");
+        assert!(!stdout.contains(&private), "{stdout}");
+        assert!(!stdout.contains("is valid"), "{stdout}");
+    }
+}
+
 #[tokio::test]
 async fn check_refuses_an_unreadable_secret_by_its_safe_reference() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;

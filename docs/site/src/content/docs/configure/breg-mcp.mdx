@@ -432,8 +432,9 @@ breg-review --runtime-config /etc/breg-review/runtime.yaml check
 ```
 
 `breg-mcp check` resolves every secret without opening a socket or the audit journal.
-`breg-review check` reads and parses its secrets without fetching the issuer's discovery document
-or opening its journal. Neither command proves the authorization server or the registry accepts
+`breg-review check` reads and parses its secrets and refuses a client key `serve` would refuse,
+such as one without a `kid`, without fetching the issuer's discovery document or opening its
+journal. Neither command proves the authorization server or the registry accepts
 the configuration; the first `serve` does.
 
 {/* Evidence: crates/registry-breg-mcp/src/main.rs; crates/registry-breg-review/src/lib.rs, check(). */}
