@@ -157,6 +157,15 @@ FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
     "products/manifest/fuzz/Cargo.lock",
     "products/platform/fuzz/Cargo.lock",
 )
+# The editor extensions ask for a hosting CLI of their own version, so the
+# editor checks hold these manifests and lockfiles equal to the workspace.
+EDITOR_RELEASE_SURFACE_PATHS = (
+    "editors/vscode/package.json",
+    "editors/vscode/package-lock.json",
+    "editors/zed/Cargo.toml",
+    "editors/zed/Cargo.lock",
+    "editors/zed/extension.toml",
+)
 DOCS_RELEASE_IDENTITY_ROOTS = (
     "docs/site/scripts",
     "docs/site/src/content/docs",
@@ -1846,6 +1855,55 @@ def validate_fuzz_lock_versions(
     return surfaces
 
 
+def validate_editor_versions(repo: Path, version: str) -> list[Path]:
+    vscode_path, vscode_lock_path, zed_path, zed_lock_path, zed_extension_path = (
+        repo / relative for relative in EDITOR_RELEASE_SURFACE_PATHS
+    )
+    vscode = required_json(vscode_path)
+    if not isinstance(vscode, dict) or vscode.get("version") != version:
+        raise ReleasePlanError(
+            f"{relative_path(repo, vscode_path)} version must be {version!r}"
+        )
+    vscode_lock = required_json(vscode_lock_path)
+    lock_packages = (
+        vscode_lock.get("packages") if isinstance(vscode_lock, dict) else None
+    )
+    lock_root = lock_packages.get("") if isinstance(lock_packages, dict) else None
+    if (
+        not isinstance(vscode_lock, dict)
+        or vscode_lock.get("version") != version
+        or not isinstance(lock_root, dict)
+        or lock_root.get("version") != version
+    ):
+        raise ReleasePlanError(
+            f"{relative_path(repo, vscode_lock_path)} must bind version "
+            f"{version!r} in both root identities"
+        )
+    zed_package = required_toml(zed_path).get("package")
+    if not isinstance(zed_package, dict) or zed_package.get("version") != version:
+        raise ReleasePlanError(
+            f"{relative_path(repo, zed_path)} package.version must be {version!r}"
+        )
+    zed_lock_packages = required_toml(zed_lock_path).get("package")
+    zed_lock_versions = [
+        package.get("version")
+        for package in (zed_lock_packages if isinstance(zed_lock_packages, list) else [])
+        if isinstance(package, dict)
+        and package.get("name") == zed_package.get("name")
+        and "source" not in package
+    ]
+    if zed_lock_versions != [version]:
+        raise ReleasePlanError(
+            f"{relative_path(repo, zed_lock_path)} must lock "
+            f"{zed_package.get('name')} at version {version!r}"
+        )
+    if required_toml(zed_extension_path).get("version") != version:
+        raise ReleasePlanError(
+            f"{relative_path(repo, zed_extension_path)} version must be {version!r}"
+        )
+    return [repo / relative for relative in EDITOR_RELEASE_SURFACE_PATHS]
+
+
 def validate_release_archive_lock(repo: Path, version: str) -> Path:
     path = repo / "docs/site/src/data/archive-lock.yaml"
     document = required_yaml(path)
@@ -2147,6 +2205,14 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             f"{version} path-package graph",
         )
     )
+    editor_surfaces = validate_editor_versions(repo, version)
+    checks.append(
+        passed_check(
+            "editor-versions",
+            f"{len(editor_surfaces)} VS Code and Zed extension manifests and "
+            f"lockfiles use {version}",
+        )
+    )
     parsed_version = release_version_tuple(version)
     uses_release_docs = parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
     docsets_data = None
@@ -2210,6 +2276,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         "workspace": workspace,
         "client_surfaces": client_surfaces,
         "fuzz_lock_surfaces": fuzz_lock_surfaces,
+        "editor_surfaces": editor_surfaces,
         "docsets_data": docsets_data,
         "selected_docset": selected_docset,
         "selected_docset_index": selected_docset_index,
@@ -2251,6 +2318,7 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
     surfaces.extend(
         (path, "excluded-fuzz-lock") for path in context["fuzz_lock_surfaces"]
     )
+    surfaces.extend((path, "editor-version") for path in context["editor_surfaces"])
     identifier_catalog = context["selected"]["data"].get("identifier_catalog")
     if isinstance(identifier_catalog, dict) and isinstance(
         identifier_catalog.get("path"), str

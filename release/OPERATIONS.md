@@ -1131,9 +1131,11 @@ that release PR.
 
 The surfaces to move are the ones `registry-release prepare` holds equal to
 the workspace version in its `workspace-versions`, `client-package-versions`,
-`excluded-fuzz-locks`, and `openapi-versions` checks: path dependencies and
-`Cargo.lock`, the native client packages and generated loaders, the lockfiles
-in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, and the committed OpenAPI documents.
+`excluded-fuzz-locks`, `editor-versions`, and `openapi-versions` checks: path
+dependencies and `Cargo.lock`, the native client packages and generated
+loaders, the lockfiles in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, the VS Code and
+Zed extension manifests and lockfiles in `EDITOR_RELEASE_SURFACE_PATHS`, and
+the committed OpenAPI documents.
 The release is closed only once this PR and the
 documentation promotion below have merged. The one exception is a next
 release already in preparation when `verify-public` passes: its release PR
