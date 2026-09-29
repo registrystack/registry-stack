@@ -2887,9 +2887,9 @@ class BregServicesRosterStructureTest(unittest.TestCase):
         self,
     ) -> None:
         scanned = self.scanned_files()
-        self.assertTrue(
-            {ROOT / relative for relative in BREG_SERVICES_ROSTER_CONSUMERS}
-            <= set(scanned)
+        self.assertLessEqual(
+            {ROOT / relative for relative in BREG_SERVICES_ROSTER_CONSUMERS},
+            set(scanned),
         )
         findings = []
         for path in scanned:

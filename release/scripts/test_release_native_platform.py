@@ -817,7 +817,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             output=merged,
         )
         merged_names = {path.name for path in (merged / "platform").iterdir()}
-        self.assertTrue(set(expected) <= merged_names)
+        self.assertLessEqual(set(expected), merged_names)
 
         failed, failed_output, failed_calls = self.build(
             "bregctl",
