@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.37.0 - 2026-09-29
+
 - BREAKING: a record or query `400` names the member or parameter at fault
   in `fieldPath`, where it carried none before. `detail` and `code` are
   unchanged. A create body names `/data` for a field the grant does not let
@@ -27,6 +29,37 @@
   `readableFields` (`GET /v1/registry?accessProfile=<id>`), and handle a
   `400` on such a patch as a malformed document, not as a missing record or
   a stale revision.
+- BREAKING: BReg refuses to compile a standing agent profile, one with
+  `actorKind: agent` and no `taskGrant`, that holds `submit_request`,
+  `revise_request`, `cancel_request`, or `apply_request`, with
+  `access_profile.standing_agent.operation_forbidden`, or that holds
+  `create` or `patch` on an entity without a `changeRequest`, or
+  `import`, `tombstone`, or `batch` on any entity, with
+  `access_profile.standing_agent.direct_mutation_forbidden`. A standing
+  agent carries no human approval, so it may read and author
+  change-request drafts while a human submits them; move the lifecycle
+  operations to a profile the person uses directly.
+- BREAKING: BReg refuses to compile a standing agent profile that holds an
+  immediate-action permission, with
+  `access_profile.standing_agent.action_forbidden`. An immediate action
+  commits its effects at once, with no draft for the person to confirm, so
+  a token carrying a trusted `act` no longer reaches any immediate action.
+  Move the action permission to a profile the person uses directly.
+- BREAKING: BReg refuses to compile a module that contributes an access
+  profile declaring a `taskGrant`, whether on an entity it adds or on one it
+  extends, with `access_profile.task_grant.module_forbidden`. Task-grant
+  ceilings are checked only where grants are authored, in project
+  `accessProfiles`; declare the task-grant profile there.
+- BREAKING: BReg accepts an `act` claim of exactly `{sub, iss}` when `iss`
+  equals the verified token issuer, as a token exchange writes it, beside
+  exactly `{sub}`. A token whose `act.sub` is the trusted actor for its
+  client is an agent token whatever its `registry_actor_kind` claim says,
+  so it no longer satisfies a profile that declares `actorKind: human`.
+- BREAKING: BReg admits a token carrying a trusted `act` only on an access
+  profile that declares `actorKind: agent`. A profile that declares no
+  `actorKind` refuses such a token, so a delegated caller cannot borrow the
+  operations of a profile written for people using BReg directly. Tokens
+  without `act` are admitted as before.
 
 - A read path answers when the caller's profile holds no permission entry
   for the path's target entity. It returns the records the path grant and
@@ -34,6 +67,16 @@
   permission without `get` or `list`, where it answered
   `503 source.unavailable` before. A profile that does not declare the path
   is still refused as `404 resource.not_found`, like an unknown path.
+- The audit journal records the agent behind a delegated request. A
+  request carrying a trusted `act` writes the shared `authorization` object
+  on its refusal, mutation, and request lifecycle records, with actor kind
+  `agent` and a keyed `actorPseudonym` scoped to the package revision beside
+  the principal and client pseudonyms. The raw actor identifier is never
+  stored, and task-grant records without `act` are unchanged.
+- The audit journal records delegated authority on reads. A read's
+  terminal record, for records, lists, lookups, revisions, history, and
+  snapshots, now carries the `authorization` object for a task-grant or
+  delegated token. Direct tokens record no such object, as before.
 
 - Align the citizen MCP gateway and review page with the shared runtime
   configuration and audit primitives before their first release. Listener
@@ -42,7 +85,11 @@
   File audit streams rotate at 100 MiB and retain sealed files for 90 days
   by default; archive draft chained files and start on a fresh path.
   Admitted operations record a request before protected I/O and a response
-  before result release, including failed sign-in callbacks and sign-out.
+  before result release. That includes every refused callback for a pending
+  sign-in whose state and issuer match, and every sign-out a live session
+  confirms with its CSRF token. A callback refused for its sign-in cookie,
+  query, state, issuer, or rate limit opens no operation and is not
+  journaled, and neither is a sign-out without a live session.
   A lost submit response can be retried from the same live review session
   with its retained action and idempotency key; gateway stale-update retries
   remain refused. Import is included in the standing-agent direct-write

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.37.0 - 2026-09-29
+
 - Read each request's `now`, and the hold-expiry, retention, and reminder
   dispatch passes' `now`, from the same clock the capacity transaction
   re-checks grants against. Production still reads the system clock, so

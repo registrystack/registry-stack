@@ -18,13 +18,15 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.37.0 beta-49
+
 - BREAKING: Base Registry Engine (BReg) refuses to compile a standing
   agent profile, one with `actorKind: agent` and no `taskGrant`, that
   holds `submit_request`,
   `revise_request`, `cancel_request`, or `apply_request`, with
   `access_profile.standing_agent.operation_forbidden`, or that holds
   `create` or `patch` on an entity without a `changeRequest`, or
-  `tombstone` or `batch` on any entity, with
+  `import`, `tombstone`, or `batch` on any entity, with
   `access_profile.standing_agent.direct_mutation_forbidden`. A standing
   agent carries no human approval, so it may read and author
   change-request drafts while a human submits them; move the lifecycle
@@ -168,6 +170,74 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-platform-httpsec/src/server.rs, CspBuilder;
     crates/registry-platform-audit/src/authorization.rs, AuthorizationAuditEvent::without_purpose;
     crates/registry-platform-testing/src/authorization_server.rs, TestAuthorizationServer. */}
+
+- BREAKING: a Base Registry Engine (BReg) record or query `400` names the member or parameter at
+  fault in `fieldPath`, where it carried none before; `detail` and `code` are unchanged. A create
+  body names `/data` or `/data/<apiName>`, a JSON Patch document names `/<n>` and its members, a
+  batch body names `/items`, `/changeContext`, and each item's members, a malformed
+  `Idempotency-Key` and a batch `If-Match` name the header, and a `query.invalid` refusal names the
+  parameter. An unknown and a withheld name answer the same problem and are never echoed. The
+  v0.37.0 Rust, Node.js, and Python BReg clients accept `fieldPath` on `request.invalid` and
+  `query.invalid`; upgrade a client that rejects unfamiliar problem members with the runtime. See
+  [Mutations](../reference/breg-api/#mutations).
+
+{/* Evidence: crates/registry-breg/src/problem_location.rs, is_record_request_location() and
+    is_query_parameter_location(); crates/registry-breg-client/src/client.rs,
+    valid_record_request_problem_path() and BREG_QUERY_PARAMETERS. */}
+
+- BREAKING: a BReg JSON Patch `test` of a field the grant does not let the caller read answers
+  `400 request.invalid` at `/<n>/path` before the record is read, like a `test` of an unknown
+  field, instead of a `404` or `412` first. Test only fields the grant lists in `readableFields`.
+  A read path whose target entity has no permission entry in the caller's profile answers with the
+  records the path grant authorizes instead of `503 source.unavailable`.
+
+{/* Evidence: crates/registry-breg/src/mutation.rs, patch_location();
+    crates/registry-breg/tests/postgres_client_relationships.rs,
+    read_path_answers_when_the_profile_has_no_entry_for_its_target_entity. */}
+
+- BREAKING: Registry Casework selects the source profile only by the `Registry-Source-Profile`
+  header on decide and both attempt recovery routes. `DecideRequest` no longer carries
+  `sourceProfileId`, `RecoverAttemptRequest` is a closed empty object, and a body that still sends
+  `sourceProfileId` is refused with 422 `request.unprocessable`; the Rust, Node.js, and Python
+  clients follow. `caseworkctl dev token` writes the `Registry-Casework-Profile` line into a profile
+  client's header file, and a review inbox left empty only because that header is missing answers
+  400 `source-profile.required`. See
+  [Revisions, actions, and recovery](../reference/client-api/#revisions-actions-and-recovery).
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, DecideRequest and RecoverAttemptRequest;
+    crates/registry-caseworkctl/src/dev/mod.rs, header_file();
+    crates/registry-casework/tests/review_http.rs,
+    an_inbox_emptied_only_by_the_missing_source_profile_says_so. */}
+
+- BREAKING: every Casework mutating route parses its JSON body strictly: a duplicate object member at
+  any depth, or a raw integer IEEE 754 binary64 cannot represent exactly, is refused with 422
+  `request.unprocessable`, and a `Content-Type` that does not parse whole as `application/json` or
+  `application/*+json` is refused with 415 `request.unsupported-media-type`. Send such an integer
+  as a string.
+
+{/* Evidence: crates/registry-casework/src/http.rs, StrictJson. */}
+
+- Registry Casework refuses a zero or over-maximum page `limit` with the new closed problem code
+  `request.limit-out-of-range`, and `ReviewTaskPage` carries a required `status`. A plain item,
+  history, or clocks read across a moved source binding returns the retained item without actions
+  instead of 409 `work-item.proposal-changed`. A source binding or policy field an adapter refuses
+  is named by its key path. See [Problem codes](../reference/apis/registry-casework/#problem-codes).
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM;
+    crates/registry-casework-core/src/review.rs, ReviewTaskPage;
+    crates/registry-casework/src/service.rs, retained_without_actions();
+    crates/registry-casework-breg/src/config.rs, validate_binding_input() and
+    check_description_input(). */}
+
+- Registry Scheduling starts a hold's time to live once its capacity transaction takes its locks,
+  so a hold created under contention keeps its whole `holdPolicy.ttlMinutes`, and answers
+  availability for a horizon or `start` past the last representable instant instead of panicking
+  the request.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs, saturating_later();
+    crates/registry-scheduling/tests/postgres_commitments.rs,
+    a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl and
+    a_start_at_the_edge_of_representable_time_answers_instead_of_panicking. */}
 
 ## v0.36.0 beta-48
 
