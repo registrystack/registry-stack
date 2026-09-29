@@ -261,6 +261,7 @@ pub(super) fn runtime_config(
     json!({
         "apiVersion": MESSAGING_RUNTIME_API_VERSION,
         "kind": MESSAGING_RUNTIME_KIND,
+        "identity": {"databaseId": "messaging-test"},
         "package": {"root": project},
         "listener": {
             "bind": format!("127.0.0.1:{}", endpoints.api_port),

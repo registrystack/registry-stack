@@ -20,6 +20,7 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use registry_messaging::activation::ApplyRequest;
 use registry_messaging::audit::MessagingAudit;
 use registry_messaging::auth::MessagingAuthenticator;
 use registry_messaging::config::RuntimeConfig;
@@ -32,7 +33,7 @@ use registry_messaging::messages::{MessageService, MessageStore};
 use registry_messaging::metrics::Metrics;
 use registry_messaging::package::{load_package, package_inputs, write_package_inputs};
 use registry_messaging::providers::{activate_providers, CallbackReceivers};
-use registry_messaging::runtime::{apply_package, migrate_from_path};
+use registry_messaging::runtime::apply_activation;
 use registry_messaging::store::PostgresStore;
 use registry_messaging_core::{AccessProfile, AccessProfiles, Package, IDEMPOTENCY_KEY_HEADER};
 use registry_platform_audit::{AuditProfile, AuditWriter};
@@ -283,9 +284,8 @@ impl Harness {
         write_package_inputs(&package_root, &inputs, None).expect("the installed starter package");
         let runtime_path =
             write_runtime(root.path(), &package_root, &isolated.reference, providers);
-        migrate_from_path(&runtime_path).await.expect("migrate");
         let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration");
-        apply_package(&config, true)
+        apply_activation(&config, &ApplyRequest::default())
             .await
             .expect("apply the starter");
 
@@ -338,6 +338,7 @@ impl Harness {
             authenticator,
             readiness: Readiness::Store {
                 store: store.clone(),
+                database_id: config.database_id().to_owned(),
                 package_digest: package.digest().to_owned(),
                 audit: Arc::clone(&audit),
             },
@@ -479,6 +480,7 @@ impl Harness {
             )),
             readiness: Readiness::Store {
                 store: self.store.clone(),
+                database_id: self.config.database_id().to_owned(),
                 package_digest: self.package.digest().to_owned(),
                 audit: Arc::clone(&self.audit),
             },
@@ -520,6 +522,7 @@ impl Harness {
             )),
             readiness: Readiness::Store {
                 store: self.store.clone(),
+                database_id: self.config.database_id().to_owned(),
                 package_digest: self.package.digest().to_owned(),
                 audit: Arc::clone(&audit),
             },
@@ -642,6 +645,7 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
     let runtime = json!({
         "apiVersion": registry_messaging_core::MESSAGING_RUNTIME_API_VERSION,
         "kind": registry_messaging_core::MESSAGING_RUNTIME_KIND,
+        "identity": {"databaseId": "messaging-test"},
         "package": {"root": package},
         "listener": {"bind": free_port().to_string(), "tlsTermination": "development-loopback"},
         "secretProviders": {"environment": {}},

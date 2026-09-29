@@ -53,6 +53,42 @@ It does not claim complete DCAT-AP or BRegDCAT-AP conformance.
     `products/discovery/contracts/standards-profile.yaml` pin the profile and selected standards
     subset. */}
 
+## Install the authoring tool and runtime
+
+Registry Stack releases publish the `discovery-<tag>-linux-amd64` runtime asset. The first release
+eligible to publish a matching `discoveryctl-<tag>-linux-amd64` authoring asset is v0.38.0. For a
+published v0.38.0 or later release, authenticate both assets through the shared `SHA256SUMS`
+procedure at `https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, then
+install the exact pair:
+
+```sh
+tag="${TAG:?set TAG to a published v0.38.0 or later tag}"
+mkdir -p ~/.local/bin
+for binary in discovery discoveryctl; do
+  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
+done
+export PATH="$HOME/.local/bin:$PATH"
+discovery --version
+discoveryctl --version
+```
+
+Earlier releases contain the Linux runtime asset but require a source build for `discoveryctl`.
+For another platform, build both binaries from the same Registry Stack checkout:
+
+```sh
+cargo build --release --locked -p registry-discovery -p registry-discoveryctl
+export PATH="$PWD/target/release:$PATH"
+```
+
+The release also publishes `ghcr.io/registrystack/discovery:<tag>`. Authenticate its digest through
+the release manifest and deploy that digest instead of the mutable tag. The image runs
+`/usr/local/bin/discovery` as the Distroless `cc-debian13` nonroot user, with
+`/etc/registry-discovery/runtime.yaml` as its default runtime file. Mount that file and the complete
+package directory read-only. Discovery keeps no writable local state.
+
+{/* Evidence: release/scripts/release_candidate.py, _relay_v2_payload_inventory;
+    release/docker/Dockerfile.discovery; release/VERIFY.md. */}
+
 ## Add the approved provider URLs
 
 Create `<discovery-project>/origins.yaml`. Each enabled origin is fetched only during packaging.

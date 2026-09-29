@@ -75,6 +75,7 @@ ipnet.workspace = true
 jsonwebtoken.workspace = true
 lettre.workspace = true
 registry-messaging-core.workspace = true
+registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true

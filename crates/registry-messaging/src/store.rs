@@ -2,16 +2,15 @@
 
 //! The PostgreSQL store: connections, the versioned schema, and readiness.
 //!
-//! The runtime reaches PostgreSQL through two credentials. The migration URL
-//! applies the schema, once, from the `migrate` command; the runtime URL
-//! serves requests and never changes the schema. Migrations are serialized on
-//! one session advisory lock, so two migrators started together apply each
-//! version once and both succeed.
+//! The runtime reaches PostgreSQL through two credentials. `messagingctl
+//! apply` uses the migration URL for the atomic schema and activation change;
+//! the runtime URL serves requests and never changes the schema. Migrations
+//! are serialized on one transaction advisory lock, so two operators started
+//! together apply each version once and both succeed.
 //!
-//! The package ledger records each package a deployment activated. The
-//! operator records a package with the migration credential, through
-//! `messagingctl apply`; the runtime reads the latest entry at startup and
-//! serves only the package it names.
+//! The shared activation ledger records each package and database identity.
+//! `messagingctl apply` owns migrations and activation in one transaction;
+//! the runtime only reads the resulting schema and activation state.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -24,20 +23,20 @@ use tokio_postgres::Config as PgConfig;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
+const ACTIVATION_MIGRATION: &str = include_str!("../migrations/0002_activations.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
-const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] =
+    [(1, MESSAGING_MIGRATION), (2, ACTIVATION_MIGRATION)];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the migrations table's primary key. The key
 /// spells the ASCII bytes of "messagin".
-const MIGRATION_LOCK_KEY: i64 = 0x6d65_7373_6167_696e;
+pub(crate) const MIGRATION_LOCK_KEY: i64 = 0x6d65_7373_6167_696e;
 
 /// Serializes package activations on one transaction lock, so two operators
 /// applying the same package record it once. The key spells "msgledgr".
-const LEDGER_LOCK_KEY: i64 = 0x6d73_676c_6564_6772;
-
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("the Messaging database configuration is invalid")]
@@ -163,6 +162,14 @@ impl PostgresStore {
             .ok_or(StoreError::Configuration)
     }
 
+    pub async fn current_user(&self) -> Result<String, StoreError> {
+        let client = self.client().await?;
+        Ok(client
+            .query_one("SELECT current_user::text", &[])
+            .await?
+            .get(0))
+    }
+
     /// Apply every schema version not yet applied, under the migration lock.
     /// Running it again, or twice at once, applies nothing twice.
     pub async fn migrate(&self) -> Result<(), StoreError> {
@@ -234,96 +241,15 @@ impl PostgresStore {
         Ok(depth)
     }
 
-    /// The digest of the package the ledger names active: its latest entry,
-    /// or none when no package was ever applied.
     pub async fn active_package_digest(&self) -> Result<Option<String>, StoreError> {
         let client = self.client().await?;
-        let row = client
+        Ok(client
             .query_opt(
-                "SELECT package_digest FROM messaging_package_ledger \
-                 ORDER BY sequence DESC LIMIT 1",
-                &[],
-            )
-            .await?;
-        Ok(row.map(|row| row.get(0)))
-    }
-
-    /// Record `digest` as the active package, under the ledger lock, and
-    /// answer what the ledger named active when the lock was taken.
-    /// Applying the package the ledger already names active records
-    /// nothing.
-    ///
-    /// # Errors
-    ///
-    /// [`LedgerWriteError::Store`] when nothing was recorded, and
-    /// [`LedgerWriteError::Commit`] when the COMMIT failed, so the package
-    /// may have been recorded.
-    pub async fn apply_package(
-        &self,
-        digest: &str,
-        runtime_version: &str,
-    ) -> Result<LedgerWrite, LedgerWriteError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .execute("SELECT pg_advisory_xact_lock($1)", &[&LEDGER_LOCK_KEY])
-            .await?;
-        let predecessor: Option<String> = transaction
-            .query_opt(
-                "SELECT package_digest FROM messaging_package_ledger \
-                 ORDER BY sequence DESC LIMIT 1",
+                "SELECT package_digest FROM messaging_activations ORDER BY apply_order DESC LIMIT 1",
                 &[],
             )
             .await?
-            .map(|row| row.get(0));
-        if predecessor.as_deref() == Some(digest) {
-            transaction.commit().await?;
-            return Ok(LedgerWrite {
-                recorded: false,
-                predecessor,
-            });
-        }
-        transaction
-            .execute(
-                "INSERT INTO messaging_package_ledger(package_digest, runtime_version, activated_at) \
-                 VALUES ($1, $2, now())",
-                &[&digest, &runtime_version],
-            )
-            .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(LedgerWriteError::Commit)?;
-        Ok(LedgerWrite {
-            recorded: true,
-            predecessor,
-        })
-    }
-}
-
-/// What one package ledger write did.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LedgerWrite {
-    /// Whether this write recorded the package.
-    pub recorded: bool,
-    /// The digest the ledger named active under the lock, before the write.
-    pub predecessor: Option<String>,
-}
-
-/// Why a package ledger write did not complete.
-#[derive(Debug, Error)]
-pub enum LedgerWriteError {
-    /// The write failed before its COMMIT, so nothing was recorded.
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// The COMMIT failed, so the package may have been recorded.
-    #[error("the Messaging package ledger commit could not be confirmed: {0}")]
-    Commit(#[source] tokio_postgres::Error),
-}
-
-impl From<tokio_postgres::Error> for LedgerWriteError {
-    fn from(error: tokio_postgres::Error) -> Self {
-        Self::Store(StoreError::Query(error))
+            .map(|row| row.get(0)))
     }
 }
 
@@ -357,6 +283,48 @@ async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), 
         transaction.commit().await?;
     }
     Ok(())
+}
+
+pub(crate) async fn migrate_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<Vec<i64>, StoreError> {
+    transaction
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS messaging_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL);",
+        )
+        .await?;
+    let applied = transaction
+        .query(
+            "SELECT version FROM messaging_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.get::<_, i64>(0))
+        .collect::<Vec<_>>();
+    if applied
+        .iter()
+        .any(|version| !MIGRATIONS.iter().any(|(known, _)| known == version))
+    {
+        return Err(StoreError::SchemaVersion);
+    }
+    let mut added = Vec::new();
+    for (version, migration) in MIGRATIONS {
+        if applied.contains(&version) {
+            continue;
+        }
+        transaction.batch_execute(migration).await?;
+        transaction
+            .execute(
+                "INSERT INTO messaging_schema_migrations(version,applied_at) VALUES($1,now())",
+                &[&version],
+            )
+            .await?;
+        added.push(version);
+    }
+    Ok(added)
 }
 
 fn tls_connector(

@@ -81,6 +81,7 @@ pub enum Readiness {
     /// until it is restarted onto it.
     Store {
         store: PostgresStore,
+        database_id: String,
         package_digest: String,
         audit: Arc<MessagingAudit>,
     },
@@ -94,6 +95,7 @@ impl Readiness {
         match self {
             Self::Store {
                 store,
+                database_id,
                 package_digest,
                 audit,
             } => {
@@ -101,19 +103,8 @@ impl Readiness {
                     tracing::warn!("the Messaging audit destination is not ready");
                     return false;
                 }
-                let active = match store.ready().await {
-                    Ok(()) => store.active_package_digest().await,
-                    Err(error) => Err(error),
-                };
-                match active {
-                    Ok(Some(active)) if active == *package_digest => true,
-                    Ok(_) => {
-                        tracing::warn!(
-                            "the Messaging package ledger names another package active; \
-                             restart the runtime to serve it"
-                        );
-                        false
-                    }
+                match crate::activation::check_runtime(store, database_id, package_digest).await {
+                    Ok(_) => true,
                     Err(error) => {
                         tracing::warn!(error = %error, "the Messaging store is not ready");
                         false

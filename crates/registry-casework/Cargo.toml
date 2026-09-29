@@ -39,6 +39,7 @@ jsonwebtoken.workspace = true
 registry-casework-core.workspace = true
 registry-casework-breg.workspace = true
 registry-platform-canonical-json.workspace = true
+registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true

@@ -982,6 +982,10 @@ jobs:
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_activation
         run: cargo test --locked -p registry-schedulingctl --features postgres-test --test activation_postgres
+      - name: Verify shared package activation primitives
+        env:
+          ACTIVATION_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_activation
+        run: cargo test --locked -p registry-platform-activation --features postgres-test --test postgres_activation
       - name: Create isolated dispatch-core test database
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
@@ -1062,7 +1066,7 @@ jobs:
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate
-      - name: Verify the package ledger and template stability
+      - name: Verify package activation and template stability
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_package
@@ -1724,7 +1728,7 @@ jobs:
           # The tutorial installs the maintained client package, so the replay
           # imports that same package, assembled from this commit. maturin gets
           # the pinned release build environment. The CI profile exercises the
-          # same five-binding assembly and installed facade without release LTO.
+          # same six-binding assembly and installed facade without release LTO.
           # Production optimization remains covered by release recipe checks.
           python3 -m venv "${RUNNER_TEMP}/maturin"
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
@@ -1734,6 +1738,7 @@ jobs:
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
             --include-casework \
+            --include-messaging \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \

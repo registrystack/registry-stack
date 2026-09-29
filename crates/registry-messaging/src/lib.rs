@@ -4,6 +4,7 @@
 //! authentication against authored access profiles, the HTTP surface, and
 //! the PostgreSQL store.
 
+pub mod activation;
 pub mod audit;
 pub mod auth;
 pub mod callbacks;

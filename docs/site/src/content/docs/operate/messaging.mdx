@@ -1,6 +1,6 @@
 ---
 title: Deploy Registry Messaging
-description: Build Registry Messaging, provision PostgreSQL, write the runtime file that connects each provider, record and serve a package, and operate messages, the audit journal, and metrics.
+description: Install or build Registry Messaging, provision PostgreSQL, write the runtime file that connects each provider, record and serve a package, and operate messages, the audit journal, and metrics.
 status: draft
 owner: registry-docs
 source_repos:
@@ -45,9 +45,31 @@ database.
     crates/registry-messaging/src/store.rs; crates/registry-messaging/migrations;
     products/messaging/README.md, Product boundary. */}
 
-## Build the binaries
+## Install or build the binaries
 
-Registry Messaging is unreleased, so both binaries are built from a Registry Stack checkout:
+The first release eligible to publish Messaging is v0.38.0, after image-package
+onboarding is complete. For a published release that contains
+Messaging, choose `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), download the
+`messaging-<tag>-linux-amd64` and `messagingctl-<tag>-linux-amd64` assets, and authenticate both
+through the shared `SHA256SUMS` procedure at
+`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`. Install the exact
+pair from one tag:
+
+```sh
+tag="${TAG:?set TAG to a published tag that includes Registry Messaging}"
+mkdir -p ~/.local/bin
+for binary in messaging messagingctl; do
+  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
+done
+export PATH="$HOME/.local/bin:$PATH"
+messaging --version
+messagingctl --version
+```
+
+The install replaces either file already at that destination. Preserve the old pair first when
+you need a rollback path. Until a published release contains Messaging, or for another platform,
+build both binaries from a Registry Stack checkout:
 
 ```sh
 cargo build --release --locked -p registry-messaging -p registry-messagingctl
@@ -57,13 +79,24 @@ On macOS, build through the runtime-library helper
 [Author a Messaging package](../../configure/messaging/#get-messagingctl) shows, so the shell can
 load the FIPS crypto library.
 
-`target/release/messaging` is the runtime, with the `migrate` and `serve` subcommands.
-`target/release/messagingctl` is the operator tool; `check` and `apply` need no running runtime,
-and `messages` reads and changes messages through the database.
+`target/release/messaging` is the runtime, with the `serve` subcommand.
+`target/release/messagingctl` is the operator tool; `check`, `plan`, `apply`, and `status` need no
+running runtime, and `messages` reads and changes messages through the database.
 
 {/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messagingctl/src/lib.rs, Command. */}
 
-{/* messaging-release: once the first release that carries Messaging publishes, name the released messaging and messagingctl linux-amd64 binaries and the ghcr.io/registrystack/messaging image before the source build. */}
+The release also publishes `ghcr.io/registrystack/messaging:<tag>`. The image carries
+`/usr/local/bin/messaging` and `/usr/local/bin/messagingctl` on Distroless `cc-debian13` as the
+`nonroot` user. Its default command is
+`messaging --runtime-config /etc/registry-messaging/runtime.yaml serve`. It uses
+`/var/lib/registry-messaging` as its working directory and keeps the package, runtime
+configuration, and secrets outside the image. Mount those inputs read-only and provide writable
+persistent storage for the audit path. Authenticate the image digest through the release manifest
+and deploy that digest rather than the tag alone.
+
+{/* Evidence: release/scripts/release_roster.py, MESSAGING_FIRST_RELEASE and messaging_in_release;
+    release/scripts/release_candidate.py, _relay_v2_payload_inventory;
+    release/docker/Dockerfile.messaging. */}
 
 ## Provision PostgreSQL
 
@@ -94,13 +127,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO messaging_runtime;
 ```
 
-The default privileges cover every table `migrate` creates, because it always runs as the
-migration role. When you reuse a database an earlier session already migrated, grant the same
-privileges on the tables and sequences that already exist.
+The default privileges cover every table `messagingctl apply` creates, because activation always
+runs as the migration role. When you reuse a database an earlier session already prepared, grant
+the same privileges on the tables and sequences that already exist.
 
 {/* Evidence: crates/registry-messaging/migrations; crates/registry-messaging/src/store.rs;
-    grants exercised against PostgreSQL 17.11 over TLS with migrate, messagingctl apply, and serve
-    on 2026-09-25. */}
+    crates/registry-messagingctl/src/lib.rs. */}
 
 ## Write the runtime file
 
@@ -110,6 +142,8 @@ per provider. Keep it outside the package, and put no credential in it:
 ```yaml
 apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
 kind: MessagingRuntimeConfig
+identity:
+  databaseId: messaging-production
 package:
   root: /srv/registry-messaging/package
   # The digest messagingctl check reported for the package you were handed.
@@ -165,6 +199,7 @@ providers:
 
 | Section | What it binds |
 | --- | --- |
+| `identity` | The stable operator-chosen id of the database this deployment owns |
 | `package` | The absolute directory holding `messaging.yaml`, and optionally the one digest the runtime may load from it |
 | `listener` | The public listener and the transport boundary it sits behind |
 | `metricsListener` | The private socket that serves `/metrics`. Omit it to serve no metrics |
@@ -331,7 +366,7 @@ retention: payload 7 days, record 90 days, submission receipt 7 days
 ```
 
 That run used a loopback listener. When `package.expectedDigest` names another package, `check`,
-`apply`, and `serve` all refuse before reaching a database:
+`plan`, `apply`, and `serve` all refuse before reaching a database:
 
 ```text
 error[config.refused] package.expectedDigest: the Messaging package at package.expectedDigest does not satisfy the shared package envelope: package.expectedDigest is sha256:0000000000000000000000000000000000000000000000000000000000000000 but the package at package.root is sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4; deploy the pinned package or update package.expectedDigest
@@ -342,49 +377,38 @@ error[config.refused] package.expectedDigest: the Messaging package at package.e
     products/messaging/RUNTIME-CONFIG.md, Keys; check and digest-refusal outputs observed with messagingctl 0.34.0-dev on
     2026-09-27. */}
 
-## Migrate, record the package, and serve
+## Plan, apply, inspect, and serve
 
-Apply the migrations with the migration credential, from the operator host:
+Run the read-only plan from the operator host before the first deployment and before every
+upgrade:
 
 ```sh
-messaging --runtime-config /etc/registry-messaging/runtime.yaml migrate
+messagingctl plan --runtime-config /etc/registry-messaging/runtime.yaml
 ```
 
-`migrate` prints nothing and exits 0. It takes a PostgreSQL advisory lock, so a second `migrate` on
-the same database waits instead of racing it, and running it again applies nothing new. Run it
-before the first `serve` and before rolling out a release that adds migrations.
-
-Next, record the package in the package ledger. Without `--apply`, `messagingctl apply` only
-compares the package on disk with the one the ledger names active:
+`plan` connects with the runtime credential and writes nothing. It reports the configured package
+and active package digests, whether the database belongs to `identity.databaseId`, schema versions
+still to apply, and whether changes are pending. Review that report, then activate with the
+migration credential:
 
 ```sh
 messagingctl apply --runtime-config /etc/registry-messaging/runtime.yaml
 ```
 
-```text
-package digest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
-active digest: none
-change: activate: run again with --apply to record this package
-```
+`apply` is the only command that changes the activation ledger. Under one PostgreSQL advisory lock,
+it applies pending schema versions, binds an unclaimed database to `identity.databaseId`, activates
+the verified package, grants the runtime role its required access, and records the activation as
+one transaction. A second `apply` waits for the lock instead of racing it. An already active
+package with no pending work is a refusal, so deployment automation should apply only when `plan`
+reports changes.
+
+Read the active state and activation history with the runtime credential:
 
 ```sh
-messagingctl apply --runtime-config /etc/registry-messaging/runtime.yaml --apply
+messagingctl status --runtime-config /etc/registry-messaging/runtime.yaml
 ```
 
-```text
-package digest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
-active digest: none
-change: recorded: restart the runtime to serve this package
-```
-
-An applied run reads `active digest` under the same lock that records the package, so it names the
-package this write replaced. When the write does not finish cleanly, `apply` exits 3 with one of
-two codes. `package.outcome-unknown` means the record may have been written: run `apply` without
-`--apply` to see which package the ledger names active before applying again. `audit.unconfirmed`
-means the package was recorded and its audit outcome record could not be written: do not apply it
-again, and restore the audit destination.
-
-`apply` uses the migration credential. Then start the runtime with the runtime credential:
+Then start the runtime with the runtime credential:
 
 ```sh
 messaging --runtime-config /etc/registry-messaging/runtime.yaml serve
@@ -417,20 +441,18 @@ batch cut short rolls back, and the next start erases it and whatever the stoppe
     a_shutdown_finishes_the_send_in_flight_and_claims_nothing_more;
     crates/registry-messaging/tests/postgres_retention.rs,
     a_stop_request_ends_the_run_after_the_batch_in_progress_and_the_next_run_resumes;
-    crates/registry-messaging/src/store.rs, MIGRATION_LOCK_KEY;
     crates/registry-messagingctl/src/lib.rs, Command; crates/registry-messaging/src/http.rs, ready();
-    apply report shape from render_apply(); starter digest captured with messagingctl 0.34.0-dev
-    on 2026-09-27; startup log shape from serve(). */}
+    crates/registry-platform-activation/src/lib.rs; startup log shape from serve(). */}
 
 ## Change the active package
 
 `serve` refuses to start unless the package on disk has the digest the ledger names active, so an
 edited file never changes what a running deployment sends. To roll out a new package, replace the
-package directory, update `package.expectedDigest` if you set it, run `messagingctl apply` to see
-the change, record it with `--apply`, and restart the runtime.
+package directory, update `package.expectedDigest` if you set it, review `messagingctl plan`, run
+`messagingctl apply`, confirm the result with `messagingctl status`, and restart the runtime.
 
 :::caution[A recorded package stops the old one from restarting]
-Once `apply --apply` records a new digest, every runtime that restarts on the old package directory
+Once `apply` records a new digest, every runtime that restarts on the old package directory
 refuses to start. Record a package only when every serving host has the new directory in place, and
 restart them together.
 :::
@@ -730,10 +752,10 @@ Each of these is the process's whole output on standard error, and each exits no
 | Output | Cause |
 | --- | --- |
 | `messaging: MESSAGING_LOG must be one of error, warn, or info` | `MESSAGING_LOG` holds another value. Exits 2 |
-| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference secret:file/runtime-database-url could not be resolved: no readable secret of that name exists under the configured provider` | The secret file is missing or unreadable. `migrate` reports the migration connection the same way, and `messagingctl apply` exits 3 with the same message |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference secret:file/runtime-database-url could not be resolved: no readable secret of that name exists under the configured provider` | The secret file is missing or unreadable. `messagingctl plan`, `apply`, and `status` report the applicable database connection the same way |
 | `messaging: the OIDC issuer could not be initialized` | The issuer's discovery document or keys could not be fetched. Check reachability, or declare a static `jwksSource` |
-| `messaging: the Messaging schema readiness check failed: the Messaging query failed: db error` | `serve` ran against a database `migrate` has not prepared |
-| `messaging: the Messaging package ledger names no active package; record package sha256:… with messagingctl apply before serving` | No package was recorded. Run `messagingctl apply --apply` |
+| `messaging: the Messaging schema readiness check failed: the Messaging query failed: db error` | `serve` ran against a database `messagingctl apply` has not prepared |
+| `messaging: the Messaging package ledger names no active package; record package sha256:… with messagingctl apply before serving` | No package was recorded. Review `messagingctl plan`, then run `messagingctl apply` |
 | `messaging: the Messaging package on disk (…) is not the package the ledger names active (…); record it with messagingctl apply, then restart` | The package changed since it was recorded |
 | `messaging: package.expectedDigest is …, but the package under package.root has digest …` | The package directory is not the one the runtime file pins |
 

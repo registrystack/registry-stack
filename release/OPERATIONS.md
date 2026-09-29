@@ -109,18 +109,21 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
 `v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.31.0`;
-`scheduling` joins from `v0.33.0`. `breg-mcp` and `breg-review` have not
-joined a release: `BREG_SERVICES_FIRST_RELEASE` in
-`release/scripts/release_roster.py` names their first release and is unset.
-`messaging` has not joined a release either: `MESSAGING_FIRST_RELEASE` in the
-same module names its first release and is unset.
-Registry Render's `registry-render` Linux amd64 binary and image join from
-`v0.38.0`; the adapter's `evidence-oid4vci` image joins from the same version.
-`RENDER_FIRST_RELEASE` and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in that module
-own those boundaries. The existing OID4VCI binary stays in earlier inventories.
-Both images need the onboarding steps above before the first candidate: provision
-the public and private package identities, add the private candidate names to
-cleanup only after bootstrap, and commit separately reviewed advisory baselines.
+`scheduling` joins from `v0.33.0`. The paired `breg-mcp` and `breg-review`
+supporting services, Registry Messaging, Registry Render, and the separate
+`evidence-oid4vci` image join from `v0.38.0`.
+`BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
+`RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
+`release/scripts/release_roster.py` own those boundaries. The existing
+OID4VCI binary stays in earlier inventories. v0.38.0 also adds the Linux amd64
+`discoveryctl` asset beside the existing Discovery runtime asset, completing
+the released authoring and runtime pair. Earlier releases require operators to
+build `discoveryctl` from source. Scheduling adds its Linux amd64 runtime
+asset in v0.38.0 through `SCHEDULING_BINARY_FIRST_RELEASE`.
+All five new images need the onboarding steps above before the first candidate:
+provision the public and private package identities, add the private candidate
+names to cleanup only after bootstrap, and commit separately reviewed advisory
+baselines.
 Until then, the image-onboarding check refuses a `v0.38.0` or later candidate.
 Render's template package and runtime configuration are external deployment
 inputs; the image installs no template package or host fonts.
@@ -193,12 +196,11 @@ and require a reviewed Scheduling advisory baseline before requesting a
 `v0.33.0` or later candidate.
 
 The two Base Registry Engine supporting services, the citizen MCP gateway
-`breg-mcp` and the citizen review page `breg-review`, have not joined a
-release, so no version includes them in either check.
+`breg-mcp` and the citizen review page `breg-review`, join from `v0.38.0`.
 `BREG_SERVICES_FIRST_RELEASE` in `release/scripts/release_roster.py` is the
 single place that decides the first release that ships them, and every release
-script and workflow reads it; the pull request that admits them sets the
-constant. From that release both checks include both services. The release
+script and workflow reads it. From that release both checks include both
+services. The release
 source deny-lists the public `breg-mcp` and `breg-review` packages while
 leaving `breg-mcp-candidate` and `breg-review-candidate` out of scheduled
 cleanup until their private package identities exist. Provision all four
@@ -221,13 +223,13 @@ address such as `0.0.0.0:8110` for the gateway or `0.0.0.0:8115` for the
 review page, with `listener.networkExposure: container-private`, and publish
 the port only to the operator-controlled TLS terminator.
 
-Messaging has not joined a release, so no version includes it in either
-check. `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` is the
-single place that decides the first release that ships it, and every release
-script and workflow reads it. Messaging joins a release in the pull request
-that adopts the shared platform activation crate (issue #1731) in place of
-`messaging migrate`, and that pull request sets the constant. From that
-release both checks include Messaging. The release source deny-lists the
+Messaging joins from `v0.38.0`. `MESSAGING_FIRST_RELEASE` in
+`release/scripts/release_roster.py` is the single place that decides the first
+release that ships it, and every release script and workflow reads it. The
+shared platform activation crate supplies the ledger and role boundary behind
+`messagingctl plan`, `apply`, and `status`.
+From `v0.38.0`, both
+checks include Messaging. The release source deny-lists the
 public `messaging` package, but the commands do not establish that `messaging`
 or `messaging-candidate` has already been provisioned. Complete the onboarding
 steps above, add `messaging-candidate` to the cleanup allowlist only after its
@@ -285,9 +287,10 @@ Registry Stack v0.22.0 through v0.26.0 promoted separate Evidence, Relay, and,
 from v0.23.0, Discovery client projects. Those immutable versions remain
 supported release history. Starting with v0.26.1, a release promotes only the
 unified user-facing clients: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. Their `discovery`, `evidence`, `relay`, and
-`breg` namespaces carry the product APIs. BREG's native binding and all four
-product-specific bindings are build inputs, not additional public projects.
+`registry-stack-client` on PyPI. Their product namespaces carry the version-selected APIs. From v0.38.0,
+these include `discovery`, `evidence`, `relay`, `breg`, `scheduling`, and
+`messaging`. The product-specific native bindings are build inputs, not
+additional public projects.
 
 The npm and PyPI publication jobs use GitHub-hosted runners and OpenID Connect
 trusted publishing. Do not add npm or PyPI write tokens to the repository.
@@ -398,7 +401,7 @@ and makes the Linux AMD64 row its single artifact owner. Candidate assembly
 reuses that exact root tarball without rebuilding it. `client_registry.py
 validate-dist` remains the exact proof that the published root package carries
 the required platform dependency set. For the unified package, that proof also
-requires each implementation package to contain all four native bindings. The
+requires each implementation package to contain the version-selected native bindings. The
 planner rejects a prepared tree that binds those versions.
 
 ### Prepare the documentation archive lock
@@ -723,7 +726,7 @@ gh workflow run release-upgrade-rehearsal.yml \
 
 The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
 because no adopter ran v0.32, so the script refuses to start from any earlier
-release rather than skipping the check. Scheduling state is not rehearsed:
+release rather than skipping the check. Scheduling runtime binaries join from `v0.38.0`. Scheduling state is not rehearsed:
 the script verifies and runs release binaries, and `v0.33.0` and `v0.34.0`
 shipped Scheduling only as a container image. Scheduling's
 `scheduling_audit_outbox` retirement is therefore covered by migration 8,
@@ -732,12 +735,11 @@ operator archiving the old audit file before the upgraded runtime starts, as
 the Scheduling changelog and the retention page describe. An image-driven
 Scheduling leg is tracked separately.
 
-Messaging joins the rehearsal once a release has shipped it. It has not
-joined a release yet: `MESSAGING_FIRST_RELEASE` in
-`release/scripts/release_roster.py` is unset, so every rehearsal omits it.
-Messaging joins a release in the pull request that adopts the shared platform
-activation crate (issue #1731) in place of `messaging migrate`, and that pull
-request sets the constant. When the starting release ships Messaging, the old
+Messaging joins the rehearsal from `v0.38.0`.
+`MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
+boundary. The shared platform activation crate supplies the ledger behind
+`messagingctl plan`, `apply`, and `status`. When the starting release ships
+Messaging, the old
 binaries apply the `messagingctl init` starter package, then submit scheduled
 email and SMS messages whose delivery window starts a day later, so no provider
 is contacted, and cancel one of them. After the upgrade the new binaries must
@@ -824,7 +826,9 @@ workflow then:
 - Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
   image set is Relay, Evidence Gateway, and Registry Mint. Discovery joins at
   `v0.24.0`, Base Registry Engine joins at `v0.26.0`, and Casework joins at
-  `v0.30.0`. Mint is excluded from `v0.31.0` onward.
+  `v0.30.0`. Mint is excluded from `v0.31.0` onward. Scheduling joins at
+  `v0.33.0`; `breg-mcp`, `breg-review`, Messaging, Registry Render, and the
+  Evidence OID4VCI image join at `v0.38.0`.
 - Builds the exact locked release documentation archive once, in parallel with
   binary and client builds, and includes it in the candidate payload closure.
 - Publishes images only to private candidate packages.
@@ -860,7 +864,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence, discovery, breg, casework, scheduling, or messaging
+name=relay # or evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"

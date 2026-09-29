@@ -316,10 +316,13 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
             MODULE.parse_roster(result.stdout),
             (
                 "breg",
+                "breg-mcp",
+                "breg-review",
                 "casework",
                 "discovery",
                 "evidence",
                 "evidence-oid4vci",
+                "messaging",
                 "registry-render",
                 "relay",
                 "scheduling",
@@ -441,7 +444,7 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
-    def test_no_version_roster_includes_messaging_until_it_joins_a_release(
+    def test_messaging_joins_the_collector_roster_from_v0_38(
         self,
     ) -> None:
         for version, expected in (
@@ -457,10 +460,13 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 "1.0.0",
                 (
                     "breg",
+                    "breg-mcp",
+                    "breg-review",
                     "casework",
                     "discovery",
                     "evidence",
                     "evidence-oid4vci",
+                    "messaging",
                     "registry-render",
                     "relay",
                     "scheduling",

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Focused contracts for the Render and Evidence OID4VCI release images."""
+"""Focused contracts for supporting-service release images."""
 
 from __future__ import annotations
 
@@ -8,6 +8,28 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SUPPORTING_IMAGES = {
+    "breg-mcp": {
+        "workdir": "/var/lib/breg-mcp",
+        "command": 'CMD ["--runtime-config", "/etc/breg-mcp/runtime.yaml", "serve"]',
+    },
+    "breg-review": {
+        "workdir": "/var/lib/breg-review",
+        "command": 'CMD ["--runtime-config", "/etc/breg-review/runtime.yaml", "serve"]',
+    },
+    "evidence-oid4vci": {
+        "workdir": "/var/lib/registry-evidence-oid4vci",
+        "command": 'CMD ["serve", "--config", "/etc/registry-evidence-oid4vci/runtime.yaml"]',
+    },
+    "messaging": {
+        "workdir": "/var/lib/registry-messaging",
+        "command": 'CMD ["--runtime-config", "/etc/registry-messaging/runtime.yaml", "serve"]',
+    },
+    "registry-render": {
+        "workdir": "/var/lib/registry-render",
+        "command": 'CMD ["serve", "--runtime-config", "/etc/registry-render/runtime.yaml"]',
+    },
+}
 
 
 class SupportingReleaseImageTests(unittest.TestCase):
@@ -57,8 +79,8 @@ class SupportingReleaseImageTests(unittest.TestCase):
             dockerfile,
         )
 
-    def test_both_images_ship_license_notices_as_nonroot_distroless(self) -> None:
-        for name in ("registry-render", "evidence-oid4vci"):
+    def test_supporting_images_share_the_release_runtime_contract(self) -> None:
+        for name, contract in SUPPORTING_IMAGES.items():
             with self.subTest(name=name):
                 dockerfile = self.dockerfile(name)
                 self.assertIn(
@@ -68,8 +90,20 @@ class SupportingReleaseImageTests(unittest.TestCase):
                 self.assertIn('org.registrystack.runtime.gid="65532"', dockerfile)
                 self.assertIn(f"/licenses/{name}/LICENSE", dockerfile)
                 self.assertIn(f"/licenses/{name}/THIRD_PARTY_NOTICES", dockerfile)
+                self.assertIn(f"WORKDIR {contract['workdir']}", dockerfile)
+                self.assertIn(contract["command"], dockerfile)
+                self.assertIn(f'ENTRYPOINT ["/usr/local/bin/{name}"]', dockerfile)
 
-    def test_release_image_builder_admits_both_image_names(self) -> None:
+    def test_messaging_image_requires_its_operator_tool(self) -> None:
+        dockerfile = self.dockerfile("messaging")
+        self.assertIn(
+            "install -m 0755 /workspace/image-bin/messagingctl "
+            "/workspace/runtime-root/usr/local/bin/messagingctl",
+            dockerfile,
+        )
+        self.assertNotIn("if [ -e /workspace/image-bin/messagingctl ]", dockerfile)
+
+    def test_shared_publication_surfaces_admit_every_supporting_image(self) -> None:
         builder = (ROOT / "release/scripts/build-release-image.sh").read_text(
             encoding="utf-8"
         )
@@ -78,8 +112,22 @@ class SupportingReleaseImageTests(unittest.TestCase):
             for line in builder.splitlines()
             if line.strip().startswith("discovery|evidence|")
         )
-        self.assertIn("|evidence-oid4vci|", supported)
-        self.assertIn("|registry-render|", supported)
+        collector = (ROOT / "release/scripts/collect-rehearsal-advisory-evidence.py").read_text(
+            encoding="utf-8"
+        )
+        smoke = (ROOT / "release/scripts/smoke-release-image-oci-labels.sh").read_text(
+            encoding="utf-8"
+        )
+        cleanup = (ROOT / "release/scripts/cleanup-release-candidates.py").read_text(
+            encoding="utf-8"
+        )
+        for name in SUPPORTING_IMAGES:
+            with self.subTest(name=name):
+                self.assertIn(name, supported)
+                self.assertIn(f'"{name}"', collector)
+                self.assertIn(name, smoke.split("images=(", 1)[1].split(")", 1)[0])
+                self.assertIn(f'"{name}",', cleanup)
+                self.assertNotIn(f'"{name}-candidate",', cleanup)
 
 
 if __name__ == "__main__":

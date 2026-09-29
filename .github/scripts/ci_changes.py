@@ -24,6 +24,7 @@ SHARDS = {
         "registry-discoveryctl",
     ),
     "platform": (
+        "registry-platform-activation",
         "registry-platform-audit",
         "registry-platform-authcommon",
         "registry-platform-buildinfo",
@@ -1330,15 +1331,15 @@ def classify(
         "breg_contracts_lanes": list(
             BREG_CONTRACTS_LANES if integration else BREG_CONTRACTS_LANES[:1]
         ),
-        "casework_postgres": integration
+        "casework_postgres": (integration or "registry-platform-activation" in affected)
         and (
             bool(affected & CASEWORK_PACKAGES)
             or breg_contracts
             or "registry-scheduling" in affected
         ),
-        "scheduling_postgres": integration and bool(
-            affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})
-        ),
+        "scheduling_postgres": (
+            integration or "registry-platform-activation" in affected
+        ) and bool(affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})),
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "release_tool": release_tool,

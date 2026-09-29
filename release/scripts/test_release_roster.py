@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import io
 import sys
-import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -15,18 +14,21 @@ if str(SCRIPT_DIR) not in sys.path:
 import release_roster  # noqa: E402
 
 
-class ReleaseRosterTest(unittest.TestCase):
-    def test_render_and_oid4vci_image_begin_at_v0_38(self) -> None:
-        self.assertEqual((0, 38, 0), release_roster.RENDER_FIRST_RELEASE)
-        self.assertEqual(
-            (0, 38, 0),
-            release_roster.EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE,
-        )
-        for helper in (
-            release_roster.render_in_release,
-            release_roster.evidence_oid4vci_image_in_release,
+class ReleaseRosterTest(TestCase):
+    def test_new_release_surfaces_begin_at_v0_38(self) -> None:
+        for constant, helper in (
+            ("BREG_SERVICES_FIRST_RELEASE", release_roster.breg_services_in_release),
+            ("MESSAGING_FIRST_RELEASE", release_roster.messaging_in_release),
+            ("DISCOVERYCTL_FIRST_RELEASE", release_roster.discoveryctl_in_release),
+            ("SCHEDULING_BINARY_FIRST_RELEASE", release_roster.scheduling_binary_in_release),
+            ("RENDER_FIRST_RELEASE", release_roster.render_in_release),
+            (
+                "EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE",
+                release_roster.evidence_oid4vci_image_in_release,
+            ),
         ):
-            with self.subTest(helper=helper.__name__):
+            with self.subTest(constant=constant):
+                self.assertEqual((0, 38, 0), getattr(release_roster, constant))
                 self.assertFalse(helper((0, 37, 0)))
                 self.assertFalse(helper((0, 37, 99)))
                 self.assertTrue(helper((0, 38, 0)))
@@ -34,6 +36,10 @@ class ReleaseRosterTest(unittest.TestCase):
 
     def test_first_release_constants_are_read_at_call_time(self) -> None:
         for constant, helper in (
+            ("BREG_SERVICES_FIRST_RELEASE", release_roster.breg_services_in_release),
+            ("MESSAGING_FIRST_RELEASE", release_roster.messaging_in_release),
+            ("DISCOVERYCTL_FIRST_RELEASE", release_roster.discoveryctl_in_release),
+            ("SCHEDULING_BINARY_FIRST_RELEASE", release_roster.scheduling_binary_in_release),
             ("RENDER_FIRST_RELEASE", release_roster.render_in_release),
             (
                 "EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE",
@@ -47,6 +53,10 @@ class ReleaseRosterTest(unittest.TestCase):
 
     def test_cli_reports_the_version_selected_roster(self) -> None:
         for command in (
+            "breg-services-in-release",
+            "messaging-in-release",
+            "discoveryctl-in-release",
+            "scheduling-binary-in-release",
             "render-in-release",
             "evidence-oid4vci-image-in-release",
         ):
@@ -60,4 +70,4 @@ class ReleaseRosterTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

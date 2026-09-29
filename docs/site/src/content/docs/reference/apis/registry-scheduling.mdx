@@ -24,6 +24,56 @@ unreleased and carries no frozen compatibility promise.
 reachable problem code. This page holds the authority, revision, and recovery rules those operations
 assume.
 
+## Obtain the operator tool and runtime
+
+Registry Stack releases publish `schedulingctl` for Linux amd64, Linux arm64, and macOS arm64. Pick
+a published tag from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), authenticate the
+asset for your platform through
+`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, then install it. For
+Linux amd64:
+
+```sh
+tag="${TAG:?set TAG to a published Registry Stack tag}"
+mkdir -p ~/.local/bin
+install -m 0755 "schedulingctl-${tag}-linux-amd64" "$HOME/.local/bin/schedulingctl"
+export PATH="$HOME/.local/bin:$PATH"
+schedulingctl --version
+```
+
+From v0.38.0, the release also includes the Linux amd64 runtime binary
+`scheduling-<tag>-linux-amd64`. Authenticate it through the same checksum chain, install it alongside
+`schedulingctl`, and run `scheduling --runtime-config /etc/registry-scheduling/runtime.yaml serve`.
+Earlier releases ship the runtime through its image.
+
+The runtime is published as `ghcr.io/registrystack/scheduling:<tag>`. Authenticate the image digest
+through the release manifest and deploy the digest instead of the mutable tag. The Distroless
+`cc-debian13` image runs `/usr/local/bin/scheduling` as the nonroot user, reads
+`/etc/registry-scheduling/runtime.yaml`, and uses `/var/lib/registry-scheduling` as its working
+directory. Mount the runtime file, package, and serving secrets read-only, and mount the audit
+directory read-write.
+
+Images published from v0.36.0 also contain the matching `/usr/local/bin/schedulingctl`. Run
+`plan`, `apply`, or `status` against the exact image bytes by overriding the entrypoint:
+
+```sh
+docker run --rm \
+  --entrypoint /usr/local/bin/schedulingctl \
+  -v /etc/registry-scheduling/runtime.yaml:/etc/registry-scheduling/runtime.yaml:ro \
+  -v /etc/registry-scheduling/package:/etc/registry-scheduling/package:ro \
+  -v /etc/registry-scheduling/operator-secrets:/etc/registry-scheduling/secrets:ro \
+  -v /var/lib/registry-scheduling/audit:/var/lib/registry-scheduling/audit:rw \
+  "ghcr.io/registrystack/scheduling@sha256:<verified-digest>" \
+  plan --runtime-config /etc/registry-scheduling/runtime.yaml
+```
+
+Use the same mounts for `apply` or `status`. The migration secret needed by `apply` should stay out
+of the serving container.
+
+{/* Evidence: release/scripts/release_candidate.py, _relay_v2_payload_inventory and
+    OPERATOR_TOOL_MINIMUM_VERSION; release/docker/Dockerfile.scheduling;
+    products/scheduling/README.md, Start from an authored project. */}
+
 ## Contract boundary
 
 Every request presents `Authorization: Bearer <token>` holding an RFC 9068 access token, `typ:

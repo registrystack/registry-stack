@@ -2976,8 +2976,13 @@ class RegistryReleaseTest(TestCase):
             inventory = {name: version for name in previous}
             if tuple(int(part) for part in version.split(".")) >= (0, 36, 0):
                 inventory["schedulingctl"] = version
-            if module.release_roster.render_in_release(tuple(map(int, version.split(".")))):
+            version_tuple = tuple(map(int, version.split(".")))
+            if module.release_roster.render_in_release(version_tuple):
                 inventory["registry-render"] = version
+            if module.release_roster.breg_services_in_release(version_tuple):
+                inventory.update({"breg-mcp": version, "breg-review": version})
+            if module.release_roster.discoveryctl_in_release(version_tuple):
+                inventory["discoveryctl"] = version
             return inventory
 
         # No version ships Messaging while the roster names no first release.
@@ -3097,22 +3102,27 @@ class RegistryReleaseTest(TestCase):
         }
         # No version ships either service while the roster names no first
         # release, including the current and the next minor.
-        self.assertIsNone(module.release_roster.BREG_SERVICES_FIRST_RELEASE)
-        for version in ("0.36.0", "0.37.0", "1.0.0"):
-            with self.subTest(version=version, roster=None):
-                current = {name: version for name in published}
-                if module.release_roster.render_in_release(tuple(map(int, version.split(".")))):
-                    current["registry-render"] = version
-                self.assertEqual(
-                    [], module.artifact_inventory_errors(version, current)
-                )
-                for service in ("breg-mcp", "breg-review"):
-                    self.assertNotEqual(
-                        [],
-                        module.artifact_inventory_errors(
-                            version, current | {service: version}
-                        ),
+        with mock.patch.object(module.release_roster, "BREG_SERVICES_FIRST_RELEASE", None):
+            for version in ("0.36.0", "0.37.0", "1.0.0"):
+                with self.subTest(version=version, roster=None):
+                    current = {name: version for name in published}
+                    if module.release_roster.render_in_release(tuple(map(int, version.split(".")))):
+                        current["registry-render"] = version
+                    version_tuple = tuple(map(int, version.split(".")))
+                    if module.release_roster.discoveryctl_in_release(version_tuple):
+                        current["discoveryctl"] = version
+                    if module.release_roster.messaging_in_release(version_tuple):
+                        current.update({"messaging": version, "messagingctl": version})
+                    self.assertEqual(
+                        [], module.artifact_inventory_errors(version, current)
                     )
+                    for service in ("breg-mcp", "breg-review"):
+                        self.assertNotEqual(
+                            [],
+                            module.artifact_inventory_errors(
+                                version, current | {service: version}
+                            ),
+                        )
 
         # A hypothetical first release keeps the inclusion path covered.
         with mock.patch.object(
@@ -4718,6 +4728,8 @@ def write_manifest(
     if load_release_roster().breg_services_in_release(version_tuple):
         artifacts["breg-mcp"] = version
         artifacts["breg-review"] = version
+    if load_release_roster().discoveryctl_in_release(version_tuple):
+        artifacts["discoveryctl"] = version
     if load_release_roster().render_in_release(version_tuple):
         artifacts["registry-render"] = version
     if load_release_roster().messaging_in_release(version_tuple):
