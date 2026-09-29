@@ -1011,7 +1011,7 @@ async fn snapshot_and_revision_reads_write_subject_access_log_entries() {
         route_operation(&registry, registry_breg::contract::Operation::Revisions);
     assert_eq!(
         logged_operations(&db, &record).await,
-        [revision_operation.clone()]
+        [revision_operation.as_str()]
     );
 
     let (status, snapshot) = send(
