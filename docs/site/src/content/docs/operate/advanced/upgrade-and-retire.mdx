@@ -51,7 +51,9 @@ reverse path. See [Compatibility direction](../../../reference/api-stability/#co
 
 BReg goes first, because Casework and Evidence both read it. Casework follows because it refuses
 a BReg of another release. Evidence and its wallet-facing front end come next. Scheduling reads
-none of them and upgrades on its own, before the clients. Rehearse the whole
+none of them and upgrades on its own, before the clients. Each release's notes list, per product,
+the project and runtime-file changes its upgrade needs; make them in the step that upgrades that
+product. Rehearse the whole
 sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
@@ -62,8 +64,10 @@ sequence on a restored copy first, as
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** Rebuild the deployed project unchanged with the new `bregctl package`,
-   point `package.root` at the rebuilt package, check it against the live database with
+4. **Upgrade BReg.** Make the project and runtime-file changes the release notes list, rebuild
+   the deployed project with no model change using the new `bregctl test` and `bregctl package
+   --test-receipt FILE --output DIR` (a receipt from the earlier release is not accepted), point
+   `package.root` at the rebuilt package, check it against the live database with
    `bregctl plan --runtime-config FILE --package DIR` naming the same directory, apply it with
    `bregctl apply --runtime-config FILE --package DIR`, run `bregctl verify --runtime-config
    FILE`, and restart every `breg` process on the new binary; `bregctl status --runtime-config
@@ -82,15 +86,26 @@ sequence on a restored copy first, as
    before it finishes, rerun it with the same `database.roles`: a retry under other roles is
    refused as `apply.resume.roles_differ`, naming the roles the activation started with. A new package applied under `database.roles` other than the ones the active activation serves with is refused as `apply.successor.roles_differ` before maintenance; apply the active package under the new roles first, then the new package. A role change, the active package applied under other `database.roles`, cannot be assessed by `bregctl migration reconcile`: when one stops before it finishes, fix the cause and rerun the same apply, which resumes it. Casework reports each BReg source as unavailable from here until step 5
    finishes.
-5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
-   `caseworkctl plan --runtime-config FILE` and `caseworkctl apply --runtime-config FILE` with the
+5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. From a
+   release before the activation ledger, add `identity.databaseId` to the runtime file. When step
+   4 changed the `registryRevision` a BReg source serves, check each such source with `caseworkctl
+   check PROJECT --against-breg-package DIR --source-id ID`, repin it with `caseworkctl source add
+   BREG_PROJECT --project PROJECT --source-id ID --apply`, package the Casework project again, and
+   point the runtime file's `package.root` at the new package (and `package.expectedDigest`, when
+   set, at its digest); see
+   [Check a BReg source's pinned revision](../../casework/#check-a-breg-sources-pinned-revision).
+   Stop every earlier `casework` process before the apply: one left running holds the audit
+   writer lock the new runtime needs, and can strand a source attempt when the apply changes a
+   source's binding generation. Run `caseworkctl plan --runtime-config FILE` and `caseworkctl apply --runtime-config FILE` with the
    new binaries, then start `casework` and run `caseworkctl doctor --runtime-config FILE`; see [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
-6. **Upgrade Evidence.** Package a fresh candidate with the new `evidencectl package`, run
-   `evidence check --require-runtime-dependencies` with the new binary, start it, and verify a fresh synthetic
-   assertion. Then start the new `evidence-oid4vci`.
+6. **Upgrade Evidence.** Re-import each BReg source whose export the release notes say changed,
+   then package a fresh candidate with the new `evidencectl package`, run `evidence check
+   --runtime-config FILE --require-runtime-dependencies` with the new binary (add
+   `--without-audit-lock` while the earlier instance still runs), stop the earlier `evidence`,
+   start the new one, and verify a fresh synthetic assertion. Then start the new `evidence-oid4vci`.
 7. **Upgrade Scheduling**, when it runs. Stop the earlier `scheduling` runtime, or keep its
    destination bindings until its hook deliveries drain. Add `identity.databaseId` to the runtime
-   file, run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
+   file when it has none, run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
    FILE` with the new binary, then start `scheduling`; `schedulingctl status --runtime-config
    FILE` confirms what the database activated. From a release before the activation ledger, the
    first `apply` adopts the database and backfills the retained policy document, and the runtime
@@ -120,18 +135,28 @@ No product migrates backwards. A Casework binary refuses a database whose schema
 supports, and a BReg package applies forward only. Evidence refuses a runtime file carrying keys
 its release does not know. To return to the previous release:
 
-- **BReg.** Undo a model change by rolling forward to a successor that reverts it. When the data
-  itself must go back, restore the pre-activation backup; see
+- **BReg.** To return to the previous release, stop every `breg`, restore the step 1 `pg_dump`,
+  and start the previous `breg` with the previous package and runtime file copied in step 1; the
+  new release's tools cannot read the earlier package or runtime file. To undo only a model
+  change, roll forward to a successor that reverts it, and when the data itself must go back,
+  restore the pre-activation backup; see
   [Roll back by rolling forward](../../breg-changes/#roll-back-by-rolling-forward).
-- **Casework.** Restore the pre-migrate backup and run the previous binary and package; see
+- **Casework.** Restore the pre-apply backup and run the previous binary, package, and runtime
+  file copied in step 1; see
   [Restore Registry Casework](../back-up-and-restore/#restore-registry-casework) for what that
   restore loses.
 - **Evidence.** Restart the previous binary with the previous bundle and runtime file.
+- **Scheduling.** Restore the pre-apply database backup, then run the previous binary, package,
+  and runtime file copied in step 1. Always restore first: an earlier Scheduling runtime may not
+  detect a schema newer than its own.
 
 Because the release rule holds in both directions, rolling back one product means rolling back
 every product that must match it: Casework refuses a BReg that went back without it.
 
 {/* Evidence: crates/registry-casework/src/store.rs, refuse_newer_schema();
+    crates/registry-bregctl/src/lib.rs, LegacyFormat refused as apply.package.refused;
+    crates/registry-platform-audit/src/writer.rs, single-writer lock;
+    crates/registry-evidence/src/cli.rs, Check (--runtime-config, --without-audit-lock);
     crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
     crates/registry-evidence/src/config.rs, deny_unknown_fields on the runtime file. */}
 
