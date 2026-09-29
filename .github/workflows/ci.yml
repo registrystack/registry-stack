@@ -233,8 +233,8 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform_coverage == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # --all-features enables registry-platform-dispatch/postgres-test, whose
-    # suite fails rather than skips without its database.
+    # --all-features enables the dispatch and activation PostgreSQL tests,
+    # which fail rather than skip without their disposable database.
     services:
       postgres:
         image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
@@ -271,6 +271,7 @@ jobs:
       - name: Enforce platform line coverage
         env:
           DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+          ACTIVATION_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
         run: >-
           cargo llvm-cov --locked
           -p 'registry-platform-*'
