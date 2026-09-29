@@ -22,4 +22,3 @@ migrations and hooks, call `grant_runtime_role`, then observe the effective
 role before appending the ledger row. Runtime startup must compare both the
 configured database identity and verified package digest through
 `check_active_package` before serving requests.
-
