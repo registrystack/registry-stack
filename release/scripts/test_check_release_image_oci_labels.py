@@ -731,6 +731,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                                 "scheduling",
                                 "schedulingctl",
                                 "messaging",
+                                "messagingctl",
                             )
                         )
                     )

@@ -64,6 +64,7 @@ IMAGE_SOURCES = {
     "scheduling": SCHEDULING[0],
     "schedulingctl": SCHEDULING[1],
     "messaging": MESSAGING[0],
+    "messagingctl": MESSAGING[1],
     "evidence": CORE[1],
     "relay": CORE[5],
 }
@@ -234,6 +235,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 "scheduling",
                 "schedulingctl",
                 "messaging",
+                "messagingctl",
                 "evidence",
                 "relay",
             ],
@@ -278,6 +280,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 "scheduling",
                 "schedulingctl",
                 "messaging",
+                "messagingctl",
                 "evidence",
                 "relay",
             ],
@@ -349,6 +352,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             any(path.name.startswith("messaging") for path in (output / "bin").iterdir())
         )
         self.assertFalse((output / "image-bin/messaging").exists())
+        self.assertFalse((output / "image-bin/messagingctl").exists())
 
     def test_no_version_ships_the_breg_services_until_the_roster_names_a_first_release(
         self,

@@ -294,6 +294,12 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertIn("messaging-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("messagingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        # The Messaging image's operator tool is checked only inside the
+        # hold-out gate, so a release without Messaging never stages it.
+        messaging_smoke = merge.split(
+            'if [[ "${messaging_in_release}" == true ]]; then\n', 1
+        )[1].split("fi", 1)[0]
+        self.assertIn("dist/image-bin/messagingctl --version", messaging_smoke)
         breg_services = merge.split(
             'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
             '  breg-services-in-release "${REHEARSAL_VERSION}")"\n'

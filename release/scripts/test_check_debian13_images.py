@@ -402,6 +402,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 Path("release/docker/Dockerfile.breg"): "bregctl",
                 Path("release/docker/Dockerfile.casework"): "caseworkctl",
                 Path("release/docker/Dockerfile.scheduling"): "schedulingctl",
+                Path("release/docker/Dockerfile.messaging"): "messagingctl",
             },
             {
                 relative: contract["tool"]

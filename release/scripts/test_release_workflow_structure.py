@@ -705,6 +705,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
                 messaging_smoke,
             )
+        # The Messaging image's operator tool is checked only inside the
+        # hold-out gate, so a release without Messaging never stages it.
+        self.assertIn("dist/image-bin/messagingctl --version", messaging_smoke)
+        self.assertNotIn(
+            "messagingctl", operator_tools.split(messaging_gate, 1)[0]
+        )
         breg_services = merge.split(
             'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
             '  breg-services-in-release "${{ needs.validate.outputs.version }}")"\n'
