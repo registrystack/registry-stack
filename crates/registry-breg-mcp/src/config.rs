@@ -296,6 +296,10 @@ pub enum RuntimeConfigError {
     AudienceReused,
     #[error("{0} must be greater than zero")]
     Zero(&'static str),
+    #[error("service.reviewBaseUrl must be the review page's publicOrigin, with no path")]
+    ReviewBaseUrlNotOrigin,
+    #[error("service.application.ownerField must name a different field than targetField")]
+    OwnerFieldIsTarget,
 }
 
 impl RuntimeConfig {
@@ -440,8 +444,15 @@ impl RuntimeConfig {
             &service.application.owner_field,
             "service.application.ownerField",
         )?;
-        service_url(&service.review_base_url, self.development_loopback())
+        if service.application.owner_field == service.application.target_field {
+            return Err(RuntimeConfigError::OwnerFieldIsTarget);
+        }
+        let review_base_url = service_url(&service.review_base_url, self.development_loopback())
             .ok_or(RuntimeConfigError::InvalidUrl("service.reviewBaseUrl"))?;
+        // The review page serves its pages at the root of its publicOrigin.
+        if review_base_url.path() != "/" {
+            return Err(RuntimeConfigError::ReviewBaseUrlNotOrigin);
+        }
         Ok(())
     }
 }
@@ -833,6 +844,45 @@ rateLimits:
                 "{audience}"
             );
         }
+    }
+
+    /// The review page serves `/requests/<id>` at the root of its
+    /// `publicOrigin` and signs in with root-relative return paths, so a
+    /// base URL with a path would hand the citizen a link the page does not
+    /// serve.
+    #[test]
+    fn the_review_base_url_is_an_origin_without_a_path() {
+        let root = document().replace(
+            "reviewBaseUrl: https://review.example.test",
+            "reviewBaseUrl: https://review.example.test/",
+        );
+        load(&root).expect("a trailing slash is the root path");
+        for base in [
+            "https://review.example.test/citizen",
+            "https://review.example.test/citizen/",
+            "https://review.example.test//",
+        ] {
+            let text = document().replace(
+                "reviewBaseUrl: https://review.example.test",
+                &format!("reviewBaseUrl: {base}"),
+            );
+            assert!(
+                matches!(load(&text), Err(RuntimeConfigError::ReviewBaseUrlNotOrigin)),
+                "{base}"
+            );
+        }
+    }
+
+    /// The gateway writes the citizen's record into the target field and the
+    /// citizen's principal into the owner field, so one field named twice
+    /// would have the owner silently overwrite the target.
+    #[test]
+    fn the_owner_field_is_not_the_target_field() {
+        let text = document().replace("ownerField: owner", "ownerField: address");
+        assert!(matches!(
+            load(&text),
+            Err(RuntimeConfigError::OwnerFieldIsTarget)
+        ));
     }
 
     #[test]

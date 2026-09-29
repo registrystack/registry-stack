@@ -315,11 +315,11 @@ publishes RFC 9728 protected-resource metadata naming the issuer and the require
 | `application.entity` | The change-request entity the gateway drafts |
 | `application.targetField` | The field identifier of the reference to the citizen's record |
 | `application.ownerField` | The field identifier of the field recording the citizen's principal |
-| `reviewBaseUrl` | The review page's `publicOrigin`; the gateway returns `<reviewBaseUrl>/requests/<id>` |
+| `reviewBaseUrl` | The review page's `publicOrigin`, with no path; the gateway returns `<reviewBaseUrl>/requests/<id>` |
 
 `name`, `description`, and `disclosure` are each at most 4096 bytes. The two field keys take the
 field identifier as the project declares it, such as `new-address-line`, not the API name
-`newAddressLine` the registry's metadata publishes for it.
+`newAddressLine` the registry's metadata publishes for it, and must name two different fields.
 
 ### Audit and limits
 

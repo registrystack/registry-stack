@@ -146,7 +146,7 @@ service:
     entity: address-correction-request
     targetField: address
     ownerField: owner
-  reviewBaseUrl: https://registry.example/citizen/
+  reviewBaseUrl: https://review.example/
 audit:
   hashKeyRef: secret:file/audit-key
   destination: file

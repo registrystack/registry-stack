@@ -53,7 +53,7 @@ pub const OTHER_HOST: &str = "other-host";
 pub const ACTOR: &str = "6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34";
 pub const SCOPE: &str = "address-correction:self";
 /// The review page base of every gateway that serves no real page.
-pub const REVIEW_BASE_URL: &str = "https://review.example.test/citizen/";
+pub const REVIEW_BASE_URL: &str = "https://review.example.test/";
 pub const CITIZEN_A: &str = "synthetic-citizen-a";
 pub const CITIZEN_B: &str = "synthetic-citizen-b";
 pub const ADDRESS_A: &str = "c7110c06-8938-4294-bd68-7390de8e752e";

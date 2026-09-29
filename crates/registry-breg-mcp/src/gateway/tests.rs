@@ -98,7 +98,7 @@ impl Fixture {
                 description: "Correct the postal address the registry holds for you.".to_owned(),
                 disclosure: "The assistant will see your current address.".to_owned(),
             },
-            Url::parse("https://review.example.test/citizen/").expect("review url"),
+            Url::parse("https://review.example.test/").expect("review url"),
             audit,
             profile.key_hasher(),
         );
@@ -660,7 +660,7 @@ async fn prepare_review_links_the_citizens_own_application() {
     assert_eq!(value["isError"], false, "{value}");
     assert_eq!(
         value["reviewUrl"],
-        format!("https://review.example.test/citizen/requests/{application}")
+        format!("https://review.example.test/requests/{application}")
     );
     let status = fixture
         .call(
