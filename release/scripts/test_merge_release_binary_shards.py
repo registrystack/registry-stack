@@ -19,14 +19,16 @@ SPEC.loader.exec_module(MODULE)
 
 # Messaging has not joined a release (release_roster.MESSAGING_FIRST_RELEASE is
 # None). The inclusion fixtures patch a hypothetical first release so the
-# Messaging shard path stays covered without any production knob.
-HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
+# Messaging shard path stays covered without any production knob. The
+# hypothetical release follows v0.36.0, so its fixture also carries the
+# operator tools every release from v0.36.0 stages.
+HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 37, 0)
 # breg-mcp and breg-review have not joined a release
 # (release_roster.BREG_SERVICES_FIRST_RELEASE is None). The inclusion tests
 # patch a hypothetical first release so their shard path stays covered without
 # any production knob.
 HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)
-VERSION = "0.36.0"
+VERSION = "0.37.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
@@ -44,17 +46,23 @@ CASEWORK = [
     f"casework-{TAG}-linux-amd64",
     f"caseworkctl-{TAG}-linux-amd64",
 ]
-SCHEDULING = [f"scheduling-{TAG}-linux-amd64"]
+SCHEDULING = [
+    f"scheduling-{TAG}-linux-amd64",
+    f"schedulingctl-{TAG}-linux-amd64",
+]
 MESSAGING = [
     f"messaging-{TAG}-linux-amd64",
     f"messagingctl-{TAG}-linux-amd64",
 ]
-FINAL = [CORE[0], *BREG, *CASEWORK, *MESSAGING, *CORE[1:]]
+FINAL = [CORE[0], *BREG, *CASEWORK, SCHEDULING[1], *MESSAGING, *CORE[1:]]
 IMAGE_SOURCES = {
     "discovery": CORE[0],
     "breg": BREG[0],
+    "bregctl": BREG[1],
     "casework": CASEWORK[0],
+    "caseworkctl": CASEWORK[1],
     "scheduling": SCHEDULING[0],
+    "schedulingctl": SCHEDULING[1],
     "messaging": MESSAGING[0],
     "evidence": CORE[1],
     "relay": CORE[5],
@@ -205,20 +213,31 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertIn("scheduling", dict(images_033))
         self.assertNotIn("scheduling-v0.33.0-linux-amd64", rosters_033["core"])
-        rosters_035, images_035 = MODULE.rosters("0.35.0")
-        self.assertEqual([], rosters_035["messaging"])
-        self.assertNotIn("messaging", dict(images_035))
         rosters_036, images_036 = MODULE.rosters("0.36.0")
+        self.assertEqual([], rosters_036["messaging"])
+        self.assertNotIn("messaging", dict(images_036))
+        rosters_037, images_037 = MODULE.rosters("0.37.0")
         self.assertEqual(
             [
-                "messaging-v0.36.0-linux-amd64",
-                "messagingctl-v0.36.0-linux-amd64",
+                "messaging-v0.37.0-linux-amd64",
+                "messagingctl-v0.37.0-linux-amd64",
             ],
-            rosters_036["messaging"],
+            rosters_037["messaging"],
         )
         self.assertEqual(
-            ["discovery", "breg", "casework", "scheduling", "messaging", "evidence", "relay"],
-            [name for name, _ in images_036],
+            [
+                "discovery",
+                "breg",
+                "bregctl",
+                "casework",
+                "caseworkctl",
+                "scheduling",
+                "schedulingctl",
+                "messaging",
+                "evidence",
+                "relay",
+            ],
+            [name for name, _ in images_037],
         )
         rosters_035, images_035 = MODULE.rosters("0.35.0")
         self.assertEqual(
@@ -295,9 +314,9 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             self.merge()
         self.assertFalse(self.output.exists())
 
-        version = "0.35.0"
+        version = "0.36.0"
         tag = f"v{version}"
-        fixture = self.root / "v0.35.0"
+        fixture = self.root / "v0.36.0"
         fixture.mkdir()
         original_root = self.root
         self.root = fixture
@@ -330,6 +349,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             any(path.name.startswith("messaging") for path in (output / "bin").iterdir())
         )
         self.assertFalse((output / "image-bin/messaging").exists())
+
     def test_no_version_ships_the_breg_services_until_the_roster_names_a_first_release(
         self,
     ) -> None:
@@ -362,6 +382,8 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         roster_patch.start()
         self.addCleanup(roster_patch.stop)
         version = "0.37.0"
+        # setUp already wrote this version's shards; keep these apart.
+        self.root = self.root / "breg-services"
         rosters, images = MODULE.rosters(version)
         shards = {
             name: self.write_shard(name, assets, version)
@@ -472,6 +494,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             breg=shards["breg"],
             casework=shards["casework"],
             scheduling=shards["scheduling"],
+            messaging=None,
             output=output,
             builder_image=BUILDER,
         )
