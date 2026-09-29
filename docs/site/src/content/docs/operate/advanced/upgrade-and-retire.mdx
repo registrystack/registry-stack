@@ -1,6 +1,6 @@
 ---
 title: Upgrade and retire a deployment
-description: Upgrade Base Registry Engine, Registry Casework, Evidence, and their clients to a new release in a safe order, and retire a deployment without losing the records it must leave behind.
+description: Upgrade Base Registry Engine, Registry Casework, Evidence, Registry Scheduling, and their clients to a new release in a safe order, and retire a deployment without losing the records it must leave behind.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,8 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
-Use this runbook when you move a deployment of Base Registry Engine (BReg), Registry Casework, and
-Evidence to a new release, or take it out of service. Each product's own guide carries its upgrade
+Use this runbook when you move a deployment of Base Registry Engine (BReg), Registry Casework,
+Evidence, and Registry Scheduling to a new release, or take it out of service. Each product's own guide carries its upgrade
 command; this page gives the order across products, the version rule that order enforces, and
 what each product must leave behind when it is retired.
 
@@ -66,10 +66,11 @@ sequence on a restored copy first, as
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
 4. **Upgrade BReg.** Make the project and runtime-file changes the release notes list, rebuild
    the deployed project with no model change using the new `bregctl test` and `bregctl package
-   --test-receipt FILE --output DIR` (a receipt from the earlier release is not accepted), point
-   `package.root` at the rebuilt package, check it against the live database with
-   `bregctl plan --runtime-config FILE --package DIR` naming the same directory, apply it with
-   `bregctl apply --runtime-config FILE --package DIR`, run `bregctl verify --runtime-config
+   --test-receipt FILE --output BUILD` (a receipt from the earlier release is not accepted), point
+   `package.root` at `BUILD/package` (and `package.expectedDigest`, when set, at the package
+   digest it reports, `packageDigest` with `--format json`), check it against the live database with
+   `bregctl plan --runtime-config FILE --package BUILD/package` naming the same directory, apply
+   it with `bregctl apply --runtime-config FILE --package BUILD/package`, run `bregctl verify --runtime-config
    FILE`, and restart every `breg` process on the new binary; `bregctl status --runtime-config
    FILE` confirms what the database activated. A model change follows as its own successor; see
    [Activate the successor](../../breg-changes/#activate-the-successor). From a release before
@@ -135,9 +136,14 @@ No product migrates backwards. A Casework binary refuses a database whose schema
 supports, and a BReg package applies forward only. Evidence refuses a runtime file carrying keys
 its release does not know. To return to the previous release:
 
-- **BReg.** To return to the previous release, stop every `breg`, restore the step 1 `pg_dump`,
-  and start the previous `breg` with the previous package and runtime file copied in step 1; the
-  new release's tools cannot read the earlier package or runtime file. To undo only a model
+- **BReg.** To return to the previous release, stop every `breg` and retire the upgraded
+  database, restore the step 1 `pg_dump` into a fresh database, and point the previous runtime file copied
+  in step 1 at it. The restored copy carries the claim of the database it was dumped from, so
+  adopt it with the previous release's `bregctl instance-claim adopt --runtime-config FILE
+  --acknowledge-original-retired` (see
+  [After a logical restore](../back-up-and-restore/#after-a-logical-restore) for why), then
+  start the previous `breg` with the previous package and that runtime file; the new release's
+  tools cannot read the earlier package or runtime file. To undo only a model
   change, roll forward to a successor that reverts it, and when the data itself must go back,
   restore the pre-activation backup; see
   [Roll back by rolling forward](../../breg-changes/#roll-back-by-rolling-forward).
@@ -155,6 +161,9 @@ every product that must match it: Casework refuses a BReg that went back without
 
 {/* Evidence: crates/registry-casework/src/store.rs, refuse_newer_schema();
     crates/registry-bregctl/src/lib.rs, LegacyFormat refused as apply.package.refused;
+    crates/registry-bregctl/src/package_lifecycle.rs, PACKAGE_DIRECTORY (the package child of
+    --output); crates/registry-breg/src/instance_claim.rs, module docs (a logical copy keeps its
+    original's claim; v0.35.0 ships instance-claim adopt);
     crates/registry-platform-audit/src/writer.rs, single-writer lock;
     crates/registry-evidence/src/cli.rs, Check (--runtime-config, --without-audit-lock);
     crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
@@ -166,6 +175,19 @@ Retire the products in the reverse of the upgrade order, so nothing still runnin
 you have removed. Retiring a product leaves records behind: signatures others still verify,
 decisions others may challenge, and audit entries your retention policy holds. None of the products
 has a decommission command, so the steps below are yours.
+
+### Retire Scheduling
+
+Scheduling reads no other product and no other product reads it, so it can retire at any point
+in this sequence.
+
+1. Stop routing booking requests to Scheduling, and tell the callers holding appointments how
+   those appointments will be honoured.
+2. Stop `scheduling`. Reminder and observer-hook deliveries are outbox work its own workers send,
+   so every delivery still pending stops with it and is not sent.
+3. Scheduling has no export command. Keep a final `pg_dump` for as long as your policy holds its
+   appointment records.
+4. Ship the final audit file, its sealed files, and the `schedulingctl` sibling of `audit.path`.
 
 ### Retire Evidence
 
@@ -217,6 +239,8 @@ has a decommission command, so the steps below are yours.
     docs/site/src/content/docs/reference/api-stability.mdx, JWKS served by the process;
     products/evidence/OPERATOR-CONTRACT.md, predecessor key retention and audit master retention;
     crates/registry-caseworkctl/src/lib.rs, no export command, RetentionCommand, AttemptCommand;
+    crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,
+    outbox workers spawned by the runtime; products/scheduling/README.md, the schedulingctl audit file;
     crates/registry-bregctl/src/lib.rs, DataCommand::Export, ImportAuthorityCommand,
     WebhookCommand; crates/registry-breg/src/field_encryption.rs, module docs. */}
 
