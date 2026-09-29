@@ -51,6 +51,23 @@ def load_registry_release():
     return module
 
 
+def load_release_roster():
+    """Return the shared roster module the release scripts import."""
+    sys.path.insert(0, str(TOOL.parent))
+    try:
+        import release_roster
+    finally:
+        sys.path.pop(0)
+    return release_roster
+
+
+# breg-mcp and breg-review have not joined a release
+# (release_roster.BREG_SERVICES_FIRST_RELEASE is None). The inclusion tests
+# patch a hypothetical first release so their path stays covered without any
+# production knob.
+HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)
+
+
 def candidate_verification_plan(registry_release):
     version = "0.31.1"
     release_id = "beta-44"
@@ -2393,19 +2410,20 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence discovery breg breg-mcp breg-review casework scheduling)",
+            'canary_image_names="$(python3 release/scripts/release_candidate.py \\\n'
+            '            image-names --version "${version}")"\n'
+            '          read -r -a image_names <<<"${canary_image_names}"\n',
             "images: $images[0]",
             "scans: $scans[0]",
-            '"discovery-image"',
-            '"evidence-image"',
-            '"breg-image"',
-            '"breg-mcp-image"',
-            '"breg-review-image"',
-            '"casework-image"',
-            '"scheduling-image"',
-            '"relay-image"',
+            'subjects:($ARGS.positional | map(. + "-image"))',
+            "}' --args \"${image_names[@]}\" > \"${evidence_root}/advisory-verdict.json\"",
         ):
             self.assertIn(current, workflow)
+        # The canary derives its image roster from release_candidate.py, so it
+        # names no product image of its own, breg-mcp and breg-review included.
+        self.assertNotIn("image_names=(", workflow)
+        self.assertNotIn('"breg-mcp-image"', workflow)
+        self.assertNotIn('"breg-review-image"', workflow)
         for retired in (
             "registry-relay",
             "registryctl-",
@@ -2916,10 +2934,12 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
-    def test_breg_services_release_surface_begins_after_v0_35(self) -> None:
+    def test_breg_services_release_surface_begins_at_their_first_release(
+        self,
+    ) -> None:
         module = load_registry_release()
         published = {
-            name: "0.35.0"
+            name
             for name in (
                 module.RELAY_V2_ARTIFACT_INVENTORY
                 | {
@@ -2933,6 +2953,7 @@ class RegistryReleaseTest(TestCase):
                     "caseworkctl",
                     "casework-installer",
                     "scheduling",
+                    "schedulingctl",
                     "registry-client-node",
                     "registry-client-python",
                 }
@@ -2944,24 +2965,48 @@ class RegistryReleaseTest(TestCase):
                 "evidence-client-python",
             }
         }
-        self.assertEqual([], module.artifact_inventory_errors("0.35.0", published))
-        future = {name: "0.36.0" for name in published}
-        future["breg-mcp"] = "0.36.0"
-        future["breg-review"] = "0.36.0"
-        self.assertEqual([], module.artifact_inventory_errors("0.36.0", future))
-        for service in ("breg-mcp", "breg-review"):
-            with self.subTest(service=service):
-                self.assertNotEqual(
-                    [],
-                    module.artifact_inventory_errors(
-                        "0.35.0", published | {service: "0.35.0"}
-                    ),
+        # No version ships either service while the roster names no first
+        # release, including the current and the next minor.
+        self.assertIsNone(module.release_roster.BREG_SERVICES_FIRST_RELEASE)
+        for version in ("0.36.0", "0.37.0", "1.0.0"):
+            with self.subTest(version=version, roster=None):
+                current = {name: version for name in published}
+                self.assertEqual(
+                    [], module.artifact_inventory_errors(version, current)
                 )
-                missing = dict(future)
-                del missing[service]
-                self.assertNotEqual(
-                    [], module.artifact_inventory_errors("0.36.0", missing)
-                )
+                for service in ("breg-mcp", "breg-review"):
+                    self.assertNotEqual(
+                        [],
+                        module.artifact_inventory_errors(
+                            version, current | {service: version}
+                        ),
+                    )
+
+        # A hypothetical first release keeps the inclusion path covered.
+        with mock.patch.object(
+            module.release_roster,
+            "BREG_SERVICES_FIRST_RELEASE",
+            HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE,
+        ):
+            earlier = {name: "0.36.0" for name in published}
+            self.assertEqual([], module.artifact_inventory_errors("0.36.0", earlier))
+            future = {name: "0.37.0" for name in published}
+            future["breg-mcp"] = "0.37.0"
+            future["breg-review"] = "0.37.0"
+            self.assertEqual([], module.artifact_inventory_errors("0.37.0", future))
+            for service in ("breg-mcp", "breg-review"):
+                with self.subTest(service=service):
+                    self.assertNotEqual(
+                        [],
+                        module.artifact_inventory_errors(
+                            "0.36.0", earlier | {service: "0.36.0"}
+                        ),
+                    )
+                    missing = dict(future)
+                    del missing[service]
+                    self.assertNotEqual(
+                        [], module.artifact_inventory_errors("0.37.0", missing)
+                    )
 
         recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
@@ -4538,7 +4583,7 @@ def write_manifest(
         artifacts["scheduling"] = version
     if version_tuple >= (0, 36, 0):
         artifacts["schedulingctl"] = version
-    if version_tuple >= (0, 36, 0):
+    if load_release_roster().breg_services_in_release(version_tuple):
         artifacts["breg-mcp"] = version
         artifacts["breg-review"] = version
     manifest = {

@@ -7,6 +7,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,11 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+# breg-mcp and breg-review have not joined a release
+# (release_roster.BREG_SERVICES_FIRST_RELEASE is None). The inclusion tests
+# patch a hypothetical first release so their shard path stays covered without
+# any production knob.
+HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)
 VERSION = "0.33.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
@@ -183,38 +189,81 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertNotIn("breg-mcp", dict(images_035))
         self.assertNotIn("breg-review", dict(images_035))
-        rosters_036, images_036 = MODULE.rosters("0.36.0")
+        with mock.patch.object(
+            MODULE.release_roster,
+            "BREG_SERVICES_FIRST_RELEASE",
+            HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE,
+        ):
+            rosters_036, _ = MODULE.rosters("0.36.0")
+            rosters_037, images_037 = MODULE.rosters("0.37.0")
+        self.assertEqual(
+            ["breg-v0.36.0-linux-amd64", "bregctl-v0.36.0-linux-amd64"],
+            rosters_036["breg"],
+        )
         self.assertEqual(
             [
-                "breg-v0.36.0-linux-amd64",
-                "bregctl-v0.36.0-linux-amd64",
-                "breg-mcp-v0.36.0-linux-amd64",
-                "breg-review-v0.36.0-linux-amd64",
+                "breg-v0.37.0-linux-amd64",
+                "bregctl-v0.37.0-linux-amd64",
+                "breg-mcp-v0.37.0-linux-amd64",
+                "breg-review-v0.37.0-linux-amd64",
             ],
-            rosters_036["breg"],
+            rosters_037["breg"],
         )
         self.assertEqual(
             [
                 "discovery",
                 "breg",
+                "bregctl",
                 "breg-mcp",
                 "breg-review",
                 "casework",
+                "caseworkctl",
                 "scheduling",
+                "schedulingctl",
                 "evidence",
                 "relay",
             ],
-            [name for name, _ in images_036],
+            [name for name, _ in images_037],
         )
 
-    def test_breg_services_merge_from_the_breg_shard_from_v0_36_0(self) -> None:
-        version = "0.36.0"
+    def test_no_version_ships_the_breg_services_until_the_roster_names_a_first_release(
+        self,
+    ) -> None:
+        self.assertIsNone(MODULE.release_roster.BREG_SERVICES_FIRST_RELEASE)
+        for version in ("0.36.0", "0.37.0", "1.0.0"):
+            with self.subTest(version=version):
+                rosters, images = MODULE.rosters(version)
+                self.assertEqual(
+                    [f"breg-v{version}-linux-amd64", f"bregctl-v{version}-linux-amd64"],
+                    rosters["breg"],
+                )
+                self.assertFalse(
+                    any(
+                        name.startswith(("breg-mcp", "breg-review"))
+                        for names in rosters.values()
+                        for name in names
+                    )
+                )
+                self.assertNotIn("breg-mcp", dict(images))
+                self.assertNotIn("breg-review", dict(images))
+
+    def test_breg_services_merge_from_the_breg_shard_from_the_first_release(
+        self,
+    ) -> None:
+        roster_patch = mock.patch.object(
+            MODULE.release_roster,
+            "BREG_SERVICES_FIRST_RELEASE",
+            HYPOTHETICAL_BREG_SERVICES_FIRST_RELEASE,
+        )
+        roster_patch.start()
+        self.addCleanup(roster_patch.stop)
+        version = "0.37.0"
         rosters, images = MODULE.rosters(version)
         shards = {
             name: self.write_shard(name, assets, version)
             for name, assets in rosters.items()
         }
-        output = self.root / "dist-0.36.0"
+        output = self.root / "dist-0.37.0"
         MODULE.merge(
             version=version,
             source_sha=SOURCE_SHA,
@@ -242,7 +291,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 .splitlines()
             ],
         )
-        (shards["breg"] / "bin" / "breg-review-v0.36.0-linux-amd64").unlink()
+        (shards["breg"] / "bin" / "breg-review-v0.37.0-linux-amd64").unlink()
         with self.assertRaisesRegex(MODULE.ShardError, "breg"):
             MODULE.merge(
                 version=version,
@@ -251,7 +300,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 breg=shards["breg"],
                 casework=shards["casework"],
                 scheduling=shards["scheduling"],
-                output=self.root / "dist-0.36.0-incomplete",
+                output=self.root / "dist-0.37.0-incomplete",
                 builder_image=BUILDER,
             )
 

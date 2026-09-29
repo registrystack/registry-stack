@@ -69,7 +69,9 @@ jobs:
           PY
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          image_names=(relay evidence discovery breg breg-mcp breg-review casework scheduling)
+          canary_image_names="$(python3 release/scripts/release_candidate.py \
+            image-names --version "${version}")"
+          read -r -a image_names <<<"${canary_image_names}"
 
           write_image_reports() {
             local name="$1"
@@ -104,17 +106,8 @@ jobs:
           jq -n '{
             schema_version:"registry-stack.advisory-verdict.v2",
             verdict:"passed",
-            subjects:[
-              "discovery-image",
-              "evidence-image",
-              "breg-image",
-              "breg-mcp-image",
-              "breg-review-image",
-              "casework-image",
-              "scheduling-image",
-              "relay-image"
-            ]
-          }' > "${evidence_root}/advisory-verdict.json"
+            subjects:($ARGS.positional | map(. + "-image"))
+          }' --args "${image_names[@]}" > "${evidence_root}/advisory-verdict.json"
           cp "${evidence_root}/advisory-verdict.json" \
             canary/bundle-root/security/advisory-verdict.json
           evidence_name="registry-stack-${tag}-security-evidence.tar.gz"

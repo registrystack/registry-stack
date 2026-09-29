@@ -220,14 +220,15 @@ effective limit.
     crates/registry-breg-review/src/lib.rs, SIGTERM;
     crates/registry-breg-review/README.md. */}
 
-## Run the release images
+## Run the service images
 
-From v0.36.0, the Base Registry Engine release set includes a `breg-mcp` image and a
-`breg-review` image beside the `breg` image. Each carries its binary alone, on a distroless base with no shell. The release manifest
-records the promoted digest of each image; pin that digest instead of the movable tag.
+No release publishes a `breg-mcp` or `breg-review` image or binary yet. The repository carries
+a Dockerfile for each, and each image carries its binary alone, on a distroless base with no shell.
+Until the services join a release, build the images from a checkout and pin the digest you
+built instead of a movable tag.
 
 {/* Evidence: release/docker/Dockerfile.breg-mcp; release/docker/Dockerfile.breg-review;
-    release/OPERATIONS.md. */}
+    release/scripts/release_roster.py, BREG_SERVICES_FIRST_RELEASE; release/OPERATIONS.md. */}
 
 Mount the runtime configuration and the secrets read-only, and give the journal a writable
 directory the image user owns. Inside a container, bind the listener on `0.0.0.0`, which requires
@@ -248,7 +249,7 @@ A gateway container then looks like this, with the review page following the sam
 {/* Evidence: release/docker/Dockerfile.breg-mcp, WORKDIR, EXPOSE, ENTRYPOINT, and CMD. */}
 
 ```sh
-BREG_MCP_IMAGE='ghcr.io/registrystack/breg-mcp@sha256:<digest-from-the-release-manifest>'
+BREG_MCP_IMAGE='<registry>/breg-mcp@sha256:<digest-of-the-image-you-built>'
 docker run --rm \
   --mount type=bind,source=/etc/breg-mcp/runtime.yaml,target=/etc/breg-mcp/runtime.yaml,readonly \
   --mount type=bind,source=/run/secrets/breg-mcp,target=/run/secrets/breg-mcp,readonly \

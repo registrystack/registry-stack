@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -412,19 +413,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             module._candidate_image_names("0.33.0"),
             module._candidate_image_names("0.35.0"),
         )
-        self.assertEqual(
-            {
-                "breg",
-                "breg-mcp",
-                "breg-review",
-                "casework",
-                "discovery",
-                "evidence",
-                "relay",
-                "scheduling",
-            },
-            module._candidate_image_names("0.36.0"),
-        )
+        for version in ("0.36.0", "0.37.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    module._candidate_image_names("0.33.0"),
+                    module._candidate_image_names(version),
+                )
         self.assertFalse(
             any(
                 "registry-notary" in name
@@ -590,7 +584,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for fragment in (
             "-p registry-breg-mcp --bin breg-mcp",
             "-p registry-breg-review --bin breg-review",
-            'if [[ "${include_breg_services}" -eq 1 ]]; then',
+            'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  breg-services-in-release "${{ needs.validate.outputs.version }}")"',
+            'if [[ "${breg_services_in_release}" == true ]]; then',
             'asset="${breg_service}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"',
         ):
             self.assertIn(fragment, native["run"])
@@ -670,8 +666,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             operator_tools,
         )
         self.assertIn('"dist/image-bin/${operator_tool}" --version', operator_tools)
-        self.assertIn("if (( release_major > 0 || release_minor >= 36 )); then", merge)
-        self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
+        breg_services = merge.split(
+            'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  breg-services-in-release "${{ needs.validate.outputs.version }}")"\n'
+            'if [[ "${breg_services_in_release}" == true ]]; then\n',
+            1,
+        )[1]
+        self.assertTrue(
+            breg_services.startswith("  for breg_service in breg-mcp breg-review; do")
+        )
         self.assertIn(
             'dist/bin/${breg_service}-${{ needs.validate.outputs.tag }}-linux-amd64',
             merge,
@@ -2162,8 +2165,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             ],
             "v0.36.0": [
                 "breg",
-                "breg-mcp",
-                "breg-review",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            ],
+            "v0.37.0": [
+                "breg",
                 "casework",
                 "discovery",
                 "evidence",
@@ -2238,30 +2247,38 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
-        for service in ("breg-mcp", "breg-review"):
-            with self.subTest(missing=service):
-                missing_service = dict(manifests["v0.36.0"])
-                missing_service["images"] = [
-                    image
-                    for image in missing_service["images"]
-                    if image["name"] != service
-                ]
-                rejected = subprocess.run(
-                    ["jq", "-e", "--arg", "tag", "v0.36.0", jq_filter],
-                    input=json.dumps(missing_service),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertNotEqual(0, rejected.returncode)
+        for tag in ("v0.36.0", "v0.37.0"):
+            for service in ("breg-mcp", "breg-review"):
+                with self.subTest(tag=tag, unexpected=service):
+                    with_service = dict(manifests[tag])
+                    with_service["images"] = [
+                        *with_service["images"],
+                        {
+                            "name": service,
+                            "digest": "sha256:fixture",
+                            "final_ref": f"ghcr.io/registrystack/{service}:{tag}",
+                            "candidate_ref": (
+                                f"ghcr.io/registrystack/{service}-candidate"
+                                "@sha256:fixture"
+                            ),
+                        },
+                    ]
+                    rejected = subprocess.run(
+                        ["jq", "-e", "--arg", "tag", tag, jq_filter],
+                        input=json.dumps(with_service),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(0, rejected.returncode)
 
         self.assertIn(
-            "breg|breg-mcp|breg-review|casework|discovery|evidence|mint|relay|scheduling)",
-            verify,
+            "breg|casework|discovery|evidence|mint|relay|scheduling)", verify
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
-        self.assertIn("Base Registry Engine, join at `v0.36.0`", verify)
+        self.assertNotIn("breg|breg-mcp", verify)
+        self.assertIn("`BREG_SERVICES_FIRST_RELEASE`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
@@ -2489,6 +2506,206 @@ class NightlyRustCoverageWorkflowStructureTest(unittest.TestCase):
         for name in module.SHARDS.keys() - {"platform", "manifest", "developer-tools"}:
             with self.subTest(shard=name):
                 self.assertEqual(flags[name], name)
+
+
+
+BREG_SERVICES_ROSTER = "release/scripts/release_roster.py"
+# Every script and workflow that decides whether a release ships the citizen
+# MCP gateway and its review page.
+BREG_SERVICES_ROSTER_CONSUMERS = (
+    "release/scripts/merge-release-binary-shards.py",
+    "release/scripts/merge-release-native-platform-shards.py",
+    "release/scripts/registry-release",
+    "release/scripts/release_candidate.py",
+    "release/scripts/build-release-binaries.sh",
+    "release/scripts/build-release-native-platform.sh",
+    ".github/workflows/release-candidate.yml",
+    ".github/workflows/release-rehearsal.yml",
+)
+# A mention of either service, by binary name or by the shared gate name.
+BREG_SERVICES_MENTION = re.compile(r"breg[-_](?:mcp|review|services)", re.IGNORECASE)
+# A release version written into code: a version tuple, an X.Y.Z comparison,
+# a major or minor comparison, or a named minimum or first-release constant.
+BREG_SERVICES_VERSION_LITERAL = re.compile(
+    r"\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)"
+    r"|(?:>=|<=|>|<)\s*[\"']?v?\d+\.\d+\.\d+"
+    r"|\b\w*(?:major|minor)\b[}\"'\s]*(?:>=|<=|>|<|==|-ge|-gt|-le|-lt|-eq)\s*\d+"
+    r"|\w*_MINIMUM_VERSION\b|\w*_FIRST_RELEASE\b"
+)
+# A numeric gate: a comparison against a version number written in place.
+BREG_SERVICES_NUMERIC_GATE = re.compile(
+    r"(?:>=|<=|>|<)\s*\(\s*\d+\s*,"
+    r"|(?:>=|<=|>|<)\s*[\"']?v?\d+\.\d+\.\d+"
+    r"|\b\w*(?:major|minor)\b[}\"'\s]*(?:>=|<=|>|<|==|-ge|-gt|-le|-lt|-eq)\s*\d+"
+)
+# A mention of the roster's constant that does not assign it.
+BREG_SERVICES_CONSTANT_READ = re.compile(
+    r"BREG_SERVICES_FIRST_RELEASE(?!\s*(?::[^=\n]*)?=(?!=))"
+)
+# How many indented lines after a numeric gate count as its body.
+BREG_SERVICES_GATE_BODY_LINES = 3
+
+
+def breg_services_gate_body(lines: list[str], index: int) -> list[str]:
+    """Return the first lines indented under the gate at ``index``."""
+
+    def indentation(line: str) -> int:
+        return len(line) - len(line.lstrip())
+
+    body = []
+    for line in lines[index + 1 :]:
+        if line.strip() and indentation(line) <= indentation(lines[index]):
+            break
+        body.append(line)
+        if len(body) == BREG_SERVICES_GATE_BODY_LINES:
+            break
+    return body
+
+
+def breg_services_version_literals(text: str) -> list[tuple[int, str]]:
+    """Return lines that tie breg-mcp or breg-review to a version in place.
+
+    A line carrying both a release version and either service is one finding;
+    a numeric gate whose body mentions either service is another. Naming
+    ``BREG_SERVICES_FIRST_RELEASE`` without assigning it is the one allowed
+    mention, so prose and code may point at the roster.
+    """
+    lines = text.splitlines()
+    findings = []
+    for index, line in enumerate(lines):
+        allowed = BREG_SERVICES_CONSTANT_READ.sub("", line)
+        if BREG_SERVICES_VERSION_LITERAL.search(
+            allowed
+        ) and BREG_SERVICES_MENTION.search(allowed):
+            findings.append((index + 1, line.strip()))
+        elif BREG_SERVICES_NUMERIC_GATE.search(line) and any(
+            BREG_SERVICES_MENTION.search(body)
+            for body in breg_services_gate_body(lines, index)
+        ):
+            findings.append((index + 1, line.strip()))
+    return findings
+
+
+class BregServicesRosterStructureTest(unittest.TestCase):
+    def scanned_files(self) -> list[Path]:
+        paths = []
+        for directory in ("release/scripts", ".github/workflows", ".github/scripts"):
+            for path in sorted((ROOT / directory).iterdir()):
+                if (
+                    path.is_file()
+                    and not path.name.startswith("test_")
+                    and path.suffix != ".pyc"
+                    and path.relative_to(ROOT).as_posix() != BREG_SERVICES_ROSTER
+                ):
+                    paths.append(path)
+        return paths
+
+    def test_no_script_or_workflow_carries_its_own_breg_services_version(
+        self,
+    ) -> None:
+        scanned = self.scanned_files()
+        self.assertTrue(
+            {ROOT / relative for relative in BREG_SERVICES_ROSTER_CONSUMERS}
+            <= set(scanned)
+        )
+        findings = []
+        for path in scanned:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            findings.extend(
+                f"{path.relative_to(ROOT)}:{line}: {content}"
+                for line, content in breg_services_version_literals(text)
+            )
+        self.assertEqual([], findings)
+
+    def test_the_scan_catches_hand_written_breg_services_gates(self) -> None:
+        for sample in (
+            "BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)\n",
+            "if parsed >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:\n",
+            '    "breg-mcp": (0, 36, 0),\n',
+            "if parsed >= (0, 36, 0):\n    groups.append('breg-review')\n",
+            "include_breg_services=0\n"
+            "if ((version_major > 0 || version_minor >= 36)); then\n"
+            "  include_breg_services=1\n",
+            "if (( release_major > 0 || release_minor >= 36 )); then\n"
+            "  for breg_service in breg-mcp breg-review; do\n",
+            'if version >= "0.36.0":\n    roster.add("breg-mcp")\n',
+            "BREG_SERVICES_FIRST_RELEASE = (0, 37, 0)\n",
+            "BREG_SERVICES_FIRST_RELEASE: tuple[int, int, int] = (0, 37, 0)\n",
+        ):
+            with self.subTest(sample=sample):
+                self.assertNotEqual([], breg_services_version_literals(sample))
+        for sample in (
+            "if release_roster.breg_services_in_release(parsed):\n",
+            "first = release_roster.BREG_SERVICES_FIRST_RELEASE\n",
+            'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  breg-services-in-release "${version}")"\n',
+            "if (( release_major > 0 || release_minor >= 36 )); then\n"
+            "  for operator_tool in bregctl caseworkctl schedulingctl; do\n",
+        ):
+            with self.subTest(sample=sample):
+                self.assertEqual([], breg_services_version_literals(sample))
+
+    def test_every_breg_services_gate_reads_the_roster(self) -> None:
+        for relative in BREG_SERVICES_ROSTER_CONSUMERS:
+            with self.subTest(path=relative):
+                text = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn("release_roster", text)
+                self.assertIn("breg_services_in_release", text)
+
+    def test_the_roster_cli_names_no_release_until_the_breg_services_join_one(
+        self,
+    ) -> None:
+        for version in ("0.36.0", "0.37.0", "1.0.0", "v1.0.0"):
+            with self.subTest(version=version):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / BREG_SERVICES_ROSTER),
+                        "breg-services-in-release",
+                        version,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("false\n", result.stdout)
+                self.assertEqual("", result.stderr)
+        refused = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / BREG_SERVICES_ROSTER),
+                "breg-services-in-release",
+                "0.37",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, refused.returncode)
+        self.assertEqual("", refused.stdout)
+        self.assertIn("release version must be X.Y.Z", refused.stderr)
+
+    def test_the_roster_includes_the_breg_services_from_a_named_first_release(
+        self,
+    ) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "release_roster_under_test", ROOT / BREG_SERVICES_ROSTER
+        )
+        assert spec is not None and spec.loader is not None
+        roster = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(roster)
+        self.assertIsNone(roster.BREG_SERVICES_FIRST_RELEASE)
+        for version in ((0, 36, 0), (0, 37, 0), (1, 0, 0)):
+            with self.subTest(version=version, first_release=None):
+                self.assertFalse(roster.breg_services_in_release(version))
+        with mock.patch.object(roster, "BREG_SERVICES_FIRST_RELEASE", (0, 37, 0)):
+            self.assertFalse(roster.breg_services_in_release((0, 36, 9)))
+            self.assertTrue(roster.breg_services_in_release((0, 37, 0)))
+            self.assertTrue(roster.breg_services_in_release((1, 0, 0)))
 
 
 if __name__ == "__main__":

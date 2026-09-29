@@ -28,6 +28,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             shutil.copytree(ROOT / directory, root / directory)
         for relative in (
             "release/scripts/release_candidate.py",
+            "release/scripts/release_roster.py",
             "release/scripts/build-release-binaries.sh",
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
@@ -284,10 +285,15 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("schedulingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("for operator_tool in bregctl caseworkctl schedulingctl", merge)
         self.assertIn('"dist/image-bin/${operator_tool}" --version', merge)
-        self.assertIn(
-            "if (( release_major > 0 || release_minor >= 36 )); then", merge
+        breg_services = merge.split(
+            'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  breg-services-in-release "${REHEARSAL_VERSION}")"\n'
+            'if [[ "${breg_services_in_release}" == true ]]; then\n',
+            1,
+        )[1]
+        self.assertTrue(
+            breg_services.startswith("  for breg_service in breg-mcp breg-review; do")
         )
-        self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
         self.assertIn(
             'dist/bin/${breg_service}-v${REHEARSAL_VERSION}-linux-amd64', merge
         )

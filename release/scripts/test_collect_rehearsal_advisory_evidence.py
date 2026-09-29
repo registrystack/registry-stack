@@ -413,21 +413,44 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
-    def test_v0_36_roster_includes_the_breg_citizen_services(self) -> None:
-        result = subprocess.run(
-            [
-                "python3",
-                str(ROOT / "release/scripts/release_candidate.py"),
-                "image-names",
-                "--version",
-                "0.36.0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    def test_the_roster_holds_out_the_breg_citizen_services(self) -> None:
+        # release_roster.BREG_SERVICES_FIRST_RELEASE is unset, so neither the
+        # current nor the next minor collects evidence for breg-mcp or
+        # breg-review.
+        for version in ("0.36.0", "0.37.0"):
+            with self.subTest(version=version):
+                result = subprocess.run(
+                    [
+                        "python3",
+                        str(ROOT / "release/scripts/release_candidate.py"),
+                        "image-names",
+                        "--version",
+                        version,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    MODULE.parse_roster(result.stdout),
+                    (
+                        "breg",
+                        "casework",
+                        "discovery",
+                        "evidence",
+                        "relay",
+                        "scheduling",
+                    ),
+                )
+
+    def test_the_breg_citizen_services_are_supported_once_they_join(
+        self,
+    ) -> None:
         self.assertEqual(
-            MODULE.parse_roster(result.stdout),
+            MODULE.parse_roster(
+                "breg breg-mcp breg-review casework discovery evidence relay "
+                "scheduling\n"
+            ),
             (
                 "breg",
                 "breg-mcp",

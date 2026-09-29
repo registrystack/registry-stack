@@ -370,7 +370,9 @@ jobs:
             test "$("dist/bin/bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "bregctl ${{ needs.validate.outputs.version }}"
           fi
-          if (( release_major > 0 || release_minor >= 36 )); then
+          breg_services_in_release="$(python3 release/scripts/release_roster.py \
+            breg-services-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${breg_services_in_release}" == true ]]; then
             for breg_service in breg-mcp breg-review; do
               test "$("dist/bin/${breg_service}-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
                 "${breg_service} ${{ needs.validate.outputs.version }}"
@@ -545,9 +547,9 @@ jobs:
               -p registry-bregctl \
               --target "${{ matrix.target }}"
           fi
-          include_breg_services=0
-          if (( release_major > 0 || release_minor >= 36 )); then
-            include_breg_services=1
+          breg_services_in_release="$(python3 release/scripts/release_roster.py \
+            breg-services-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${breg_services_in_release}" == true ]]; then
             cargo build --release --locked \
               -p registry-breg-mcp --bin breg-mcp \
               --target "${{ matrix.target }}"
@@ -594,7 +596,7 @@ jobs:
                 "${breg_binary} ${{ needs.validate.outputs.version }}"
             done
           fi
-          if [[ "${include_breg_services}" -eq 1 ]]; then
+          if [[ "${breg_services_in_release}" == true ]]; then
             for breg_service in breg-mcp breg-review; do
               asset="${breg_service}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
               cp "target/${{ matrix.target }}/release/${breg_service}" \

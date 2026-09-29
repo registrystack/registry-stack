@@ -9,8 +9,15 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import release_roster  # noqa: E402
 
 
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
@@ -25,7 +32,6 @@ MACOS_FIPS_ARCHIVE_MINIMUM_VERSION = (0, 33, 0)
 # The Scheduling runtime ships only inside its image; its operator tool is a
 # release binary from this version.
 SCHEDULINGCTL_MINIMUM_VERSION = (0, 36, 0)
-BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 36, 0)
 
 
 class ShardError(ValueError):
@@ -52,7 +58,7 @@ def rosters(version: str) -> dict[str, list[str]]:
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-{ASSET}"]
         bregctl = [f"bregctl-{tag}-{ASSET}"]
-    if parsed >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+    if release_roster.breg_services_in_release(parsed):
         # The citizen MCP gateway and its review page are clients of BReg, so
         # they build beside bregctl rather than beside the runtime.
         bregctl.extend(

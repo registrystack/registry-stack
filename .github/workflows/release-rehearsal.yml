@@ -252,7 +252,9 @@ jobs:
             "bregctl ${REHEARSAL_VERSION}"
           IFS=. read -r release_major release_minor _release_patch \
             <<<"${REHEARSAL_VERSION}"
-          if (( release_major > 0 || release_minor >= 36 )); then
+          breg_services_in_release="$(python3 release/scripts/release_roster.py \
+            breg-services-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${breg_services_in_release}" == true ]]; then
             for breg_service in breg-mcp breg-review; do
               test "$("dist/bin/${breg_service}-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
                 "${breg_service} ${REHEARSAL_VERSION}"

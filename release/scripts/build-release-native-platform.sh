@@ -73,11 +73,14 @@ include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
 fi
-# The citizen MCP gateway and its review page ship in the BReg release set.
-# They depend on the engine only through its client, so they build in the
-# bregctl group rather than beside the runtime.
+# release_roster.py names the first release that ships the citizen MCP
+# gateway and its review page in the BReg set; until it does, no version
+# builds them. They depend on the engine only through its client, so they
+# build in the bregctl group rather than beside the runtime.
 include_breg_services=0
-if ((version_major > 0 || version_minor >= 36)); then
+breg_services_in_release="$(python3 "${script_dir}/release_roster.py" \
+  breg-services-in-release "${version}")"
+if [[ "${breg_services_in_release}" == true ]]; then
   include_breg_services=1
 fi
 include_casework=0
