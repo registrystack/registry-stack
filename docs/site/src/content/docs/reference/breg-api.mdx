@@ -463,7 +463,9 @@ history, each under its own grant operation.
 
 `GET /v1/records/{route}/{recordId}/revisions` returns a collection of the record's revisions,
 and `.../revisions/{revision}` returns one. A read covers at most 100 revisions. Revisions show
-stored field values only; derived fields and read paths are not evaluated over history.
+stored field values only; derived fields and read paths are not evaluated over history. A
+revision read takes `accessProfile` and no other query option: any other defined option returns
+`400 query.invalid`, whose `fieldPath` names the first one you sent.
 
 Correction context from a batch is absent unless the `revisions` grant lists
 `provenanceFields`, drawn from `kind`, `reasonCode`, `reasonText`, and `sourceReferences`, and

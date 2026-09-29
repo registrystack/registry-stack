@@ -4548,10 +4548,17 @@ impl QueryOptions {
         }
         let mut pairs = Vec::new();
         let mut request_history_after_proposal_version = None;
+        let mut first_query_member = None;
         for pair in raw.split('&') {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
             let name = percent_decode(name)?;
             let value = percent_decode(value).map_err(|error| error.at_parameter(&name))?;
+            if first_query_member.is_none() {
+                first_query_member = READ_QUERY_MEMBERS
+                    .iter()
+                    .copied()
+                    .find(|member| *member == name);
+            }
             if name == REQUEST_HISTORY_PARAMETER {
                 let at_fault = QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER);
                 let version = value.parse::<u32>().map_err(|_| at_fault)?;
@@ -4577,7 +4584,9 @@ impl QueryOptions {
             return Err(QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER));
         }
         if !allow_read_query && result.has_any_query_member() {
-            return Err(QueryParseError::Invalid);
+            return Err(first_query_member
+                .map(QueryParseError::InvalidAt)
+                .unwrap_or(QueryParseError::Invalid));
         }
         Ok(result)
     }
@@ -4721,6 +4730,20 @@ impl Default for QueryOptions {
 }
 
 const REQUEST_HISTORY_PARAMETER: &str = "requestHistoryAfterProposalVersion";
+
+/// The members `QueryOptions::has_any_query_member` counts, which a route that
+/// serves no read query refuses at the first one present.
+const READ_QUERY_MEMBERS: [&str; 9] = [
+    "$select",
+    "$filter",
+    "$orderby",
+    "$top",
+    "$count",
+    "$skiptoken",
+    "bbox",
+    "asOf",
+    REQUEST_HISTORY_PARAMETER,
+];
 
 fn located_parse_error(
     (_, parameter): (strict_query::QueryParseError, Option<&'static str>),

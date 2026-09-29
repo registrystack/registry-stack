@@ -234,14 +234,30 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     )
     .await;
     assert_eq!(unknown_profile.status(), StatusCode::NOT_FOUND);
-    let extra_query = send(
-        &app,
-        &format!("/v1/records/widgets/{RECORD_ID}/revisions?pageSize=1"),
-        Some(history_claims("case-review", ["zone-a"])),
-    )
-    .await;
-    assert_eq!(extra_query.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(extra_query).await["code"], "query.invalid");
+    for (query, field_path) in [
+        ("pageSize=1", None),
+        ("$select=id", Some("$select")),
+        ("accessProfile=operator&$top=1&$select=id", Some("$top")),
+        (
+            "requestHistoryAfterProposalVersion=1",
+            Some("requestHistoryAfterProposalVersion"),
+        ),
+    ] {
+        let extra_query = send(
+            &app,
+            &format!("/v1/records/widgets/{RECORD_ID}/revisions?{query}"),
+            Some(history_claims("case-review", ["zone-a"])),
+        )
+        .await;
+        assert_eq!(extra_query.status(), StatusCode::BAD_REQUEST, "{query}");
+        let problem = body_json(extra_query).await;
+        assert_eq!(problem["code"], "query.invalid", "{query}");
+        assert_eq!(
+            problem.get("fieldPath").and_then(Value::as_str),
+            field_path,
+            "a revision route names the first read-query member it refuses: {query}"
+        );
+    }
 
     let malformed = send(
         &app,

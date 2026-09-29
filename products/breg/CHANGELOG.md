@@ -23,6 +23,9 @@
   patch, batch, and ingestion chunk body to `/data/` followed by an API name
   the operation admits: a writable field for `add` and `replace`, a writable
   optional field for `remove`, and a readable unencrypted field for `test`.
+  The package OpenAPI admits what any profile serving the route may; the
+  OpenAPI a caller fetches admits only what the caller's selected profile
+  may, so it names no field another profile writes or reads.
   The runtime already refused every other path; a client generated from the
   OpenAPI now refuses it before sending. The OpenAPI is part of the compiled
   artifacts, so every project with a patch or batch route compiles to a new
@@ -44,7 +47,8 @@
   `$select`, including a malformed percent-encoding of its value. A
   `:snapshot` route answers a query it cannot parse with that located
   `400 query.invalid`, like every other native read route, where it answered
-  `404 resource.not_found`. An unknown and a withheld name answer the same
+  `404 resource.not_found`. A revision read, which takes no read-query option,
+  names the first one sent. An unknown and a withheld name answer the same
   problem and are never echoed. A client that rejects an unfamiliar problem member accepts
   `fieldPath` on `request.invalid` and `query.invalid`; the Rust, Node.js,
   and Python BReg clients do in this release, and a client that pins exact

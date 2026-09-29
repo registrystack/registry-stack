@@ -2778,21 +2778,33 @@ fn json_patch_request_body(spec: OpenApiOperationSpec<'_>) -> Value {
     })
 }
 
-/// The patch document of a package route: the union of what the profiles
-/// serving it may write and read.
+/// The patch document of a route: in the package document, the union of what
+/// the profiles serving it may write and read; in a caller's document, only
+/// what the selected profile may.
 fn route_patch_schema(spec: OpenApiOperationSpec<'_>) -> Value {
-    let readable = spec
-        .route
-        .access_profiles
-        .iter()
-        .filter_map(|profile_id| spec.entity.access_profiles.get(profile_id))
-        .flat_map(|profile| profile.readable_fields.iter().cloned())
-        .collect();
-    json_patch_array_schema(
-        spec.entity,
-        &writable_fields_for_route(spec.route, spec.entity),
-        &readable,
-    )
+    let (writable, readable) = match spec.access_profiles {
+        OpenApiAccessProfiles::All => (
+            writable_fields_for_route(spec.route, spec.entity),
+            spec.route
+                .access_profiles
+                .iter()
+                .filter_map(|profile_id| spec.entity.access_profiles.get(profile_id))
+                .flat_map(|profile| profile.readable_fields.iter().cloned())
+                .collect(),
+        ),
+        OpenApiAccessProfiles::Selected(profile_id) => spec
+            .entity
+            .access_profiles
+            .get(profile_id)
+            .map(|profile| {
+                (
+                    profile.writable_fields.clone(),
+                    profile.readable_fields.clone(),
+                )
+            })
+            .unwrap_or_default(),
+    };
+    json_patch_array_schema(spec.entity, &writable, &readable)
 }
 
 fn batch_request_body(
@@ -5156,6 +5168,108 @@ mod attachment_tests {
         assert!(
             !validator.is_valid(&retained),
             "historical metadata retains the global bound"
+        );
+    }
+}
+
+#[cfg(test)]
+mod patch_schema_tests {
+    use super::*;
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+
+    fn patch_paths(profiles: OpenApiAccessProfiles<'_>) -> BTreeMap<String, BTreeSet<String>> {
+        let project = parse_project_json(br#"{
+            "apiVersion":"registry.registrystack.org/v1alpha1",
+            "kind":"RegistryProject",
+            "registry":{"id":"patch-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patch-artifacts.example.test"},
+            "entities":[{
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
+                "fields":[
+                    {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+                    {"id":"label","type":"string","maxLength":64,"classification":"internal"},
+                    {"id":"note","apiName":"remark","type":"string","maxLength":64,"classification":"internal"}
+                ]
+            }],
+            "accessProfiles":[
+                {"id":"labeller","default":true,"principalClaim":"principal","permissions":[{"entity":"site","operations":["get","patch"],"readableFields":["code","label"],"writableFields":["label"], "rowBoundaries": []}]},
+                {"id":"annotator","principalClaim":"principal","permissions":[{"entity":"site","operations":["get","patch"],"readableFields":["note"],"writableFields":["note"], "rowBoundaries": []}]}
+            ]
+        }"#).expect("patch artifact fixture parses");
+        let registry = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("patch artifact fixture compiles");
+        let entity = &registry.entities()["site"];
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.operation == Operation::Patch)
+            .expect("fixture patch route exists");
+        let operation = openapi_operation(OpenApiOperationSpec {
+            registry_identifier: registry.registry_id(),
+            route,
+            entity,
+            response_entity: entity,
+            query: registry.queries(),
+            schema_ref: "site",
+            request_schema_ref: "site",
+            readable_fields: None,
+            access_profiles: profiles,
+        });
+        let schema = &operation["requestBody"]["content"]["application/json-patch+json"]["schema"];
+        let mut paths = BTreeMap::<String, BTreeSet<String>>::new();
+        for shape in schema["items"]["oneOf"]
+            .as_array()
+            .expect("closed operation shapes")
+        {
+            let path_enum = shape["properties"]["path"]["enum"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            for op in shape["properties"]["op"]["enum"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![shape["properties"]["op"]["const"].clone()])
+            {
+                paths
+                    .entry(op.as_str().unwrap().to_owned())
+                    .or_default()
+                    .extend(
+                        path_enum
+                            .iter()
+                            .map(|path| path.as_str().unwrap().to_owned()),
+                    );
+            }
+        }
+        paths
+    }
+
+    fn set(paths: &[&str]) -> BTreeSet<String> {
+        paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_callers_patch_schema_names_only_the_selected_profiles_fields() {
+        let labeller = patch_paths(OpenApiAccessProfiles::Selected("labeller"));
+        assert_eq!(labeller["replace"], set(&["/data/label"]));
+        assert_eq!(labeller["test"], set(&["/data/code", "/data/label"]));
+        assert!(
+            labeller
+                .values()
+                .flatten()
+                .all(|path| path != "/data/remark"),
+            "another profile's field stays out of a caller's document: {labeller:?}"
+        );
+
+        let annotator = patch_paths(OpenApiAccessProfiles::Selected("annotator"));
+        assert_eq!(annotator["replace"], set(&["/data/remark"]));
+        assert_eq!(annotator["test"], set(&["/data/remark"]));
+
+        let package = patch_paths(OpenApiAccessProfiles::All);
+        assert_eq!(package["replace"], set(&["/data/label", "/data/remark"]));
+        assert_eq!(
+            package["test"],
+            set(&["/data/code", "/data/label", "/data/remark"])
         );
     }
 }
