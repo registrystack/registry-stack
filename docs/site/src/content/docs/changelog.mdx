@@ -18,6 +18,26 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.36.0 beta-48
+
+- BREAKING: Base Registry Engine (BReg) records every activation in a database ledger and ships
+  unsigned, environment-neutral packages named by their package digest. Package signing is removed,
+  so upgrade to v0.35.0 first: this release does not read a predecessor package without a
+  `SHA256SUMS` envelope. `bregctl plan` and `bregctl status` report what an apply would change and
+  what the database activated, and `bregctl apply` without `--initial` adopts a database an earlier
+  release installed. `package.environment` and `package.instanceId` move to the runtime file's
+  `identity`, `package.sequence` is removed, and the runtime `package` block keeps only `root` and
+  `expectedDigest`. Every package's schema fingerprint changes, and a project that declared a
+  package identity compiles to a new `registryRevision`, so rebuild each package with the v0.36.0
+  `bregctl package`. In split-role mode, plan, apply, and startup refuse a runtime role that can
+  write the ledger or the registry state. After upgrading BReg, re-import each BReg source into
+  Evidence once and repin each BReg source in Casework. See
+  [Upgrade in this order](../operate/advanced/upgrade-and-retire/#upgrade-in-this-order).
+
+{/* Evidence: crates/registry-breg/src/migration.rs, package_ledger_entry(), adopt_verified_package(),
+    and read_activation_status(); crates/registry-bregctl/src/apply_lifecycle.rs, plan() and status();
+    crates/registry-breg/src/contract.rs, removed_project_field_diagnostics(). */}
+
 - The shared audit writer recovers an active file whose final line a crash tore: the next start
   moves those bytes to the owner-only side file `<audit.path>.torn`, truncates to the last complete
   line, and logs it, instead of refusing to start. A configured `audit.path` ending in a companion
@@ -39,9 +59,11 @@ relevant product pages on this site rather than duplicating release notes.
   fixture reports use `evaluatedCases`, `failingCase`, `expectedClass`, and
   `observedClass`. An unreadable file or a missing local dev session exits
   `3` instead of `1`. Commands that read one project take it as a positional
-  `<project>`; the former `--project` flag stays accepted but hidden. The
-  `access` commands and `audit show` still act on the current directory, and
-  `doctor` keeps its `--project` option. `test`
+  `<project>`; the former `--project` flag stays accepted but hidden on them.
+  `source import`, `source diff`, `source update`, and `target new` keep
+  their documented `--project`, the `access` commands and `audit show` still
+  act on the current directory, and `doctor` keeps its `--project` option.
+  `test`
   and `fixtures run` accept `--format junit`, and `dev start --name-prefix`
   sets the local issuer container name prefix. Update scripts that read
   `operation` or snake_case fixture keys. See

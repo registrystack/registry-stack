@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.36.0 - 2026-09-29
+
 - Recover a torn final line at open instead of refusing to start: the file
   writer copies the bytes after the last complete line to the owner-only side
   file `<path>.torn`, syncs it, truncates the active file to its last complete

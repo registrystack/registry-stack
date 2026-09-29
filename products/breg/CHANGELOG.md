@@ -29,9 +29,9 @@
   The runtime already refused every other path; a client generated from the
   OpenAPI now refuses it before sending. The OpenAPI is part of the compiled
   artifacts, so every project with a patch or batch route compiles to a new
-  `registryRevision` and every package must be rebuilt, as the package
-  signing entry below already requires; a Casework source and an Evidence
-  import follow the repin and re-import steps that entry names. Create and patch request shapes are
+  `registryRevision` and every package must be rebuilt. A Casework source
+  and an Evidence import follow the repin and re-import steps the v0.36.0
+  package signing entry names. Create and patch request shapes are
   unchanged: a write body's `data` holds what a read shows under
   `data.domainData`.
 
@@ -63,6 +63,8 @@
   permission without `get` or `list`, where it answered
   `503 source.unavailable` before. A profile that does not declare the path
   is still refused as `404 resource.not_found`, like an unknown path.
+
+## v0.36.0 - 2026-09-29
 
 - BREAKING: package signing is removed. Upgrade to v0.35.0 before this
   release: a deployment on v0.34.0 or earlier must pass through v0.35.0,

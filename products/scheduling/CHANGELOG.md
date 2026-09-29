@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.36.0 - 2026-09-29
+
 - Write operational logs to standard error instead of standard output, so a
   `stdout` audit destination carries audit entries alone. A collector that read
   `scheduling` logs from standard output reads standard error instead.
@@ -31,9 +33,10 @@
     schema version is pending or the runtime role or its role mode changed,
     so a rotated runtime role or a move to split mode re-applies it. The
     operator reference is kept only as a keyed hash scoped by the activation
-    id. Apply writes a `scheduling-activation-audit/v1` request entry to
-    `audit.schedulingctl.ndjson` before the transaction and a response entry
-    after it, and applies nothing when the request entry is refused. An
+    id. Apply writes a `scheduling-activation-audit/v1` request entry to the
+    `schedulingctl` sibling of `audit.path` (`audit.schedulingctl.ndjson`
+    beside `audit.ndjson`) before the transaction and a response entry after
+    it, and applies nothing when the request entry is refused. An
     activation whose commit was not acknowledged is read back, and one whose
     outcome cannot be read is answered `unfinished` with reason
     `schedulingctl.activation.unacknowledged`, naming `schedulingctl status`,
