@@ -96,11 +96,14 @@ without it.
 `retentionDays` defaults to 90 and accepts 1 through 3650. Each row records its
 own expiry when the read occurs. A later package can change the policy for new
 rows, but it does not extend already-recorded expiry, remove retained history,
-or turn disabling `accessLog` into erasure. Every minute, the bounded background
-retention worker removes at most 1000 expired rows, including after a later
-package disables logging. Expired rows are hidden immediately even when their
-physical deletion awaits a later batch. Operator backup retention is separate
-from the live subject-log retention contract.
+or turn disabling `accessLog` into erasure. Every minute, the background
+retention worker erases expired rows in batches of 1000, each committed on its
+own, until a batch comes back short, including after a later package disables
+logging. One tick stops after 100 batches (100,000 rows) and logs a warning
+with the remaining expired backlog; the next tick continues from there. Expired
+rows are hidden immediately even when their physical deletion awaits a later
+tick. Operator backup retention is separate from the live subject-log retention
+contract.
 
 An access-logged entity cannot grant an anonymous profile a direct, list,
 lookup, snapshot, or revision read. A source entity also cannot grant an

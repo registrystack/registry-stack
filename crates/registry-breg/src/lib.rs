@@ -8,6 +8,9 @@ pub mod access_preview;
 pub mod authority;
 #[cfg(feature = "runtime")]
 mod subject_access_log;
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub use subject_access_log::expire_subject_access_log_for_test;
 
 #[cfg(feature = "runtime")]
 pub mod action_evidence;
