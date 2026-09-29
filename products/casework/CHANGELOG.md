@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.37.0 - 2026-09-29
+
 - BREAKING: the `Registry-Source-Profile` header is the only input that
   selects the source profile on `POST /v1/work-items/{itemId}/decisions` and
   both attempt recovery routes, as on every other source-backed route.

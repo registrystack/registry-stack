@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## v0.37.0 - 2026-09-29
+
+- Add `registry-platform-ratelimit`, a shared crate with two in-memory
+  keyed limiters, `TokenBucketLimiter` and `FixedWindowCounter`, each capped
+  at a fixed number of tracked keys. Evidence uses it for its request budget
+  and failed-selector counter with no change in behavior: the same refill,
+  key cap, pruning, and refusals. A cost above the burst is refused as
+  `CostExceedsBurst` before any bucket is touched.
+- Add `registry-platform-dispatch`, the shared at-least-once dispatch core:
+  the idempotency-key recipe, the policy frozen with each job, and, behind
+  the `postgres` feature, a fenced PostgreSQL lease machine with claim,
+  lease-expiry recovery, retry, dead letter, expiry, replay, cancellation,
+  and an opt-in quarantine. The product owns the job table, the audit around
+  every transition, and the send. The `registry-platform-hooks` notification
+  delivery worker runs its lease state machine on it.
+- `registry-platform-crypto` gains a `mac` module with HMAC-SHA256 and, for
+  verifying schemes a provider already signs that way, HMAC-SHA1 tags, each
+  verified in constant time, and `constant_time_eq` for shared secrets such
+  as URL tokens. A `MacMismatch` refusal carries no tag, key, or message.
+- `registry-platform-httputil` gains a side-effecting send class for data
+  destinations, compiled only by
+  `DataDestinationRequestTemplate::new_script_send`: a POST with a JSON or
+  form body, or a GET whose content travels in the query string only behind
+  a `QueryStringContentAcknowledgement`. It also gains a typed AWS SigV4
+  path for bounded JSON 1.0 sends, `ProductionAddressPolicy` for a product
+  that opens its own non-HTTP connection, and
+  `DestinationSendError::delivery_certainty`, which reports a failed send as
+  `NotSent` before the connection is established and `MaybeSent` after.
+- `ExchangeAuthorization::upstream` sends an optional actor token with an
+  RFC 8693 exchange.
+- `PrivateKeyJwt::redeem_authorization_code` redeems an authorization code
+  with PKCE and the configured resource, and returns any ID token
+  unverified.
+- `CspBuilder::deny_by_default` starts a policy from `default-src 'none'`,
+  and `with_form_action` and `with_style_src` add directives to it.
+- `AuthorizationAuditEvent::without_purpose` builds an allowed or denied
+  event for a product that records no purpose.
+- The `test-authorization-server` feature of `registry-platform-testing`
+  adds a local authorization server for authorization code, client
+  credentials, and token exchange tests.
+
 ## v0.36.0 - 2026-09-29
 
 - Recover a torn final line at open instead of refusing to start: the file
