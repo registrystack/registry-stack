@@ -1064,6 +1064,13 @@ follows. Do not wait for the next release PR to make this change.
 The release manifest, notes, changelogs, and documentation archive stay with
 that release PR.
 
+The prepare commit of the release just published names the surfaces to move:
+its version-bearing files, not its manifest, notes, changelogs, or
+documentation archive. The release is closed only once this PR and the
+documentation promotion below have merged. The one exception is a next
+release already in preparation when `verify-public` passes: its release PR
+then carries the bump.
+
 ### Promote the published documentation
 
 Once `verify-public` passes, record the release as published in one PR against
