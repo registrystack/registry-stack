@@ -938,6 +938,8 @@ jobs:
               wheel_stem=registry_breg_client_native
             elif [[ "${client}" == casework ]]; then
               wheel_stem=registry_casework_client_native
+            elif [[ "${client}" == messaging ]]; then
+              wheel_stem=registry_messaging_client_native
             fi
             wheel="${wheel_stem}-${CLIENT_VERSION}-${wheel_tag}.whl"
             if [[ ! -f "${built_wheel_dir}/${wheel}" ]]; then
@@ -1175,6 +1177,8 @@ jobs:
             if (( major > 0 || minor >= 30 )); then
               include_casework=1
             fi
+            messaging_in_release="$(python3 release/scripts/release_roster.py \
+              messaging-in-release "${CLIENT_VERSION}")"
             smoke="${RUNNER_TEMP}/node-smoke-registry"
             root_stage="${RUNNER_TEMP}/node-root-registry"
             mkdir -p "${smoke}" "${root_stage}"
@@ -1199,6 +1203,9 @@ jobs:
               expected_addons=4
               if [[ "${include_casework}" -eq 1 ]]; then
                 expected_addons=5
+              fi
+              if [[ "${messaging_in_release}" == true ]]; then
+                expected_addons=$((expected_addons + 1))
               fi
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
                 -maxdepth 1 -name '*.node' | wc -l)" -eq "${expected_addons}"
