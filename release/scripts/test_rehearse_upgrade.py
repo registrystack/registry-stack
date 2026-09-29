@@ -305,6 +305,55 @@ class CaseworkPackageTest(unittest.TestCase):
                 casework.activate(side)
             self.assertEqual(side.run_json.call_count, 1)
 
+    def already_active(self, activation: str) -> dict[str, Any]:
+        return {"changesPending": False, "active": {"activationId": activation},
+                "refusals": [{"code": MODULE.CASEWORK_ALREADY_ACTIVE}]}
+
+    def test_an_activated_database_with_nothing_pending_keeps_its_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            casework = self.casework(Path(directory))
+            side = unittest.mock.Mock()
+            side.run_json.return_value = self.already_active("seeded")
+            self.assertEqual(casework.activate(side, "seeded"), {"activationId": "seeded"})
+            side.run_json.assert_called_once_with(
+                "caseworkctl", "--format", "json", "plan",
+                "--runtime-config", str(casework.runtime))
+
+    def test_an_activated_database_with_changes_pending_is_applied(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            casework = self.casework(Path(directory))
+            side = unittest.mock.Mock()
+            side.run_json.side_effect = [{"changesPending": True},
+                                         {"activationId": "successor"}]
+            self.assertEqual(casework.activate(side, "seeded"), {"activationId": "successor"})
+            self.assertEqual(side.run_json.call_args_list[1].args[3], "apply")
+
+    def test_nothing_pending_must_name_the_seeded_activation_as_already_active(self) -> None:
+        other = self.already_active("another")
+        refused = self.already_active("seeded")
+        refused["refusals"].append({"code": "casework.activation.database-id-mismatch"})
+        for planned in (other, refused, {"changesPending": False}):
+            with self.subTest(planned=planned), tempfile.TemporaryDirectory() as directory:
+                casework = self.casework(Path(directory))
+                side = unittest.mock.Mock()
+                side.run_json.return_value = planned
+                with self.assertRaisesRegex(MODULE.RehearsalError, "already active"):
+                    casework.activate(side, "seeded")
+                self.assertEqual(side.run_json.call_count, 1)
+
+    def test_a_release_that_activates_packages_is_told_apart_by_its_apply_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bin_dir = Path(temp)
+            script = bin_dir / "caseworkctl"
+            side = MODULE.Side("from", bin_dir, bin_dir / "ca.pem")
+            for status, activates in ((0, True), (2, False)):
+                with self.subTest(status=status):
+                    script.write_text(
+                        f'#!/bin/sh\n[ "$1 $2" = "apply --help" ] || exit 64\nexit {status}\n',
+                        encoding="utf-8")
+                    script.chmod(0o755)
+                    self.assertIs(MODULE.activates_casework_packages(side), activates)
+
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)

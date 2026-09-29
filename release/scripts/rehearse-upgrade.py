@@ -1331,7 +1331,8 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
 
 
 # ---------------------------------------------------------------------------
-# Casework: migrate, bootstrap, write review work, upgrade and apply, compare.
+# Casework: migrate or activate, bootstrap, write review work, upgrade and apply,
+# compare.
 
 
 CASEWORK_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
@@ -1339,12 +1340,20 @@ CASEWORK_AUDIENCE = "urn:upgrade-rehearsal:casework"
 CASEWORK_KID = "upgrade-rehearsal-rsa"
 CASEWORK_DATABASE_ID = "upgrade-rehearsal-casework"
 CASEWORK_OPERATOR_REFERENCE = "upgrade-rehearsal"
+CASEWORK_ALREADY_ACTIVE = "casework.activation.already-active"
 CASEWORK_ACTORS = {
     "administrator": ("upgrade-rehearsal-admin", "casework:admin", True),
     "staff": ("upgrade-rehearsal-staff", "casework:staff", True),
     "supervisor": ("upgrade-rehearsal-supervisor", "casework:supervisor", True),
     "requester": ("upgrade-rehearsal-requester", "casework:request", False),
 }
+
+
+def activates_casework_packages(side: Side) -> bool:
+    """Whether one side's Casework applies database changes with a package
+    activation; an earlier release migrated with `casework migrate`."""
+
+    return side.run("caseworkctl", "apply", "--help", check=False).returncode == 0
 
 
 class Casework:
@@ -1439,23 +1448,36 @@ class Casework:
         self.package = rebuilt
         return True
 
-    def activate(self, side: Side) -> dict[str, Any]:
+    def activate(self, side: Side, active: str | None = None) -> dict[str, Any]:
         """Name the database in runtime.yaml, then plan and apply with the
         migration credential, the upgrade step the Casework changelog names.
-        The first apply on a database an earlier release migrated adopts it:
-        it applies the pending migrations, grants the runtime role, and
-        records the first activation. Returns the apply report."""
+        The first apply on an empty database migrates it and records the
+        first activation. The first apply on a database an earlier release
+        migrated adopts it: it applies the pending migrations, grants the
+        runtime role, and records the first activation.
+
+        `active` is the activation an earlier release already recorded. When
+        plan reports that activation as already active with nothing pending,
+        apply would refuse, so nothing is applied. Returns the apply report,
+        or the active activation when nothing was applied."""
         runtime = load_yaml(self.runtime)
         runtime.setdefault("identity", {})["databaseId"] = CASEWORK_DATABASE_ID
         dump_yaml(self.runtime, runtime)
         config = ["--runtime-config", str(self.runtime)]
         planned = side.run_json("caseworkctl", "--format", "json", "plan", *config)
-        if planned.get("changesPending") is not True:
+        if planned.get("changesPending") is True:
+            return side.run_json("caseworkctl", "--format", "json", "apply", *config,
+                                 "--operator-reference", CASEWORK_OPERATOR_REFERENCE)
+        if active is None:
             raise RehearsalError("caseworkctl plan reported nothing pending, so the first "
                                  "apply would not adopt the database the previous release "
                                  "migrated")
-        return side.run_json("caseworkctl", "--format", "json", "apply", *config,
-                             "--operator-reference", CASEWORK_OPERATOR_REFERENCE)
+        current = planned.get("active") or {}
+        refusals = [refusal.get("code") for refusal in planned.get("refusals") or []]
+        if current.get("activationId") != active or refusals != [CASEWORK_ALREADY_ACTIVE]:
+            raise RehearsalError("caseworkctl plan reported nothing pending without naming "
+                                 "the previous release's activation as already active")
+        return current
 
     def call(self, actor: str, method: str, path: str, body: Any = None,
              headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
@@ -1544,8 +1566,12 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     casework.provision()
     casework.author(old)
     runtime = ["--runtime-config", str(casework.runtime)]
-    old.run("casework", *runtime, "migrate")
-    casework.grant_existing()
+    seeded = None
+    if activates_casework_packages(old):
+        seeded = casework.activate(old)["activationId"]
+    else:
+        old.run("casework", *runtime, "migrate")
+        casework.grant_existing()
     ready = f"http://127.0.0.1:{casework.port}/ready"
     service = Service(old, "casework", [*runtime, "serve"], work / "casework-old.log", ready)
     try:
@@ -1567,7 +1593,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     archived = archive_audit_tables(postgres, "casework", before_counts, work / "audit-table-archive")
     archived_files = archive_audit_files(casework.audit, "casework.ndjson", work / "audit-archive")
     repackaged = casework.repackage(new)
-    activation = casework.activate(new)
+    activation = casework.activate(new, seeded)
     losses = row_count_losses(before_counts, postgres.row_counts("casework"), archived)
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
     try:
@@ -1586,7 +1612,9 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         "auditFilesArchived": archived_files,
         "archivedAuditTables": archived,
         "repackaged": repackaged,
+        "seededBy": "migrate" if seeded is None else "activation",
         "activationId": activation["activationId"],
+        "activatedOnUpgrade": activation["activationId"] != seeded,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
