@@ -563,10 +563,7 @@ const MESSAGING_DOCUMENTS: &[DocumentRules] = &[
                 ..N::global("parts/*", "Messaging part")
             },
         ],
-        references: &[N {
-            scope: super::spec::Scope::Document,
-            ..N::global("fallback", "Messaging locale")
-        }],
+        references: &[],
         files: &[],
     },
     DocumentRules {

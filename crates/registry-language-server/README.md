@@ -108,7 +108,7 @@ symbols, completion, and hover for their modeled local authoring edges.
 | BReg | Authored modules, entities and extensions, fields including implicit `id`, selectors, constraints, read paths, entity and project access profiles, action inputs/effects, vocabularies, Manifest projection names, and governed script/WASM/SQL files. Module assets resolve relative to the module. |
 | Casework | Queues, access profiles, review kinds/stages/outcomes/producers, clocks/calendars, source bindings and imported request fields, task templates, runtime source names, and development directory clients. |
 | Scheduling | Services/offerings/openings/holiday sets, local location/pool/window records, exception reopening targets scoped to location, and fixture offering names. |
-| Messaging | Providers, sender profiles, template identities and version-specific metadata files, access profiles, runtime providers, locale/fallback/part names and their Jinja body files, provider scripts, and fixed template schema/sample file symbols. |
+| Messaging | Providers, sender profiles, template identities and version-specific metadata files, access profiles, runtime providers, locale and part names and their Jinja body files, provider scripts, and fixed template schema/sample file symbols. |
 | Discovery | Origin, mapping, requirement, and evidence-type-list declarations. External evidence type identifiers are not treated as local references. |
 | Manifest | Catalog, dataset, service, distribution, codelist, entity and field names; dataset/service/distribution relationships, entity-scoped identifiers, requirements and evidence lists, and Registry Evidence evaluation profiles. |
 | Render | Document identifiers, governed entry/schema files, and locale label files. |

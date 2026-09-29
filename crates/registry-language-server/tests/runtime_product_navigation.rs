@@ -496,8 +496,9 @@ fn scheduling_reopen_and_messaging_bodies_use_owned_document_contracts() {
     );
     let project=Project::new(&[
         file("messaging.yaml","kind: MessagingPackage\nproviders: [{id: smtp}]\ntemplates: [{id: notice, version: '1'}]\n"),
-        file("templates/notice/1/template.yaml","channel: email\nlocales: [<|locale|>en]\nparts: [<|part|>body]\nfallback: en\n"),
-        file("templates/notice/1/en/body.j2","{{ message }}\n"),
+        file("templates/notice/1/template.yaml","channel: email\nlocales: [<|locale|>en]\nparts: [subject, <|part|>text]\n"),
+        file("templates/notice/1/en/subject.j2","Notification\n"),
+        file("templates/notice/1/en/text.j2","{{ message }}\n"),
         file("templates/notice/1/schema.json","{}"),
         file("providers/smtp/provider.yaml","prepareScript: <|script|>prepare.rhai\n"),
         file("providers/smtp/prepare.rhai","// provider\n"),
@@ -511,7 +512,7 @@ fn scheduling_reopen_and_messaging_bodies_use_owned_document_contracts() {
                 project.cursor("templates/notice/1/template.yaml", cursor)
             )
             .iter()
-            .any(|location| location.path == project.path("templates/notice/1/en/body.j2")));
+            .any(|location| location.path == project.path("templates/notice/1/en/text.j2")));
     }
     assert_eq!(
         index.definitions_at(
