@@ -98,6 +98,43 @@ def write_json(path: Path, data: object) -> None:
     write(path, json.dumps(data, indent=2) + "\n")
 
 
+def write_editor_surfaces(root: Path, version: str) -> None:
+    write_json(
+        root / "editors/vscode/package.json",
+        {"name": "registry-stack", "version": version},
+    )
+    write_json(
+        root / "editors/vscode/package-lock.json",
+        {
+            "name": "registry-stack",
+            "version": version,
+            "packages": {"": {"name": "registry-stack", "version": version}},
+        },
+    )
+    write(
+        root / "editors/zed/Cargo.toml",
+        f'''[package]
+name = "registry-stack-zed"
+version = "{version}"
+''',
+    )
+    write(
+        root / "editors/zed/Cargo.lock",
+        f'''version = 4
+
+[[package]]
+name = "registry-stack-zed"
+version = "{version}"
+''',
+    )
+    write(
+        root / "editors/zed/extension.toml",
+        f'''id = "registry-stack"
+version = "{version}"
+''',
+    )
+
+
 def binding_loader(version: str, expected_version: str | None = None) -> str:
     expected_version = version if expected_version is None else expected_version
     return (
@@ -564,6 +601,7 @@ name = "registry-core"
 version = "1.1.0"
 ''',
             )
+        write_editor_surfaces(self.root, "1.1.0")
         write(
             root / "products/manifest/CHANGELOG.md",
             "# Changelog\n\n## [1.1.0]\n\n- Ready.\n",
@@ -717,6 +755,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "workspace-versions",
                 "client-package-versions",
                 "excluded-fuzz-locks",
+                "editor-versions",
                 "docsets",
                 "docs-archive-lock",
                 "active-release-identity-surfaces",
@@ -760,6 +799,11 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",
+            "editors/vscode/package.json",
+            "editors/vscode/package-lock.json",
+            "editors/zed/Cargo.toml",
+            "editors/zed/Cargo.lock",
+            "editors/zed/extension.toml",
             "docs/site/src/data/archive-lock.yaml",
             "docs/site/src/data/repo-docs.yaml",
         ):
@@ -850,6 +894,61 @@ version = "1.0.0"
             "products/breg/wasm-handler-sdk/Cargo.lock path packages must use version 1.1.0",
             result.stderr,
         )
+
+    def test_prepare_rejects_each_stale_editor_surface(self) -> None:
+        stale_surfaces = (
+            (
+                "editors/vscode/package.json",
+                lambda path: write_json(
+                    path, {"name": "registry-stack", "version": "1.0.0"}
+                ),
+            ),
+            (
+                "editors/vscode/package-lock.json",
+                lambda path: write_json(
+                    path,
+                    {
+                        "name": "registry-stack",
+                        "version": "1.1.0",
+                        "packages": {
+                            "": {"name": "registry-stack", "version": "1.0.0"}
+                        },
+                    },
+                ),
+            ),
+            (
+                "editors/zed/Cargo.toml",
+                lambda path: write(
+                    path, '[package]\nname = "registry-stack-zed"\nversion = "1.0.0"\n'
+                ),
+            ),
+            (
+                "editors/zed/Cargo.lock",
+                lambda path: write(
+                    path,
+                    'version = 4\n\n[[package]]\n'
+                    'name = "registry-stack-zed"\nversion = "1.0.0"\n',
+                ),
+            ),
+            (
+                "editors/zed/extension.toml",
+                lambda path: write(
+                    path, 'id = "registry-stack"\nversion = "1.0.0"\n'
+                ),
+            ),
+        )
+        for relative, make_stale in stale_surfaces:
+            with self.subTest(surface=relative):
+                make_stale(self.repo.root / relative)
+
+                result = self.prepare()
+
+                self.assertEqual(1, result.returncode)
+                self.assertIn(relative, result.stderr)
+                self.assertIn("1.1.0", result.stderr)
+                write_editor_surfaces(self.repo.root, "1.1.0")
+                corrected = self.prepare()
+                self.assertEqual(0, corrected.returncode, corrected.stderr)
 
     def test_prepare_rejects_stale_loader_diagnostics_with_current_guards(self) -> None:
         for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
