@@ -50,12 +50,13 @@ reverse path. See [Compatibility direction](../../../reference/api-stability/#co
 ## Upgrade in this order
 
 BReg goes first, because Casework and Evidence both read it. Casework follows because it refuses
-a BReg of another release. Evidence and its wallet-facing front end come last. Rehearse the whole
+a BReg of another release. Evidence and its wallet-facing front end come next. Scheduling reads
+none of them and upgrades on its own, before the clients. Rehearse the whole
 sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
-1. **Back up both databases.** Take the BReg `pg_dump` and the Casework `pg_dump`, and copy both
-   products' packages and runtime files. These backups are the only way back; see
+1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling one
+   when it runs, and copy those products' packages and runtime files. These backups are the only way back; see
    [Roll back](#roll-back).
 2. **Stop `evidence-oid4vci`**, when it runs. Its outstanding offers end here; see
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
@@ -63,9 +64,10 @@ sequence on a restored copy first, as
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
 4. **Upgrade BReg.** Rebuild the deployed project unchanged with the new `bregctl package`,
    point `package.root` at the rebuilt package, check it against the live database with
-   `bregctl plan --package` naming the same directory, `apply` it, run `bregctl verify`, and
-   restart every `breg` process on the new binary; `bregctl status` confirms what the database
-   activated. A model change follows as its own successor; see
+   `bregctl plan --runtime-config FILE --package DIR` naming the same directory, apply it with
+   `bregctl apply --runtime-config FILE --package DIR`, run `bregctl verify --runtime-config
+   FILE`, and restart every `breg` process on the new binary; `bregctl status --runtime-config
+   FILE` confirms what the database activated. A model change follows as its own successor; see
    [Activate the successor](../../breg-changes/#activate-the-successor). From a release before
    the activation ledger, this first `apply` adopts the database as it stands: `package.root`
    and `--package` must both name the rebuilt package, which must describe the schema the
@@ -81,12 +83,19 @@ sequence on a restored copy first, as
    refused as `apply.resume.roles_differ`, naming the roles the activation started with. A new package applied under `database.roles` other than the ones the active activation serves with is refused as `apply.successor.roles_differ` before maintenance; apply the active package under the new roles first, then the new package. A role change, the active package applied under other `database.roles`, cannot be assessed by `bregctl migration reconcile`: when one stops before it finishes, fix the cause and rerun the same apply, which resumes it. Casework reports each BReg source as unavailable from here until step 5
    finishes.
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
-   `caseworkctl plan` and `caseworkctl apply` with the new binaries, then start `casework` and run
-   `caseworkctl doctor`; see [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
+   `caseworkctl plan --runtime-config FILE` and `caseworkctl apply --runtime-config FILE` with the
+   new binaries, then start `casework` and run `caseworkctl doctor --runtime-config FILE`; see [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
 6. **Upgrade Evidence.** Package a fresh candidate with the new `evidencectl package`, run
    `evidence check --require-runtime-dependencies` with the new binary, start it, and verify a fresh synthetic
    assertion. Then start the new `evidence-oid4vci`.
-7. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
+7. **Upgrade Scheduling**, when it runs. Stop the earlier `scheduling` runtime, or keep its
+   destination bindings until its hook deliveries drain. Add `identity.databaseId` to the runtime
+   file, run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
+   FILE` with the new binary, then start `scheduling`; `schedulingctl status --runtime-config
+   FILE` confirms what the database activated. From a release before the activation ledger, the
+   first `apply` adopts the database and backfills the retained policy document, and the runtime
+   refuses to start until it has.
+8. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
    Stack client at the same release before it calls the upgraded runtimes.
 
 {/* Evidence: docs/site/src/content/docs/operate/casework.mdx, "Upgrade Casework and BReg in
@@ -101,6 +110,8 @@ sequence on a restored copy first, as
     crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
     crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
     lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
+    release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
+    (identity.databaseId, apply before start, hook drain);
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
 
 ## Roll back
