@@ -70,6 +70,8 @@ pub(crate) enum ContractError {
     TargetFieldInvalid,
     #[error("the application owner field is not writable on create")]
     OwnerFieldInvalid,
+    #[error("the application owner field is the target field")]
+    OwnerFieldIsTarget,
     #[error("the application offers no field the citizen may author")]
     NothingEditable,
 }
@@ -122,6 +124,10 @@ impl Contract {
         let owner = field_by_id(create, &spec.owner_field)
             .filter(|field| contains(create.create_writable_fields(), field.identifier()))
             .ok_or(ContractError::OwnerFieldInvalid)?;
+
+        if owner.identifier() == target.identifier() || owner.api_name() == target.api_name() {
+            return Err(ContractError::OwnerFieldIsTarget);
+        }
 
         let controlled = [target.identifier(), owner.identifier()];
         let editable: Vec<EditableField> = create
@@ -331,6 +337,38 @@ pub(crate) mod tests {
             Contract::derive(&metadata, &spec),
             Err(ContractError::TargetFieldInvalid)
         );
+    }
+
+    /// The gateway writes the citizen's record into the target and the
+    /// citizen's principal into the owner, so a spec that names one field
+    /// twice would have the owner silently overwrite the target.
+    #[test]
+    fn an_owner_that_is_the_target_is_refused() {
+        let mut spec = spec();
+        spec.owner_field = "address".to_owned();
+        let metadata = BRegMetadata::from_slice(FIXTURE).expect("fixture metadata");
+        assert_eq!(
+            Contract::derive(&metadata, &spec),
+            Err(ContractError::OwnerFieldIsTarget)
+        );
+    }
+
+    /// The gateway writes by API name, so distinct identifiers alone would
+    /// not keep the owner off the target. Metadata that publishes an owner
+    /// under the target's API name never reaches the contract: the client
+    /// refuses it as a duplicate.
+    #[test]
+    fn an_owner_published_under_the_target_api_name_never_reaches_the_contract() {
+        let mut document: Value = serde_json::from_slice(FIXTURE).expect("fixture parses");
+        let owner = document["operations"][0]["fields"]
+            .as_array_mut()
+            .expect("create fields")
+            .iter_mut()
+            .find(|field| field["id"] == "owner")
+            .expect("owner field");
+        owner["apiName"] = json!("address");
+        let bytes = serde_json::to_vec(&document).expect("fixture serializes");
+        assert!(BRegMetadata::from_slice(&bytes).is_err());
     }
 
     #[test]
