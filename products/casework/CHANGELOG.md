@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Share activation ledger and runtime privilege checks with Scheduling and
+  Messaging. Activation now detects the loss of any required table DML
+  privilege, including when other required privileges remain granted (#1731).
+
 ## v0.37.0 - 2026-09-29
 
 - BREAKING: the `Registry-Source-Profile` header is the only input that

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Publish an `evidence-oid4vci` Docker image from v0.38.0 alongside the
+  existing release binary (#1760).
+
 ## v0.36.0 - 2026-09-29
 
 - `evidencectl audit show --last-operation` reads a retained history that

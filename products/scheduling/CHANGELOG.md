@@ -10,6 +10,12 @@
   product, record type, and record identifier tuple, with bounded paging whose
   cursor is bound to both the caller and filter.
 
+- Add a standalone Linux amd64 runtime binary from v0.38.0, alongside the
+  existing Docker image and operator binary.
+- Share activation ledger and runtime privilege checks with Casework and
+  Messaging. Activation now detects the loss of any required table DML
+  privilege, including when other required privileges remain granted (#1731).
+
 ## v0.37.0 - 2026-09-29
 
 - Read each request's `now`, and the hold-expiry, retention, and reminder
