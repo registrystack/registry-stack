@@ -40,7 +40,9 @@ The two citizen profiles share request ownership. Request visibility and the
 owner lifecycle checks key on the verified principal, so a draft the agent
 creates is the same draft the citizen's review page reads and submits. The
 review page submits with the `ifMatch` of the request it last read, so an agent
-edit made after that read makes the submission fail its precondition.
+edit made after that read makes the submission fail its precondition. The page
+also remembers the revision of the address it showed, and a change to that
+address after the read renders the review again instead of submitting.
 
 ## What the project does not bind
 

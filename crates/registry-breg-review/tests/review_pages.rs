@@ -201,6 +201,48 @@ async fn t5_stale_if_match_after_agent_patch_rerenders_and_asks_again() {
 }
 
 #[tokio::test]
+async fn a_target_changed_since_the_render_rerenders_and_asks_again() {
+    const CHANGED_LINE: &str = "9 Quay Street";
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    assert!(page.body.contains(CURRENT_LINE_A), "{}", page.body);
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+
+    // The draft is untouched, so its action's precondition still holds: only
+    // the page can notice that the values the person saw are gone.
+    harness
+        .environment
+        .registry
+        .change_address(ADDRESS_A, CHANGED_LINE);
+    let stale = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+
+    assert_eq!(stale.status, StatusCode::CONFLICT, "{}", stale.body);
+    assert!(stale.body.contains("data-notice=\"request-changed\""));
+    assert!(stale.body.contains(CHANGED_LINE), "{}", stale.body);
+    assert_eq!(harness.environment.registry.submits(), 0);
+    let fresh_view = stale.input("view").expect("the re-render asks again");
+    assert_ne!(fresh_view, view);
+
+    let confirmed = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &fresh_view)],
+        )
+        .await;
+    assert_eq!(confirmed.status, StatusCode::OK, "{}", confirmed.body);
+    assert!(confirmed.body.contains("data-outcome=\"submitted\""));
+    assert_eq!(harness.environment.registry.submit_effects(), 1);
+}
+
+#[tokio::test]
 async fn a_conflicted_submit_rerenders_from_a_fresh_read_not_the_stale_one() {
     let harness = Harness::start().await;
     let (cookie, page) = harness.review().await;

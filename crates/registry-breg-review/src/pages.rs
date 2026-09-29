@@ -166,6 +166,7 @@ fn render(
                 id: id.clone(),
                 request_id: request_id.to_owned(),
                 action,
+                target: review.target.clone(),
                 idempotency_key: format!("breg-review-{key}"),
             };
             if !app.sessions.remember_view(caller.cookie, view) {
@@ -298,13 +299,16 @@ pub(crate) async fn submit(
             .await
         }
     };
+    // The action's precondition binds only the draft, so the page itself
+    // holds the submit to the target revision the person saw beside it.
     let Some(view) = form
         .view
         .as_deref()
         .and_then(|view| app.sessions.view(caller.cookie, &request_id, view))
+        .filter(|view| view.target == review.target)
     else {
-        // Not a view this session rendered for this request: show the
-        // current state and ask again.
+        // Not a view this session rendered for this request, or one whose
+        // target has changed since: show the current state and ask again.
         if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
             return response;
         }

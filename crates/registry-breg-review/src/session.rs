@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
+use crate::registry::RecordRevision;
+
 /// The length of a base64url encoding of 32 random bytes.
 pub(crate) const TOKEN_LENGTH: usize = 43;
 
@@ -76,13 +78,15 @@ impl PendingSignIn {
     }
 }
 
-/// One rendered review: the exact submit action the person saw, and the
-/// idempotency key every submit of that view reuses.
+/// One rendered review: the exact submit action the person saw, the target
+/// revision whose values they saw beside it, and the idempotency key every
+/// submit of that view reuses.
 #[derive(Clone)]
 pub(crate) struct View {
     pub id: String,
     pub request_id: String,
     pub action: BRegLifecycleAction,
+    pub target: RecordRevision,
     pub idempotency_key: String,
 }
 

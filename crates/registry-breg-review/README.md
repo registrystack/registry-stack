@@ -110,12 +110,17 @@ with no form. When both reads succeed, the page shows the current values next to
 the proposed ones, labelled from caller-filtered registry metadata.
 
 The submit form appears only when the registry offers `submit_request` on the
-draft. The page remembers that exact action and a fresh idempotency key as a
-view bound to the session and the request. `POST /requests/{id}/submit`
-checks the CSRF token, repeats both reads, and only then submits the remembered
-action under its key. A crafted form cannot skip the target read, a replayed
-submit returns the first receipt, and a stale view renders the current state
-with a notice instead of submitting.
+draft. The page remembers that exact action, the target record revision it
+showed, and a fresh idempotency key as a view bound to the session and the
+request; the form carries only the view's random identifier. The action's
+`If-Match` binds the draft, and the remembered revision binds the target.
+`POST /requests/{id}/submit` checks the CSRF token, repeats both reads, and
+only then submits the remembered action under its key. A crafted form cannot
+skip the target read, a replayed submit returns the first receipt while the
+target is unchanged, and a stale view renders the current state with a notice
+and status 409 instead of submitting. A view is stale when it is unknown, when
+the target's revision has changed since it was rendered, or when the registry
+refuses the draft's precondition.
 
 ## Security model
 

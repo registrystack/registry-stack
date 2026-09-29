@@ -83,6 +83,8 @@ pub struct Address {
     pub line: &'static str,
     pub locality: &'static str,
     pub postal_code: &'static str,
+    /// The record revision, advanced by every change to the record.
+    pub revision: u64,
 }
 
 /// A stateful stand-in for the registry. Like the real one it conceals every
@@ -153,6 +155,7 @@ impl MockRegistry {
                     line: CURRENT_LINE_A,
                     locality: "Solmara",
                     postal_code: "PS-100",
+                    revision: 3,
                 },
             ),
             (
@@ -162,6 +165,7 @@ impl MockRegistry {
                     line: CURRENT_LINE_B,
                     locality: "Solmara",
                     postal_code: "PS-200",
+                    revision: 3,
                 },
             ),
         ]);
@@ -193,6 +197,15 @@ impl MockRegistry {
     /// profile ahead of its get, as a registry exposing both reads does.
     pub fn publish_target_list_first(&self) {
         self.target_list_first.store(true, Ordering::SeqCst);
+    }
+
+    /// Someone else changes `address` itself, leaving every draft naming it
+    /// untouched.
+    pub fn change_address(&self, address: &str, line: &'static str) {
+        let mut addresses = self.addresses.lock().unwrap();
+        let address = addresses.get_mut(address).unwrap();
+        address.line = line;
+        address.revision += 1;
     }
 
     /// An agent edits citizen A's draft between the render and the submit.
@@ -700,7 +713,7 @@ fn address_record(identifier: &str, address: &Address) -> Value {
     json!({
         "data": {
             "recordIdentifier": identifier,
-            "revisionIdentifier": "3",
+            "revisionIdentifier": address.revision.to_string(),
             "domainData": {
                 "addressLine": address.line,
                 "locality": address.locality,
@@ -798,7 +811,11 @@ async fn read_address(
     {
         return problem(BRegProblemCode::ResourceNotFound);
     }
-    record_response(TARGET_ENTITY, &address_record(&identifier, address), 3)
+    record_response(
+        TARGET_ENTITY,
+        &address_record(&identifier, address),
+        address.revision,
+    )
 }
 
 async fn submit_draft(
