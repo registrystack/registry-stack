@@ -265,8 +265,13 @@ pub(crate) async fn run_retention(
             }
             _ = interval.tick() => {
                 if let Ok(client) = pool.get().await {
-                    if expire_tick(&**client, MAX_EXPIRY_BATCHES_PER_TICK).await.is_err() {
-                        tracing::error!("subject access log expiry failed");
+                    match expire_tick(&**client, MAX_EXPIRY_BATCHES_PER_TICK).await {
+                        Ok(tick) => tracing::debug!(
+                            erased = tick.erased,
+                            bound_reached = tick.bound_reached,
+                            "subject access log expiry tick finished"
+                        ),
+                        Err(_) => tracing::error!("subject access log expiry failed"),
                     }
                 } else {
                     tracing::error!("subject access log expiry could not acquire a connection");
