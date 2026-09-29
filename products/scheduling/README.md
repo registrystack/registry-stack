@@ -76,9 +76,9 @@ the activation ledger. With the migration credential and under one advisory
 lock, it applies the pending schema versions, binds the database to the
 policy's scheduling id, publishes the policy, grants the runtime role its
 access when the two credentials name different roles, and records one ledger
-row, all in one transaction. It writes an activation request entry to
-`audit.schedulingctl.ndjson` before that transaction and a response entry
-after it, and applies nothing when the request entry cannot be written.
+row, all in one transaction. It writes an activation request entry to the
+`schedulingctl` sibling of `audit.path` (`audit.schedulingctl.ndjson` beside
+`audit.ndjson`) before that transaction and a response entry after it, and applies nothing when the request entry cannot be written.
 `--operator-reference` (a change ticket, for instance) is kept only as a keyed
 hash, and each `--backup REF` is recorded as given. Applying the package that
 is already active refuses with `nothing needs applying` unless a schema
