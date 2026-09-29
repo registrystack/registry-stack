@@ -238,6 +238,14 @@ clears a retained payload on the first successful delivery, and clears an undeli
 its expiry has passed, which is also the point after which that delivery can no longer be
 replayed. The delivery rows themselves stay; only the payload goes.
 
+An entity that declares `accessLog` writes one row per logged record read to
+`registry_internal.registry_subject_access_log`. Each row takes its expiry from the entity's
+`retentionDays` (default 90) when the read happens, and the subject's access-log route hides it once
+that expiry passes. A background job erases expired rows every minute in batches of 1000 until none
+remain, up to 100,000 rows a minute; a run that stops at that bound logs a warning with the
+remaining backlog. The job keeps running after a later package turns `accessLog` off, and a package
+change never extends an existing row's expiry. Database backups keep their own copies of these rows.
+
 Import and export checkpoints live on the operator host, not in the database. `bregctl data import`
 writes a checkpoint file beside a `.state` sidecar it owns, and `bregctl data export` writes its
 output file beside a checkpoint that binds the package revision, schema fingerprint, entity,
@@ -254,6 +262,8 @@ every activation, and store secrets separately.
     crates/registry-breg/src/request_retention.rs;
     crates/registry-breg/src/audit.rs;
     crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/src/subject_access_log.rs, run_retention() and expire_tick();
+    products/breg/ACCESS-LOG.md;
     crates/registry-breg/src/runtime_config.rs, DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
     and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS;
     crates/registry-bregctl/src/data_lifecycle.rs. */}
