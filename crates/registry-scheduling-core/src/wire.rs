@@ -153,6 +153,19 @@ pub struct PageDocument<T> {
     pub next_cursor: Option<String>,
 }
 
+/// An opaque link to a record owned by another product.
+///
+/// Scheduling stores and returns this tuple without resolving it. The
+/// identifier names only the referenced record; callers must not put personal
+/// data in any field.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalReference {
+    pub product: String,
+    pub record_type: String,
+    pub identifier: String,
+}
+
 /// A minted hold, the answer to `POST /v1/holds`. The hold request body is
 /// the same admission request shape a direct create carries: a hold is an
 /// admission ask that reserves instead of committing.
@@ -168,6 +181,7 @@ pub struct HoldDocument {
     pub units: u32,
     pub expires_at: DateTime<Utc>,
     pub policy_revision: u64,
+    pub external_references: Vec<ExternalReference>,
 }
 
 /// The lifecycle state of an appointment on the wire.
@@ -205,6 +219,7 @@ pub struct AppointmentDocument {
     pub policy_revision: u64,
     pub created_at: DateTime<Utc>,
     pub cancelled_at: Option<DateTime<Utc>>,
+    pub external_references: Vec<ExternalReference>,
 }
 
 /// The request behind `POST /v1/appointments`: confirm a held allocation, or
@@ -408,6 +423,7 @@ mod tests {
             units: 1,
             expires_at: utc(5, 1),
             policy_revision: 1,
+            external_references: Vec::new(),
         });
         tolerates_a_later_member(&AppointmentDocument {
             appointment_id: "6e97f6a3-8524-4a13-9db8-ad0c4eb4d64b".to_owned(),
@@ -422,6 +438,7 @@ mod tests {
             policy_revision: 1,
             created_at: utc(4, 9),
             cancelled_at: None,
+            external_references: Vec::new(),
         });
         tolerates_a_later_member(&AppointmentHistoryEntryDocument {
             event_id: "b31c0f4e-cc7f-4ba8-88f2-9c1a9102f0a1".to_owned(),
@@ -501,6 +518,7 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
+            external_references: Vec::new(),
         };
 
         let direct = CreateAppointmentRequest {
@@ -544,6 +562,7 @@ mod tests {
             policy_revision: 1,
             created_at: utc(4, 9),
             cancelled_at: None,
+            external_references: Vec::new(),
         };
         let json = serde_json::to_value(&appointment).unwrap();
         assert_eq!(json["state"], "confirmed");

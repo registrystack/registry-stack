@@ -133,3 +133,8 @@ traceability:
   - {id: BREG-SEC-130, state: enforced, negativeId: BREG-NEG-130, negativeTest: {path: crates/registry-breg/tests/postgres_task_grants.rs, name: standing_agent_audit_records_the_delegated_actor_by_pseudonym}}
   - {id: BREG-SEC-131, state: enforced, negativeId: BREG-NEG-131, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_an_immediate_action}}
   - {id: BREG-SEC-132, state: enforced, negativeId: BREG-NEG-132, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: module_contributed_profiles_cannot_declare_a_task_grant}}
+  - {id: BREG-SEC-133, state: enforced, negativeId: BREG-NEG-133, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: subject_access_log_requires_current_record_ownership_and_records_each_read_hit}}
+  - {id: BREG-SEC-134, state: enforced, negativeId: BREG-NEG-134, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access}}
+  - {id: BREG-SEC-135, state: enforced, negativeId: BREG-NEG-135, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: access_log_exemptions_are_delayed_audited_and_expire_without_runtime_delete_authority}}
+  - {id: BREG-SEC-136, state: enforced, negativeId: BREG-NEG-136, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: a_failed_subject_access_log_insert_prevents_record_release}}
+  - {id: BREG-SEC-137, state: enforced, negativeId: BREG-NEG-137, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: relationship_exemptions_bind_the_source_entity_without_profile_name_collisions}}

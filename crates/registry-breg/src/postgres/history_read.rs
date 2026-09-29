@@ -398,6 +398,18 @@ impl PostgresSnapshotReadService {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
+        crate::subject_access_log::record_reads(
+            transaction,
+            &plan.entity,
+            &request.entity_id,
+            &request.context,
+            &rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+            &request.operation_id,
+            &self.expected,
+            &request.correlation,
+            &self.audit,
+        )
+        .await?;
         guarded
             .commit()
             .await

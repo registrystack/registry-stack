@@ -138,8 +138,9 @@ invariants:
       One caller reads or pages another caller's appointment, history, or
       listing by guessing an identifier or replaying a cursor.
     enforcementPoint: >-
-      owned_booking on the appointment read and history paths, and cursors that
-      are opaque version 4 UUIDs bound to their listing context and expiring
+      owned_booking on the appointment read and history paths; actor predicates
+      on filtered appointment listings; and cursors that are opaque version 4
+      UUIDs bound to their listing context, actor, and exact filter and expiring
       fifteen minutes out, with ownership re-checked before a cursor is
       honoured.
     refusal: >-
@@ -147,7 +148,7 @@ invariants:
       one, and refuse a cursor presented against a different context.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
-      name: cursors_page_their_own_listing_and_refuse_foreign_contexts
+      name: external_references_survive_the_lifecycle_and_filter_only_owned_appointments
   - id: SCHEDULING-SEC-09
     state: enforced
     threat: >-

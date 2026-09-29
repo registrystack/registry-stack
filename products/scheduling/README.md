@@ -271,9 +271,32 @@ exclusions rather than accidents:
   someone's behalf. Every commitment's grant names the caller, and the party
   a request carries is the party the caller commits.
 
-`externalReferences` and the integration seams that would attach a Scheduling
-appointment to another product's record are Phase 4 work. They are absent from
-the wire types today, and adding them is a contract change, not a fill-in.
+## External record references
+
+The `v1alpha2` HTTP contract adds external references on the existing `/v1`
+routes. Upgrade the runtime before sending the new admission field. Existing
+admissions may omit it, and existing appointments return an empty set.
+
+An admission may carry `externalReferences`, each a typed opaque tuple of
+`product`, `recordType`, and `identifier`. Scheduling stores only that tuple.
+It never calls the referenced product, resolves the identifier, or grants any
+authority through the link. Identifiers name records only; callers must not put
+personal data in a reference.
+
+A hold returns the references it was created with. Confirming that hold copies
+the same immutable references to the appointment; a direct booking takes them
+from its admission. A reschedule must omit `externalReferences`; rescheduling
+and cancellation retain the original set. Exact retries
+may reorder the set, but changing a reference under the same idempotency key is
+`idempotency.key-reused`.
+
+`GET /v1/appointments` requires `externalReferenceProduct`,
+`externalReferenceRecordType`, and `externalReferenceIdentifier`, and accepts
+the ordinary `cursor` and `limit` parameters. It returns only appointments
+owned by the authenticated caller that carry the exact tuple. Its cursor is
+bound to both that caller and tuple, and ownership is rechecked on every page.
+The link lets another product find appointments created by its stable service
+principal without giving Scheduling access to that product.
 
 ## Arrival windows and channel subquotas
 

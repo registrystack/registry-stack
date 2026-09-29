@@ -262,6 +262,7 @@ pub enum CompiledRegistryChangeCode {
     EntityMutationModeChanged,
     EntityClassificationChanged,
     EntityAccessRequirementsChanged,
+    EntityAccessLogChanged,
     EntityGeoJsonChanged,
     EntityTemporalChanged,
     ChangeRequestContractChanged,
@@ -1073,6 +1074,18 @@ fn compare_entities(
                 changes,
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityAccessRequirementsChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Entity,
+                    Some(entity_id.as_str()),
+                    None,
+                ),
+            );
+        }
+        if previous_entity.access_log != candidate_entity.access_log {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::EntityAccessLogChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Entity,
                     Some(entity_id.as_str()),

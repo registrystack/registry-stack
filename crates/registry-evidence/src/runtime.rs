@@ -61,7 +61,8 @@ use crate::{
     },
     signing::{EvidenceSigner, EvidenceSigningError},
     source::{
-        statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor, SourceResponse,
+        statement_inputs, ResolvedSourceSelector, SourceAccessAttribution, SourceError,
+        SourceExecutor, SourceResponse,
     },
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
     EVIDENCE_REQUEST_BATCH_SCHEMA_V1, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
@@ -1423,6 +1424,8 @@ impl EvidenceRuntime {
                 audit,
             });
         }
+        let source_access_attribution =
+            SourceAccessAttribution::new(context.principal(), &batch.purpose);
 
         let audit_material = RequestBatchAuditMaterial {
             assurance_profile: self.bundle().config.assurance_profile,
@@ -1449,6 +1452,7 @@ impl EvidenceRuntime {
                 let outcomes = match self
                     .execute_optimized_request_batch(
                         &audit_material,
+                        &source_access_attribution,
                         &authorized,
                         operation,
                         &source_id,
@@ -1490,6 +1494,7 @@ impl EvidenceRuntime {
             } else {
                 self.evaluate_request_batch_item(
                     &audit_material,
+                    &source_access_attribution,
                     item_index,
                     item,
                     operation,
@@ -1883,6 +1888,8 @@ impl EvidenceRuntime {
                 return Err(map_authority(error));
             }
         };
+        let source_access_attribution =
+            SourceAccessAttribution::new(context.principal(), &request.purpose);
 
         // A holder-bound operation is scoped to no relying party, so the audit
         // pseudonyms of what it releases cannot be derived under one. Its scope
@@ -1953,6 +1960,7 @@ impl EvidenceRuntime {
                 let stage = self
                     .execute_source_stage(
                         &material,
+                        &source_access_attribution,
                         operation,
                         &source,
                         &resolved,
@@ -2011,6 +2019,7 @@ impl EvidenceRuntime {
                 let search_stage = self
                     .execute_source_stage(
                         &material,
+                        &source_access_attribution,
                         operation,
                         &search,
                         &resolved,
@@ -2065,6 +2074,7 @@ impl EvidenceRuntime {
                 let fetch_stage = self
                     .execute_source_stage(
                         &material,
+                        &source_access_attribution,
                         operation,
                         &fetch,
                         &resolved,
@@ -2150,6 +2160,7 @@ impl EvidenceRuntime {
                     } = self
                         .execute_source_stage(
                             &material,
+                            &source_access_attribution,
                             operation,
                             &stage.source,
                             &resolved,
@@ -2731,6 +2742,7 @@ impl EvidenceRuntime {
     async fn evaluate_request_batch_item(
         &self,
         audit_material: &RequestBatchAuditMaterial,
+        source_access_attribution: &SourceAccessAttribution,
         item_index: u8,
         item: &AuthorizedRequestBatchItem,
         operation: &str,
@@ -2741,6 +2753,7 @@ impl EvidenceRuntime {
         let Some(facts) = self
             .acquire_request_batch_item(
                 audit_material,
+                source_access_attribution,
                 item_index,
                 &item.resolved,
                 operation,
@@ -2830,6 +2843,7 @@ impl EvidenceRuntime {
     async fn execute_optimized_request_batch(
         &self,
         audit_material: &RequestBatchAuditMaterial,
+        source_access_attribution: &SourceAccessAttribution,
         items: &[AuthorizedRequestBatchItem],
         operation: &str,
         source_id: &str,
@@ -2889,7 +2903,7 @@ impl EvidenceRuntime {
             .get(source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
         let response = executor
-            .execute_batch(prepared.request())
+            .execute_batch_attributed(prepared.request(), source_access_attribution)
             .await
             .map_err(|error| {
                 failure(
@@ -2931,6 +2945,7 @@ impl EvidenceRuntime {
     async fn acquire_request_batch_item(
         &self,
         audit_material: &RequestBatchAuditMaterial,
+        source_access_attribution: &SourceAccessAttribution,
         item_index: u8,
         resolved: &ResolvedAuthorization,
         operation: &str,
@@ -2947,6 +2962,7 @@ impl EvidenceRuntime {
                 let stage = self
                     .execute_request_batch_source_stage(
                         audit_material,
+                        source_access_attribution,
                         item_index,
                         operation,
                         &source,
@@ -2976,6 +2992,7 @@ impl EvidenceRuntime {
                 let search_stage = self
                     .execute_request_batch_source_stage(
                         audit_material,
+                        source_access_attribution,
                         item_index,
                         operation,
                         &search,
@@ -3003,6 +3020,7 @@ impl EvidenceRuntime {
                 let fetch_stage = self
                     .execute_request_batch_source_stage(
                         audit_material,
+                        source_access_attribution,
                         item_index,
                         operation,
                         &fetch,
@@ -3046,6 +3064,7 @@ impl EvidenceRuntime {
                     let outcome = self
                         .execute_request_batch_source_stage(
                             audit_material,
+                            source_access_attribution,
                             item_index,
                             operation,
                             &stage.source,
@@ -3116,6 +3135,7 @@ impl EvidenceRuntime {
     async fn execute_request_batch_source_stage(
         &self,
         audit_material: &RequestBatchAuditMaterial,
+        source_access_attribution: &SourceAccessAttribution,
         item_index: u8,
         operation: &str,
         source_id: &str,
@@ -3167,8 +3187,13 @@ impl EvidenceRuntime {
             .await
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
 
-        let execution =
-            executor.execute_with_prior_facts(&selectors, prior_facts, &request, observed_at);
+        let execution = executor.execute_with_prior_facts_attributed(
+            &selectors,
+            prior_facts,
+            &request,
+            observed_at,
+            source_access_attribution,
+        );
         let executed = match deadline {
             Some(deadline) => {
                 let Some(remaining) = stage_time_budget(deadline, Instant::now()) else {
@@ -3241,6 +3266,7 @@ impl EvidenceRuntime {
     async fn execute_source_stage(
         &self,
         material: &AuditMaterial,
+        source_access_attribution: &SourceAccessAttribution,
         operation: &str,
         source_id: &str,
         resolved: &ResolvedAuthorization,
@@ -3310,8 +3336,13 @@ impl EvidenceRuntime {
         // knowing whether the entry is on disk, so it could neither answer as
         // the entry records nor report the entry missing. That is why the
         // timeout never crosses an append.
-        let execution =
-            executor.execute_with_prior_facts(&selectors, prior_facts, &request, observed_at);
+        let execution = executor.execute_with_prior_facts_attributed(
+            &selectors,
+            prior_facts,
+            &request,
+            observed_at,
+            source_access_attribution,
+        );
         let executed = match deadline {
             Some(deadline) => {
                 // A ceiling already spent by the durable append above, or by

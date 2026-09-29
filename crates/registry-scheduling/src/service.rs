@@ -27,11 +27,11 @@ use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, type_uri, AdmissionRequest,
     AppointmentDocument, AppointmentHistoryEntryDocument, AppointmentStateDocument,
     AvailabilityEntry, CancelAppointmentRequest, Channel, CreateAppointmentRequest,
-    ExactTimeContext, ExactTimeOffering, LedgerKind, LedgerSnapshot, OfferingDocument,
-    OfferingPolicy, PageDocument, PoolMember, ProblemCode, PublishedWindow, ReminderDocument,
-    RescheduleAppointmentRequest, ResourceDocument, SchedulingFacts, SchedulingMode,
-    SchedulingModeDocument, SchedulingPolicy, SchedulingServiceDocument, ServiceDocument,
-    WindowContext, WindowDocument,
+    ExactTimeContext, ExactTimeOffering, ExternalReference, LedgerKind, LedgerSnapshot,
+    OfferingDocument, OfferingPolicy, PageDocument, PoolMember, ProblemCode, PublishedWindow,
+    ReminderDocument, RescheduleAppointmentRequest, ResourceDocument, SchedulingFacts,
+    SchedulingMode, SchedulingModeDocument, SchedulingPolicy, SchedulingServiceDocument,
+    ServiceDocument, WindowContext, WindowDocument,
 };
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -493,6 +493,7 @@ impl SchedulingService {
             window_revision: None,
             capabilities: offering.requires_capabilities.clone(),
             prerequisites: offering.prerequisites.clone(),
+            external_references: Vec::new(),
         };
         let refusal = match self.supply(offering).await?.0 {
             ResolvedSupply::ExactTime {
@@ -834,6 +835,62 @@ impl SchedulingService {
         ))
     }
 
+    /// List this caller's appointments carrying one opaque external record
+    /// reference. Ownership is applied on every page; the cursor also binds
+    /// the same actor and exact reference so it cannot be moved across either
+    /// boundary.
+    pub async fn list_appointments(
+        &self,
+        caller: &Caller,
+        reference: &ExternalReference,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        now: DateTime<Utc>,
+    ) -> Result<PageDocument<AppointmentDocument>, ServiceError> {
+        let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
+        let reference_hash = canonical_hash(&serde_json::to_value(reference).map_err(|_| {
+            ServiceError::internal("the external reference could not be canonicalized")
+        })?)?;
+        let context = format!("appointments:{actor}:{reference_hash}");
+        let position = self.resolve_position(cursor, &context, now).await?;
+        let after_id = id_position(position)?
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()
+            .map_err(|_| ServiceError::Problem(ProblemCode::CursorInvalid))?;
+        let limit = page_limit(limit);
+        let mut claims = self
+            .store
+            .list_appointments_by_external_reference(
+                &actor,
+                reference,
+                after_id,
+                i64::try_from(limit + 1).unwrap_or(i64::MAX),
+            )
+            .await?;
+        let more = claims.len() > limit;
+        claims.truncate(limit);
+        let next_cursor = if more {
+            let last_id = claims
+                .last()
+                .expect("a page with more rows has one row")
+                .claim_id
+                .to_string();
+            Some(
+                self.mint_cursor(&context, &ListingPosition::AfterId { last_id }, now)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok(PageDocument {
+            items: claims
+                .iter()
+                .map(|claim| appointment_document(claim, &self.policy, self.revision(), None))
+                .collect(),
+            next_cursor,
+        })
+    }
+
     pub async fn reschedule_appointment(
         &self,
         caller: &Caller,
@@ -856,6 +913,9 @@ impl SchedulingService {
             .require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)
             .await?;
         if request.admission.offering != appointment.offering {
+            return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+        }
+        if !request.admission.external_references.is_empty() {
             return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
         }
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
@@ -2103,6 +2163,7 @@ fn hold_document(
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
         expires_at: claim.hold_expires_at.unwrap_or(claim.created_at),
         policy_revision: projected_policy_revision(policy_revision, receipt),
+        external_references: claim.external_references.clone(),
     }
 }
 
@@ -2129,6 +2190,7 @@ fn appointment_document(
         policy_revision: projected_policy_revision(policy_revision, receipt),
         created_at: claim.created_at,
         cancelled_at: claim.closed_at,
+        external_references: claim.external_references.clone(),
     }
 }
 
@@ -2806,6 +2868,7 @@ mod tests {
             occupied_end: at(2, 35),
             units: 1,
             duplicate_key: None,
+            external_references: Vec::new(),
             hold_expires_at: None,
             revision: 1,
             policy_revision: 4,
@@ -2814,12 +2877,16 @@ mod tests {
             created_at: at(0, 0),
             closed_at: None,
         };
-        let receipt = json!({
+        let mut receipt = json!({
             "kind": "booking",
             "claim": claim.clone(),
             "resource": "station-1",
             "policyRevision": 4
         });
+        receipt["claim"]
+            .as_object_mut()
+            .expect("a claim receipt object")
+            .remove("externalReferences");
         let answer: CommitmentAnswer<ClaimRow> = CommitmentAnswer::Replay {
             status_code: 201,
             receipt,

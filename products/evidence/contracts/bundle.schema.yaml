@@ -1006,6 +1006,13 @@ $defs:
           dependency; unrelated export provenance stays outside requirement revisions.
         type: string
         pattern: '^sha256:[0-9a-f]{64}$'
+      forwardAccessAttribution:
+        description: >-
+          Opts this HTTP source into host-owned forwarding of the verified access requester
+          and request purpose. The Gateway sends bounded base64url-encoded values in the
+          reserved Registry-Access-Requester and Registry-Access-Purpose headers only after
+          authentication, authorization, and selector resolution. Omission is false.
+        type: boolean
       baseUrl:
         description: >-
           Fixed HTTPS origin the source's evidence-data requests target, with no path, query,

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
-    AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
-    FieldTypeSource, HookSource, ManifestProjectionCatalogSource,
+    AccessLogSource, AccessProfileSource, BatchSource, Classification, ConstraintSource,
+    EventConditionSource, FieldTypeSource, HookSource, ManifestProjectionCatalogSource,
     ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
     ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
     ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
@@ -951,6 +951,8 @@ pub struct CompiledEntity {
     pub classification: Classification,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_requirements: Option<crate::contract::AccessRequirementsSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log: Option<AccessLogSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<CompiledGeoJsonBinding>,
     pub physical_table: String,

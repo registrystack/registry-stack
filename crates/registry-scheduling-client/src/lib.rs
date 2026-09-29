@@ -40,11 +40,11 @@ pub use registry_platform_httputil::client::{BearerToken, TransportKind};
 pub use registry_scheduling_core::{
     type_uri, AdmissionRequest, AppointmentDocument, AppointmentHistoryEntryDocument,
     AppointmentStateDocument, AvailabilityEntry, CancelAppointmentRequest,
-    CreateAppointmentRequest, ExplainDocument, HoldDocument, LocationDocument, OfferingDocument,
-    PageDocument, PartyCounts, ProblemCode, ReminderDocument, RescheduleAppointmentRequest,
-    ResourceDocument, SchedulingModeDocument, SchedulingServiceDocument, ServiceDocument,
-    WindowDocument, APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
-    CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER,
-    LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH,
-    SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
+    CreateAppointmentRequest, ExplainDocument, ExternalReference, HoldDocument, LocationDocument,
+    OfferingDocument, PageDocument, PartyCounts, ProblemCode, ReminderDocument,
+    RescheduleAppointmentRequest, ResourceDocument, SchedulingModeDocument,
+    SchedulingServiceDocument, ServiceDocument, WindowDocument, APPOINTMENTS_PATH,
+    AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH,
+    IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
 };

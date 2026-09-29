@@ -3210,6 +3210,7 @@ mod tests {
                 change_control: None,
                 change_request: None,
                 consent_record: None,
+                access_log: None,
                 fields: vec![
                     FieldSource {
                         pattern: None,

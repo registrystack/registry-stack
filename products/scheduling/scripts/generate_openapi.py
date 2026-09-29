@@ -115,6 +115,7 @@ SCHEMA_STRUCTS = {
         "WindowDocument": "WindowDocument",
         "ResourceDocument": "ResourceDocument",
         "LocationDocument": "LocationDocument",
+        "ExternalReference": "ExternalReference",
         "HoldDocument": "HoldDocument",
         "AppointmentDocument": "AppointmentDocument",
         "CreateAppointmentRequest": "CreateAppointmentRequest",
@@ -144,6 +145,7 @@ ROUTE_HANDLERS = {
     ("POST", "/v1/holds"): "create_hold",
     ("DELETE", "/v1/holds/{hold_id}"): "release_hold",
     ("POST", "/v1/appointments"): "create_appointment",
+    ("GET", "/v1/appointments"): "list_appointments",
     ("GET", "/v1/appointments/{appointment_id}"): "get_appointment",
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): "reschedule_appointment",
     ("POST", "/v1/appointments/{appointment_id}/cancel"): "cancel_appointment",
@@ -163,6 +165,7 @@ OPERATION_IDS = {
     ("POST", "/v1/holds"): "createHold",
     ("DELETE", "/v1/holds/{hold_id}"): "releaseHold",
     ("POST", "/v1/appointments"): "createAppointment",
+    ("GET", "/v1/appointments"): "listAppointmentsByExternalReference",
     ("GET", "/v1/appointments/{appointment_id}"): "getAppointment",
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): "rescheduleAppointment",
     ("POST", "/v1/appointments/{appointment_id}/cancel"): "cancelAppointment",
@@ -235,6 +238,7 @@ OPERATION_PROBLEMS = {
     + ["hold.released", "idempotency.expired", "service.unavailable"],
     ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
     + OFFERING + ["hold.expired", "hold.released", "service.unavailable"],
+    ("GET", "/v1/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + STORAGE,
     # A reschedule resolves its offering from the appointment rather than from
     # the caller, so an unknown offering is operator state, not a refusal the
@@ -483,6 +487,10 @@ def schemas(problem_entries: list[dict]) -> dict:
     mode = {"type": "string", "enum": ["exact-time", "arrival-window"]}
     appointment_state = {"type": "string", "enum": ["confirmed", "cancelled"]}
     party = obj({"recipients": count, "attendees": count}, ["recipients", "attendees"])
+    external_reference = obj(
+        {"product": text, "recordType": text, "identifier": text},
+        ["product", "recordType", "identifier"],
+    )
     admission = obj(
         {
             "offering": text,
@@ -494,6 +502,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             "windowRevision": nullable(revision),
             "capabilities": array(text),
             "prerequisites": array(text),
+            "externalReferences": array(ref("ExternalReference")),
         },
         ["offering", "start", "party", "policyRevision", "capabilities", "prerequisites"],
     )
@@ -556,6 +565,7 @@ def schemas(problem_entries: list[dict]) -> dict:
         "ResourcePage": page("ResourceDocument"),
         "LocationDocument": answer({"locationId": text, "timezone": text}, ["locationId", "timezone"]),
         "LocationPage": page("LocationDocument"),
+        "ExternalReference": external_reference,
         "AvailabilitySlot": answer(
             {"kind": {"const": "slot"}, "start": instant, "end": instant, "free": count},
             ["kind", "start", "end", "free"],
@@ -586,8 +596,9 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "units": count,
                 "expiresAt": instant,
                 "policyRevision": revision,
+                "externalReferences": array(ref("ExternalReference")),
             },
-            ["holdId", "offering", "start", "end", "units", "expiresAt", "policyRevision"],
+            ["holdId", "offering", "start", "end", "units", "expiresAt", "policyRevision", "externalReferences"],
         ),
         "PartyCounts": party,
         "AdmissionRequest": admission,
@@ -598,10 +609,13 @@ def schemas(problem_entries: list[dict]) -> dict:
             "properties": {"hold": nullable(text), "admission": nullable(ref("AdmissionRequest"))},
             "description": "Exactly one of hold or admission: confirming a held allocation, or a direct create. Both, or neither, is request.invalid.",
         },
-        "RescheduleAppointmentRequest": obj(
-            {"observedRevision": revision, "admission": ref("AdmissionRequest")},
-            ["observedRevision", "admission"],
-        ),
+        "RescheduleAppointmentRequest": {
+            **obj(
+                {"observedRevision": revision, "admission": ref("AdmissionRequest")},
+                ["observedRevision", "admission"],
+            ),
+            "description": "Fresh admission facts for the new time. externalReferences must be omitted; the appointment retains the immutable set established by its hold or direct booking.",
+        },
         "CancelAppointmentRequest": obj(
             {"observedRevision": revision, "reason": nullable(text)},
             ["observedRevision"],
@@ -621,6 +635,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "policyRevision": revision,
                 "createdAt": instant,
                 "cancelledAt": nullable(instant),
+                "externalReferences": array(ref("ExternalReference")),
             },
             [
                 "appointmentId",
@@ -632,8 +647,10 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "state",
                 "policyRevision",
                 "createdAt",
+                "externalReferences",
             ],
         ),
+        "AppointmentPage": page("AppointmentDocument"),
         "AppointmentHistoryEntryDocument": answer(
             {
                 "eventId": text,
@@ -777,7 +794,18 @@ def document(contract: dict) -> dict:
             parameters=[HOLD_ID],
             description="Gives a hold's capacity back before it expires, under the task grant that names hold.release. The hold's own identifier is the idempotency key, so a retried release answers as the first one did; a receipt retained past its window is idempotency.expired. A claim that is not an active hold is hold.released, whether unknown, already confirmed, or already released, and a grant naming another holder is operation.not-authorized.",
         )},
-        "/v1/appointments": {"post": operation(
+        "/v1/appointments": {"get": operation(
+            "List owned appointments by external reference",
+            "AppointmentPage",
+            parameters=[
+                parameter("externalReferenceProduct", "query", "Product identifier that owns the referenced record."),
+                parameter("externalReferenceRecordType", "query", "Record type within the referenced product."),
+                parameter("externalReferenceIdentifier", "query", "Opaque identifier of the referenced record."),
+                CURSOR_QUERY,
+                LIMIT_QUERY,
+            ],
+            description="Lists only the authenticated caller's appointments carrying the exact opaque reference. The 15-minute cursor is bound to both the caller and the reference, and ownership is rechecked on every page. Scheduling stores the tuple without calling the referenced product.",
+        ), "post": operation(
             "Confirm a hold or book directly",
             "AppointmentDocument",
             authority="task-grant",
@@ -799,7 +827,7 @@ def document(contract: dict) -> dict:
             body="RescheduleAppointmentRequest",
             idempotency=True,
             parameters=[APPOINTMENT_ID],
-            description="Re-books the appointment under the task grant that names appointment.reschedule, with a fresh admission evaluation; the appointment it replaces is excluded from the conflict checks, so a reschedule never competes with itself. The policy guard wins over the revision guard: a caller whose observed revision is also stale learns the policy moved first.",
+            description="Re-books the appointment under the task grant that names appointment.reschedule, with a fresh admission evaluation while retaining its original externalReferences; supplying externalReferences is request.unprocessable. The appointment it replaces is excluded from the conflict checks, so a reschedule never competes with itself. The policy guard wins over the revision guard: a caller whose observed revision is also stale learns the policy moved first.",
         )},
         "/v1/appointments/{appointment_id}/cancel": {"post": operation(
             "Cancel an owned appointment",
@@ -825,7 +853,7 @@ def document(contract: dict) -> dict:
         "openapi": "3.1.0",
         "info": {
             "title": "Registry Scheduling API",
-            "version": "v1alpha1",
+            "version": "v1alpha2",
             "description": "Implemented Scheduling HTTP contract: published openings, exact-time offerings over interchangeable resource pools, published arrival windows with channel subquotas, holds, and accountable bookings. Mutating authority is a complete task grant; every refusal is one problem from the closed vocabulary.",
             "license": {"name": "Apache-2.0", "identifier": "Apache-2.0"},
         },
@@ -1318,6 +1346,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "ResourcePage",
         "LocationPage",
         "AvailabilityPage",
+        "AppointmentPage",
         "AppointmentHistoryPage",
     ):
         if set(openapi_schemas[schema_name]["properties"]) != page_fields:

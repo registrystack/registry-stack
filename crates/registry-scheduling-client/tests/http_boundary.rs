@@ -11,9 +11,9 @@ use axum::Router;
 use chrono::{TimeZone as _, Utc};
 use registry_scheduling_client::{
     type_uri, AdmissionRequest, AvailabilityEntry, BearerToken, CancelAppointmentRequest,
-    CreateAppointmentRequest, PartyCounts, ProblemCode, RescheduleAppointmentRequest,
-    SchedulingAuth, SchedulingClient, SchedulingClientConfig, SchedulingClientError,
-    SchedulingProtocolFailure, TransportKind,
+    CreateAppointmentRequest, ExternalReference, PartyCounts, ProblemCode,
+    RescheduleAppointmentRequest, SchedulingAuth, SchedulingClient, SchedulingClientConfig,
+    SchedulingClientError, SchedulingProtocolFailure, TransportKind,
 };
 use url::Url;
 
@@ -148,6 +148,7 @@ fn admission() -> AdmissionRequest {
         window_revision: None,
         capabilities: Vec::new(),
         prerequisites: Vec::new(),
+        external_references: Vec::new(),
     }
 }
 
@@ -158,7 +159,7 @@ const APPOINTMENT_DOCUMENT: &str = concat!(
     r#"{"appointmentId":"appt-1","offering":"registry-update-30","#,
     r#""start":"2026-10-05T02:00:00Z","end":"2026-10-05T02:30:00Z","#,
     r#""resource":"station-1","units":1,"channel":null,"revision":2,"state":"confirmed","#,
-    r#""policyRevision":4,"createdAt":"2026-10-04T09:00:00Z","cancelledAt":null}"#
+    r#""policyRevision":4,"createdAt":"2026-10-04T09:00:00Z","cancelledAt":null,"externalReferences":[]}"#
 );
 
 #[tokio::test]
@@ -265,6 +266,64 @@ async fn catalogue_listings_forward_and_round_trip_the_cursor() {
     assert_eq!(observations[5].uri, "/v1/resources?cursor=next");
     assert_eq!(observations[6].uri, "/v1/locations");
     assert_eq!(observations[7].uri, "/v1/locations?cursor=next");
+    server.abort();
+}
+
+#[tokio::test]
+async fn appointment_listing_forwards_the_exact_external_reference_and_bounds_it_locally() {
+    let observations: Observations = Arc::new(Mutex::new(Vec::new()));
+    let page = format!(r#"{{"items":[{APPOINTMENT_DOCUMENT}],"nextCursor":"next"}}"#);
+    let app = Router::new()
+        .route("/v1/appointments", get(capture_get))
+        .with_state(Fixture::json(&observations, StatusCode::OK, &page));
+    let (address, server) = spawn(app).await;
+
+    let token = BearerToken::new("fixture-secret").expect("fixture token");
+    let client = client(&address);
+    let reference = ExternalReference {
+        product: "registry-casework".to_owned(),
+        record_type: "case".to_owned(),
+        identifier: "case:1764".to_owned(),
+    };
+    let page = client
+        .list_appointments(auth(&token), &reference, None, Some(25))
+        .await
+        .expect("the filtered appointment page");
+    assert_eq!(page.value.items.len(), 1);
+    assert_eq!(page.value.next_cursor.as_deref(), Some("next"));
+
+    {
+        let observations = observations.lock().expect("observations");
+        assert_eq!(observations.len(), 1);
+        assert_eq!(
+            observations[0].uri,
+            "/v1/appointments?externalReferenceProduct=registry-casework&externalReferenceRecordType=case&externalReferenceIdentifier=case%3A1764&limit=25"
+        );
+    }
+
+    for invalid in [
+        ExternalReference {
+            product: "Registry-Casework".to_owned(),
+            ..reference.clone()
+        },
+        ExternalReference {
+            identifier: String::new(),
+            ..reference.clone()
+        },
+    ] {
+        assert!(matches!(
+            client
+                .list_appointments(auth(&token), &invalid, None, None)
+                .await,
+            Err(SchedulingClientError::InvalidRequest { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .list_appointments(auth(&token), &reference, None, Some(0))
+            .await,
+        Err(SchedulingClientError::InvalidRequest { .. })
+    ));
     server.abort();
 }
 
@@ -456,7 +515,7 @@ async fn create_hold_sends_the_admission_body_under_its_idempotency_key() {
         r#"{"holdId":"hold-7","offering":"registry-update-30","#,
         r#""start":"2026-10-05T02:00:00Z","end":"2026-10-05T02:30:00Z","#,
         r#""resource":"station-1","units":1,"expiresAt":"2026-10-05T01:45:00Z","#,
-        r#""policyRevision":4}"#
+        r#""policyRevision":4,"externalReferences":[]}"#
     );
     let app = Router::new()
         .route("/v1/holds", post(capture_call))

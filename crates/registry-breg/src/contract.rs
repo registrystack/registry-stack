@@ -405,6 +405,9 @@ pub struct EntitySource {
     /// Mandatory request-access requirements checked against every profile, including module contributions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_requirements: Option<AccessRequirementsSource>,
+    /// Subject-facing record access history, separate from the operational audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log: Option<AccessLogSource>,
     #[serde(default)]
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
@@ -432,6 +435,77 @@ pub struct EntitySource {
     /// `requireConsent` permissions check before returning a subject's row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_record: Option<ConsentRecordSource>,
+}
+
+/// Maximum retained subject-facing access-log window.
+pub const MAX_ACCESS_LOG_RETENTION_DAYS: u16 = 3_650;
+/// Maximum length of a plaintext subject identifier stored on a logged entity.
+pub const MAX_ACCESS_LOG_SUBJECT_CHARACTERS: u32 = 512;
+/// Maximum explicit intermediary clients trusted by one logged entity.
+pub const MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES: usize = 64;
+/// Maximum delayed-disclosure policies declared by one logged entity.
+pub const MAX_ACCESS_LOG_EXEMPTIONS: usize = 64;
+/// Maximum UTF-8 bytes in a delayed-disclosure policy reason.
+pub const MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES: usize = 256;
+
+const fn default_access_log_retention_days() -> u16 {
+    90
+}
+
+/// Governed subject-facing access-log policy for an entity.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AccessLogSource {
+    /// Required plaintext string or text field matched to the subject's verified principal.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = 64), regex(pattern = "^[a-z][a-z0-9_-]*$"))
+    )]
+    pub subject_field: String,
+    /// Days each entry remains available before bounded background erasure.
+    #[serde(default = "default_access_log_retention_days")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3_650)))]
+    pub retention_days: u16,
+    /// Verified intermediary client IDs allowed to forward original requester attribution.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(length(max = 64)))]
+    pub trusted_intermediaries: BTreeSet<String>,
+    /// Access profiles whose entries become subject-visible only after a policy delay.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "maxProperties" = MAX_ACCESS_LOG_EXEMPTIONS,
+            "propertyNames" = {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+            }
+        ))
+    )]
+    pub exemptions: BTreeMap<String, AccessLogExemptionSource>,
+}
+
+/// Delayed subject disclosure for reads under one access profile.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AccessLogExemptionSource {
+    /// Entity whose access profile authorizes the read. Omitted for direct reads of the logged entity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = 64), regex(pattern = "^[a-z][a-z0-9_-]*$"))
+    )]
+    pub source_entity: Option<String>,
+    /// Bounded policy reason retained and audited with each delayed entry.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub reason: String,
+    /// Days after the read when the entry becomes visible to the subject.
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3_649)))]
+    pub delay_days: u16,
 }
 
 /// The fields of a consent-record entity the engine reads. Other fields are

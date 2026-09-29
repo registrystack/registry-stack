@@ -636,6 +636,7 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
+            external_references: Vec::new(),
         }
     }
 
@@ -1246,6 +1247,7 @@ mod tests {
             window_revision: Some(2),
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
+            external_references: Vec::new(),
         }
     }
 

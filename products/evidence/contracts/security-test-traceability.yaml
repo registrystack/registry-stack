@@ -328,6 +328,10 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}
+  - id: sec-source-access-attribution-host-owned
+    tests:
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: authorized_access_attribution_is_host_owned_and_opt_in}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorized_runtime_forwards_verified_requester_and_purpose_only_to_opted_source}
   - id: sec-sd-jwt-projection-integrity
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: external_rfc9901_and_draft18_vectors_verify_shared_cryptography_and_preserve_profile_boundary}

@@ -89,6 +89,12 @@ TLS trust profile in the target's `sourceConnections`. Credentials remain
 logical secret references resolved by that deployment. A BReg package or
 metadata response never supplies Evidence caller authority.
 
+When the exported entity declares `accessLog`, the source opts into forwarding
+the Evidence requester's verified identity and purpose. The Evidence
+connection's verified OAuth client ID must also appear in that entity's
+`accessLog.trustedIntermediaries`; otherwise BReg refuses the forwarded
+request. Forwarded attribution does not grant record authority.
+
 Use the existing authentication mode appropriate for the source. A named
 connection shares its HTTP pool, admission limit and OAuth token state across
 the sources which explicitly reference it within one Evidence process.

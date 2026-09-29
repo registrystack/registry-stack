@@ -19,6 +19,7 @@
 //! re-renders its pinned problem under the answering request's trace, and a
 //! release's empty receipt answers as an empty 204 again.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -37,10 +38,10 @@ use registry_platform_httpsec::{
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, CancelAppointmentRequest,
-    CreateAppointmentRequest, ProblemCode, RescheduleAppointmentRequest, APPOINTMENTS_PATH,
-    AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
-    LOCATIONS_PATH, MAXIMUM_COLLECTION_ENTRIES, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH,
-    RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
+    CreateAppointmentRequest, ExternalReference, ProblemCode, RescheduleAppointmentRequest,
+    APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, HOLDS_PATH,
+    IDEMPOTENCY_KEY_HEADER, LOCATIONS_PATH, MAXIMUM_COLLECTION_ENTRIES,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -81,6 +82,7 @@ pub fn router(state: HttpState) -> Router {
             .route(AVAILABILITY_EXPLAIN_PATH, get(explain))
             .route(HOLDS_PATH, post(create_hold))
             .route(HOLD_ROUTE, delete(release_hold))
+            .route(APPOINTMENTS_PATH, get(list_appointments))
             .route(APPOINTMENTS_PATH, post(create_appointment))
             .route(APPOINTMENT_ROUTE, get(get_appointment))
             .route(APPOINTMENT_RESCHEDULE_ROUTE, post(reschedule_appointment))
@@ -377,6 +379,35 @@ async fn get_appointment(
     ))
 }
 
+async fn list_appointments(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<AppointmentListingQuery>,
+) -> Result<
+    Json<registry_scheduling_core::PageDocument<registry_scheduling_core::AppointmentDocument>>,
+    HttpError,
+> {
+    let caller = authenticate_read(&state, &headers).await?;
+    let reference = ExternalReference {
+        product: query.external_reference_product,
+        record_type: query.external_reference_record_type,
+        identifier: query.external_reference_identifier,
+    };
+    bounded_external_reference(&reference)?;
+    Ok(Json(
+        state
+            .service
+            .list_appointments(
+                &caller,
+                &reference,
+                query.cursor.as_deref(),
+                query.limit,
+                state.store.observed_now(),
+            )
+            .await?,
+    ))
+}
+
 async fn reschedule_appointment(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -467,6 +498,18 @@ async fn appointment_history(
 
 #[derive(Debug, Default, Deserialize)]
 struct ListingQuery {
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppointmentListingQuery {
+    external_reference_product: String,
+    external_reference_record_type: String,
+    external_reference_identifier: String,
     #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
@@ -568,7 +611,28 @@ fn bounded_admission(request: &AdmissionRequest) -> Result<(), HttpError> {
         bounded_reference(duplicate_key)?;
     }
     bounded_references(&request.capabilities)?;
-    bounded_references(&request.prerequisites)
+    bounded_references(&request.prerequisites)?;
+    if request.external_references.len() > MAXIMUM_COLLECTION_ENTRIES {
+        return Err(HttpError(ProblemCode::RequestInvalid));
+    }
+    let mut unique = BTreeSet::new();
+    for reference in &request.external_references {
+        bounded_external_reference(reference)?;
+        if !unique.insert((
+            reference.product.as_str(),
+            reference.record_type.as_str(),
+            reference.identifier.as_str(),
+        )) {
+            return Err(HttpError(ProblemCode::RequestInvalid));
+        }
+    }
+    Ok(())
+}
+
+fn bounded_external_reference(reference: &ExternalReference) -> Result<(), HttpError> {
+    bounded_identifier(&reference.product)?;
+    bounded_identifier(&reference.record_type)?;
+    bounded_reference(&reference.identifier)
 }
 
 /// One policy identifier as the authored grammar admits it.
@@ -1082,6 +1146,7 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
+            external_references: Vec::new(),
         }
     }
 
@@ -1121,6 +1186,25 @@ mod tests {
                 prerequisites: vec!["req".to_owned(); MAXIMUM_COLLECTION_ENTRIES + 1],
                 ..admission()
             },
+            AdmissionRequest {
+                external_references: vec![
+                    ExternalReference {
+                        product: "registry-casework".to_owned(),
+                        record_type: "case".to_owned(),
+                        identifier: "case:1".to_owned(),
+                    };
+                    MAXIMUM_COLLECTION_ENTRIES + 1
+                ],
+                ..admission()
+            },
+            AdmissionRequest {
+                external_references: vec![ExternalReference {
+                    product: "Registry-Casework".to_owned(),
+                    record_type: "case".to_owned(),
+                    identifier: "case:1".to_owned(),
+                }],
+                ..admission()
+            },
             // A reference is a stable scoped identifier, so an empty one and
             // one carrying a control byte are both malformed.
             AdmissionRequest {
@@ -1141,6 +1225,19 @@ mod tests {
                 "an unbounded caller string reached the store: {request:?}"
             );
         }
+
+        let duplicate = ExternalReference {
+            product: "registry-casework".to_owned(),
+            record_type: "case".to_owned(),
+            identifier: "case:1".to_owned(),
+        };
+        assert!(matches!(
+            bounded_admission(&AdmissionRequest {
+                external_references: vec![duplicate.clone(), duplicate],
+                ..admission()
+            }),
+            Err(HttpError(ProblemCode::RequestInvalid))
+        ));
     }
 
     #[test]

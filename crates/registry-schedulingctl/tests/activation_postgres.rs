@@ -383,7 +383,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert_eq!(report["schemaVersion"], 0);
     assert_eq!(
         report["pendingSchemaVersions"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     );
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
@@ -478,7 +478,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .starts_with("single-role mode"));
     assert_eq!(
         initial["schemaVersionsApplied"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     );
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
@@ -575,9 +575,57 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 9);
+    assert_eq!(report["schemaVersion"], 10);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn external_reference_migration_preserves_existing_claims_with_an_empty_set() {
+    let deployment = Deployment::single("activation_external_references").await;
+    let first = deployment.package("first", POLICY);
+    let second = deployment.package("second", &successor_policy());
+    let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
+    let second_config = deployment.config("second.yaml", &second, ConfigOptions::default());
+    apply(&first_config).expect("the initial package activates");
+
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "INSERT INTO {schema}.scheduling_claims
+                (claim_id, kind, state, offering, supply_id, displayed_start,
+                 displayed_end, occupied_start, occupied_end, units, revision,
+                 policy_revision, actor)
+             VALUES ('00000000-0000-4000-8000-000000001764', 'booking', 'active',
+                     'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
+                     now(), now() + interval '30 minutes', 1, 1, 1, 'legacy-actor');
+             ALTER TABLE {schema}.scheduling_claims DROP COLUMN external_references;
+             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=10;",
+            schema = deployment.schema
+        ))
+        .await
+        .expect("simulate a populated schema immediately before migration 10");
+
+    let report = apply(&second_config).expect("the successor applies migration 10");
+    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([10]));
+    let row = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT offering, actor, external_references
+                   FROM {}.scheduling_claims
+                  WHERE claim_id='00000000-0000-4000-8000-000000001764'",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the pre-migration claim remains");
+    assert_eq!(row.get::<_, String>(0), "registry-update-30");
+    assert_eq!(row.get::<_, String>(1), "legacy-actor");
+    assert_eq!(row.get::<_, Value>(2), serde_json::json!([]));
+
     deployment.drop().await;
 }
 
@@ -1674,7 +1722,7 @@ async fn apply_takes_the_publication_locks_before_it_migrates() {
         .admin
         .batch_execute(&format!(
             "DROP TABLE {schema}.scheduling_activations;\
-             DELETE FROM {schema}.scheduling_schema_migrations WHERE version = 9;",
+             DELETE FROM {schema}.scheduling_schema_migrations WHERE version IN (9, 10);",
             schema = deployment.schema
         ))
         .await
@@ -1738,6 +1786,6 @@ async fn apply_takes_the_publication_locks_before_it_migrates() {
         .join()
         .expect("the apply does not panic")
         .expect("the apply proceeds once the anchor is released");
-    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([9]));
+    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([9, 10]));
     deployment.drop().await;
 }

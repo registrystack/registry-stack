@@ -19,7 +19,9 @@ use crate::contract::{
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    WebhookDeadLetterMode, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
+    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
     MAX_STRUCTURED_VALUE_BYTES,
 };
@@ -2208,6 +2210,7 @@ fn validate_entities(
             _ => {}
         }
         validate_entity_fields(entity, entities, errors);
+        validate_access_log(entity, entities, errors);
         attachments::validate(entity, errors);
         validate_geojson(entity, errors);
         validate_derived(entity, errors);
@@ -2220,6 +2223,174 @@ fn validate_entities(
         validate_hooks(registry_id, entity, profile, &mut event_ids, errors);
     }
     validate_read_path_cycles(entities, errors);
+}
+
+fn validate_access_log(
+    entity: &EntitySource,
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(access_log) = &entity.access_log else {
+        return;
+    };
+    let path = format!("entities[id={}].accessLog", entity.id);
+    let fields = stored_field_map(entity);
+    match fields.get(access_log.subject_field.as_str()) {
+        Some(field)
+            if field.required
+                && !field.encrypted
+                && matches!(
+                    field.field_type,
+                    FieldTypeSource::String { max_length, .. }
+                        | FieldTypeSource::Text { max_length }
+                        if max_length <= MAX_ACCESS_LOG_SUBJECT_CHARACTERS
+                ) => {}
+        _ => errors.push(Diagnostic::error(
+            "access_log.subject_field.invalid",
+            format!("{path}.subjectField"),
+            &format!(
+                "subjectField must name a required plaintext stored string or text field with maxLength at most {MAX_ACCESS_LOG_SUBJECT_CHARACTERS}"
+            ),
+        )),
+    }
+    if !(1..=MAX_ACCESS_LOG_RETENTION_DAYS).contains(&access_log.retention_days) {
+        errors.push(Diagnostic::error(
+            "access_log.retention_days.invalid",
+            format!("{path}.retentionDays"),
+            &format!("retentionDays must be between 1 and {MAX_ACCESS_LOG_RETENTION_DAYS}"),
+        ));
+    }
+    if access_log.trusted_intermediaries.len() > MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES {
+        errors.push(Diagnostic::error(
+            "access_log.trusted_intermediaries.too_many",
+            format!("{path}.trustedIntermediaries"),
+            &format!(
+                "an access log may trust at most {MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES} intermediary clients"
+            ),
+        ));
+    }
+    if access_log.trusted_intermediaries.iter().any(|client| {
+        client.is_empty()
+            || client.len() > 512
+            || client.chars().any(char::is_control)
+            || client.chars().any(char::is_whitespace)
+    }) {
+        errors.push(Diagnostic::error(
+            "access_log.trusted_intermediary.invalid",
+            format!("{path}.trustedIntermediaries"),
+            "a trusted intermediary must be a bounded non-whitespace verified client identifier",
+        ));
+    }
+    if access_log.exemptions.len() > MAX_ACCESS_LOG_EXEMPTIONS {
+        errors.push(Diagnostic::error(
+            "access_log.exemptions.too_many",
+            format!("{path}.exemptions"),
+            &format!("an access log may declare at most {MAX_ACCESS_LOG_EXEMPTIONS} exemptions"),
+        ));
+    }
+    for (profile_id, exemption) in &access_log.exemptions {
+        validate_id(profile_id, &format!("{path}.exemptions"), errors);
+        let source_entity_id = exemption.source_entity.as_deref().unwrap_or(&entity.id);
+        if exemption.source_entity.is_some() {
+            validate_id(
+                source_entity_id,
+                &format!("{path}.exemptions[{profile_id}].sourceEntity"),
+                errors,
+            );
+        }
+        let valid_profile = entities.get(source_entity_id).is_some_and(|source_entity| {
+            source_entity
+                .access_profiles
+                .iter()
+                .find(|profile| profile.id == *profile_id)
+                .is_some_and(|profile| {
+                    if source_entity_id == entity.id {
+                        profile_has_direct_logged_read(profile)
+                    } else {
+                        profile_has_read_path_to(source_entity, profile, &entity.id)
+                    }
+                })
+        });
+        if !valid_profile {
+            errors.push(Diagnostic::error(
+                "access_log.exemption.profile_invalid",
+                format!("{path}.exemptions[{profile_id}]"),
+                "an access-log exemption must name a profile on sourceEntity that directly reads the logged entity or has a declared read path to it",
+            ));
+        }
+        if exemption.reason.is_empty()
+            || exemption.reason != exemption.reason.trim()
+            || exemption.reason.len() > MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES
+            || exemption.reason.chars().any(char::is_control)
+        {
+            errors.push(Diagnostic::error(
+                "access_log.exemption.reason_invalid",
+                format!("{path}.exemptions[{profile_id}].reason"),
+                &format!(
+                    "an access-log exemption reason must be trimmed printable text of at most {MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES} UTF-8 bytes"
+                ),
+            ));
+        }
+        if exemption.delay_days == 0 || exemption.delay_days >= access_log.retention_days {
+            errors.push(Diagnostic::error(
+                "access_log.exemption.delay_invalid",
+                format!("{path}.exemptions[{profile_id}].delayDays"),
+                "delayDays must be at least 1 and less than retentionDays",
+            ));
+        }
+    }
+    for profile in &entity.access_profiles {
+        if profile.anonymous && profile_has_direct_logged_read(profile) {
+            errors.push(Diagnostic::error(
+                "access_log.anonymous_read_forbidden",
+                format!(
+                    "entities[id={}].accessProfiles[id={}].operations",
+                    entity.id, profile.id
+                ),
+                "an access-logged entity cannot grant anonymous record reads because every logged reader must be named",
+            ));
+        }
+    }
+    for source_entity in entities.values() {
+        for profile in &source_entity.access_profiles {
+            if profile.anonymous && profile_has_read_path_to(source_entity, profile, &entity.id) {
+                errors.push(Diagnostic::error(
+                    "access_log.anonymous_read_forbidden",
+                    format!(
+                        "entities[id={}].accessProfiles[id={}].readPaths",
+                        source_entity.id, profile.id
+                    ),
+                    "an access-logged entity cannot be reached through an anonymous read path because every logged reader must be named",
+                ));
+            }
+        }
+    }
+}
+
+fn profile_has_direct_logged_read(profile: &AccessProfileSource) -> bool {
+    profile.operations.iter().any(|operation| {
+        matches!(
+            operation,
+            Operation::Get
+                | Operation::Lookup
+                | Operation::List
+                | Operation::Revisions
+                | Operation::Snapshot
+        )
+    })
+}
+
+fn profile_has_read_path_to(
+    source_entity: &EntitySource,
+    profile: &AccessProfileSource,
+    target_entity_id: &str,
+) -> bool {
+    profile.read_paths.iter().any(|grant| {
+        source_entity
+            .read_paths
+            .iter()
+            .any(|path| path.id == grant.path && path.to == target_entity_id)
+    })
 }
 
 fn validate_geojson(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
@@ -5595,6 +5766,7 @@ fn compile_entities(
                 batch: source.batch.clone(),
                 classification: source.classification,
                 access_requirements: source.access_requirements.clone(),
+                access_log: source.access_log.clone(),
                 geojson: source
                     .geojson
                     .as_ref()

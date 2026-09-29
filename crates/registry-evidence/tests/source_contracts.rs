@@ -33,8 +33,8 @@ use registry_evidence::rhai_runtime::{
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
 use registry_evidence::source::{
-    project_fixture_response, PreparedSourceRequest, ResolvedSourceSelector, SourceError,
-    SourceExecutor, SourceResponse, SourceStatus,
+    project_fixture_response, PreparedSourceRequest, ResolvedSourceSelector,
+    SourceAccessAttribution, SourceError, SourceExecutor, SourceResponse, SourceStatus,
 };
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
@@ -821,6 +821,10 @@ async fn exact_request_applies_path_query_body_headers_auth_and_projection_once(
     );
     let requests = server.received_requests().await.expect("requests recorded");
     assert_eq!(requests.len(), 1);
+    assert!(!requests[0]
+        .headers
+        .contains_key("registry-access-requester"));
+    assert!(!requests[0].headers.contains_key("registry-access-purpose"));
     assert_eq!(
         requests[0].url.query(),
         Some("filter=first%20value&filter=second%2Fvalue%25")
@@ -840,6 +844,95 @@ async fn exact_request_applies_path_query_body_headers_auth_and_projection_once(
         serde_json::from_slice::<Value>(&requests[0].body).expect("JSON body"),
         json!({"limit": 1, "requested": ["status"]})
     );
+}
+
+#[tokio::test]
+async fn authorized_access_attribution_is_host_owned_and_opt_in() {
+    let server = MockServer::start().await;
+    let requester = "agence-citoyenne:José";
+    let purpose = "benefit-review";
+    let encoded_requester =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(requester.as_bytes());
+    let encoded_purpose =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(purpose.as_bytes());
+    Mock::given(method("POST"))
+        .and(path("/v1/records/A%20B"))
+        .and(header("registry-access-requester", encoded_requester))
+        .and(header("registry-access-purpose", encoded_purpose))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (_root, secrets) = resolver(&[("key", "secret")]);
+    let mut source = serde_json::to_value(source_config(
+        &server.uri(),
+        json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+        json!(["record_id"]),
+        json!([]),
+        json!(["/ok"]),
+    ))
+    .unwrap();
+    source["forwardAccessAttribution"] = json!(true);
+    let source: SourceConfig = serde_json::from_value(source).unwrap();
+    let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
+    let attribution = SourceAccessAttribution::new(requester, purpose);
+    let response = executor
+        .execute_attributed(
+            &[selector("A B")],
+            &prepared_http_request(&parts()),
+            Utc::now(),
+            &attribution,
+        )
+        .await
+        .expect("attributed source call succeeds");
+    assert_eq!(response.into_data(), Some(json!({"ok": true})));
+
+    let error = executor
+        .execute(
+            &[selector("A B")],
+            &prepared_http_request(&parts()),
+            Utc::now(),
+        )
+        .await
+        .expect_err("an opted-in source refuses a call without verified attribution");
+    assert_eq!(error, SourceError::InvalidPlan);
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        1,
+        "missing attribution fails before source I/O"
+    );
+    for invalid in [
+        "".to_owned(),
+        " ".to_owned(),
+        "requester\nforged".to_owned(),
+        "x".repeat(513),
+    ] {
+        let invalid = SourceAccessAttribution::new(&invalid, purpose);
+        assert!(matches!(
+            executor
+                .execute_attributed(
+                    &[selector("A B")],
+                    &prepared_http_request(&parts()),
+                    Utc::now(),
+                    &invalid,
+                )
+                .await,
+            Err(SourceError::InvalidPlan)
+        ));
+    }
+    let invalid_purpose = SourceAccessAttribution::new(requester, "purpose\nforged");
+    assert!(matches!(
+        executor
+            .execute_attributed(
+                &[selector("A B")],
+                &prepared_http_request(&parts()),
+                Utc::now(),
+                &invalid_purpose,
+            )
+            .await,
+        Err(SourceError::InvalidPlan)
+    ));
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
 #[test]
