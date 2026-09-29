@@ -292,6 +292,8 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             "registry-relay",
             "discovery",
             "evidence",
+            "evidence-oid4vci",
+            "registry-render",
             "mint",
             "breg",
             "breg-mcp",
@@ -343,6 +345,17 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self,
     ) -> None:
         for name in ("breg-mcp", "breg-review"):
+            with self.subTest(name=name):
+                self.assertIn(name, self.module.PUBLIC_PACKAGES)
+                self.assertNotIn(f"{name}-candidate", self.module.CANDIDATE_PACKAGES)
+                with self.assertRaisesRegex(
+                    self.module.CleanupError,
+                    "package is not in the exact candidate allowlist",
+                ):
+                    self.module.assert_candidate_package(f"{name}-candidate")
+
+    def test_render_and_oid4vci_remain_denylisted_until_package_bootstrap(self) -> None:
+        for name in ("registry-render", "evidence-oid4vci"):
             with self.subTest(name=name):
                 self.assertIn(name, self.module.PUBLIC_PACKAGES)
                 self.assertNotIn(f"{name}-candidate", self.module.CANDIDATE_PACKAGES)

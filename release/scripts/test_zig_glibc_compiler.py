@@ -297,7 +297,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
             "'casework', 'caseworkctl', 'scheduling', 'schedulingctl', 'messaging', "
-            "'messagingctl'):\n"
+            "'messagingctl', 'registry-render'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
@@ -324,6 +324,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "'registry-manifest', 'relay', 'relayctl']\n"
             "if parsed >= (0, 24, 0):\n"
             "    core.insert(0, 'discovery')\n"
+            "if release_roster.render_in_release(parsed):\n"
+            "    core.append('registry-render')\n"
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
             "selected = (core if group in ('all', 'core') else []) + "
             "(breg if group in ('all', 'breg') else []) + "
@@ -335,6 +337,10 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    if name != 'scheduling' or group == 'scheduling':\n"
             "        (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
             "images = ['discovery', 'breg', 'casework', 'scheduling', 'messaging', 'evidence', 'relay']\n"
+            "if release_roster.evidence_oid4vci_image_in_release(parsed):\n"
+            "    images.append('evidence-oid4vci')\n"
+            "if release_roster.render_in_release(parsed):\n"
+            "    images.append('registry-render')\n"
             "if parsed >= (0, 36, 0):\n"
             "    images += ['bregctl', 'caseworkctl', 'schedulingctl', 'messagingctl']\n"
             "for name in images:\n"
@@ -510,6 +516,36 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         result, breg = self.run_payload(version="0.25.9", group="breg")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([], breg)
+
+    def test_core_stages_render_and_oid4vci_image_only_from_v0_38(self) -> None:
+        result, historical_calls = self.run_payload(version="0.37.99", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            any("registry-render" in call["args"] for call in historical_calls)
+        )
+        historical_bin, historical_images = self.staged()
+        self.assertFalse(any(name.startswith("registry-render-") for name in historical_bin))
+        self.assertNotIn("registry-render", historical_images)
+        self.assertNotIn("evidence-oid4vci", historical_images)
+
+        result, current_calls = self.run_payload(version="0.38.0", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-render",
+                "--bin",
+                "registry-render",
+            ],
+            [call["args"] for call in current_calls],
+        )
+        current_bin, current_images = self.staged()
+        self.assertIn("registry-render-v0.38.0-linux-amd64", current_bin)
+        self.assertIn("registry-render", current_images)
+        self.assertIn("evidence-oid4vci", current_images)
 
     def test_casework_group_builds_both_exact_binary_targets_from_v0_30(self) -> None:
         result, calls = self.run_payload(version="0.30.0", group="casework")
@@ -788,6 +824,10 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             ("0.31.0", ("core", "breg", "casework")),
             # Messaging has not joined a release, so its shard is empty.
             ("0.35.0", groups_with_messaging),
+            (
+                "0.38.0",
+                ("core", "breg", "casework", "scheduling"),
+            ),
         ):
             with self.subTest(version=version):
                 self.assert_merged_groups_equivalent_to_all(version, groups)

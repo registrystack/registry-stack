@@ -34,7 +34,9 @@ IMAGE_NAMES = frozenset(
         "casework",
         "discovery",
         "evidence",
+        "evidence-oid4vci",
         "messaging",
+        "registry-render",
         "relay",
         "scheduling",
     }

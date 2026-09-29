@@ -415,10 +415,17 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         # Neither Messaging nor breg-mcp and breg-review join a release until
         # release_roster names their first one.
-        for version in ("0.35.0", "0.36.0", "0.37.0", "1.0.0"):
+        for version in ("0.35.0", "0.36.0", "0.37.0"):
             with self.subTest(version=version):
                 self.assertEqual(
                     module._candidate_image_names("0.33.0"),
+                    module._candidate_image_names(version),
+                )
+        for version in ("0.38.0", "1.0.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    module._candidate_image_names("0.37.0")
+                    | {"registry-render", "evidence-oid4vci"},
                     module._candidate_image_names(version),
                 )
         with mock.patch.object(
@@ -1462,6 +1469,25 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
     """The unified clients carry no Messaging namespace until Messaging joins a
     release; the change that names its first release adds it back."""
 
+    def test_render_and_oid4vci_smokes_follow_the_shared_release_roster(self) -> None:
+        for name, job in (
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux"),
+        ):
+            with self.subTest(workflow=name):
+                _, document = workflow(name)
+                smoke = step_run(document, job, "Merge and smoke the canonical Linux payload")
+                self.assertIn("render-in-release", smoke)
+                self.assertIn("evidence-oid4vci-image-in-release", smoke)
+                self.assertIn("dist/image-bin/evidence-oid4vci --version", smoke)
+                self.assertIn("dist/image-bin/registry-render --version", smoke)
+                self.assertIn("crates/registry-render/src/lib.rs", smoke)
+                self.assertIn('"${render_binary}" init "${render_project}"', smoke)
+                self.assertIn('"${render_binary}" package --bundle "${render_project}"', smoke)
+                self.assertIn('"${render_binary}" compile --bundle "${render_package}"', smoke)
+                self.assertIn("--issued-at 2026-01-01T00:00:00Z", smoke)
+                self.assertIn('--strict --out "${RUNNER_TEMP}/release-render-letter.pdf"', smoke)
+
     def test_release_client_jobs_package_no_messaging_client(self) -> None:
         for name, job in (
             ("release-candidate.yml", "clients"),
@@ -2249,11 +2275,23 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
+            "v0.38.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "evidence-oid4vci",
+                "registry-render",
+                "relay",
+                "scheduling",
+            ],
             "v1.0.0": [
                 "breg",
                 "casework",
                 "discovery",
                 "evidence",
+                "evidence-oid4vci",
+                "registry-render",
                 "relay",
                 "scheduling",
             ],
@@ -2374,7 +2412,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                     self.assertNotEqual(0, rejected.returncode)
 
         self.assertIn(
-            "breg|casework|discovery|evidence|messaging|mint|relay|scheduling)",
+            "breg|casework|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling)",
             verify,
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)

@@ -177,6 +177,7 @@ jobs:
               "mint": "mint",
               "registry-manifest": "registry-manifest",
               "registry-manifest-cli": "registry-manifest",
+              "registry-render": "registry-render",
               "breg": "breg",
               "bregctl": "bregctl",
               "breg-mcp": "breg-mcp",

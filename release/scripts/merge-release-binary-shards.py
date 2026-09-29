@@ -92,10 +92,20 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     ]
     if parsed >= MINT_RETIREMENT_VERSION:
         common.remove(f"mint-{tag}-linux-amd64")
+    if release_roster.render_in_release(parsed):
+        common.append(f"registry-render-{tag}-linux-amd64")
     core.extend(common)
     for image_name in ("evidence", "mint", "relay"):
         if image_name != "mint" or parsed < MINT_RETIREMENT_VERSION:
             image_bins.append((image_name, f"{image_name}-{tag}-linux-amd64"))
+    if release_roster.evidence_oid4vci_image_in_release(parsed):
+        image_bins.append(
+            ("evidence-oid4vci", f"evidence-oid4vci-{tag}-linux-amd64")
+        )
+    if release_roster.render_in_release(parsed):
+        image_bins.append(
+            ("registry-render", f"registry-render-{tag}-linux-amd64")
+        )
     return {
         "core": core,
         "breg": breg,

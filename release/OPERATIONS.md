@@ -50,9 +50,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, or messaging}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
 case "${package}" in
-  relay|evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging) ;;
+  relay|evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -114,10 +114,18 @@ joined a release: `BREG_SERVICES_FIRST_RELEASE` in
 `release/scripts/release_roster.py` names their first release and is unset.
 `messaging` has not joined a release either: `MESSAGING_FIRST_RELEASE` in the
 same module names its first release and is unset.
-The published `v0.32.0` and older release
-inventories remain unchanged. After selecting
-the candidate version, derive its exact image roster and verify each final
-destination:
+Registry Render's `registry-render` Linux amd64 binary and image join from
+`v0.38.0`; the adapter's `evidence-oid4vci` image joins from the same version.
+`RENDER_FIRST_RELEASE` and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in that module
+own those boundaries. The existing OID4VCI binary stays in earlier inventories.
+Both images need the onboarding steps above before the first candidate: provision
+the public and private package identities, add the private candidate names to
+cleanup only after bootstrap, and commit separately reviewed advisory baselines.
+Until then, the image-onboarding check refuses a `v0.38.0` or later candidate.
+Render's template package and runtime configuration are external deployment
+inputs; the image installs no template package or host fonts.
+Release inventories through `v0.37.0` remain unchanged. After selecting the
+candidate version, derive its exact image roster and verify each final destination:
 
 ```sh
 version="${VERSION:?set VERSION to the candidate version without a v prefix}"

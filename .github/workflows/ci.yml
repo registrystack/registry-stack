@@ -1471,6 +1471,12 @@ jobs:
       - name: Test documentation release preparation
         run: python3 -m unittest release/scripts/test_prepare_release_docs.py
 
+      - name: Test version-selected release roster
+        run: python3 -m unittest release/scripts/test_release_roster.py
+
+      - name: Test supporting release image packaging
+        run: python3 -m unittest release/scripts/test_release_supporting_images.py
+
       - name: Test release candidate manifest and promotion verifier
         run: python3 -m unittest release/scripts/test_release_candidate.py
 
