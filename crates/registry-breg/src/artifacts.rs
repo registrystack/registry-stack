@@ -2779,19 +2779,30 @@ fn json_patch_request_body(spec: OpenApiOperationSpec<'_>) -> Value {
 }
 
 /// The patch document of a route: in the package document, the union of what
-/// the profiles serving it may write and read; in a caller's document, only
-/// what the selected profile may.
+/// the profiles serving it with `patch` may write and read, so a batch route
+/// shared with a create-only profile publishes no path only it may use; in a
+/// caller's document, only what the selected profile may.
 fn route_patch_schema(spec: OpenApiOperationSpec<'_>) -> Value {
     let (writable, readable) = match spec.access_profiles {
-        OpenApiAccessProfiles::All => (
-            writable_fields_for_route(spec.route, spec.entity),
-            spec.route
+        OpenApiAccessProfiles::All => {
+            let patching = spec
+                .route
                 .access_profiles
                 .iter()
                 .filter_map(|profile_id| spec.entity.access_profiles.get(profile_id))
-                .flat_map(|profile| profile.readable_fields.iter().cloned())
-                .collect(),
-        ),
+                .filter(|profile| profile.operations.contains(&Operation::Patch))
+                .collect::<Vec<_>>();
+            (
+                patching
+                    .iter()
+                    .flat_map(|profile| profile.writable_fields.iter().cloned())
+                    .collect(),
+                patching
+                    .iter()
+                    .flat_map(|profile| profile.readable_fields.iter().cloned())
+                    .collect(),
+            )
+        }
         OpenApiAccessProfiles::Selected(profile_id) => spec
             .entity
             .access_profiles
@@ -5178,22 +5189,28 @@ mod patch_schema_tests {
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
 
-    fn patch_paths(profiles: OpenApiAccessProfiles<'_>) -> BTreeMap<String, BTreeSet<String>> {
+    fn patch_paths(
+        method: Operation,
+        profiles: OpenApiAccessProfiles<'_>,
+    ) -> BTreeMap<String, BTreeSet<String>> {
         let project = parse_project_json(br#"{
             "apiVersion":"registry.registrystack.org/v1alpha1",
             "kind":"RegistryProject",
             "registry":{"id":"patch-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patch-artifacts.example.test"},
             "entities":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
+                "batch":{"maximumItems":3,"maximumBytes":8192},
                 "fields":[
                     {"id":"code","type":"string","maxLength":32,"classification":"internal"},
                     {"id":"label","type":"string","maxLength":64,"classification":"internal"},
-                    {"id":"note","apiName":"remark","type":"string","maxLength":64,"classification":"internal"}
+                    {"id":"note","apiName":"remark","type":"string","maxLength":64,"classification":"internal"},
+                    {"id":"stamp","type":"string","maxLength":64,"classification":"internal"}
                 ]
             }],
             "accessProfiles":[
-                {"id":"labeller","default":true,"principalClaim":"principal","permissions":[{"entity":"site","operations":["get","patch"],"readableFields":["code","label"],"writableFields":["label"], "rowBoundaries": []}]},
-                {"id":"annotator","principalClaim":"principal","permissions":[{"entity":"site","operations":["get","patch"],"readableFields":["note"],"writableFields":["note"], "rowBoundaries": []}]}
+                {"id":"labeller","default":true,"principalClaim":"principal","permissions":[{"entity":"site","operations":["get","patch","batch"],"readableFields":["code","label"],"writableFields":["label"], "rowBoundaries": []}]},
+                {"id":"annotator","principalClaim":"principal","permissions":[{"entity":"site","operations":["get","patch","batch"],"readableFields":["note"],"writableFields":["note"], "rowBoundaries": []}]},
+                {"id":"stamper","principalClaim":"principal","permissions":[{"entity":"site","operations":["get","create","batch"],"readableFields":["stamp"],"writableFields":["stamp"], "rowBoundaries": []}]}
             ]
         }"#).expect("patch artifact fixture parses");
         let registry = compile_project(&project, &[], CompileProfile::Authoring)
@@ -5203,8 +5220,8 @@ mod patch_schema_tests {
             .routes()
             .routes
             .iter()
-            .find(|route| route.operation == Operation::Patch)
-            .expect("fixture patch route exists");
+            .find(|route| route.operation == method)
+            .expect("fixture route exists");
         let operation = openapi_operation(OpenApiOperationSpec {
             registry_identifier: registry.registry_id(),
             route,
@@ -5216,32 +5233,47 @@ mod patch_schema_tests {
             readable_fields: None,
             access_profiles: profiles,
         });
-        let schema = &operation["requestBody"]["content"]["application/json-patch+json"]["schema"];
         let mut paths = BTreeMap::<String, BTreeSet<String>>::new();
-        for shape in schema["items"]["oneOf"]
-            .as_array()
-            .expect("closed operation shapes")
-        {
-            let path_enum = shape["properties"]["path"]["enum"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            for op in shape["properties"]["op"]["enum"]
-                .as_array()
-                .cloned()
-                .unwrap_or_else(|| vec![shape["properties"]["op"]["const"].clone()])
-            {
-                paths
-                    .entry(op.as_str().unwrap().to_owned())
-                    .or_default()
-                    .extend(
-                        path_enum
-                            .iter()
-                            .map(|path| path.as_str().unwrap().to_owned()),
-                    );
-            }
-        }
+        collect_patch_paths(&operation["requestBody"], &mut paths);
         paths
+    }
+
+    /// Every closed JSON Patch operation shape anywhere in `value`, by `op`.
+    fn collect_patch_paths(value: &Value, paths: &mut BTreeMap<String, BTreeSet<String>>) {
+        match value {
+            Value::Object(object) => {
+                if let (Some(op), Some(path_enum)) = (
+                    object.get("properties").and_then(|p| p.get("op")),
+                    object
+                        .get("properties")
+                        .and_then(|p| p.get("path"))
+                        .and_then(|path| path.get("enum"))
+                        .and_then(Value::as_array),
+                ) {
+                    let ops = op["enum"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_else(|| vec![op["const"].clone()]);
+                    for op in ops {
+                        paths
+                            .entry(op.as_str().unwrap().to_owned())
+                            .or_default()
+                            .extend(
+                                path_enum
+                                    .iter()
+                                    .map(|path| path.as_str().unwrap().to_owned()),
+                            );
+                    }
+                }
+                object
+                    .values()
+                    .for_each(|value| collect_patch_paths(value, paths));
+            }
+            Value::Array(items) => items
+                .iter()
+                .for_each(|value| collect_patch_paths(value, paths)),
+            _ => {}
+        }
     }
 
     fn set(paths: &[&str]) -> BTreeSet<String> {
@@ -5250,7 +5282,10 @@ mod patch_schema_tests {
 
     #[test]
     fn a_callers_patch_schema_names_only_the_selected_profiles_fields() {
-        let labeller = patch_paths(OpenApiAccessProfiles::Selected("labeller"));
+        let labeller = patch_paths(
+            Operation::Patch,
+            OpenApiAccessProfiles::Selected("labeller"),
+        );
         assert_eq!(labeller["replace"], set(&["/data/label"]));
         assert_eq!(labeller["test"], set(&["/data/code", "/data/label"]));
         assert!(
@@ -5261,15 +5296,32 @@ mod patch_schema_tests {
             "another profile's field stays out of a caller's document: {labeller:?}"
         );
 
-        let annotator = patch_paths(OpenApiAccessProfiles::Selected("annotator"));
+        let annotator = patch_paths(
+            Operation::Patch,
+            OpenApiAccessProfiles::Selected("annotator"),
+        );
         assert_eq!(annotator["replace"], set(&["/data/remark"]));
         assert_eq!(annotator["test"], set(&["/data/remark"]));
 
-        let package = patch_paths(OpenApiAccessProfiles::All);
+        let package = patch_paths(Operation::Patch, OpenApiAccessProfiles::All);
         assert_eq!(package["replace"], set(&["/data/label", "/data/remark"]));
         assert_eq!(
             package["test"],
             set(&["/data/code", "/data/label", "/data/remark"])
+        );
+    }
+
+    #[test]
+    fn a_package_batch_patch_schema_names_only_patching_profiles_fields() {
+        let package = patch_paths(Operation::Batch, OpenApiAccessProfiles::All);
+        assert_eq!(package["replace"], set(&["/data/label", "/data/remark"]));
+        assert_eq!(
+            package["test"],
+            set(&["/data/code", "/data/label", "/data/remark"])
+        );
+        assert!(
+            package.values().flatten().all(|path| path != "/data/stamp"),
+            "a create-only profile's field is not a batch patch path: {package:?}"
         );
     }
 }
