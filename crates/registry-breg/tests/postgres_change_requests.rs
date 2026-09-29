@@ -2172,6 +2172,124 @@ async fn retained_attachment_apply_access_checks_frozen_guard_row_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attachment_downloads_write_a_subject_access_log_entry() {
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(attachment_project()).unwrap();
+    assert_eq!(source["entities"][2]["id"], "correction-request");
+    source["entities"][2]["accessLog"] = json!({"subjectField":"tenant"});
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let get_route = registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| {
+            route.entity_id == "correction-request"
+                && route.operation == registry_breg::contract::Operation::Get
+        })
+        .unwrap()
+        .id
+        .clone();
+    let download_operation = format!("{get_route}.attachment.evidence.get");
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry,
+        identity,
+        PACKAGE_ID,
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+    ));
+    let steward = claims("steward", "access-log-attachment-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "access-log-attachment-old-site",
+        json!({"tenant":TENANT,"name":"old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "access-log-attachment-new-site",
+        json!({"tenant":TENANT,"name":"new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "access-log-attachment-placement",
+        json!({"tenant":TENANT,"site":old_site.id}),
+    )
+    .await;
+    let draft = create_record(&app, "/v1/records/correction-requests?accessProfile=submitter", submitter.clone(),
+        "access-log-attachment-request", json!({"tenant":TENANT,"placement":placement.id,"proposedSite":new_site.id,"reason":"access log attachment"})).await;
+    let before = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=submitter",
+            draft.id
+        ),
+        submitter.clone(),
+    )
+    .await;
+    let uploaded = send(
+        &app,
+        Method::PATCH,
+        &format!(
+            "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+            draft.id
+        ),
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/octet-stream"),
+            ("idempotency-key", "access-log-attachment-upload"),
+            ("if-match", &before.etag),
+        ],
+        b"access log attachment".to_vec(),
+    )
+    .await;
+    assert_eq!(uploaded.status(), StatusCode::OK);
+    let logged_downloads = || async {
+        database
+            .admin
+            .query(
+                "SELECT record_id::text, requester FROM registry_internal.registry_subject_access_log
+                  WHERE entity_id='correction-request' AND operation_id=$1",
+                &[&download_operation],
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+            .collect::<Vec<_>>()
+    };
+    assert!(logged_downloads().await.is_empty());
+
+    let downloaded = send(
+        &app,
+        Method::GET,
+        &format!("/v1/records/correction-requests/{}/attachments/evidence?proposalVersion=1&accessProfile=submitter", draft.id),
+        Some(submitter),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(downloaded.status(), StatusCode::OK);
+    assert_eq!(
+        logged_downloads().await,
+        [(draft.id.clone(), SUBMITTER.to_owned())],
+        "one download writes one entry naming the downloaded record and caller"
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires disposable PostgreSQL and BREG_TEST_S3_ENDPOINT/BREG_TEST_S3_BUCKET"]
 async fn real_s3_http_attachments_preserve_proposals_and_complete_operator_erasure() {
     let (_cleanup_secrets, cleanup_storage) = attachment_s3_storage().await;

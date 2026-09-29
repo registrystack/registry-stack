@@ -19,7 +19,8 @@ use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
-    PostgresRecordReadService, RegistryLockKey, RegistryStateTestIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
+    PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use registry_platform_audit::AuditProfile;
@@ -804,6 +805,242 @@ async fn one_retention_tick_erases_every_expired_batch_and_reports_a_bounded_bac
     assert_eq!(access_log_rows(&db).await, 1, "the live entry is retained");
 
     drop(pool);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+fn compiled_with_history() -> CompiledRegistry {
+    let source = json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+        "registry":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+            "fields":[{"id":"subject","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"restricted"},
+                {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
+            "accessLog":{"subjectField":"subject"}}],
+        "accessProfiles":[
+            {"id":"reader","default":true,"principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[
+                {"entity":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
+                    "revisionAccess":true,"rowBoundaries":[]}]},
+            {"id":"steward","principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[
+                {"entity":"entry","operations":["create"],"readableFields":["subject","label"],
+                    "writableFields":["subject","label"],"rowBoundaries":[]}]}
+        ]
+    });
+    compile_project(
+        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .unwrap()
+}
+
+/// Serves record, snapshot, revision, and mutation routes, so a record gets
+/// its revision history through the ordinary create path.
+async fn setup_with_history() -> (TestDatabase, Router, MockIdp, Arc<CompiledRegistry>) {
+    let database = TestDatabase::create(4).await;
+    let registry = Arc::new(compiled_with_history());
+    let (migration, task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .unwrap();
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE,
+            database_id: "history-access-database",
+            label: "history-access-package-1",
+        },
+    )
+    .await
+    .unwrap();
+    drop(migration);
+    task.abort();
+    let idp = MockIdp::start().await;
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        idp.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
+    verifier.allowed_clients = vec!["portal".into(), "agency".into()];
+    let auth = Arc::new(
+        RegistryAuthenticator::new(
+            &registry,
+            verifier,
+            keys,
+            AuthorityClaimConfig::new("sub", Some("registry_purpose".into())),
+        )
+        .unwrap(),
+    );
+    let pool = database.runtime_config.build_pool().unwrap();
+    let lock_key = RegistryLockKey::derive(PACKAGE).unwrap();
+    let audit =
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x52; 32].into()).unwrap());
+    let cursors = Arc::new(
+        CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),
+    );
+    let records = PostgresRecordReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+        cursors.clone(),
+    );
+    let revisions = PostgresRevisionReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+    );
+    let snapshots = PostgresSnapshotReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+        cursors.clone(),
+    );
+    let mutations = PostgresRecordMutationService::new(
+        pool,
+        registry.clone(),
+        identity.clone(),
+        "history-access-instance",
+        lock_key,
+        Duration::from_secs(2),
+        audit,
+    );
+    let service = HttpService::new(
+        registry.clone(),
+        ReadRuntimeIdentity {
+            package_revision: identity.activation_id,
+            schema_fingerprint: identity.schema_fingerprint,
+        },
+        Arc::new(records),
+        Arc::new(Ready),
+        cursors,
+    )
+    .with_postgres_revisions(Arc::new(revisions))
+    .with_snapshots(Arc::new(snapshots))
+    .with_postgres_mutations(Arc::new(mutations));
+    (
+        database,
+        authenticated_router(Arc::new(service), auth),
+        idp,
+        registry,
+    )
+}
+
+fn route_operation(
+    registry: &CompiledRegistry,
+    operation: registry_breg::contract::Operation,
+) -> String {
+    registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.entity_id == "entry" && route.operation == operation)
+        .unwrap()
+        .id
+        .clone()
+}
+
+async fn logged_operations(db: &TestDatabase, record: &str) -> Vec<String> {
+    db.admin
+        .query(
+            "SELECT operation_id FROM registry_internal.registry_subject_access_log
+              WHERE entity_id='entry' AND record_id=$1::text::uuid ORDER BY accessed_at, operation_id",
+            &[&record],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+#[tokio::test]
+async fn snapshot_and_revision_reads_write_subject_access_log_entries() {
+    let (db, app, idp, registry) = setup_with_history().await;
+    let steward = token(&idp, "agency", "steward");
+    let reader = token(&idp, "agency", "officer");
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/records/entries?accessProfile=steward")
+        .header("authorization", format!("Bearer {steward}"))
+        .header("content-type", "application/json")
+        .header("idempotency-key", "history-access-create")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"data":{"subject":SUBJECT,"label":"protected-label"}}))
+                .unwrap(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+            .unwrap();
+    let record = created["data"]["recordIdentifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        logged_operations(&db, &record).await.is_empty(),
+        "a write is not a logged read"
+    );
+
+    let (status, revisions) = send(
+        &app,
+        &reader,
+        Method::GET,
+        &format!("/v1/records/entries/{record}/revisions"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{revisions}");
+    assert_eq!(revisions["items"].as_array().map(Vec::len), Some(1));
+    let revision_operation =
+        route_operation(&registry, registry_breg::contract::Operation::Revisions);
+    assert_eq!(
+        logged_operations(&db, &record).await,
+        [revision_operation.clone()]
+    );
+
+    let (status, snapshot) = send(
+        &app,
+        &reader,
+        Method::GET,
+        "/v1/records/entries:snapshot",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    assert_eq!(snapshot["items"].as_array().map(Vec::len), Some(1));
+    let mut logged = logged_operations(&db, &record).await;
+    logged.sort();
+    let mut expected = vec![
+        revision_operation,
+        route_operation(&registry, registry_breg::contract::Operation::Snapshot),
+    ];
+    expected.sort();
+    assert_eq!(logged, expected);
+
+    let (status, log) = history(&app, &token(&idp, "portal", SUBJECT), &record, "").await;
+    assert_eq!(status, StatusCode::OK, "{log}");
+    let events = log["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event["requester"] == "agency"));
+
+    db.assert_every_audit_request_answered_once();
     drop(app);
     drop(idp);
     db.cleanup().await;
