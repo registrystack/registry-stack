@@ -2099,7 +2099,7 @@ class Evidence:
         Evidence configuration keys and changes the package format: rewrite
         the target's governance and runtime, package it with this side's
         evidencectl, install it, and point the operative runtime at it. The
-        audit chain, secrets, and keys stay where they are.
+        audit stream, secrets, and keys stay where they are.
         """
 
         if not reads_runtime_config(side):

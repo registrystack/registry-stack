@@ -204,7 +204,7 @@ Both service images run as the Distroless `nonroot` user (UID and GID 65532)
 and start `serve` with the runtime configuration at
 `/etc/breg-mcp/runtime.yaml` or `/etc/breg-review/runtime.yaml`, which the
 operator mounts along with the secrets the configuration references. Each
-service writes its audit chain under its working directory, `/var/lib/breg-mcp`
+service writes its audit stream under its working directory, `/var/lib/breg-mcp`
 or `/var/lib/breg-review`. The audit sink refuses a directory that the runtime
 user does not own or that others may write to, so mount a persistent volume
 there that keeps the image's ownership and `0700` mode. The listener binds a
