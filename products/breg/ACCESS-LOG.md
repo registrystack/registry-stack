@@ -180,8 +180,8 @@ entry, reveal a delayed entry early, or rewrite its reason.
 ## Reads covered
 
 BReg logs each authorized record materialized from storage through direct get,
-list, lookup, relationship traversal, snapshot, revision, and attachment
-download routes. Paging lookahead rows are removed first, so they do not become
+list (including GIS collection items), lookup, relationship traversal, snapshot,
+revision, and attachment download routes. Paging lookahead rows are removed first, so they do not become
 events. A refusal before record access and a query that matches no record create
 no subject-log entry. An unresolved ambiguous lookup can materialize candidate
 records before it refuses the response; those accesses are recorded. Each

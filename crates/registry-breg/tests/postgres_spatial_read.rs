@@ -642,6 +642,41 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gis_item_reads_write_a_subject_access_log_entry_per_feature() {
+    let harness = SpatialHarness::create(compiled_spatial_registry_with_access_log()).await;
+    seed_spatial_rows(&harness).await;
+    let app = harness.router(None, cursor_codec());
+    let response = send(
+        &app,
+        "/v1/gis/collections/service-site.map-reader/items?bbox=100.25,13.25,100.25,13.25&limit=20&f=json",
+        Some(claims(["zone-a"])),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(feature_ids(&body_json(response).await), [ZERO_AREA]);
+    let logged = harness
+        .database
+        .admin
+        .query(
+            "SELECT record_id::text, requester FROM registry_internal.registry_subject_access_log
+              WHERE entity_id='service-site'",
+            &[],
+        )
+        .await
+        .expect("access-log rows are readable by the administrator")
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        logged,
+        [(ZERO_AREA.to_owned(), PRINCIPAL_CANARY.to_owned())],
+        "each returned GIS feature is one logged record read"
+    );
+    harness.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_spatial_response_budget_refuses_oversized_payloads_atomically() {
     let harness = SpatialHarness::create(compiled_spatial_registry()).await;
     seed_spatial_budget_rows(&harness).await;
@@ -2170,6 +2205,26 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(project_source.as_bytes()).expect("spatial fixture parses");
     compile_project_with_assets(&project, &[module], &assets, CompileProfile::Authoring)
         .expect("spatial fixture compiles to trusted inventories")
+}
+
+fn compiled_spatial_registry_with_access_log() -> registry_breg::CompiledRegistry {
+    let source = spatial_registry_module_source().replacen(
+        r#""tombstone":true,"#,
+        r#""tombstone":true,"accessLog":{"subjectField":"code"},"#,
+        1,
+    );
+    let module = parse_module_json(source.as_bytes()).expect("spatial fixture module parses");
+    let assets = vec![
+        spatial_module_asset("sql/map-label.sql", spatial_map_label_sql()),
+        spatial_module_asset("sql/zone-site-count.sql", spatial_zone_site_count_sql()),
+        spatial_module_asset("sql/zone-label.sql", spatial_zone_label_sql()),
+        spatial_module_asset("sql/region-label.sql", spatial_region_label_sql()),
+    ];
+    let digest = module_digest_with_assets(&module, &assets);
+    let project_source = spatial_registry_project_source(&digest);
+    let project = parse_project_json(project_source.as_bytes()).expect("spatial fixture parses");
+    compile_project_with_assets(&project, &[module], &assets, CompileProfile::Authoring)
+        .expect("access-logged spatial fixture compiles")
 }
 
 fn spatial_module_asset(path: &str, sql: &str) -> ModuleAssetSource {
