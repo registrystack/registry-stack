@@ -447,14 +447,27 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
         release_candidate = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(release_candidate)
         stdout = io.StringIO()
+        tools_stdout = io.StringIO()
         with mock.patch.object(
             release_candidate.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
-        ), redirect_stdout(stdout):
-            self.assertEqual(
-                0,
-                release_candidate.main(["image-names", "--version", "0.36.0"]),
-            )
+        ):
+            with redirect_stdout(stdout):
+                self.assertEqual(
+                    0,
+                    release_candidate.main(["image-names", "--version", "0.36.0"]),
+                )
+            with redirect_stdout(tools_stdout):
+                self.assertEqual(
+                    0,
+                    release_candidate.main(
+                        ["image-operator-tools", "--version", "0.36.0"]
+                    ),
+                )
         roster = MODULE.parse_roster(stdout.getvalue())
+        self.assertEqual(
+            "messagingctl",
+            MODULE.parse_operator_tools(tools_stdout.getvalue(), roster)["messaging"],
+        )
         self.assertEqual(
             roster,
             (

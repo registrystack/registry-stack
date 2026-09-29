@@ -412,6 +412,8 @@ jobs:
               "messaging ${{ needs.validate.outputs.version }}"
             test "$("dist/bin/messagingctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "messagingctl ${{ needs.validate.outputs.version }}"
+            test "$(dist/image-bin/messagingctl --version)" = \
+              "messagingctl ${{ needs.validate.outputs.version }}"
           fi
 
       - name: Set up Docker Buildx

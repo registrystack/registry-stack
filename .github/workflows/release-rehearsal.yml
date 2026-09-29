@@ -294,6 +294,8 @@ jobs:
               "messaging ${REHEARSAL_VERSION}"
             test "$("dist/bin/messagingctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
               "messagingctl ${REHEARSAL_VERSION}"
+            test "$(dist/image-bin/messagingctl --version)" = \
+              "messagingctl ${REHEARSAL_VERSION}"
           fi
 
       - name: Set up Docker Buildx for advisory evidence

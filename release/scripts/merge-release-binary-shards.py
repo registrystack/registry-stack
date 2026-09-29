@@ -79,6 +79,8 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
             f"messagingctl-{tag}-linux-amd64",
         ]
         image_bins.append(("messaging", messaging[0]))
+        if parsed >= OPERATOR_TOOL_VERSION:
+            image_bins.append(("messagingctl", messaging[1]))
     common = [
         f"evidence-{tag}-linux-amd64",
         f"evidencectl-{tag}-linux-amd64",

@@ -292,6 +292,9 @@ build_payload() {
     cp target/release/messaging "dist/bin/messaging-${RELEASE_TAG}-linux-amd64"
     cp target/release/messagingctl "dist/bin/messagingctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/messaging dist/image-bin/messaging
+    if [[ "${include_operator_tools}" -eq 1 ]]; then
+      cp target/release/messagingctl dist/image-bin/messagingctl
+    fi
   fi
 
   # Nothing but the staged payload is in these directories yet: the checksum
@@ -480,6 +483,9 @@ if [[ ("${group}" == all || "${group}" == messaging) && "${include_messaging}" -
     "messagingctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(messaging)
+  if [[ "${include_operator_tools}" -eq 1 ]]; then
+    image_bin_binaries+=(messagingctl)
+  fi
 fi
 if [[ "${group}" == all || "${group}" == core ]]; then
   bin_assets+=(

@@ -44,6 +44,7 @@ OPERATOR_TOOLS = {
     "breg": "bregctl",
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
+    "messaging": "messagingctl",
 }
 SEMVER_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")

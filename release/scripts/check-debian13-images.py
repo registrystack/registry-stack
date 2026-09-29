@@ -201,6 +201,7 @@ HTTP_PROBE_DOCKERFILES = {
     },
     Path("release/docker/Dockerfile.messaging"): {
         "binary": "messaging",
+        "tool": "messagingctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/messaging"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-messaging/runtime.yaml", "serve"]',
     },

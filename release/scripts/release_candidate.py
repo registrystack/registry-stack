@@ -75,6 +75,7 @@ IMAGE_OPERATOR_TOOLS = {
     "breg": "bregctl",
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
+    "messaging": "messagingctl",
 }
 # Registry Messaging joins the release set from the release that
 # release_roster.MESSAGING_FIRST_RELEASE names.

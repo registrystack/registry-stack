@@ -966,13 +966,24 @@ class ReleaseCandidateTest(TestCase):
         for version in ("0.33.0", "0.35.0", "0.35.9"):
             with self.subTest(version=version):
                 self.assertEqual({}, self.module.image_operator_tools(version))
-        for version in ("0.36.0", "1.0.0"):
+        self.assertEqual(
+            {
+                "breg": "bregctl",
+                "casework": "caseworkctl",
+                "scheduling": "schedulingctl",
+            },
+            self.module.image_operator_tools("0.36.0"),
+        )
+        # The Messaging image carries messagingctl only in a release that
+        # ships Messaging, here the hypothetical first release.
+        for version in ("0.37.0", "1.0.0"):
             with self.subTest(version=version):
                 self.assertEqual(
                     {
                         "breg": "bregctl",
                         "casework": "caseworkctl",
                         "scheduling": "schedulingctl",
+                        "messaging": "messagingctl",
                     },
                     self.module.image_operator_tools(version),
                 )
@@ -983,6 +994,11 @@ class ReleaseCandidateTest(TestCase):
             (
                 "0.36.0",
                 "breg=bregctl casework=caseworkctl scheduling=schedulingctl\n",
+            ),
+            (
+                "0.37.0",
+                "breg=bregctl casework=caseworkctl messaging=messagingctl "
+                "scheduling=schedulingctl\n",
             ),
         ):
             with self.subTest(version=version):
@@ -1047,6 +1063,16 @@ class ReleaseCandidateTest(TestCase):
                         )
                     self.assertEqual(0, result)
                     self.assertNotIn("messaging", stdout.getvalue().split())
+                    self.assertNotIn(
+                        "messaging", self.module.image_operator_tools(version)
+                    )
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = self.module.main(
+                            ["image-operator-tools", "--version", version]
+                        )
+                    self.assertEqual(0, result)
+                    self.assertNotIn("messagingctl", stdout.getvalue())
 
     def test_breg_services_join_only_the_rosters_from_their_first_release(
         self,

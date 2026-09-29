@@ -336,7 +336,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "        (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
             "images = ['discovery', 'breg', 'casework', 'scheduling', 'messaging', 'evidence', 'relay']\n"
             "if parsed >= (0, 36, 0):\n"
-            "    images += ['bregctl', 'caseworkctl', 'schedulingctl']\n"
+            "    images += ['bregctl', 'caseworkctl', 'schedulingctl', 'messagingctl']\n"
             "for name in images:\n"
             "    if name in selected:\n"
             "        (image_dir / name).write_text(name + '\\n')\n",
@@ -660,8 +660,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             sorted(path.name for path in (self.root / "dist/bin").iterdir()),
         )
         self.assertEqual(
-            ["messaging"],
-            [path.name for path in (self.root / "dist/image-bin").iterdir()],
+            ["messaging", "messagingctl"],
+            sorted(path.name for path in (self.root / "dist/image-bin").iterdir()),
         )
 
     def test_outer_builder_dispatches_each_group_with_canonical_container_paths(
