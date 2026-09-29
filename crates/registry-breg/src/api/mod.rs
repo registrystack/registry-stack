@@ -1212,13 +1212,13 @@ async fn snapshot_dispatch(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse_snapshot(raw_query.as_deref()) {
         Ok(options) => options,
-        Err(_) => {
+        Err(error) => {
             return audited_known_read_refusal(
                 &service,
                 &route,
                 &claims,
                 None,
-                concealed(),
+                error.problem(),
                 &correlation,
             )
             .await;
@@ -4551,7 +4551,7 @@ impl QueryOptions {
         for pair in raw.split('&') {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
             let name = percent_decode(name)?;
-            let value = percent_decode(value)?;
+            let value = percent_decode(value).map_err(|error| error.at_parameter(&name))?;
             if name == REQUEST_HISTORY_PARAMETER {
                 let at_fault = QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER);
                 let version = value.parse::<u32>().map_err(|_| at_fault)?;
@@ -4590,7 +4590,9 @@ impl QueryOptions {
             }
             for pair in raw.split('&') {
                 let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
-                pairs.push((percent_decode(name)?, percent_decode(value)?));
+                let name = percent_decode(name)?;
+                let value = percent_decode(value).map_err(|error| error.at_parameter(&name))?;
+                pairs.push((name, value));
             }
         }
         let parsed =
@@ -4735,6 +4737,21 @@ enum QueryParseError {
 }
 
 impl QueryParseError {
+    /// Locate an unlocated refusal of a value at its parameter, when the
+    /// decoded name is one of the fixed parameter names.
+    fn at_parameter(self, name: &str) -> Self {
+        match (
+            self,
+            strict_query::QUERY_PARAMETERS
+                .iter()
+                .copied()
+                .find(|parameter| *parameter == name),
+        ) {
+            (Self::Invalid, Some(parameter)) => Self::InvalidAt(parameter),
+            (error, _) => error,
+        }
+    }
+
     fn problem(self) -> Response {
         match self {
             Self::Invalid => invalid_query(),

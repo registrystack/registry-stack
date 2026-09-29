@@ -733,6 +733,11 @@ carries caller-controlled bytes into responses and logs.
   depend on a withheld field either. The feature API and lookup bodies keep
   their unlocated refusals: the feature API speaks its own parameter names,
   and lookup refusals keep the value-free equivalence BREG-SEC-20 pins.
+- A `:snapshot` route now answers a query it cannot parse with the located
+  `400 query.invalid` other native read routes already gave before
+  authorization, instead of the concealed `404`. The parse never consults a
+  grant or a record, so the answer tells the caller only that its own query
+  string is malformed, which every other read route already told it.
 - `detail` and `code` are unchanged, so typed clients keep matching them,
   and the Rust client accepts the new forms only on `request.invalid` and
   `query.invalid`, never exposes them, and still turns any other location

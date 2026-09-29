@@ -41,8 +41,11 @@
   `/items`, `/changeContext`, `/items/<n>` and its fixed members, and the
   create and patch forms under them; a malformed `Idempotency-Key` names the
   header; and a `query.invalid` refusal names the parameter, such as
-  `$select`. An unknown and a withheld name answer the same problem and are
-  never echoed. A client that rejects an unfamiliar problem member accepts
+  `$select`, including a malformed percent-encoding of its value. A
+  `:snapshot` route answers a query it cannot parse with that located
+  `400 query.invalid`, like every other native read route, where it answered
+  `404 resource.not_found`. An unknown and a withheld name answer the same
+  problem and are never echoed. A client that rejects an unfamiliar problem member accepts
   `fieldPath` on `request.invalid` and `query.invalid`; the Rust, Node.js,
   and Python BReg clients do in this release, and a client that pins exact
   problem bodies drops `fieldPath` before comparing.

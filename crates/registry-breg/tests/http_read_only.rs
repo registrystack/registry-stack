@@ -953,6 +953,52 @@ async fn snapshot_rejects_ambiguous_time_and_cursor_overrides_before_history_io(
     assert_eq!(records.calls.load(Ordering::SeqCst), 0);
 }
 
+/// #1442: a snapshot query refusal names its fixed parameter like every
+/// other native read route, and a malformed value encoding is located at the
+/// parameter it belongs to. A parameter name the caller made up is not named.
+#[tokio::test]
+async fn query_refusals_name_the_fixed_parameter_even_for_malformed_encoding() {
+    let (app, records, snapshots) = snapshot_harness(SNAPSHOT_PROJECT, &[]);
+    for (uri, field_path) in [
+        (
+            "/v1/records/assignments:snapshot?snapshot=a&snapshot=b",
+            Some("snapshot"),
+        ),
+        (
+            "/v1/records/assignments:snapshot?validAt=%ZZ",
+            Some("validAt"),
+        ),
+        ("/v1/records/assignments:snapshot?$top=101", Some("$top")),
+        (
+            "/v1/records/assignments:snapshot?asOf=2026-06-05",
+            Some("asOf"),
+        ),
+        ("/v1/records/assignments:snapshot?$expand=household", None),
+        ("/v1/records/assignments?$top=%ZZ", Some("$top")),
+        ("/v1/records/assignments?%ZZ=1", None),
+    ] {
+        let response = send_to(
+            &app,
+            Method::GET,
+            uri,
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "query.invalid", "{uri}");
+        assert_eq!(problem["detail"], "The query request is invalid.", "{uri}");
+        assert_eq!(
+            problem.get("fieldPath").and_then(Value::as_str),
+            field_path,
+            "{uri}"
+        );
+        assert!(!problem.to_string().contains("expand"), "{uri}");
+    }
+    assert!(snapshots.requests.lock().unwrap().is_empty());
+    assert_eq!(records.calls.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn snapshot_default_projection_excludes_live_derived_fields() {
     let source = DERIVED_DISCOVERY_PROJECT.replace(
