@@ -1,5 +1,5 @@
 current: latest
-released: v0.35.0
+released: v0.36.0
 published_archive_limit: 3
 docsets:
   - id: latest
@@ -36,33 +36,33 @@ docsets:
     label: v0.36.0
     path: /v/0.36.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.36.0
     repo_docs_source: monorepo
     published_at: 2026-09-29
-    description: Registry Stack v0.36.0 beta-48 candidate documentation set.
+    description: Released Registry Stack v0.36.0 beta-48 documentation set.
     products:
       registry-stack:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
       registry-relay:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
       registry-manifest:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
       registry-evidence:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
       registry-casework:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
       registry-scheduling:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
       registry-render:
         version: v0.36.0
-        ref: v0.36.0
+        ref: 0b9b6a7ce5ccc2c8022ea78f881691c3c512e6cf
   - id: v0.35.0
     label: v0.35.0
     path: /v/0.35.0/
