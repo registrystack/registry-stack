@@ -103,7 +103,22 @@ test('wraps a docset-gated product group of the index in a DocsetProduct region'
   // no trace of it in a docset that does not publish the product.
   assert.doesNotMatch(index.replace(region[0], '\n'), /messaging/iu);
   // Only gated groups are wrapped.
-  assert.equal(index.match(/<DocsetProduct /gu).length, 1);
+  assert.equal(index.match(/<DocsetProduct /gu).length, 2);
+});
+
+test('wraps the Base Registry Engine citizen gateway group of the index in a DocsetProduct region', () => {
+  const index = renderCatalog(fixtureCatalog(), fixtureReviewMetadata()).get('index.mdx');
+  const region = index.match(
+    /\n<DocsetProduct product="registry-breg-services">\n([\s\S]*?)\n<\/DocsetProduct>\n/u,
+  );
+  assert.ok(region, 'the citizen gateway group must sit in a DocsetProduct region');
+  assert.match(region[1], /^## Base Registry Engine citizen gateway$/mu);
+  assert.match(region[1], /\(\.\/breg-mcp\/\)/u);
+  assert.match(region[1], /\(\.\/breg-review\/\)/u);
+  // The Base Registry Engine group itself stays published in every docset.
+  const rest = index.replace(region[0], '\n');
+  assert.match(rest, /^## Base Registry Engine$/mu);
+  assert.doesNotMatch(rest, /breg-mcp|breg-review|citizen gateway/iu);
 });
 
 test('renders required groups and conditional requirements', () => {

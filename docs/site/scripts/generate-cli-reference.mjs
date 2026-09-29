@@ -56,11 +56,15 @@ const hiddenCommands = new Set([
 ]);
 const groups = [
   { title: 'Base Registry Engine', binaries: ['breg', 'bregctl'] },
-  { title: 'Base Registry Engine citizen gateway', binaries: ['breg-mcp', 'breg-review'] },
-  { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
-  { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   // A group with a product is published only by docsets carrying that product
   // (docs/site/src/lib/docset-products.mjs gates its command pages).
+  {
+    title: 'Base Registry Engine citizen gateway',
+    binaries: ['breg-mcp', 'breg-review'],
+    product: 'registry-breg-services',
+  },
+  { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
+  { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },

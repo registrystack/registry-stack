@@ -69,6 +69,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasScheduling = Boolean(selectedDocset.products?.['registry-scheduling']);
   const hasRender = Boolean(selectedDocset.products?.['registry-render']);
   const hasMessaging = Boolean(selectedDocset.products?.['registry-messaging']);
+  const hasBregServices = Boolean(selectedDocset.products?.['registry-breg-services']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   const currentHasMessaging = Boolean(currentDocset.products?.['registry-messaging']);
@@ -91,6 +92,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasScheduling,
     hasRender,
     hasMessaging,
+    hasBregServices,
     currentHasMessaging,
     selectedDocset,
     internalRedirect,
@@ -108,6 +110,7 @@ const {
   hasScheduling,
   hasRender,
   hasMessaging,
+  hasBregServices,
   currentHasMessaging,
   selectedDocset,
   internalRedirect,
@@ -593,7 +596,9 @@ export default defineConfig({
                 { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],
             },
-            {
+            // breg-mcp and breg-review are published only by docsets that carry
+            // them (src/lib/docset-products.mjs).
+            ...(hasBregServices ? [{
               label: 'Citizen chat assistant',
               collapsed: true,
               items: [
@@ -601,7 +606,7 @@ export default defineConfig({
                 { label: 'Configure the gateway and review page', slug: 'configure/breg-mcp' },
                 { label: 'Operate the gateway and review page', slug: 'operate/breg-mcp' },
               ],
-            },
+            }] : []),
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
             { label: 'API reference', slug: 'reference/breg-api' },
             { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },

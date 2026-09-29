@@ -98,6 +98,8 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_task_grants.rs;
     products/breg/TASK_GRANTS.md. */}
 
+<DocsetProduct product="registry-breg-services">
+
 - `breg-mcp` is a new supporting service beside BReg: an MCP gateway a chat
   host uses to act for one verified citizen. It reads the citizen's own
   record and creates or patches change-request drafts for it, and has no
@@ -135,19 +137,21 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg-review/tests/binary.rs;
     products/breg/MCP-GATEWAY.md. */}
 
+</DocsetProduct>
+
 - `registry-platform-ratelimit` is a new shared crate with two in-memory
   keyed limiters, `TokenBucketLimiter` and `FixedWindowCounter`, each capped
   at a fixed number of tracked keys. Evidence now uses it for its request
   budget and failed-selector counter with no change in behavior: the same
-  refill, key cap, pruning, and refusals. The gateway and the review page
-  use it for their limits.
+  refill, key cap, pruning, and refusals.<DocsetProduct product="registry-breg-services"> The
+  gateway and the review page use it for their limits.</DocsetProduct>
 
 {/* Evidence: crates/registry-platform-ratelimit/src/lib.rs, MAX_TRACKED_KEYS;
     crates/registry-platform-ratelimit/src/token_bucket.rs, TokenBucketLimiter;
     crates/registry-platform-ratelimit/src/fixed_window.rs, FixedWindowCounter;
     crates/registry-evidence/src/rate_limit.rs. */}
 
-- Platform crates gain what the gateway and the review page need.
+- Platform crates gain<DocsetProduct product="registry-breg-services"> what the gateway and the review page need</DocsetProduct><DocsetProduct product="registry-breg-services" absent> token exchange, sign-in, and security header primitives</DocsetProduct>.
   `ExchangeAuthorization::upstream` sends an optional actor token with an
   RFC 8693 exchange. `PrivateKeyJwt::redeem_authorization_code` redeems an
   authorization code with PKCE and the configured resource, and returns any
