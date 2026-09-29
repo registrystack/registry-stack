@@ -13,7 +13,7 @@ ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8a
 # their licenses. The runtime stays the entrypoint; an operator runs
 # messagingctl by overriding it.
 # Messaging stores messages and dispatch state in PostgreSQL; only its local
-# append-only audit chain needs a writable persistent directory.
+# append-only audit stream needs a writable persistent directory.
 # Every release that carries Messaging stages messagingctl beside the runtime,
 # and the candidate refuses a build whose staged copy is missing.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
