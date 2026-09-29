@@ -62,6 +62,7 @@ const METADATA_REVISION: &str =
 const EFFECT_DIGEST: &str =
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const TARGET_GET: &str = "records.person-address.get";
+const TARGET_LIST: &str = "records.person-address.list";
 
 /// One draft the mock registry holds.
 #[derive(Debug)]
@@ -111,6 +112,9 @@ pub struct MockRegistry {
     pause_next_metadata_response: AtomicBool,
     metadata_response_paused: tokio::sync::Semaphore,
     release_metadata_response: tokio::sync::Semaphore,
+    /// Whether the metadata also publishes a list of the target entity,
+    /// named first among the target field's reference operations.
+    target_list_first: AtomicBool,
     /// How the registry answers the next draft read instead of the draft.
     next_draft_read: Mutex<Option<Injected>>,
     /// A problem the registry answers the next submit with, before any effect.
@@ -174,6 +178,7 @@ impl MockRegistry {
             pause_next_metadata_response: AtomicBool::new(false),
             metadata_response_paused: tokio::sync::Semaphore::new(0),
             release_metadata_response: tokio::sync::Semaphore::new(0),
+            target_list_first: AtomicBool::new(false),
             next_draft_read: Mutex::new(None),
             next_submit_problem: Mutex::new(None),
         }
@@ -182,6 +187,12 @@ impl MockRegistry {
     /// The registry stops accepting every access token it was issued.
     pub fn refuse_tokens(&self) {
         *self.refusing_tokens.lock().unwrap() = true;
+    }
+
+    /// The metadata publishes a list of the target entity for the review
+    /// profile ahead of its get, as a registry exposing both reads does.
+    pub fn publish_target_list_first(&self) {
+        self.target_list_first.store(true, Ordering::SeqCst);
     }
 
     /// An agent edits citizen A's draft between the render and the submit.
@@ -516,6 +527,74 @@ fn target_operation() -> Value {
     })
 }
 
+/// [`metadata`], also publishing a list of the target entity for the review
+/// profile and naming it before the get among the target field's reference
+/// operations.
+pub fn metadata_with_target_list_first() -> Value {
+    let mut document = metadata();
+    let list_reference = json!({
+        "operationId": TARGET_LIST,
+        "accessProfile": PROFILE,
+        "labelFields": ["address-line"]
+    });
+    let operations = document["operations"].as_array_mut().unwrap();
+    for operation in operations.iter_mut() {
+        for field in operation["fields"].as_array_mut().unwrap() {
+            if let Some(references) = field.pointer_mut("/reference/operations") {
+                references
+                    .as_array_mut()
+                    .unwrap()
+                    .insert(0, list_reference.clone());
+            }
+        }
+    }
+    operations.push(target_list_operation());
+    let target = document["entities"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == TARGET_ENTITY)
+        .unwrap();
+    target["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"operation": "list", "accessProfile": PROFILE}));
+    document
+}
+
+fn target_list_operation() -> Value {
+    let mut list = target_operation();
+    list["id"] = json!(TARGET_LIST);
+    list["path"] = json!(format!("/v1/records/{TARGET_ROUTE}"));
+    list["operation"] = json!("list");
+    list["request"] = json!({
+        "fieldNames": "api",
+        "queryParameters": ["$select", "$skiptoken", "$top"]
+    });
+    list["query"] = json!({
+        "kind": "list",
+        "allowCount": false,
+        "defaultPageSize": 100,
+        "maxPageSize": 100,
+        "maxFilterClauses": 32,
+        "maxInValues": 100,
+        "filterableFields": [],
+        "sortableFields": [],
+        "selectableFields": [
+            {"id": "address-line", "apiName": "addressLine"},
+            {"id": "locality", "apiName": "locality"},
+            {"id": "postal-code", "apiName": "postalCode"}
+        ],
+        "pagination": {
+            "exclusive": true,
+            "parameter": "$skiptoken",
+            "responsePath": "pageInfo.nextCursor"
+        },
+        "temporal": null
+    });
+    list
+}
+
 /// The caller-filtered metadata the registry answers for `citizen-review`.
 pub fn metadata() -> Value {
     let get = operation(
@@ -665,7 +744,12 @@ async fn registry_metadata(
         return problem(BRegProblemCode::ResourceNotFound);
     }
     registry.pause_metadata_response_if_requested().await;
-    json_response(StatusCode::OK, &metadata(), &[])
+    let metadata = if registry.target_list_first.load(Ordering::SeqCst) {
+        metadata_with_target_list_first()
+    } else {
+        metadata()
+    };
+    json_response(StatusCode::OK, &metadata, &[])
 }
 
 async fn read_draft(
