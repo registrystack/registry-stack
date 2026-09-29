@@ -16,8 +16,9 @@ submit is the registry's decision, not the page's.
 closed YAML document and serves the page until SIGINT or SIGTERM, then stops
 accepting connections and exits once the requests in flight are answered.
 `breg-review --runtime-config /absolute/path/review.yaml check` validates the
-same document, reads and parses its secrets, and exits without serving: it
-neither calls the provider nor opens the audit journal. Unknown keys are
+same document, reads and parses its secrets, refuses a client key the sign-in
+client could not sign with, and exits without serving: it neither calls the
+provider nor opens the audit journal. Unknown keys are
 refused, and an error names the key path without echoing its value.
 
 ```yaml

@@ -464,6 +464,32 @@ fn discovered_endpoint(
         })
 }
 
+fn fetch_url_policy(config: &RuntimeConfig) -> FetchUrlPolicy {
+    if config.development() {
+        FetchUrlPolicy::dev()
+    } else {
+        FetchUrlPolicy::strict()
+    }
+}
+
+/// The confidential client the page redeems sign-in codes with. Building it
+/// makes no network call.
+fn sign_in_client(
+    config: &RuntimeConfig,
+    token_endpoint: Url,
+    client_key: PrivateJwk,
+    policy: FetchUrlPolicy,
+) -> Result<PrivateKeyJwt, RuntimeError> {
+    PrivateKeyJwt::new(
+        PrivateKeyJwtConfig::new(token_endpoint, config.sign_in.client_id.clone(), client_key)
+            .with_audience(config.sign_in.issuer.clone())
+            .with_resource(config.registry.resource.clone())
+            .with_scopes(config.sign_in.scopes.clone())
+            .with_fetch_url_policy(policy),
+    )
+    .map_err(|error| RuntimeError::SignInClient(error.to_string()))
+}
+
 /// Everything startup derives from the configuration without a network call
 /// or a write.
 struct Offline {
@@ -520,11 +546,24 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
 }
 
 /// Validate a runtime configuration the way startup does, without serving:
-/// check the document, read and parse its secrets, and compile the templates.
+/// check the document, read and parse its secrets, build the sign-in client
+/// from its key, and compile the templates.
 /// It neither fetches the provider's discovery document nor opens the audit
 /// journal, so it needs no network and writes nothing.
 pub fn check(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    offline(config)?;
+    let Offline { client_key, .. } = offline(config)?;
+    // The token endpoint comes from discovery, which `check` does not fetch,
+    // so the issuer stands in for it. Every other part of the sign-in client,
+    // the key's identifier and signing ability above all, is refused here
+    // exactly as `serve` refuses it.
+    let stand_in_endpoint = Url::parse(&config.sign_in.issuer)
+        .map_err(|_| RuntimeError::Config(RuntimeConfigError::InvalidSignIn))?;
+    sign_in_client(
+        config,
+        stand_in_endpoint,
+        client_key,
+        fetch_url_policy(config),
+    )?;
     config
         .audit
         .destination()?
@@ -561,11 +600,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         global_sign_in,
     } = offline(&config)?;
     let development = config.development();
-    let policy = if development {
-        FetchUrlPolicy::dev()
-    } else {
-        FetchUrlPolicy::strict()
-    };
+    let policy = fetch_url_policy(&config);
 
     let issuer = config.sign_in.issuer.clone();
     let discovery = fetch_discovery_with_policy(
@@ -606,14 +641,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         .with_leeway(ID_TOKEN_LEEWAY),
         jwks,
     );
-    let sign_in_client = PrivateKeyJwt::new(
-        PrivateKeyJwtConfig::new(token_endpoint, config.sign_in.client_id.clone(), client_key)
-            .with_audience(issuer.clone())
-            .with_resource(config.registry.resource.clone())
-            .with_scopes(config.sign_in.scopes.clone())
-            .with_fetch_url_policy(policy),
-    )
-    .map_err(|error| RuntimeError::SignInClient(error.to_string()))?;
+    let sign_in_client = sign_in_client(&config, token_endpoint, client_key, policy)?;
 
     let writer = match writer {
         Some(writer) => writer,
