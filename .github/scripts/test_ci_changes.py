@@ -1322,6 +1322,16 @@ class CiChangesTest(unittest.TestCase):
                 with self.subTest(path=path, output=output):
                     self.assertTrue(outputs[output])
 
+    def test_platform_coverage_has_the_shared_activation_database(self) -> None:
+        step = next(
+            step for step in self.workflow_jobs["platform-coverage"]["steps"]
+            if step.get("name") == "Enforce platform line coverage"
+        )
+        self.assertEqual(
+            step["env"]["DISPATCH_TEST_DATABASE_URL"],
+            step["env"]["ACTIVATION_TEST_DATABASE_URL"],
+        )
+
     def test_source_client_tutorial_includes_messaging_before_release_admission(self) -> None:
         script = next(
             step["run"] for step in self.workflow_jobs["evidence-tutorials"]["steps"]
