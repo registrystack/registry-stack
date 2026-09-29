@@ -345,7 +345,7 @@ pub async fn apply(
             return Err(ActivationError::Refused(refusals));
         }
     }
-    let schema_versions_applied = migrate_in(&*tx).await?;
+    let schema_versions_applied = migrate_in(&tx).await?;
     let (role_mode, grants_current, readable) = if split {
         platform::grant_runtime_role(&*tx, &layout(), runtime_role, &[])
             .await
