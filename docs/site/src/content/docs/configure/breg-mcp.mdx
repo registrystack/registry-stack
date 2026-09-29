@@ -464,8 +464,11 @@ profile cannot write is never offered, and the target and owner fields never are
 data with a notice that it is data, never instructions.
 
 `status` is one of `prepared`, `submitted`, `under_review`, `approved`, `rejected`, `applied`, or
-`cancelled`, as BReg reports it. The agent profile in the reference project reads no review outcome,
-so its status stays `submitted` until the change is applied or the request closes.
+`cancelled`, as BReg reports it. `cancelled` is the request's own state: a review that was
+cancelled, answered, or superseded, or that asked for changes, leaves the request submitted and
+open, so its status is `under_review`. `rejected`, `applied`, and `cancelled` are closed. The agent
+profile in the reference project reads no review outcome, so its status stays `submitted` until the
+change is applied or the request closes.
 
 Writes carry an idempotency key derived from the citizen, the tool, and the arguments, so a
 retried call replays its first answer instead of creating a second draft. A `start_application`
