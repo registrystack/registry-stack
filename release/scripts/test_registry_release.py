@@ -2970,13 +2970,21 @@ class RegistryReleaseTest(TestCase):
                 "evidence-client-python",
             }
         }
+
+        def released(version: str) -> dict[str, str]:
+            # schedulingctl joins every inventory from v0.36.0.
+            inventory = {name: version for name in previous}
+            if tuple(int(part) for part in version.split(".")) >= (0, 36, 0):
+                inventory["schedulingctl"] = version
+            return inventory
+
         # No version ships Messaging while the roster names no first release.
         with mock.patch.object(
             module.release_roster, "MESSAGING_FIRST_RELEASE", None
         ):
             for version in ("0.34.0", "0.35.0", "0.36.0", "1.0.0"):
                 with self.subTest(version=version, roster=None):
-                    current = {name: version for name in previous}
+                    current = released(version)
                     self.assertEqual(
                         [], module.artifact_inventory_errors(version, current)
                     )
@@ -2991,26 +2999,26 @@ class RegistryReleaseTest(TestCase):
 
         # A hypothetical first release keeps the inclusion path covered.
         with mock.patch.object(
-            module.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
+            module.release_roster, "MESSAGING_FIRST_RELEASE", (0, 37, 0)
         ):
-            earlier = {name: "0.35.0" for name in previous}
-            self.assertEqual([], module.artifact_inventory_errors("0.35.0", earlier))
+            earlier = released("0.36.0")
+            self.assertEqual([], module.artifact_inventory_errors("0.36.0", earlier))
             self.assertNotEqual(
                 [],
                 module.artifact_inventory_errors(
-                    "0.35.0",
-                    earlier | {"messaging": "0.35.0", "messagingctl": "0.35.0"},
+                    "0.36.0",
+                    earlier | {"messaging": "0.36.0", "messagingctl": "0.36.0"},
                 ),
             )
-            future = {name: "0.36.0" for name in previous}
-            future.update({"messaging": "0.36.0", "messagingctl": "0.36.0"})
-            self.assertEqual([], module.artifact_inventory_errors("0.36.0", future))
+            future = released("0.37.0")
+            future.update({"messaging": "0.37.0", "messagingctl": "0.37.0"})
+            self.assertEqual([], module.artifact_inventory_errors("0.37.0", future))
             for missing in ("messaging", "messagingctl"):
                 with self.subTest(missing=missing):
                     incomplete = dict(future)
                     del incomplete[missing]
                     self.assertNotEqual(
-                        [], module.artifact_inventory_errors("0.36.0", incomplete)
+                        [], module.artifact_inventory_errors("0.37.0", incomplete)
                     )
 
         recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(

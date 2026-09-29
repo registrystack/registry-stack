@@ -27,8 +27,9 @@ LAYER_DIGEST = "sha256:" + "e" * 64
 ATTESTATION_DIGEST = "sha256:" + "f" * 64
 # Messaging has not joined a release (release_roster.MESSAGING_FIRST_RELEASE is
 # None). Fixtures patch a hypothetical first release so the Messaging roster
-# paths stay covered without any production knob.
-HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
+# paths stay covered without any production knob. The hypothetical release
+# follows v0.36.0, so each image also carries the operator tool v0.36.0 staged.
+HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 37, 0)
 # breg-mcp and breg-review have not joined a release
 # (release_roster.BREG_SERVICES_FIRST_RELEASE is None). Fixtures patch a
 # hypothetical first release so their roster paths stay covered without any
@@ -176,6 +177,14 @@ class ReleaseCandidateTest(TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def hold_out(self, first_release: str) -> None:
+        """Hold one release_roster product out so a test covers only the other."""
+        roster_patch = mock.patch.object(
+            self.module.release_roster, first_release, None
+        )
+        roster_patch.start()
+        self.addCleanup(roster_patch.stop)
 
     def onboarding_repository(self) -> Path:
         root = self.root / "onboarding"
@@ -985,94 +994,23 @@ class ReleaseCandidateTest(TestCase):
                 self.assertEqual(0, result)
                 self.assertEqual(expected, stdout.getvalue())
 
-    def test_breg_services_join_only_the_rosters_from_their_first_release(
-        self,
-    ) -> None:
-        for version in ("0.35.0", "0.36.0"):
-            with self.subTest(version=version):
-                names = self.module._candidate_image_names(version)
-                self.assertNotIn("breg-mcp", names)
-                self.assertNotIn("breg-review", names)
-                inventory = self.module._relay_v2_payload_inventory(version)
-                self.assertFalse(
-                    any(name.startswith(("breg-mcp-", "breg-review-")) for name in inventory)
-                )
-        self.assertEqual(
-            {
-                "breg",
-                "breg-mcp",
-                "breg-review",
-                "casework",
-                "discovery",
-                "evidence",
-                "messaging",
-                "relay",
-                "scheduling",
-            },
-            self.module._candidate_image_names("0.37.0"),
-        )
-        inventory = self.module._relay_v2_payload_inventory("0.37.0")
-        for service in ("breg-mcp", "breg-review"):
-            for asset in (
-                f"{service}-v0.37.0-linux-amd64",
-                f"{service}-v0.37.0-linux-arm64",
-                f"{service}-v0.37.0-macos-arm64.tar.gz",
-            ):
-                with self.subTest(asset=asset):
-                    self.assertEqual("binary", inventory[asset])
-            self.assertNotIn(f"{service}-v0.37.0-install.sh", inventory)
-            self.assertNotIn(f"{service}-v0.37.0-macos-arm64", inventory)
-
-    def test_no_version_ships_the_breg_services_until_the_roster_names_one(
-        self,
-    ) -> None:
-        with mock.patch.object(
-            self.module.release_roster, "BREG_SERVICES_FIRST_RELEASE", None
-        ):
-            for version in ("0.36.0", "0.37.0", "1.0.0"):
-                with self.subTest(version=version):
-                    self.assertEqual(
-                        self.module.MESSAGING_RUNTIME_IMAGE_NAMES,
-                        self.module._candidate_image_names(version),
-                    )
-                    self.assertFalse(
-                        any(
-                            name.startswith(("breg-mcp", "breg-review"))
-                            for name in self.module._relay_v2_payload_inventory(
-                                version
-                            )
-                        )
-                    )
-                    stdout = io.StringIO()
-                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
-                        result = self.module.main(
-                            ["image-names", "--version", version]
-                        )
-                    self.assertEqual(0, result)
-                    names = stdout.getvalue().split()
-                    self.assertNotIn("breg-mcp", names)
-                    self.assertNotIn("breg-review", names)
-                    self.assertEqual(
-                        self.module._candidate_image_names(version),
-                        self.module.check_image_onboarding(ROOT, version),
-                    )
-
     def test_messaging_joins_only_the_rosters_from_its_first_release(self) -> None:
+        self.hold_out("BREG_SERVICES_FIRST_RELEASE")
         self.assertEqual(
             self.module._candidate_image_names("0.33.0"),
-            self.module._candidate_image_names("0.35.0"),
-        )
-        self.assertEqual(
-            self.module._candidate_image_names("0.35.0") | {"messaging"},
             self.module._candidate_image_names("0.36.0"),
         )
-        historical = self.module._relay_v2_payload_inventory("0.35.0")
+        self.assertEqual(
+            self.module._candidate_image_names("0.36.0") | {"messaging"},
+            self.module._candidate_image_names("0.37.0"),
+        )
+        historical = self.module._relay_v2_payload_inventory("0.36.0")
         self.assertFalse(any(name.startswith("messaging") for name in historical))
-        current = self.module._relay_v2_payload_inventory("0.36.0")
+        current = self.module._relay_v2_payload_inventory("0.37.0")
         self.assertEqual(
             {
-                "messaging-v0.36.0-linux-amd64": "binary",
-                "messagingctl-v0.36.0-linux-amd64": "binary",
+                "messaging-v0.37.0-linux-amd64": "binary",
+                "messagingctl-v0.37.0-linux-amd64": "binary",
             },
             {
                 name: kind
@@ -1084,6 +1022,7 @@ class ReleaseCandidateTest(TestCase):
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
         self,
     ) -> None:
+        self.hold_out("BREG_SERVICES_FIRST_RELEASE")
         with mock.patch.object(
             self.module.release_roster, "MESSAGING_FIRST_RELEASE", None
         ):
@@ -1108,6 +1047,79 @@ class ReleaseCandidateTest(TestCase):
                         )
                     self.assertEqual(0, result)
                     self.assertNotIn("messaging", stdout.getvalue().split())
+
+    def test_breg_services_join_only_the_rosters_from_their_first_release(
+        self,
+    ) -> None:
+        self.hold_out("MESSAGING_FIRST_RELEASE")
+        for version in ("0.35.0", "0.36.0"):
+            with self.subTest(version=version):
+                names = self.module._candidate_image_names(version)
+                self.assertNotIn("breg-mcp", names)
+                self.assertNotIn("breg-review", names)
+                inventory = self.module._relay_v2_payload_inventory(version)
+                self.assertFalse(
+                    any(name.startswith(("breg-mcp-", "breg-review-")) for name in inventory)
+                )
+        self.assertEqual(
+            {
+                "breg",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            },
+            self.module._candidate_image_names("0.37.0"),
+        )
+        inventory = self.module._relay_v2_payload_inventory("0.37.0")
+        for service in ("breg-mcp", "breg-review"):
+            for asset in (
+                f"{service}-v0.37.0-linux-amd64",
+                f"{service}-v0.37.0-linux-arm64",
+                f"{service}-v0.37.0-macos-arm64.tar.gz",
+            ):
+                with self.subTest(asset=asset):
+                    self.assertEqual("binary", inventory[asset])
+            self.assertNotIn(f"{service}-v0.37.0-install.sh", inventory)
+            self.assertNotIn(f"{service}-v0.37.0-macos-arm64", inventory)
+
+    def test_no_version_ships_the_breg_services_until_the_roster_names_one(
+        self,
+    ) -> None:
+        self.hold_out("MESSAGING_FIRST_RELEASE")
+        with mock.patch.object(
+            self.module.release_roster, "BREG_SERVICES_FIRST_RELEASE", None
+        ):
+            for version in ("0.36.0", "0.37.0", "1.0.0"):
+                with self.subTest(version=version):
+                    self.assertEqual(
+                        self.module.SCHEDULING_RUNTIME_IMAGE_NAMES,
+                        self.module._candidate_image_names(version),
+                    )
+                    self.assertFalse(
+                        any(
+                            name.startswith(("breg-mcp", "breg-review"))
+                            for name in self.module._relay_v2_payload_inventory(
+                                version
+                            )
+                        )
+                    )
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = self.module.main(
+                            ["image-names", "--version", version]
+                        )
+                    self.assertEqual(0, result)
+                    names = stdout.getvalue().split()
+                    self.assertNotIn("breg-mcp", names)
+                    self.assertNotIn("breg-review", names)
+                    self.assertEqual(
+                        self.module._candidate_image_names(version),
+                        self.module.check_image_onboarding(ROOT, version),
+                    )
 
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
@@ -1134,14 +1146,7 @@ class ReleaseCandidateTest(TestCase):
             ("0.33.0", "breg casework discovery evidence relay scheduling\n"),
             ("0.34.0", "breg casework discovery evidence relay scheduling\n"),
             ("0.35.0", "breg casework discovery evidence relay scheduling\n"),
-            (
-                "0.36.0",
-                "breg casework discovery evidence messaging relay scheduling\n",
-            ),
-            (
-                "0.36.0",
-                "breg casework discovery evidence messaging relay scheduling\n",
-            ),
+            ("0.36.0", "breg casework discovery evidence relay scheduling\n"),
             (
                 "0.37.0",
                 "breg breg-mcp breg-review casework discovery evidence messaging "
@@ -1259,9 +1264,49 @@ class ReleaseCandidateTest(TestCase):
                     ),
                 )
 
+    def test_messaging_onboarding_stays_closed_until_external_setup(self) -> None:
+        self.hold_out("BREG_SERVICES_FIRST_RELEASE")
+        root = self.onboarding_repository()
+        for image_name in ("scheduling", "messaging"):
+            shutil.copy2(
+                ROOT / f"release/docker/Dockerfile.{image_name}",
+                root / f"release/docker/Dockerfile.{image_name}",
+            )
+        shutil.copy2(
+            ROOT / "release/security/scheduling-advisory-baseline.json",
+            root / "release/security/scheduling-advisory-baseline.json",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "messaging advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.37.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain messaging-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.37.0", allow_missing_baseline=True
+            )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "scheduling-candidate",\n',
+                '    "scheduling-candidate",\n    "messaging-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.37.0"),
+            self.module.check_image_onboarding(
+                root, "0.37.0", allow_missing_baseline=True
+            ),
+        )
+
     def test_breg_services_onboarding_stays_closed_until_external_setup(
         self,
     ) -> None:
+        self.hold_out("MESSAGING_FIRST_RELEASE")
         root = self.onboarding_repository()
         for relative_path in (
             "release/docker/Dockerfile.scheduling",
@@ -1298,44 +1343,6 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual(
             self.module._candidate_image_names("0.36.0"),
             self.module.check_image_onboarding(root, "0.36.0"),
-        )
-
-    def test_messaging_onboarding_stays_closed_until_external_setup(self) -> None:
-        root = self.onboarding_repository()
-        for image_name in ("scheduling", "messaging"):
-            shutil.copy2(
-                ROOT / f"release/docker/Dockerfile.{image_name}",
-                root / f"release/docker/Dockerfile.{image_name}",
-            )
-        shutil.copy2(
-            ROOT / "release/security/scheduling-advisory-baseline.json",
-            root / "release/security/scheduling-advisory-baseline.json",
-        )
-        with self.assertRaisesRegex(
-            self.module.CandidateError,
-            "messaging advisory baseline is missing",
-        ):
-            self.module.check_image_onboarding(root, "0.36.0")
-        with self.assertRaisesRegex(
-            self.module.CandidateError,
-            "CANDIDATE_PACKAGES must contain messaging-candidate",
-        ):
-            self.module.check_image_onboarding(
-                root, "0.36.0", allow_missing_baseline=True
-            )
-        cleanup = root / "release/scripts/cleanup-release-candidates.py"
-        cleanup.write_text(
-            cleanup.read_text(encoding="utf-8").replace(
-                '    "scheduling-candidate",\n',
-                '    "scheduling-candidate",\n    "messaging-candidate",\n',
-            ),
-            encoding="utf-8",
-        )
-        self.assertEqual(
-            self.module._candidate_image_names("0.36.0"),
-            self.module.check_image_onboarding(
-                root, "0.36.0", allow_missing_baseline=True
-            ),
         )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
