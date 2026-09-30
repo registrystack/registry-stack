@@ -1,4 +1,6 @@
-//! Test-only issuer fixtures for this crate's own verification tests.
+//! Test-only issuer fixtures for this crate's own verification tests and, through
+//! the `fixtures` feature, for out-of-crate test tooling such as the Evidence
+//! fuzz harnesses.
 //!
 //! The Evidence runtime owns signing and depends on this crate, so a test here
 //! cannot reach the runtime signer: a development dependency back onto the
@@ -87,6 +89,13 @@ impl EvidenceSigner {
     ) -> Result<FlattenedJws, FixtureSigningError> {
         let payload =
             serde_json::to_vec(evidence).map_err(|_| FixtureSigningError::Serialization)?;
+        self.sign_payload(&payload).await
+    }
+
+    /// Sign arbitrary payload bytes under the Evidence protected header, so a
+    /// caller can put an authentic signature over a payload the verifier's
+    /// strict payload parsing must still refuse.
+    pub async fn sign_payload(&self, payload: &[u8]) -> Result<FlattenedJws, FixtureSigningError> {
         let protected = serde_json::to_vec(&ProtectedHeader {
             alg: "ES256",
             kid: self.provider.key_id(),

@@ -12,24 +12,35 @@ use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
 use registry_evidence_verifier::{
-    model::HolderPublicKey,
+    model::{HolderPublicKey, SubjectBindingMode},
     sdjwt_vc::issuance_input,
     verifier::{verify_sd_jwt_vc, verify_sd_jwt_vc_report},
 };
 use verifier_common::{canonical_evidence, fixture, parse_bounded_evidence, runtime};
 
+// Test-only holder key: the P-256 generator point, a published constant that
+// belongs to nobody and the same point the Evidence runtime's offline
+// evaluation confirms. It is deliberately distinct from the issuer key the
+// fixture signs with, so a confirmation never coincides with the issuer's own
+// key.
 fn holder_key() -> HolderPublicKey {
     HolderPublicKey {
         kty: "EC".to_owned(),
         crv: "P-256".to_owned(),
-        x: "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4".to_owned(),
-        y: "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU".to_owned(),
+        x: "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY".to_owned(),
+        y: "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU".to_owned(),
         alg: Some("ES256".to_owned()),
         kid: Some("holder-1".to_owned()),
     }
 }
 
 fn startup_round_trip(fixture: &verifier_common::VerifierFixture) {
+    // An unacceptable holder key would be refused before signing, and every
+    // holder-bound input would silently stop reaching a signature.
+    assert!(
+        holder_key().is_acceptable(),
+        "the test holder key is an acceptable P-256 key; the fuzz fixture drifted"
+    );
     let input = issuance_input(&canonical_evidence(), None, &BTreeMap::new())
         .expect("canonical evidence maps to an issuance input");
     let serialized = runtime()
@@ -46,9 +57,11 @@ fuzz_target!(|data: &[u8]| {
 
     let serialized = match parse_bounded_evidence(data) {
         Some(evidence) => {
-            // Half the inputs confirm a holder key, so both the confirmed and
-            // unconfirmed credential shapes are exercised.
-            let holder = (data.first().copied().unwrap_or_default() % 2 == 0).then(holder_key);
+            // Holder-bound inputs confirm the test holder key and
+            // audience-scoped inputs carry no confirmation, so both the
+            // confirmed and unconfirmed credential shapes are exercised.
+            let holder = matches!(evidence.subject_binding, SubjectBindingMode::HolderBound)
+                .then(holder_key);
             match issuance_input(&evidence, holder.as_ref(), &BTreeMap::new()) {
                 Ok(input) => match runtime().block_on(fixture.signer.sign_sd_jwt_vc(input)) {
                     Ok(serialized) => serialized.into_bytes(),
