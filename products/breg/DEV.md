@@ -299,8 +299,11 @@ client identity. An undeclared scope or purpose is refused before schema test.
 Every multi-purpose client shares one generated first-party signer, so the
 distinct claim names of all of them together, counting `registry_actor_kind`,
 `registry_purpose`, and `scope`, may number at most 16, and a multi-purpose
-client cannot also be listed on an authored `first_party` exchange connection.
-Both are refused when the clients file is read.
+client cannot also be listed on any authored exchange connection. That signer
+makes the client first-party, so the issuer projects the purpose connection's
+claims into its exchanged tokens: through an `institutional_grant` connection
+they would lack the `registry_grant_*` claims the registry requires. Both are
+refused when the clients file is read.
 
 A seed defaults to `operation: create`. The illustrative `reference-record`
 entity and `reference-loader` profile must be authored in the project, with an
