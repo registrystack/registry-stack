@@ -102,6 +102,9 @@ pub(super) fn exchange_issuer(
     })
 }
 
+/// Claim names the generated connection projects beyond the authored ones.
+pub(super) const GENERATED_CLAIMS: [&str; 2] = ["registry_purpose", "scope"];
+
 fn projected_claim_types(
     clients: &[PurposeClient],
 ) -> Result<BTreeMap<String, ExchangeAttributeKind>> {

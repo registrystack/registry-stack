@@ -454,6 +454,78 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
 }
 
 #[test]
+fn multi_purpose_claim_union_is_refused_above_the_issuer_attribute_limit() {
+    // Every multi-purpose client shares one generated first-party connection,
+    // which projects the union of their claim names plus the reserved
+    // registry_purpose and scope. The issuer bounds that union, so each client
+    // being within its own 32-claim bound is not enough.
+    let (_temp, _state, base, _files) = fixture();
+    let mut clients = base.clone();
+    for client in &mut clients.clients {
+        client.claims.insert(
+            "registry_purpose".into(),
+            json!(["record-change", "record-read"]),
+        );
+    }
+    let (operator, source) = clients.clients.split_at_mut(1);
+    for index in 0..7 {
+        operator[0]
+            .claims
+            .insert(format!("operator_claim_{index}"), json!("value"));
+    }
+    for index in 0..5 {
+        source[0]
+            .claims
+            .insert(format!("source_claim_{index}"), json!("value"));
+    }
+    // registry_actor_kind, registry_principal, registry_purpose, scope, and
+    // twelve distinct authored claims: exactly the limit.
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    clients.clients[1]
+        .claims
+        .insert("source_claim_5".into(), json!("value"));
+    let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("at most 16"), "{refusal}");
+    assert!(refusal.contains("multi-purpose"), "{refusal}");
+}
+
+#[test]
+fn multi_purpose_client_is_refused_on_an_authored_first_party_connection() {
+    // A multi-purpose client is always paired with the generated purpose
+    // connection, and the issuer lets a first-party client select one signer.
+    let (_temp, _state, base, _files) = fixture();
+    for mapping in [
+        config::IssuerConnectionMapping::InstitutionalGrant,
+        config::IssuerConnectionMapping::FirstParty,
+    ] {
+        let mut clients = pair_exchange_client(base.clone(), mapping);
+        clients
+            .clients
+            .iter_mut()
+            .find(|client| client.id == "source")
+            .unwrap()
+            .claims
+            .insert(
+                "registry_purpose".into(),
+                json!(["evidence-source-read", "evidence-source-audit"]),
+            );
+        let parsed = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes());
+        match mapping {
+            config::IssuerConnectionMapping::InstitutionalGrant => {
+                parsed.unwrap();
+            }
+            config::IssuerConnectionMapping::FirstParty => {
+                let refusal = parsed.unwrap_err().to_string();
+                assert!(refusal.contains("first-party connection"), "{refusal}");
+                assert!(refusal.contains("more than one registry_purpose"), "{refusal}");
+            }
+        }
+    }
+}
+
+#[test]
 fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
     let (_temp, state, mut clients, files) = fixture();
     let input = state.project.join("imported-key");
