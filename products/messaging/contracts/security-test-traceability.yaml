@@ -31,7 +31,7 @@ entries:
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: aws_authentication_refuses_get_and_non_root_or_extra_header_shapes}
       - {path: crates/registry-messaging/src/http_provider/aws_tests.rs, name: aws_non_root_non_json_or_missing_action_requests_are_refused_before_connecting}
       - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_resolving_to_loopback_is_refused_before_connecting}
-      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_named_in_the_localhost_namespace_is_refused_at_activation}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: metadata_private_and_loopback_provider_addresses_are_refused_without_an_allowlist}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_private_network_allowance_must_be_an_exact_cidr_for_an_https_provider}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_provider_url_with_credentials_a_query_or_plain_http_to_a_remote_host_is_refused}
