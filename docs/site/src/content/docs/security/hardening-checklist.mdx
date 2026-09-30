@@ -268,7 +268,8 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 - Evidence Gateway: size `rateLimits` knowing they are per process and in memory. Running N replicas
   multiplies every configured limit by N and a restart resets each budget to full. Set the
   failed-selector budget deliberately, because it is the selector-enumeration defense rather than
-  a throughput knob, and put per-client quotas in the gateway.
+  a throughput knob, and put per-client quotas in the gateway. Treat sustained machine-speed
+  probing as baseline traffic you alert on, not an incident you wait to notice.
 - Relay: `server.bind` is the entire server block. There is no admin listener, no metrics listener,
   no CORS setting, and no trusted-proxy setting, so every one of those controls is your edge's job.
   Bind Relay to loopback or a private address and publish it through a proxy you configure.
@@ -297,20 +298,19 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 The [threat model](../../explanation/threat-model/) treats the adversary as automated before it
 is expert: commodity tooling probes every reachable deployment at machine speed, and the gap
 between a public advisory and attempted exploitation is short. Work these items as part of that
-premise rather than as a separate exercise.
+premise rather than as a separate exercise; the rate budgets and quotas under
+[Transport and edge](#transport-and-edge) are the enumeration side of the same premise.
 
-- Take runtime updates on a deliberate cadence, and treat the cadence as a control. Upstream
-  dependency advisories carry dated, scoped exceptions with review triggers rather than
-  open-ended waivers, so exposure the maintainers retire stays retired only in deployments that
-  take the update. Track advisories against your own pinned base images and edge components too:
-  the runtimes' refusal surface protects the process, not the host it runs on.
+- Take runtime updates on a deliberate cadence, and treat the cadence as a control: a release
+  that fixes a dependency advisory protects only the deployments that take it. The advisories
+  this repository's `deny.toml` ignores are the opposite case, accepted residual risk that stays
+  in released code until it is resolved, each recorded with a rationale and a dated review trigger;
+  read that list when you assess a release. Track advisories against your own pinned base images
+  and edge components too: the runtimes' refusal surface protects the process, not the host it
+  runs on.
   {/* Evidence: each advisory ignore in deny.toml carries a rationale and a review trigger, and
        the CI gate runs the full cargo deny check with advisories included,
        .github/workflows/ci.yml. */}
-- Treat sustained machine-speed probing as baseline traffic you alert on, not an incident you
-  wait to notice. Per-process budgets multiply by N replicas and reset on restart, so set the
-  failed-selector budget deliberately as the selector-enumeration defense and put per-client
-  quotas in the gateway, as under [Transport and edge](#transport-and-edge).
 - Keep the probe surface uninformative end to end. The runtimes collapse authorization refusals
   to one closed problem shape by design, so an edge that adds distinguishing error pages,
   redirects, or timing differences in front of them reintroduces the oracle the runtime removed.

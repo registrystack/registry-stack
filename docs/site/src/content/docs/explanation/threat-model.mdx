@@ -305,8 +305,8 @@ through a governed read, and privacy regressions that expose raw subject identif
   request time.
 - An existence or matching oracle: No-match, ambiguous, missing-fact, and
   inconsistent-derivation outcomes collapse by default to one public problem shape, with the
-  granular category kept in audit without counts, so response shape, message, or timing cannot
-  be used to probe registry membership (`V1-I16`). Every authorization refusal likewise
+  granular category kept in audit without counts, so response shape, message, or avoidable
+  timing cannot be used to probe registry membership (`V1-I16`). Every authorization refusal likewise
   collapses to one generic `evidence.denied` problem that does not reveal which check failed.
 - Cross-purpose or cross-relying-party tracking: Subject bindings are derived with a keyed,
   domain-separated function over audience, purpose, role, profile, key version, and the
@@ -438,26 +438,34 @@ operator-side investigation depends on retaining the hashing secret and request 
 The model assumes the adversary is automated before it is expert. Publicly disclosed
 vulnerabilities reach commodity exploitation quickly, and every reachable deployment is probed
 continuously at machine speed by tooling that does not need to understand the registry domain to
-try each generic technique against it. Three consequences follow, and the preceding sections
-carry most of the answer.
+try each generic technique against it. Three consequences follow, and the mitigations above carry
+most of the answer.
 
-First, probing must yield no signal. Authorization refusals collapse to one generic
-`evidence.denied` problem, and no-match, ambiguous, missing-fact, and inconsistent-derivation
-outcomes collapse to one public problem shape, so an automated caller cannot learn which check
-failed or read registry membership out of response shape, message, or timing (`V1-I16`). Second,
-the shapes automated scanners look for are absent rather than filtered: the request schema is
-closed with no caller-supplied thresholds, expressions, scripts, paths, headers, or response
-projections (`V1-I01`, `V1-I02`), source calls are fixed by trusted configuration under a
-one-request-per-stage ceiling (`V1-I09`, `V1-I40`), and no route in the request path varies its
-destination or its query shape with request content. Third, work is bounded per request: parsers
-and scripts enforce size, count, and operation ceilings, so a machine-speed stream of requests
-cannot buy unbounded computation from any single one of them.
+First, probing must yield no signal: the collapsed refusal and unresolved-outcome shapes listed
+under the existence oracle above leave an automated caller unable to learn which check failed or
+to read registry membership out of the response (`V1-I16`). Second, the shapes automated scanners
+look for are absent rather than filtered. The request schema is closed with no caller-supplied
+thresholds, expressions, scripts, paths, headers, or response projections (`V1-I01`, `V1-I02`),
+and source calls are fixed by trusted configuration (`V1-I09`, `V1-I40`). Request content reaches
+a source call only through a tagged selector or prior-fact-bound path segment and the bounded
+query pairs and JSON body a reviewed script prepares; it never selects the origin, method,
+headers, credentials, or number of calls, which stays at one request per configured stage.
+Third, work is bounded per request: parsers and scripts enforce size, count, and operation
+ceilings, so a machine-speed stream of requests cannot buy unbounded computation from any single
+one of them.
 
-The parsing surfaces this adversary reaches are fuzzed continuously rather than only at release
-time: the platform and Evidence fuzz smokes run in the nightly sweep and in the merge queue, and
-the manifest smoke runs nightly, over the untrusted input surfaces including the Evidence
-response verifier and the authoring readers.
-{/* Evidence: products/platform/scripts/run-fuzz-smoke.sh and
+Several parsing surfaces this adversary reaches are smoke-fuzzed nightly and in the merge queue,
+for about a minute per target, rather than only at release time. The platform and Evidence
+smokes run in the merge queue when a change reaches their crates and again in the nightly sweep;
+the manifest smoke runs nightly. Together they cover bearer, access-token, and API-key parsing;
+SD-JWT issuance input and holder-proof verification; reviewed SQLite statement parsing; the
+Evidence response verifier's flattened-JWS and SD-JWT VC paths; the Evidence authoring readers for
+OpenAPI descriptions and project documents; and the manifest YAML and rendered-artifact JSON
+readers. Evidence request parsing is not fuzzed, nor are SD-JWT VC disclosures behind a valid
+issuer signature or the verifier's holder-bound presentation path.
+{/* Evidence: the target rosters in products/platform/fuzz/Cargo.toml,
+     products/evidence/fuzz/Cargo.toml, and products/manifest/fuzz/Cargo.toml, with the coverage
+     limits in products/evidence/fuzz/README.md. products/platform/scripts/run-fuzz-smoke.sh and
      products/evidence/scripts/run-fuzz-smoke.sh run as the platform-fuzz and evidence-fuzz jobs
      whose assurance tier selects the merge queue in .github/scripts/ci_changes.py, with all
      three rosters in .github/workflows/nightly-security.yml. */}
@@ -466,12 +474,13 @@ Two residual risks sharpen under this adversary, and the [hardening
 checklist](../../security/hardening-checklist/) carries the operator side of each. The human
 controls are the ones automation cannot tire past, so the bundle review, the whole-surface
 disclosure review, and project approval are load-bearing under sustained machine-speed pressure
-rather than ceremony in front of it; and the per-process rate and failed-selector budgets
-multiply with replicas and reset on restart, so edge rate control is part of the enumeration
-defense, not a throughput convenience. Patch velocity is the operator's share of the same
-premise: the repository's dependency advisories carry dated, scoped exceptions with review
-triggers rather than open-ended waivers, so a deployment that lags behind released runtime
-updates keeps exposure the maintainers have already retired.
+rather than ceremony in front of it; and because the rate budgets are per process (see the
+residual risks below), edge rate control is part of the enumeration defense, not a throughput
+convenience. Patch velocity is the operator's share of the same premise: a runtime update fixes
+nothing in a deployment that does not take it, and each advisory this repository's `deny.toml`
+ignores is accepted residual risk, recorded with a rationale and a dated review trigger, that
+stays in released code until it is resolved.
+{/* Evidence: the [advisories] ignore list and its comments in deny.toml. */}
 
 ## Field encryption draws a boundary inside the database
 
