@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: package activation (`messagingctl plan`, `apply`, and `status`) and
+  `messaging serve` startup refuse a PostgreSQL server older than 17 with an
+  upgrade instruction, before any migration or activation write. Source
+  deployments on PostgreSQL 16 or older must upgrade the database server
+  before updating Messaging.
 - BREAKING: source deployments must set `identity.databaseId` and activate
   their package with `messagingctl apply` before starting the runtime. Use
   `messagingctl plan` to inspect changes and `messagingctl status` to inspect
