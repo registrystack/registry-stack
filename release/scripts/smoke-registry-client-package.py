@@ -35,13 +35,6 @@ def main() -> None:
         ("relay", registry_client.relay.RelayClient),
         ("relay", registry_client.relay.RelayClientError),
     )
-    # Messaging joins published wheels in v0.38.0; historical wheels retain
-    # their original namespaces. Assembly separately validates the roster.
-    if hasattr(registry_client, "messaging"):
-        public_types += (
-            ("messaging", registry_client.messaging.MessagingClient),
-            ("messaging", registry_client.messaging.MessagingClientError),
-        )
     for product, value in public_types:
         expected_module = f"registry_client.{product}"
         if value.__module__ != expected_module:
@@ -68,12 +61,6 @@ def main() -> None:
     )
     if casework_client is None:
         raise SystemExit("Casework client construction returned no client")
-    if hasattr(registry_client, "messaging"):
-        messaging_client = registry_client.messaging.MessagingClient(
-            base_url="https://messaging.invalid",
-        )
-        if messaging_client is None:
-            raise SystemExit("Messaging client construction returned no client")
     print("Unified Python Registry client package smoke passed")
 
 

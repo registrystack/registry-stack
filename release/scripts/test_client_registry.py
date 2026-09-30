@@ -84,19 +84,19 @@ class ClientRegistryTest(unittest.TestCase):
         self._write_distribution(self.client)
 
     def _write_distribution(
-        self, client: str, *, include_casework: bool = False, include_messaging: bool = False
+        self, client: str, *, include_casework: bool = False
     ) -> None:
         definition = self.module.client_definition(client)
         optional = {
             f"{definition.npm_root_package}-{platform}": self.version
             for platform, _binary in self.module.npm_platforms(
-                client, self.version, include_casework=include_casework, include_messaging=include_messaging
+                client, self.version, include_casework=include_casework
             )
         }
         for path, (platform, binary) in zip(
             self.module.npm_tarballs(self.directory, self.version, client)[:-1],
             self.module.npm_platforms(
-                client, self.version, include_casework=include_casework, include_messaging=include_messaging
+                client, self.version, include_casework=include_casework
             ),
             strict=True,
         ):
@@ -111,13 +111,11 @@ class ClientRegistryTest(unittest.TestCase):
             name=definition.npm_root_package,
             version=self.version,
             optional_dependencies=optional,
-            facade_namespaces=(
-                self.module.stack_python_namespaces(
-                    self.version, include_casework=include_casework, include_messaging=include_messaging
-                )
-                if client == "stack"
-                else ()
-            ),
+            facade_namespaces=("casework",)
+            if self.module.includes_casework(
+                self.version, include_casework=include_casework
+            )
+            else (),
         )
         for path in self.module.wheel_paths(self.directory, self.version, client):
             write_wheel(
@@ -125,7 +123,7 @@ class ClientRegistryTest(unittest.TestCase):
                 project=definition.pypi_project,
                 namespaces=(
                     self.module.stack_python_namespaces(
-                        self.version, include_casework=include_casework, include_messaging=include_messaging
+                        self.version, include_casework=include_casework
                     )
                     if client == "stack"
                     else ()
@@ -160,7 +158,6 @@ class ClientRegistryTest(unittest.TestCase):
                 "package/casework-client.darwin-arm64.node",
                 "package/discovery-client.darwin-arm64.node",
                 "package/evidence-client.darwin-arm64.node",
-                "package/messaging-client.darwin-arm64.node",
                 "package/relay-client.darwin-arm64.node",
             ],
         )
@@ -180,33 +177,6 @@ class ClientRegistryTest(unittest.TestCase):
             self.assertFalse(
                 any(name.startswith("registry_client/casework/") for name in archive.namelist())
             )
-
-    def test_messaging_joins_the_unified_clients_at_v0_38(self) -> None:
-        self.assertNotIn(
-            "messaging-client",
-            self.module.native_binary_stems("stack", "0.37.99"),
-        )
-        self.assertNotIn(
-            "messaging", self.module.stack_python_namespaces("0.37.99")
-        )
-        self.assertIn(
-            "messaging-client",
-            self.module.native_binary_stems("stack", "0.38.0"),
-        )
-        self.assertIn("messaging", self.module.stack_python_namespaces("0.38.0"))
-
-    def test_local_messaging_integration_does_not_change_historical_validation(self) -> None:
-        self.version = "0.36.0"
-        self._write_distribution("stack", include_messaging=True)
-        self.module.validate_distribution(
-            self.directory, self.version, "stack", include_messaging=True,
-        )
-        with self.assertRaises(self.module.ClientRegistryError):
-            self.module.validate_distribution(self.directory, self.version, "stack")
-        with self.assertRaisesRegex(
-            self.module.ClientRegistryError, "unexpectedly contains the messaging namespace"
-        ):
-            self.module.validate_wheels(self.directory, self.version, "stack")
 
     def test_explicit_0_29_candidate_validation_includes_casework(self) -> None:
         self.version = "0.29.0"
@@ -299,32 +269,6 @@ class ClientRegistryTest(unittest.TestCase):
                 self.directory, self.version, "stack"
             )
 
-    def test_selected_messaging_requires_its_root_facade(self) -> None:
-        self.version = "0.38.0"
-        self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
-        root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
-        write_npm_package(
-            root,
-            name=definition.npm_root_package,
-            version=self.version,
-            optional_dependencies=self.module.expected_optional_dependencies(
-                "stack", self.version
-            ),
-            facade_namespaces=tuple(
-                namespace
-                for namespace in self.module.stack_python_namespaces(self.version)
-                if namespace != "messaging"
-            ),
-        )
-        with self.assertRaisesRegex(
-            self.module.ClientRegistryError,
-            "incomplete messaging facade",
-        ):
-            self.module.validate_npm_packages(
-                self.directory, self.version, "stack"
-            )
-
     def test_rejects_a_unified_wheel_without_casework(self) -> None:
         self._write_distribution("stack")
         wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
@@ -340,26 +284,6 @@ class ClientRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(
             self.module.ClientRegistryError,
             "has no casework namespace",
-        ):
-            self.module.validate_wheels(self.directory, self.version, "stack")
-
-    def test_rejects_a_v0_38_unified_wheel_without_messaging(self) -> None:
-        self.version = "0.38.0"
-        self._write_distribution("stack")
-        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
-        write_wheel(
-            wheel,
-            project="registry-stack-client",
-            namespaces=tuple(
-                value
-                for value in self.module.stack_python_namespaces(self.version)
-                if value != "messaging"
-            ),
-            version=self.version,
-        )
-        with self.assertRaisesRegex(
-            self.module.ClientRegistryError,
-            "has no messaging namespace",
         ):
             self.module.validate_wheels(self.directory, self.version, "stack")
 
@@ -642,7 +566,6 @@ class CheckedInClientManifestTest(unittest.TestCase):
             "evidence": repo / "crates/registry-evidence-client-node",
             "relay": repo / "crates/registry-relay-client-node",
             "casework": repo / "crates/registry-casework-client-node",
-            "messaging": repo / "crates/registry-messaging-client-node",
             "stack": repo / "crates/registry-stack-client-node",
         }
         for client, root in roots.items():
@@ -668,7 +591,8 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
         # Six products have Rust, Node and Python coverage, and both unified
-        # facades remain present.
+        # facades remain present. Messaging's bindings are internal and stay
+        # out of the unified facades until Messaging joins a release.
         self.assertEqual(14, len(found), found)
         return found
 
@@ -693,13 +617,11 @@ class ClientReadmeInstallTest(unittest.TestCase):
             "registry-discovery-client-node": "@registrystack/client",
             "registry-evidence-client-node": "@registrystack/client",
             "registry-relay-client-node": "@registrystack/client",
-            "registry-messaging-client-node": "@registrystack/client",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",
             "registry-evidence-client-py": "registry-stack-client",
             "registry-relay-client-py": "registry-stack-client",
-            "registry-messaging-client-py": "registry-stack-client",
         }
         for readme in self.readmes():
             crate = readme.parent.name
