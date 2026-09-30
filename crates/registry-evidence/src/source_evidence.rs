@@ -64,6 +64,18 @@ impl EvidenceSourceConfig {
         {
             return Err(invalid());
         }
+        // The upstream authenticates this service's own source credential, so
+        // it would resolve an authenticated selector from that credential and
+        // never from the downstream caller's subject.
+        if definition
+            .subjects
+            .iter()
+            .any(|subject| subject.selector.value_origin != SelectorValueOrigin::Request)
+        {
+            return Err(ConfigError::Invalid(
+                "a signed Evidence source accepts only request-origin selectors, because the upstream would resolve an authenticated selector from this service's own source credential",
+            ));
+        }
         trusted_keys_are_usable(&self.trusted_jwks).map_err(|_| invalid())?;
         revoked_key_ids_are_usable(&self.revoked_key_ids).map_err(|_| invalid())?;
         if request.method != HttpMethod::POST
@@ -141,11 +153,6 @@ impl EvidenceSourceConfig {
                 match (declared.selector.value_origin, &values) {
                     (SelectorValueOrigin::Request, Some(values))
                         if declared.selector.accepts_request_values(values) => {}
-                    (
-                        SelectorValueOrigin::AuthenticatedContext
-                        | SelectorValueOrigin::AuthenticatedGrant,
-                        None,
-                    ) => {}
                     _ => return Err(SourceError::InvalidPlan),
                 }
                 Ok(SubjectRequest {
