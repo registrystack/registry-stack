@@ -456,7 +456,7 @@ The `evidence` object contains:
 | Key | Required | Meaning |
 |---|---|---|
 | `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws` and whose selectors all declare `valueOrigin: request`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. |
-| `trustedJwks` | yes | A JWKS object with 1 through 33 explicitly accepted public signing keys. Private key material and unusable keys are refused. |
+| `trustedJwks` | yes | A JWKS object with 1 through 33 explicitly accepted public signing keys. Each key has exactly the members `alg` (`ES256`), `crv` (`P-256`), `kty` (`EC`), `x`, `y`, and `kid`, which must be the key's RFC 7638 SHA-256 thumbprint. Private key material and unusable keys are refused. |
 | `revokedKeyIds` | no | Up to 33 distinct thumbprint key identifiers that must be refused, including keys still present in `trustedJwks`. Omission means none. |
 | `maximumAssertionLifetimeSeconds` | yes | Maximum accepted upstream assertion lifetime, from 1 through 31536000 seconds. Choose the shortest lifetime the integration needs. |
 | `clockSkewSeconds` | no | Accepted clock skew from 0 through 300 seconds. Defaults to zero. |
@@ -1958,6 +1958,12 @@ sources.*.evidence.revokedKeyIds[]
 sources.*.evidence.trustedJwks
 sources.*.evidence.trustedJwks.keys
 sources.*.evidence.trustedJwks.keys[]
+sources.*.evidence.trustedJwks.keys[].alg
+sources.*.evidence.trustedJwks.keys[].crv
+sources.*.evidence.trustedJwks.keys[].kid
+sources.*.evidence.trustedJwks.keys[].kty
+sources.*.evidence.trustedJwks.keys[].x
+sources.*.evidence.trustedJwks.keys[].y
 sources.*.extractProfile
 sources.*.extractScript
 sources.*.factSchema
