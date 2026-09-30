@@ -2892,6 +2892,11 @@ async fn apply_current_row(
             }
             let before_data = current.data.clone();
             let data = if let MutationBody::Attachment(attachment) = &request.body {
+                // An attachment write changes no field, so its prospective
+                // row is the current one. Authorize it before the object
+                // store or attachment table is written, like every other
+                // refusal on this path.
+                authorize_record_snapshot(request, &current.data, current.record_uuid)?;
                 let entity = &request.plan.entity;
                 let header = crate::request_store::load_header(
                     transaction,
@@ -2962,7 +2967,9 @@ async fn apply_current_row(
             };
             let mut admitted_intake = current.data.clone();
             admitted_intake.extend(data.clone());
-            authorize_record_snapshot(request, &admitted_intake, current.record_uuid)?;
+            if !matches!(&request.body, MutationBody::Attachment(_)) {
+                authorize_record_snapshot(request, &admitted_intake, current.record_uuid)?;
+            }
             request::admit_submitter_targets(
                 transaction,
                 &request.plan.entity,
