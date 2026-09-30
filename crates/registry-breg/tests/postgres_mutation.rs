@@ -1454,6 +1454,258 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
     database.cleanup().await;
 }
 
+/// A row-boundary refusal must not become an existence or uniqueness oracle,
+/// and a batch carrying one out-of-boundary item must write nothing at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_write_nothing() {
+    let database = TestDatabase::create(8).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(row_boundary_batch_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "row-boundary-batch-registry",
+            database_id: DATABASE_ID,
+            label: "package-row-boundary-oracles",
+        },
+    )
+    .await
+    .expect("migration initializes state");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x47; 32].into())
+            .expect("test owns keyed audit"),
+    );
+    let app = mutation_router(
+        pool.clone(),
+        compiled.clone(),
+        identity,
+        RegistryLockKey::derive("row-boundary-oracles").expect("lock id is bounded"),
+        audit,
+        None,
+    );
+    let table = compiled.entities()["widget"].physical_table.clone();
+    let zone_a = api_claims("case-management", Some("zone-a"));
+    let zone_b = api_claims("case-management", Some("zone-b"));
+    let json_headers = |key: &'static str| {
+        vec![
+            ("content-type", "application/json"),
+            ("idempotency-key", key),
+        ]
+    };
+
+    // A row only zone-b may see, carrying the unique label the probes reuse.
+    let hidden = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets",
+            Some(zone_b.clone()),
+            &json_headers("oracle-hidden-seed"),
+            br#"{"data":{"jurisdiction":"zone-b","label":"hidden-unique-label","quantity":1}}"#
+                .to_vec(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(hidden.status, StatusCode::CREATED);
+    let hidden_id = hidden.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("created record id")
+        .to_owned();
+
+    // A batch with one in-boundary and one out-of-boundary create answers
+    // the value-free precondition refusal and commits neither item.
+    let before_batch = durable_counts(&database, &table).await;
+    let before_batch_refusals = refusal_audit_count(&database).await;
+    let refused_batch = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets:batch",
+            Some(zone_a.clone()),
+            &json_headers("oracle-batch-refusal"),
+            serde_json::to_vec(&json!({"items":[
+                {"operation":"create","data":{"jurisdiction":"zone-a","label":"batch-in-boundary","quantity":1}},
+                {"operation":"create","data":{"jurisdiction":"zone-b","label":"batch-concealed-value","quantity":1}}
+            ]}))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(refused_batch.0, StatusCode::PRECONDITION_FAILED);
+    let refused_batch_body: Value = serde_json::from_slice(&refused_batch.1).unwrap();
+    assert_eq!(refused_batch_body["code"], "precondition.failed");
+    let refused_batch_text = String::from_utf8(refused_batch.1.clone()).unwrap();
+    for concealed in ["zone-b", "batch-concealed-value", "batch-in-boundary"] {
+        assert!(
+            !refused_batch_text.contains(concealed),
+            "{refused_batch_text}"
+        );
+    }
+    assert_audited_refusal_only(before_batch, durable_counts(&database, &table).await);
+    assert_eq!(
+        refusal_audit_count(&database).await,
+        before_batch_refusals + 1
+    );
+    assert!(!database
+        .audit_records()
+        .iter()
+        .any(|record| record.to_string().contains("batch-concealed-value")));
+
+    // A patch on a row outside the boundary is absent, byte for byte the same
+    // answer as a record that does not exist, even with the row's own ETag
+    // and a patch that would move it inside the caller's boundary.
+    let patch = |key: &'static str, record_id: String| {
+        let app = app.clone();
+        let claims = zone_a.clone();
+        let etag = hidden.etag.clone();
+        async move {
+            send(
+                &app,
+                Method::PATCH,
+                &format!("/v1/records/widgets/{record_id}"),
+                Some(claims),
+                &[
+                    ("content-type", "application/json-patch+json"),
+                    ("idempotency-key", key),
+                    ("if-match", &etag),
+                ],
+                br#"[{"op":"replace","path":"/data/jurisdiction","value":"zone-a"}]"#.to_vec(),
+            )
+            .await
+        }
+    };
+    let before_hidden_patch = durable_counts(&database, &table).await;
+    let hidden_patch = problem(patch("oracle-hidden-patch", hidden_id.clone()).await).await;
+    let absent_patch =
+        problem(patch("oracle-absent-patch", Uuid::new_v4().to_string()).await).await;
+    // A write names its target by a guarded ETag, so a row the caller cannot
+    // see answers the same precondition refusal as a row that does not exist.
+    assert_eq!(hidden_patch.0, StatusCode::PRECONDITION_FAILED);
+    assert_identical_problems(&hidden_patch, &absent_patch);
+    assert_eq!(
+        durable_counts(&database, &table).await,
+        DurableCounts {
+            audit: before_hidden_patch.audit + 4,
+            ..before_hidden_patch
+        }
+    );
+    let read = |record_id: String| {
+        let app = app.clone();
+        let claims = zone_a.clone();
+        async move {
+            send(
+                &app,
+                Method::GET,
+                &format!("/v1/records/widgets/{record_id}"),
+                Some(claims),
+                &[],
+                Vec::new(),
+            )
+            .await
+        }
+    };
+    let hidden_read = problem(read(hidden_id.clone()).await).await;
+    let absent_read = problem(read(Uuid::new_v4().to_string()).await).await;
+    assert_eq!(hidden_read.0, StatusCode::NOT_FOUND);
+    assert_identical_problems(&hidden_read, &absent_read);
+
+    // Creating an out-of-boundary row whose unique label collides with the
+    // hidden row is refused by the boundary first: it answers exactly what a
+    // colliding-free out-of-boundary create answers, never a conflict.
+    let create = |key: &'static str, label: &'static str| {
+        let app = app.clone();
+        let claims = zone_a.clone();
+        async move {
+            send(
+                &app,
+                Method::POST,
+                "/v1/records/widgets",
+                Some(claims),
+                &[
+                    ("content-type", "application/json"),
+                    ("idempotency-key", key),
+                ],
+                serde_json::to_vec(&json!({"data":{
+                    "jurisdiction":"zone-b","label":label,"quantity":1
+                }}))
+                .unwrap(),
+            )
+            .await
+        }
+    };
+    let before_unique = durable_counts(&database, &table).await;
+    let colliding = problem(create("oracle-colliding-create", "hidden-unique-label").await).await;
+    let fresh = problem(create("oracle-fresh-create", "fresh-unique-label").await).await;
+    assert_eq!(colliding.0, StatusCode::PRECONDITION_FAILED);
+    assert_identical_problems(&colliding, &fresh);
+    let colliding_batch = problem(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets:batch",
+            Some(zone_a.clone()),
+            &json_headers("oracle-colliding-batch"),
+            serde_json::to_vec(&json!({"items":[
+                {"operation":"create","data":{"jurisdiction":"zone-b","label":"hidden-unique-label","quantity":1}}
+            ]}))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(colliding_batch.0, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        durable_counts(&database, &table).await,
+        DurableCounts {
+            audit: before_unique.audit + 6,
+            ..before_unique
+        }
+    );
+
+    // The control: inside the boundary the same label is a real conflict, so
+    // the refusals above were not answered by an absent constraint.
+    let conflict = send(
+        &app,
+        Method::POST,
+        "/v1/records/widgets",
+        Some(zone_b.clone()),
+        &json_headers("oracle-in-boundary-conflict"),
+        br#"{"data":{"jurisdiction":"zone-b","label":"hidden-unique-label","quantity":2}}"#
+            .to_vec(),
+    )
+    .await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+
+    let listed = response_parts(
+        send(
+            &app,
+            Method::GET,
+            &format!("/v1/records/widgets/{hidden_id}"),
+            Some(zone_b),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(listed.etag, hidden.etag);
+    assert_eq!(listed.body["data"]["domainData"]["jurisdiction"], "zone-b");
+
+    drop(app);
+    drop(pool);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     let database = TestDatabase::create(12).await;
@@ -3118,6 +3370,39 @@ fn assert_identical_problems(left: &(StatusCode, Vec<u8>), right: &(StatusCode, 
         )
     };
     assert_eq!(strip(left), strip(right));
+}
+
+fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"row-boundary-batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+            "batch":{"maximumItems":4,"maximumBytes":16384},
+            "constraints":[{"kind":"unique","fields":["label"]}],
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+              {"id":"quantity","type":"int64","required":true,"classification":"public"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"writer","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "permissions":[{
+              "entity":"widget","operations":["create","get","list","patch","batch"],
+              "readableFields":["jurisdiction","label","quantity"],
+              "writableFields":["jurisdiction","label","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("row boundary batch fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("row boundary batch fixture compiles")
 }
 
 fn located_refusal_registry() -> registry_breg::CompiledRegistry {
