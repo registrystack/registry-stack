@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
     model::{Evidence, FlattenedJws, JwksDocument, SubjectBinding},
     verifier::{
-        trusted_keys_are_usable, verify_flattened_jws, verify_sd_jwt_vc,
-        EvidenceVerificationPolicyDocument, ExpectedSubjectDocument,
+        revoked_key_ids_are_usable, trusted_keys_are_usable, verify_flattened_jws,
+        verify_sd_jwt_vc, EvidenceVerificationPolicyDocument, ExpectedSubjectDocument,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,19 @@ enum RetainedSubjectExpectation {
 }
 
 impl RetainedEvidenceVerification {
+    /// Close a verified-response policy for a caller-owned HTTP transport.
+    ///
+    /// Keys are independently accepted by the integrator, before any response
+    /// exists. This performs no I/O and refuses an unusable trusted key set.
+    pub fn from_prepared(
+        prepared: &PreparedEvidenceRequest,
+        trusted_jwks: JwksDocument,
+    ) -> Result<Self, EvidenceClientError> {
+        let context = Self::new(prepared, trusted_jwks);
+        context.validate()?;
+        Ok(context)
+    }
+
     /// Decode a bounded, previously retained trust snapshot. This reads no
     /// deployment metadata or current keys.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, EvidenceClientError> {
@@ -171,6 +184,8 @@ impl RetainedEvidenceVerification {
             ));
         }
         trusted_keys_are_usable(&self.trusted_jwks).map_err(EvidenceClientError::Verification)?;
+        revoked_key_ids_are_usable(&self.verification_policy.revoked_key_ids)
+            .map_err(EvidenceClientError::Verification)?;
         match &self.subject_expectation {
             RetainedSubjectExpectation::Pinned => {
                 if self.verification_policy.expected_subjects.is_empty() {
@@ -525,6 +540,14 @@ mod tests {
             b' ';
             MAXIMUM_RETAINED_CONTEXT_BYTES + 1
         ])
+        .is_err());
+        let mut invalid_revocation = serde_json::to_value(&context)
+            .expect("the retained context serializes for revocation tampering");
+        invalid_revocation["verificationPolicy"]["revokedKeyIds"] =
+            serde_json::json!(["not-a-thumbprint"]);
+        assert!(RetainedEvidenceVerification::from_slice(
+            &serde_json::to_vec(&invalid_revocation).expect("the tampered context serializes")
+        )
         .is_err());
         let wrong_schema: RetainedEvidenceVerification =
             serde_json::from_value(wrong_schema).expect("the altered shape parses");
