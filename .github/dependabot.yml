@@ -141,6 +141,7 @@ updates:
   - package-ecosystem: cargo
     directories:
       - "/editors/zed"
+      - "/products/evidence/fuzz"
       - "/products/manifest/fuzz"
       - "/products/platform/fuzz"
     schedule:
@@ -157,9 +158,9 @@ updates:
       cargo-major:
         update-types:
           - major
-    # The platform fuzz targets path-depend on the platform crates, so the
-    # root entry's deferred majors are deferred here too, under the same
-    # tickets.
+    # The platform and Evidence fuzz targets path-depend on the platform
+    # crates, so the root entry's deferred majors are deferred here too, under
+    # the same tickets.
     ignore:
       # jsonwebtoken 11 sits under every token-verifying path (#1684).
       - dependency-name: "jsonwebtoken"
