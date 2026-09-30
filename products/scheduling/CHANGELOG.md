@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: package activation (`schedulingctl plan`, `apply`, and `status`) and
+  `scheduling serve` startup refuse a PostgreSQL server older than 17 with an
+  upgrade instruction, before any migration or activation write. Operators
+  on PostgreSQL 16 or older must upgrade the database server before
+  upgrading Scheduling.
 - BREAKING: publish the `v1alpha2` HTTP contract with typed opaque
   `externalReferences` on hold and appointment
   documents and to hold or direct-booking admissions. Hold confirmation,
