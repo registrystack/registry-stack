@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Automatic review executors can renew credentials with `privateKeyJwt`.
+  `bregctl review-recovery retry-application` requeues an `executor-denied`
+  job after credentials or grants are corrected, while retaining its exact
+  current approved proposal and idempotency key. Application conflicts and
+  precondition refusals retry with a delay of 5 seconds up to 5 minutes.
+- `bregctl dev` accepts explicit service-client `reviewExecutors` bindings for
+  automatically applied requests and uses renewing local issuer credentials.
+- Webhook destination validation refuses `localhost` and `*.localhost` under
+  production and private-service profiles before startup. Dead letters retain
+  a closed, value-free failure reason for operator inspection.
+- `bregctl webhook list` remains available when retained work names a
+  superseded binding. Operators can restore the exact binding or use the new
+  audited, generation-bound `webhook discard` command to close eligible work
+  without replaying it under the replacement binding.
+
 - An upgraded runtime and `bregctl` keep verifying and serving a database a
   release before subject access-log storage activated, without an apply. The
   next successor apply installs the storage.

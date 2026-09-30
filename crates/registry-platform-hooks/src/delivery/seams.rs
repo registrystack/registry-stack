@@ -416,6 +416,7 @@ pub enum DeliveryAuditPhase {
     Attempt,
     Terminal,
     Replay,
+    Discard,
 }
 
 /// The closed outcome of a neutral delivery-audit event: exactly the
@@ -450,6 +451,14 @@ pub enum DeliveryAuditOutcome {
     /// read back, so the delivery may be pending again or still
     /// dead-lettered.
     ReplayUnfinished,
+    /// An operator asked to erase a retained delivery without replaying it.
+    DiscardRequested,
+    /// The discard and retained-payload erasure committed together.
+    DiscardCommitted,
+    /// The discard did not commit and the delivery remains retained.
+    DiscardRefused,
+    /// The discard commit failed and its outcome could not be read back.
+    DiscardUnfinished,
 }
 
 impl DeliveryAuditOutcome {
@@ -479,6 +488,8 @@ pub enum DeliveryAuditDisposition {
     DeadLettered,
     Expired,
     ReplayPending,
+    DiscardPending,
+    Discarded,
     /// A terminal disposition's commit failed and its fate cannot be read
     /// back, so the delivery may hold that disposition or still be leased.
     /// It asserts no database state.

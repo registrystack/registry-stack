@@ -113,10 +113,12 @@ configuration or secrets.
 
 `bregctl webhook list --runtime-config ABSOLUTE_FILE [--limit N]`
 verifies the current package and database identity before returning bounded
-pending, dead-lettered, and expired metadata. The default limit is 50 and the
-product maximum is 100. Results contain delivery identity, state, attempt,
-payload eligibility, and expiry only. They never contain projected values,
-record identifiers, destination URLs, secret references, or keys.
+pending, leased, dead-lettered, and expired metadata, including deliveries
+captured under a superseded binding. The default limit is 50 and the product
+maximum is 100. Results contain delivery identity, state, attempt, payload
+eligibility, expiry, binding activity, discard eligibility, and an optional
+closed dead-letter reason. They never contain projected values, record
+identifiers, destination URLs, secret references, or keys.
 
 `bregctl webhook replay --runtime-config ABSOLUTE_FILE --event-id
 UUID --delivery-id ID --expected-generation N` delegates one optimistic replay
@@ -124,6 +126,14 @@ to Base Registry Engine. Replay is limited to a current, replay-enabled dead let
 whose retained payload and exact destination binding are still available.
 Configuration, identity, generation, eligibility, and retention refusals share
 one value-free diagnostic.
+
+`bregctl webhook discard --runtime-config ABSOLUTE_FILE --event-id UUID
+--delivery-id ID --expected-generation N` irreversibly closes one retained
+pending delivery, dead letter, or expired lease without sending it under a
+replacement binding. Stop the runtime before discarding pending work. A live
+lease is refused until it expires, and any recovered proposal receipt is
+refused rather than hidden. Discard prevents future attempts; it does not undo
+a receiver effect that may already have committed.
 
 `bregctl doctor --runtime-config ABSOLUTE_FILE` verifies the startup
 dependencies opened by the current preparation path without binding a

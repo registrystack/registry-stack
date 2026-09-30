@@ -88,7 +88,13 @@ lease-expiry recovery, retry, dead letter, payload expiry, and replay) is
 `registry-platform-dispatch`, run over the delivery state table: the worker keeps
 the frozen retry delays the delivery was captured with, retries every failed or
 interrupted attempt until its attempts are spent, and accepts attempt timeouts
-from 100 milliseconds to 10 seconds. Nothing above this section is behind the feature:
+from 100 milliseconds to 10 seconds. Dead letters retain a closed, value-free
+failure reason when the installed schema supports it. The operator surface can
+list work captured under a superseded binding and explicitly discard pending
+work, a dead letter, or an expired lease under its exact generation. Discard
+never rebinds or sends the work, refuses a live lease or recovered proposal
+receipt, and preserves the shared envelope while another delivery needs it.
+Nothing above this section is behind the feature:
 the contract half has no database dependency, so a product that only declares and
 validates hooks takes the crate with default features and links no PostgreSQL
 client. No executor lives in this crate: running a Rhai or WASM handler is a

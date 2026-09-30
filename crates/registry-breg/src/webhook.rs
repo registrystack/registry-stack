@@ -55,8 +55,10 @@ use crate::runtime_config::load_runtime_config;
 use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
 
 pub use registry_platform_hooks::delivery::{
-    DeliveryError as WebhookDeliveryError, DeliveryOutcome as WebhookWorkOutcome,
-    DeliveryStatus as WebhookDeliveryStatus, DeliveryStatusKind as WebhookDeliveryStatusKind,
+    DeliveryError as WebhookDeliveryError, DeliveryFailureReason as WebhookDeliveryFailureReason,
+    DeliveryOutcome as WebhookWorkOutcome, DeliveryStatus as WebhookDeliveryStatus,
+    DeliveryStatusKind as WebhookDeliveryStatusKind,
+    RetainedBindingError as WebhookRetainedBindingError,
     MAX_DELIVERY_STATUS_RESULTS as MAX_WEBHOOK_STATUS_RESULTS,
 };
 
@@ -84,8 +86,10 @@ pub enum WebhookOperatorError {
 /// Verified, product-owned operator boundary used by `bregctl`.
 ///
 /// Construction closes package, database identity, destination, and audit
-/// bindings before list or replay is available. The CLI therefore owns no SQL,
-/// retry transition, or signing behavior.
+/// bindings before operator actions are available. Listing deliberately
+/// remains available when retained rows name a superseded binding; replay
+/// still checks the exact captured binding itself. The CLI therefore owns no
+/// SQL, retry transition, or signing behavior.
 pub struct WebhookOperatorService {
     delivery: WebhookDeliveryService,
 }
@@ -139,10 +143,6 @@ impl WebhookOperatorService {
             config.operational_timeouts().record_lock,
             audit,
         );
-        delivery
-            .verify_retained_bindings()
-            .await
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
         Ok(Self { delivery })
     }
 
@@ -164,6 +164,18 @@ impl WebhookOperatorService {
     ) -> Result<i64, WebhookOperatorError> {
         self.delivery
             .replay(event_id, compiled_delivery_id, expected_generation)
+            .await
+            .map_err(|_| WebhookOperatorError::Unavailable)
+    }
+
+    pub async fn discard(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        expected_generation: i64,
+    ) -> Result<i64, WebhookOperatorError> {
+        self.delivery
+            .discard(event_id, compiled_delivery_id, expected_generation)
             .await
             .map_err(|_| WebhookOperatorError::Unavailable)
     }
@@ -661,6 +673,7 @@ fn audit_phase(phase: DeliveryAuditPhase) -> WebhookAuditPhase {
         DeliveryAuditPhase::Attempt => WebhookAuditPhase::Attempt,
         DeliveryAuditPhase::Terminal => WebhookAuditPhase::Terminal,
         DeliveryAuditPhase::Replay => WebhookAuditPhase::Replay,
+        DeliveryAuditPhase::Discard => WebhookAuditPhase::Discard,
     }
 }
 
@@ -689,6 +702,10 @@ fn audit_outcome(outcome: DeliveryAuditOutcome) -> WebhookAuditOutcome {
         DeliveryAuditOutcome::ReplayCommitted => WebhookAuditOutcome::ReplayCommitted,
         DeliveryAuditOutcome::ReplayRefused => WebhookAuditOutcome::ReplayRefused,
         DeliveryAuditOutcome::ReplayUnfinished => WebhookAuditOutcome::ReplayUnfinished,
+        DeliveryAuditOutcome::DiscardRequested => WebhookAuditOutcome::DiscardRequested,
+        DeliveryAuditOutcome::DiscardCommitted => WebhookAuditOutcome::DiscardCommitted,
+        DeliveryAuditOutcome::DiscardRefused => WebhookAuditOutcome::DiscardRefused,
+        DeliveryAuditOutcome::DiscardUnfinished => WebhookAuditOutcome::DiscardUnfinished,
         DeliveryAuditOutcome::HandlerBindingRefused => WebhookAuditOutcome::HandlerBindingRefused,
         DeliveryAuditOutcome::HandlerDeadline => WebhookAuditOutcome::HandlerDeadline,
         DeliveryAuditOutcome::HandlerResource => WebhookAuditOutcome::HandlerResource,
@@ -706,6 +723,8 @@ fn audit_disposition(disposition: DeliveryAuditDisposition) -> WebhookAuditDispo
         DeliveryAuditDisposition::DeadLettered => WebhookAuditDisposition::DeadLettered,
         DeliveryAuditDisposition::Expired => WebhookAuditDisposition::Expired,
         DeliveryAuditDisposition::ReplayPending => WebhookAuditDisposition::ReplayPending,
+        DeliveryAuditDisposition::DiscardPending => WebhookAuditDisposition::DiscardPending,
+        DeliveryAuditDisposition::Discarded => WebhookAuditDisposition::Discarded,
         DeliveryAuditDisposition::Unknown => WebhookAuditDisposition::Unknown,
     }
 }
@@ -813,7 +832,7 @@ impl WebhookDeliveryService {
 
     /// Refuse startup or operator use if retained work cannot use its exact
     /// captured destination under the active deployment bindings.
-    pub async fn verify_retained_bindings(&self) -> Result<(), WebhookDeliveryError> {
+    pub async fn verify_retained_bindings(&self) -> Result<(), WebhookRetainedBindingError> {
         self.delivery.verify_retained_bindings().await
     }
 
@@ -838,6 +857,19 @@ impl WebhookDeliveryService {
     ) -> Result<i64, WebhookDeliveryError> {
         self.delivery
             .replay(event_id, compiled_delivery_id, expected_generation)
+            .await
+    }
+
+    /// Irreversibly discard retained delivery work under an optimistic
+    /// generation guard, without delivering it under a replacement binding.
+    pub async fn discard(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        expected_generation: i64,
+    ) -> Result<i64, WebhookDeliveryError> {
+        self.delivery
+            .discard(event_id, compiled_delivery_id, expected_generation)
             .await
     }
 }

@@ -2,8 +2,8 @@
 //! Webhook developer and operator workflows.
 //!
 //! This module renders offline examples from compiled authority and delegates
-//! live inspection and replay to Base Registry Engine. It deliberately owns no SQL,
-//! signature construction, retry policy, or replay semantics.
+//! live inspection, replay, and discard to Base Registry Engine. It deliberately owns no SQL,
+//! signature construction, retry policy, or recovery semantics.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -73,6 +73,10 @@ pub(crate) struct WebhookListItem {
     pub payload_available: bool,
     pub payload_expires_at: String,
     pub replay_eligible: bool,
+    pub discard_eligible: bool,
+    pub binding_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead_letter_reason: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -81,6 +85,15 @@ pub(crate) struct WebhookReplayOutcome {
     pub event_id: String,
     pub delivery_id: String,
     pub generation: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebhookDiscardOutcome {
+    pub event_id: String,
+    pub delivery_id: String,
+    pub generation: i64,
+    pub state: &'static str,
 }
 
 pub(crate) fn sample(
@@ -251,6 +264,54 @@ fn replay_with<E>(
     })
 }
 
+pub(crate) fn discard(
+    runtime_config: &Path,
+    event_id: &str,
+    delivery_id: &str,
+    expected_generation: i64,
+) -> Result<WebhookDiscardOutcome, WebhookLifecycleError> {
+    let runtime = operator_runtime()?;
+    discard_with(
+        runtime_config,
+        event_id,
+        delivery_id,
+        expected_generation,
+        |runtime_config, event_id, delivery_id, expected_generation| {
+            runtime.block_on(async {
+                let service = WebhookOperatorService::from_runtime_config(runtime_config).await?;
+                service
+                    .discard(event_id, delivery_id, expected_generation)
+                    .await
+            })
+        },
+    )
+}
+
+fn discard_with<E>(
+    runtime_config: &Path,
+    event_id: &str,
+    delivery_id: &str,
+    expected_generation: i64,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, E>,
+) -> Result<WebhookDiscardOutcome, WebhookLifecycleError> {
+    if !runtime_config.is_absolute()
+        || delivery_id.is_empty()
+        || delivery_id.len() > 256
+        || expected_generation <= 0
+    {
+        return Err(WebhookLifecycleError::Operator);
+    }
+    let event_id = Uuid::parse_str(event_id).map_err(|_| WebhookLifecycleError::Operator)?;
+    let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
+        .map_err(|_| WebhookLifecycleError::Operator)?;
+    Ok(WebhookDiscardOutcome {
+        event_id: event_id.to_string(),
+        delivery_id: delivery_id.to_owned(),
+        generation,
+        state: "discarded",
+    })
+}
+
 fn operator_runtime() -> Result<tokio::runtime::Runtime, WebhookLifecycleError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -261,7 +322,11 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, WebhookLifecycleError> 
 fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
     let (state, replay_eligible) = match status.state {
         WebhookDeliveryStatusKind::Pending => ("pending", false),
-        WebhookDeliveryStatusKind::DeadLettered => ("dead_lettered", status.payload_available),
+        WebhookDeliveryStatusKind::Leased => ("leased", false),
+        WebhookDeliveryStatusKind::DeadLettered => (
+            "dead_lettered",
+            status.payload_available && status.binding_active,
+        ),
         WebhookDeliveryStatusKind::Expired => ("expired", false),
     };
     WebhookListItem {
@@ -273,6 +338,9 @@ fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
         payload_available: status.payload_available,
         payload_expires_at: status.payload_expires_at,
         replay_eligible,
+        discard_eligible: status.discard_eligible,
+        binding_active: status.binding_active,
+        dead_letter_reason: status.dead_letter_reason.map(|reason| reason.as_str()),
     }
 }
 
@@ -507,6 +575,7 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+    use registry_breg::webhook::WebhookDeliveryFailureReason;
 
     #[test]
     fn structured_sample_synthesis_is_deterministic_and_uses_required_typed_properties() {
@@ -553,6 +622,9 @@ mod tests {
                     attempt: 3,
                     payload_available: true,
                     payload_expires_at: "2026-01-02T00:00:00Z".to_owned(),
+                    dead_letter_reason: Some(WebhookDeliveryFailureReason::AlwaysDeniedAddress),
+                    binding_active: true,
+                    discard_eligible: true,
                 }])
             },
         )
@@ -562,6 +634,11 @@ mod tests {
         assert_eq!(outcome.deliveries.len(), 1);
         assert_eq!(outcome.deliveries[0].state, "dead_lettered");
         assert!(outcome.deliveries[0].replay_eligible);
+        assert!(outcome.deliveries[0].discard_eligible);
+        assert_eq!(
+            outcome.deliveries[0].dead_letter_reason,
+            Some("always_denied_address")
+        );
     }
 
     #[test]
@@ -585,5 +662,87 @@ mod tests {
 
         assert!(called.get());
         assert_eq!(outcome.generation, 8);
+    }
+
+    #[test]
+    fn operator_discard_delegates_the_exact_optimistic_identity() {
+        let called = Cell::new(false);
+        let outcome = discard_with(
+            Path::new("/operator/runtime.yaml"),
+            SAMPLE_EVENT_ID,
+            "record.record-created-v1.webhook",
+            7,
+            |runtime_config, event_id, delivery_id, expected_generation| {
+                called.set(true);
+                assert_eq!(runtime_config, Path::new("/operator/runtime.yaml"));
+                assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
+                assert_eq!(delivery_id, "record.record-created-v1.webhook");
+                assert_eq!(expected_generation, 7);
+                Ok::<_, ()>(8)
+            },
+        )
+        .expect("delegated discard succeeds");
+
+        assert!(called.get());
+        assert_eq!(outcome.generation, 8);
+        assert_eq!(outcome.state, "discarded");
+    }
+
+    #[test]
+    fn operator_discard_refuses_unbounded_or_stale_identity_before_io() {
+        for (runtime_config, event_id, delivery_id, generation) in [
+            (
+                Path::new("relative-runtime.yaml"),
+                SAMPLE_EVENT_ID,
+                "record.record-created-v1.webhook",
+                1,
+            ),
+            (
+                Path::new("/operator/runtime.yaml"),
+                "not-an-event-id",
+                "record.record-created-v1.webhook",
+                1,
+            ),
+            (Path::new("/operator/runtime.yaml"), SAMPLE_EVENT_ID, "", 1),
+            (
+                Path::new("/operator/runtime.yaml"),
+                SAMPLE_EVENT_ID,
+                "record.record-created-v1.webhook",
+                0,
+            ),
+        ] {
+            let called = Cell::new(false);
+            assert_eq!(
+                discard_with(
+                    runtime_config,
+                    event_id,
+                    delivery_id,
+                    generation,
+                    |_, _, _, _| {
+                        called.set(true);
+                        Ok::<_, ()>(2)
+                    },
+                ),
+                Err(WebhookLifecycleError::Operator)
+            );
+            assert!(!called.get());
+        }
+
+        let oversized = "d".repeat(257);
+        let called = Cell::new(false);
+        assert_eq!(
+            discard_with(
+                Path::new("/operator/runtime.yaml"),
+                SAMPLE_EVENT_ID,
+                &oversized,
+                1,
+                |_, _, _, _| {
+                    called.set(true);
+                    Ok::<_, ()>(2)
+                },
+            ),
+            Err(WebhookLifecycleError::Operator)
+        );
+        assert!(!called.get());
     }
 }

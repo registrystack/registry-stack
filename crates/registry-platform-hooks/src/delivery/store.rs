@@ -11,6 +11,7 @@
 //! mapping, the proposal and answer bookkeeping columns, and the retained
 //! payload erasure.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -31,7 +32,8 @@ use super::seams::{
     HookDestination, HookHandler, HookHandlerBinding, ProposalReceiptRecovery,
 };
 use super::service::{
-    bounded_text, proposal_columns, validate_captured_policy, AttemptResult, ProposalColumns,
+    bounded_text, proposal_columns, validate_captured_policy, AttemptResult, DeliveryFailureReason,
+    ProposalColumns,
 };
 use crate::{delivery_schema, HookHandlerKind};
 
@@ -41,6 +43,9 @@ pub(super) const PART_COLUMN: &str = "compiled_delivery_id";
 
 /// The operator may replay only a dead-lettered delivery.
 pub(super) const REPLAYABLE: &[JobState] = &[JobState::DeadLettered];
+pub(super) const DEAD_LETTER_REASON_UNKNOWN: u8 = 0;
+pub(super) const DEAD_LETTER_REASON_ABSENT: u8 = 1;
+pub(super) const DEAD_LETTER_REASON_PRESENT: u8 = 2;
 
 /// The captured attempt timeouts a hook delivery may carry.
 pub(super) fn attempt_timeout_bound() -> AttemptTimeoutBound {
@@ -136,6 +141,7 @@ pub(super) struct HookRecord {
 pub(super) struct HookStore<S: DeliverySeams> {
     pub(super) seams: S,
     pub(super) schema: String,
+    pub(super) dead_letter_reason_column: AtomicU8,
 }
 
 impl<S: DeliverySeams> HookStore<S> {
@@ -517,7 +523,14 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
             )
             .await?;
         let columns = proposal_columns("dead_lettered", proposal.as_ref())?;
-        Ok(with_proposal_columns(Columns::new(), &columns))
+        let mut retained = Columns::new();
+        if self.dead_letter_reason_column.load(Ordering::Relaxed) == DEAD_LETTER_REASON_PRESENT {
+            retained = retained.set(
+                "dead_letter_reason",
+                Some(DeliveryFailureReason::WorkerInterrupted.as_str().to_owned()),
+            );
+        }
+        Ok(with_proposal_columns(retained, &columns))
     }
 
     fn finished_columns(
@@ -542,12 +555,23 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
             _ => return Err(DispatchError::Unavailable),
         };
         let columns = proposal_columns(state, sent.detail.proposal.as_ref())?;
-        Ok(with_proposal_columns(
-            Columns::new()
-                .set("handler_message", None::<Vec<u8>>)
-                .set("handler_message_digest", message_digest),
-            &columns,
-        ))
+        let mut retained = Columns::new()
+            .set("handler_message", None::<Vec<u8>>)
+            .set("handler_message_digest", message_digest);
+        if self.dead_letter_reason_column.load(Ordering::Relaxed) == DEAD_LETTER_REASON_PRESENT {
+            retained = retained.set(
+                "dead_letter_reason",
+                (disposition == Disposition::DeadLettered)
+                    .then(|| {
+                        sent.detail
+                            .failure_reason
+                            .map(DeliveryFailureReason::as_str)
+                    })
+                    .flatten()
+                    .map(str::to_owned),
+            );
+        }
+        Ok(with_proposal_columns(retained, &columns))
     }
 
     async fn after_finished(
@@ -559,17 +583,49 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
         if disposition != Disposition::Delivered {
             return Ok(());
         }
+        // Serialize every terminal sibling on the shared outbox row. The
+        // following statement then gets a fresh READ COMMITTED snapshot, so
+        // the last sibling to finish observes earlier terminal commits and
+        // erases the envelope exactly once.
+        transaction
+            .query_opt(
+                &self.sql(
+                    "SELECT outbox_id
+                       FROM {schema}.registry_outbox
+                      WHERE event_id = $1
+                      FOR UPDATE",
+                ),
+                &[&job.key.id()],
+            )
+            .await?
+            .ok_or(DispatchError::Unavailable)?;
         let erased = transaction
             .execute(
                 &self.sql(
                     "UPDATE {schema}.registry_outbox
                         SET payload = NULL
-                      WHERE event_id = $1 AND payload IS NOT NULL",
+                      WHERE event_id = $1
+                        AND payload IS NOT NULL
+                        AND NOT EXISTS (
+                            SELECT 1
+                              FROM {schema}.registry_webhook_delivery_state AS sibling
+                              JOIN {schema}.registry_webhook_deliveries AS sibling_delivery
+                                ON sibling_delivery.event_id = sibling.event_id
+                               AND sibling_delivery.compiled_delivery_id =
+                                   sibling.compiled_delivery_id
+                             WHERE sibling.event_id = $1
+                               AND sibling.compiled_delivery_id <> $2
+                               AND (
+                                   sibling.state IN ('pending', 'leased')
+                                   OR (sibling.state = 'dead_lettered'
+                                       AND sibling_delivery.operator_replay)
+                               )
+                        )",
                 ),
-                &[&job.key.id()],
+                &[&job.key.id(), &job.key.part()],
             )
             .await?;
-        if erased != 1 {
+        if erased > 1 {
             return Err(DispatchError::Unavailable);
         }
         Ok(())

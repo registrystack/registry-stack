@@ -694,6 +694,51 @@ impl RuntimeConfig {
         )
     }
 
+    fn review_token_provider(
+        &self,
+        token_ref: Option<&SecretReference>,
+        private_key_jwt: Option<&ReviewPrivateKeyJwtConfig>,
+    ) -> Result<Arc<dyn registry_platform_httputil::TokenProvider>> {
+        let resolver = self.secret_resolver()?;
+        Ok(if let Some(token_ref) = token_ref {
+            let token = resolver.resolve_reference(token_ref)?;
+            let token = std::str::from_utf8(token.expose_secret())
+                .map_err(|_| RuntimeConfigError::Secret)?;
+            Arc::new(
+                registry_platform_httputil::StaticToken::new(token.to_owned())
+                    .map_err(|_| RuntimeConfigError::Secret)?,
+            )
+        } else {
+            let oauth = private_key_jwt.ok_or(RuntimeConfigError::InvalidBinding)?;
+            let client_id = resolver.resolve_reference(&oauth.client_id_ref)?;
+            let client_id = std::str::from_utf8(client_id.expose_secret())
+                .map_err(|_| RuntimeConfigError::Secret)?;
+            let key = resolver.resolve_reference(&oauth.client_assertion_key_ref)?;
+            let key =
+                std::str::from_utf8(key.expose_secret()).map_err(|_| RuntimeConfigError::Secret)?;
+            let key = registry_platform_crypto::PrivateJwk::parse(key)
+                .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+            let mut provider = registry_platform_httputil::PrivateKeyJwtConfig::new(
+                oauth.token_endpoint.clone(),
+                client_id.to_owned(),
+                key,
+            )
+            .with_audience(oauth.assertion_audience.clone())
+            .with_resource(oauth.resource.clone())
+            .with_scopes(oauth.scopes.clone())
+            .with_request_timeout(self.operational_timeouts.http_request)
+            .with_connect_timeout(self.operational_timeouts.http_request);
+            if let Some(reference) = &oauth.ca_bundle_ref {
+                let ca = resolver.resolve_reference(reference)?;
+                provider = provider.with_trusted_root_certificates(ca.expose_secret().to_vec());
+            }
+            Arc::new(
+                registry_platform_httputil::PrivateKeyJwt::new(provider)
+                    .map_err(|_| RuntimeConfigError::InvalidBinding)?,
+            )
+        })
+    }
+
     pub fn activate_review_authorities(
         &self,
         compiled: &CompiledRegistry,
@@ -724,48 +769,10 @@ impl RuntimeConfig {
         // the new package. Durable submissions created by the previous package
         // must keep their worker after a review policy is changed or removed.
         for (authority, config) in &self.review_authorities {
-            let token_provider: Arc<dyn registry_platform_httputil::TokenProvider> =
-                if let Some(token_ref) = &config.token_ref {
-                    let token = resolver.resolve_reference(token_ref)?;
-                    let token = std::str::from_utf8(token.expose_secret())
-                        .map_err(|_| RuntimeConfigError::Secret)?;
-                    Arc::new(
-                        registry_platform_httputil::StaticToken::new(token.to_owned())
-                            .map_err(|_| RuntimeConfigError::Secret)?,
-                    )
-                } else {
-                    let oauth = config
-                        .private_key_jwt
-                        .as_ref()
-                        .ok_or(RuntimeConfigError::InvalidBinding)?;
-                    let client_id = resolver.resolve_reference(&oauth.client_id_ref)?;
-                    let client_id = std::str::from_utf8(client_id.expose_secret())
-                        .map_err(|_| RuntimeConfigError::Secret)?;
-                    let key = resolver.resolve_reference(&oauth.client_assertion_key_ref)?;
-                    let key = std::str::from_utf8(key.expose_secret())
-                        .map_err(|_| RuntimeConfigError::Secret)?;
-                    let key = registry_platform_crypto::PrivateJwk::parse(key)
-                        .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-                    let mut provider = registry_platform_httputil::PrivateKeyJwtConfig::new(
-                        oauth.token_endpoint.clone(),
-                        client_id.to_owned(),
-                        key,
-                    )
-                    .with_audience(oauth.assertion_audience.clone())
-                    .with_resource(oauth.resource.clone())
-                    .with_scopes(oauth.scopes.clone())
-                    .with_request_timeout(self.operational_timeouts.http_request)
-                    .with_connect_timeout(self.operational_timeouts.http_request);
-                    if let Some(reference) = &oauth.ca_bundle_ref {
-                        let ca = resolver.resolve_reference(reference)?;
-                        provider =
-                            provider.with_trusted_root_certificates(ca.expose_secret().to_vec());
-                    }
-                    Arc::new(
-                        registry_platform_httputil::PrivateKeyJwt::new(provider)
-                            .map_err(|_| RuntimeConfigError::InvalidBinding)?,
-                    )
-                };
+            let token_provider = self.review_token_provider(
+                config.token_ref.as_ref(),
+                config.private_key_jwt.as_ref(),
+            )?;
             let completion = config
                 .completion
                 .as_ref()
@@ -862,7 +869,6 @@ impl RuntimeConfig {
                 return Err(RuntimeConfigError::InvalidBinding);
             }
         }
-        let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
         // An executor can remain necessary for an application job accepted
         // under the previous package even when the new package no longer
@@ -905,15 +911,14 @@ impl RuntimeConfig {
                 .into_iter()
                 .map(|entity| (entity.id.clone(), entity.route.clone()))
                 .collect::<BTreeMap<_, _>>();
-            let token = resolver.resolve_reference(&config.token_ref)?;
-            let token = std::str::from_utf8(token.expose_secret())
-                .map_err(|_| RuntimeConfigError::Secret)?;
-            let token = registry_review_client::BearerToken::new(token.to_owned())
-                .map_err(|_| RuntimeConfigError::Secret)?;
+            let token_provider = self.review_token_provider(
+                config.token_ref.as_ref(),
+                config.private_key_jwt.as_ref(),
+            )?;
             let executor_client = crate::review_store::ReviewExecutorClient::new(
                 executor.to_owned(),
                 config.endpoint.clone(),
-                token,
+                token_provider,
                 config.registry_id.clone(),
                 config.access_profile.clone(),
                 request_routes,
@@ -2528,7 +2533,8 @@ struct RawReviewPrivateKeyJwtConfig {
 #[derive(Clone)]
 struct ReviewExecutorConfig {
     endpoint: reqwest::Url,
-    token_ref: SecretReference,
+    token_ref: Option<SecretReference>,
+    private_key_jwt: Option<ReviewPrivateKeyJwtConfig>,
     registry_id: String,
     access_profile: String,
 }
@@ -2551,9 +2557,21 @@ impl ReviewExecutorConfig {
             reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
         registry_platform_httputil::client::ServiceBaseUrl::new(endpoint.clone())
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+        let token_ref = raw
+            .token_ref
+            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidBinding))
+            .transpose()?;
+        let private_key_jwt = raw
+            .private_key_jwt
+            .map(ReviewPrivateKeyJwtConfig::from_raw)
+            .transpose()?;
+        if token_ref.is_some() == private_key_jwt.is_some() {
+            return Err(RuntimeConfigError::InvalidBinding);
+        }
         Ok(Self {
             endpoint,
-            token_ref: parse_secret_reference(raw.token_ref, RuntimeConfigError::InvalidBinding)?,
+            token_ref,
+            private_key_jwt,
             registry_id: raw.registry_id,
             access_profile: raw.access_profile,
         })
@@ -2565,7 +2583,10 @@ impl ReviewExecutorConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawReviewExecutorConfig {
     endpoint: String,
-    token_ref: String,
+    #[serde(default)]
+    token_ref: Option<String>,
+    #[serde(default)]
+    private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     registry_id: String,
     access_profile: String,
 }

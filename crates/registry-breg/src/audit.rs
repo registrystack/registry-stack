@@ -307,6 +307,7 @@ pub(crate) enum WebhookAuditPhase {
     Attempt,
     Terminal,
     Replay,
+    Discard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -339,6 +340,10 @@ pub(crate) enum WebhookAuditOutcome {
     ReplayCommitted,
     ReplayRefused,
     ReplayUnfinished,
+    DiscardRequested,
+    DiscardCommitted,
+    DiscardRefused,
+    DiscardUnfinished,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -349,6 +354,8 @@ pub(crate) enum WebhookAuditDisposition {
     DeadLettered,
     Expired,
     ReplayPending,
+    DiscardPending,
+    Discarded,
     /// The terminal commit's fate could not be read back; no database state
     /// is claimed.
     Unknown,
@@ -861,6 +868,22 @@ pub(crate) fn webhook_entry(
             WebhookAuditOutcome::ReplayRefused,
             WebhookAuditDisposition::DeadLettered,
         ) => event.attempt == 0,
+        (
+            WebhookAuditPhase::Discard,
+            WebhookAuditOutcome::DiscardRequested
+            | WebhookAuditOutcome::DiscardRefused,
+            WebhookAuditDisposition::DiscardPending,
+        )
+        | (
+            WebhookAuditPhase::Discard,
+            WebhookAuditOutcome::DiscardCommitted,
+            WebhookAuditDisposition::Discarded,
+        )
+        | (
+            WebhookAuditPhase::Discard,
+            WebhookAuditOutcome::DiscardUnfinished,
+            WebhookAuditDisposition::Unknown,
+        ) => event.attempt >= 0,
         _ => false,
     };
     if !shape_is_valid
@@ -887,10 +910,13 @@ pub(crate) fn webhook_entry(
             event.compiled_delivery_id,
         )
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    let correlation = format!(
+    let mut correlation = format!(
         "{event_reference}.{delivery_reference}.{}.{}",
         event.generation, event.attempt
     );
+    if event.phase == WebhookAuditPhase::Discard {
+        correlation.push_str(".discard");
+    }
     let record = json!({
         "phase": webhook_phase_name(event.phase),
         "outcome": webhook_outcome_name(event.outcome),
@@ -906,12 +932,14 @@ pub(crate) fn webhook_entry(
     // answer them under the same correlation.
     Ok(match (event.phase, event.outcome) {
         (WebhookAuditPhase::Attempt, _)
-        | (WebhookAuditPhase::Replay, WebhookAuditOutcome::ReplayRequested) => {
+        | (WebhookAuditPhase::Replay, WebhookAuditOutcome::ReplayRequested)
+        | (WebhookAuditPhase::Discard, WebhookAuditOutcome::DiscardRequested) => {
             AuditEntry::request(WEBHOOK_AUDIT_SCHEMA, correlation, record)
         }
-        (WebhookAuditPhase::Terminal | WebhookAuditPhase::Replay, _) => {
-            AuditEntry::response(WEBHOOK_AUDIT_SCHEMA, correlation, record)
-        }
+        (
+            WebhookAuditPhase::Terminal | WebhookAuditPhase::Replay | WebhookAuditPhase::Discard,
+            _,
+        ) => AuditEntry::response(WEBHOOK_AUDIT_SCHEMA, correlation, record),
     })
 }
 
@@ -920,6 +948,7 @@ fn webhook_phase_name(phase: WebhookAuditPhase) -> &'static str {
         WebhookAuditPhase::Attempt => "attempt",
         WebhookAuditPhase::Terminal => "terminal",
         WebhookAuditPhase::Replay => "replay",
+        WebhookAuditPhase::Discard => "discard",
     }
 }
 
@@ -946,6 +975,10 @@ fn webhook_outcome_name(outcome: WebhookAuditOutcome) -> &'static str {
         WebhookAuditOutcome::ReplayCommitted => "replay_committed",
         WebhookAuditOutcome::ReplayRefused => "replay_refused",
         WebhookAuditOutcome::ReplayUnfinished => "replay_unfinished",
+        WebhookAuditOutcome::DiscardRequested => "discard_requested",
+        WebhookAuditOutcome::DiscardCommitted => "discard_committed",
+        WebhookAuditOutcome::DiscardRefused => "discard_refused",
+        WebhookAuditOutcome::DiscardUnfinished => "discard_unfinished",
     }
 }
 
@@ -957,6 +990,8 @@ fn webhook_disposition_name(disposition: WebhookAuditDisposition) -> &'static st
         WebhookAuditDisposition::DeadLettered => "dead_lettered",
         WebhookAuditDisposition::Expired => "expired",
         WebhookAuditDisposition::ReplayPending => "replay_pending",
+        WebhookAuditDisposition::DiscardPending => "discard_pending",
+        WebhookAuditDisposition::Discarded => "discarded",
         WebhookAuditDisposition::Unknown => "unknown",
     }
 }
@@ -1358,6 +1393,52 @@ mod action_terminal_tests {
         assert_eq!(attempt.schema(), WEBHOOK_AUDIT_SCHEMA);
         assert!(!attempt.correlation().contains(&event_id.to_string()));
         assert!(!attempt.correlation().contains("delivery."));
+    }
+
+    #[test]
+    fn webhook_discard_is_answered_under_a_phase_scoped_identity() {
+        let event_id = Uuid::new_v4();
+        let event = |phase, outcome, disposition| WebhookAudit {
+            event_id,
+            compiled_delivery_id: "delivery",
+            package_revision: "package-revision",
+            generation: 2,
+            attempt: 1,
+            phase,
+            outcome,
+            disposition,
+        };
+        let request = webhook_entry(
+            &profile(),
+            event(
+                WebhookAuditPhase::Discard,
+                WebhookAuditOutcome::DiscardRequested,
+                WebhookAuditDisposition::DiscardPending,
+            ),
+        )
+        .expect("discard request entry");
+        let response = webhook_entry(
+            &profile(),
+            event(
+                WebhookAuditPhase::Discard,
+                WebhookAuditOutcome::DiscardCommitted,
+                WebhookAuditDisposition::Discarded,
+            ),
+        )
+        .expect("discard response entry");
+        let delivery_attempt = webhook_entry(
+            &profile(),
+            event(
+                WebhookAuditPhase::Attempt,
+                WebhookAuditOutcome::AttemptStarted,
+                WebhookAuditDisposition::Leased,
+            ),
+        )
+        .expect("delivery attempt entry");
+
+        assert_eq!(request.correlation(), response.correlation());
+        assert!(request.correlation().ends_with(".discard"));
+        assert_ne!(request.correlation(), delivery_attempt.correlation());
     }
 
     #[test]

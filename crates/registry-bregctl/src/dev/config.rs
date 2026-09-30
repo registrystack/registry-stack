@@ -33,6 +33,9 @@ pub(super) struct Clients {
     /// Exact local Casework review-authority bindings for governed proposals.
     #[serde(default)]
     pub review_authorities: BTreeMap<String, LocalReviewAuthority>,
+    /// Exact local service clients that apply approved change requests.
+    #[serde(default)]
+    pub review_executors: BTreeMap<String, LocalReviewExecutor>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -80,6 +83,16 @@ pub(super) struct LocalReviewAuthority {
     pub client: String,
     pub completion_token_file: Option<PathBuf>,
     pub completion_recipient: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalReviewExecutor {
+    /// The one service-only apply_request profile selected by the worker.
+    pub access_profile: String,
+    /// Logical client from this same closed file. Its retained issuer key is
+    /// copied into the private runtime secret tree.
+    pub client: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -529,6 +542,25 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             _ => bail!("local review completion token and recipient must be declared together"),
         }
     }
+    if clients.review_executors.len() > 8 {
+        bail!("at most 8 local review executors may be bound");
+    }
+    for (id, executor) in &clients.review_executors {
+        let client = clients
+            .clients
+            .iter()
+            .find(|client| client.id == executor.client);
+        if !governed_identifier(id)
+            || !identifier(&executor.access_profile)
+            || client.is_none_or(|client| {
+                !client.access_profiles.contains(&executor.access_profile)
+                    || client_token_claims(client).get("registry_actor_kind")
+                        != Some(&json!("service"))
+            })
+        {
+            bail!("local review executors need bounded IDs, one declared service client, and its exact access profile");
+        }
+    }
     for (id, provider) in &clients.evidence_providers {
         let origin = reqwest::Url::parse(&provider.base_url)
             .context("local Evidence provider baseUrl must be an exact loopback HTTP origin")?;
@@ -948,6 +980,24 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
                     .join(format!("review-completion-{id}-token")),
                 &bytes,
             )?;
+        }
+    }
+    for (id, executor) in &clients.review_executors {
+        let credentials = root.join("credentials").join(&executor.client);
+        for (source, name, maximum) in [
+            (
+                credentials.join("client-id"),
+                format!("review-executor-{id}-client-id"),
+                1024,
+            ),
+            (
+                credentials.join("assertion-key.jwk"),
+                format!("review-executor-{id}-client-assertion-key"),
+                64 * 1024,
+            ),
+        ] {
+            let bytes = Zeroizing::new(private::read(&source, maximum)?);
+            private::create(&root.join("secrets").join(name), &bytes)?;
         }
     }
     // The dev session's issuer is the pinned upstream ThunderID container,
@@ -1458,16 +1508,32 @@ pub(super) fn assertion_issuers(
 pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
+    let compiled = if state.webhook_port.is_some()
+        || !clients.event_destinations.is_empty()
+        || !clients.review_executors.is_empty()
+    {
+        Some(
+            crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+                .map_err(|_| anyhow::anyhow!("captured local project no longer compiles"))?,
+        )
+    } else {
+        None
+    };
     let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
-        let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
-            .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
+        let compiled = compiled
+            .as_ref()
+            .context("event bindings require a compiled local project")?;
         if let Some(port) = state.webhook_port {
-            event_destinations(&compiled, port)
+            event_destinations(compiled, port)
         } else {
-            external_event_destinations(&compiled, &clients.event_destinations)?
+            external_event_destinations(compiled, &clients.event_destinations)?
         }
     } else {
         json!({})
+    };
+    let review_executors = match compiled.as_ref() {
+        Some(compiled) => local_review_executors(state, clients, compiled)?,
+        None => BTreeMap::new(),
     };
     // A browser application explicitly using this session's default BREG
     // audience is a local OAuth client. Other-resource apps remain outside
@@ -1528,9 +1594,118 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
                 "revokedKeyIds":provider.revoked_key_ids,
                 "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
             }))).collect::<BTreeMap<_,_>>(),
-            "reviewAuthorities":local_review_authorities(state, clients)
+            "reviewAuthorities":local_review_authorities(state, clients),
+            "reviewExecutors":review_executors
         }),
     )
+}
+
+fn local_review_executors(
+    state: &State,
+    clients: &Clients,
+    compiled: &registry_breg::CompiledRegistry,
+) -> Result<BTreeMap<String, Value>> {
+    use registry_breg::contract::{ActorKindSource, Operation};
+    use registry_breg::model::{CompiledChangeRequestOnApprovedMode, CompiledChangeRequestReview};
+
+    if clients.review_executors.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    if state.instance_id != compiled.registry_id() {
+        bail!("local review executors must target this exact registry");
+    }
+    clients
+        .review_executors
+        .iter()
+        .map(|(id, executor)| {
+            let client = clients
+                .clients
+                .iter()
+                .find(|client| client.id == executor.client)
+                .context("a local review executor client is missing")?;
+            let claims = client_token_claims(client);
+            let purposes = client_purposes(client)?;
+            if purposes.len() != 1 {
+                bail!("local review executor {id} needs one fixed registry purpose");
+            }
+            let selected_purpose = purposes.into_iter().next().flatten();
+            let request_entities = compiled
+                .entities()
+                .values()
+                .filter(|entity| {
+                    entity.change_request.as_ref().is_some_and(|request| {
+                        matches!(request.review, CompiledChangeRequestReview::Required(_))
+                            && request.on_approved.mode
+                                == CompiledChangeRequestOnApprovedMode::Automatic
+                            && request.on_approved.executor.as_deref() == Some(id)
+                    })
+                })
+                .collect::<Vec<_>>();
+            if request_entities.is_empty() {
+                bail!("local review executor {id} is not selected by an automatic request");
+            }
+            let mut scopes = BTreeSet::new();
+            for entity in request_entities {
+                let profile = entity
+                    .access_profiles
+                    .get(&executor.access_profile)
+                    .with_context(|| {
+                        format!(
+                            "local review executor {id} has no apply profile for {}",
+                            entity.id
+                        )
+                    })?;
+                if profile.anonymous
+                    || profile.actor_kind != Some(ActorKindSource::Service)
+                    || !profile.operations.contains(&Operation::ApplyRequest)
+                    || (!profile.requester_clients.is_empty()
+                        && !profile.requester_clients.contains(&client.id))
+                    || !profile
+                        .required_scopes
+                        .iter()
+                        .all(|scope| client.scopes.contains(scope))
+                    || (!profile.required_purposes.is_empty()
+                        && selected_purpose
+                            .as_ref()
+                            .is_none_or(|purpose| !profile.required_purposes.contains(purpose)))
+                    || profile.principal_claim.as_ref().is_some_and(|claim| {
+                        claim != "sub"
+                            && claims
+                                .get(claim)
+                                .and_then(Value::as_str)
+                                .is_none_or(str::is_empty)
+                    })
+                {
+                    bail!("local review executor {id} does not satisfy its service apply profile");
+                }
+                scopes.extend(profile.required_scopes.iter().cloned());
+            }
+            // The OAuth provider requires a non-empty scope request. When the
+            // profile imposes no narrower scope, keep the explicitly authored
+            // client scope set rather than inventing an executor-only scope.
+            let scopes = if scopes.is_empty() {
+                client.scopes.clone()
+            } else {
+                scopes.into_iter().collect()
+            };
+            Ok((
+                id.clone(),
+                json!({
+                    "endpoint": state.breg_origin(),
+                    "registryId": compiled.registry_id(),
+                    "accessProfile": executor.access_profile,
+                    "privateKeyJwt": {
+                        "tokenEndpoint": format!("{}/oauth2/token", state.issuer_origin()),
+                        "clientIdRef": format!("secret:file/review-executor-{id}-client-id"),
+                        "clientAssertionKeyRef": format!("secret:file/review-executor-{id}-client-assertion-key"),
+                        "assertionAudience": state.issuer_origin(),
+                        "resource": state.audience(),
+                        "scopes": scopes,
+                    }
+                }),
+            ))
+        })
+        .collect()
 }
 
 fn local_review_authorities(state: &State, clients: &Clients) -> BTreeMap<String, Value> {

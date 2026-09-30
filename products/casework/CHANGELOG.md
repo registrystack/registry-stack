@@ -11,6 +11,12 @@
   Messaging. Activation now detects the loss of any required table DML
   privilege, including when other required privileges remain granted (#1731).
 
+- `caseworkctl source add` keeps an automatic executor's service apply profile
+  separate from human source-context profiles. Staff and supervisors receive
+  no executor scopes. `check` and fixture `test` report each request's
+  application mode from its imported source description, or `null` before
+  that description exists.
+
 ## v0.37.0 - 2026-09-29
 
 - BREAKING: the `Registry-Source-Profile` header is the only input that

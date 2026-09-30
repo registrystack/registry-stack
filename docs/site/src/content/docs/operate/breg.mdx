@@ -852,6 +852,14 @@ source applied the request for the first time. Use
 `application.state` with `recovery.code` to choose the supported operator action, and do not query
 the database directly.
 
+A `409` or `412` from application schedules another discovery after 5 seconds,
+then doubles the delay up to 5 minutes. A failed business precondition or row
+boundary therefore does not consume the retry budget in a tight loop. The
+worker keeps the same job and idempotency key, and each delayed discovery and
+application still checks current source authority.
+
+{/* Evidence: crates/registry-breg/src/review_store.rs; crates/registry-breg/tests/postgres_review_executor.rs */}
+
 | `recovery.code` | Operator action |
 | --- | --- |
 | `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. A later pending answer or a reconciled result clears `result-lookup-uncertain`. |
@@ -864,10 +872,27 @@ the database directly.
 | `result-poll-attempts-exhausted` | The result lookup failed, or answered an empty `404`, until the attempt budget ran out; a review the authority keeps answering as pending is never failed. Reconcile the accepted Casework request by its retained binding. If the authority lost the review, `bregctl review-recovery resubmit` submits the same retained request again. If the authority still holds a result, repair the result endpoint and start a new proposal; the retained binding identifies the review to close. |
 | `operator-closed` | An operator closed the review with `bregctl review-recovery close`. Start a new proposal, or run `bregctl review-recovery resubmit` if the authority can take the same request again. |
 | `executor-unconfigured` | Restore the named executor in runtime configuration, then use the advertised authorized manual apply action for the same approved proposal. |
-| `executor-denied` | Restore the executor's current application grant, then use the advertised authorized manual apply action for the same approved proposal. |
+| `executor-denied` | Correct the executor credential or application grant, restart with that binding, then run `bregctl review-recovery retry-application` for the exact request and proposal version. The approval must still be current. |
 | `source-action-unavailable` | Restore the compiled source apply action and its access profile, then use the advertised authorized manual apply action for the same approved proposal. |
 | `source-response-invalid` | Repair the source deployment so its read and apply responses match the compiled contract, then use the advertised authorized manual apply action. |
 | `application-attempts-exhausted` | Inspect the source and executor logs using the request and application ids, then apply manually or create a new proposal. |
+
+To recover an executor-denied job after correcting its binding:
+
+```sh
+bregctl --format json review-recovery retry-application \
+  --runtime-config /srv/registry/runtime.yaml \
+  --request-entity correction-request \
+  --request-id 00000000-0000-4000-8000-000000000001 \
+  --proposal-version 1
+```
+
+The report returns `state: queued`. Re-read the request's `review.application`
+until it reports `applied` or a new recovery code. Recovery preserves the exact
+proposal and job idempotency key. It refuses an expired approval, a withdrawn
+or replaced proposal, a running job, and a block for any other reason.
+
+{/* Evidence: crates/registry-breg/src/review_recovery.rs; crates/registry-breg/tests/postgres_change_requests.rs */}
 
 ### Resubmit or close a review the authority lost
 

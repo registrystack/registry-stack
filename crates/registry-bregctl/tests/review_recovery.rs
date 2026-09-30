@@ -30,7 +30,7 @@ where
 #[test]
 fn review_recovery_commands_share_one_value_free_refusal() {
     let relative = Path::new(PATH_VALUE_CANARY);
-    for operation in ["resubmit", "close"] {
+    for operation in ["resubmit", "close", "retry-application"] {
         let (status, stdout, stderr) = run([
             OsStr::new("bregctl"),
             OsStr::new("--format"),
@@ -70,7 +70,7 @@ fn review_recovery_commands_share_one_value_free_refusal() {
 
 #[test]
 fn review_recovery_help_describes_the_exact_operator_contract() {
-    for operation in ["resubmit", "close"] {
+    for operation in ["resubmit", "close", "retry-application"] {
         let (status, stdout, stderr) = run(["bregctl", "review-recovery", operation, "--help"]);
 
         assert_eq!(status, 0);

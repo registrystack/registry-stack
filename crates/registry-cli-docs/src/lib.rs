@@ -174,6 +174,8 @@ mod tests {
             "bregctl webhook sample",
             "bregctl webhook list",
             "bregctl webhook replay",
+            "bregctl webhook discard",
+            "bregctl review-recovery retry-application",
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
         }

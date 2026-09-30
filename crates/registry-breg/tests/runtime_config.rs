@@ -1165,6 +1165,30 @@ fn review_executors_are_strict_ordinary_self_http_bindings() {
 }
 
 #[test]
+fn review_executors_accept_exactly_one_refreshing_or_static_credential() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let credential = "    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/executor-client-id\n      clientAssertionKeyRef: secret:file/executor-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:registry:primary\n      scopes: [requests:apply]\n";
+    let refreshing = format!("{base}reviewExecutors:\n  applier:\n    endpoint: https://registry.example/\n    registryId: registry-a\n    accessProfile: automatic-applier\n{credential}");
+    parse_runtime_config_with_env(&refreshing, env_lookup).expect("renewable executor binding");
+    for invalid in [
+        refreshing.replace(credential, ""),
+        refreshing.replace(
+            "    privateKeyJwt:",
+            "    tokenRef: secret:file/opaque-token\n    privateKeyJwt:",
+        ),
+        refreshing.replace("scopes: [requests:apply]", "scopes: []"),
+        refreshing.replace("resource: urn:registry:primary", "resource: not-a-resource"),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&invalid, env_lookup)
+                .expect_err("ambiguous or invalid executor auth"),
+            RuntimeConfigError::InvalidBinding
+        );
+    }
+}
+
+#[test]
 fn review_authorities_accept_one_refreshing_or_static_credential() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
@@ -2587,6 +2611,17 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
         valid.replace("https://events.example/", "not-a-url"),
         valid.replace("https://events.example/", "http://events.example/"),
         valid.replace("https://events.example/", "https://events.example/path"),
+        valid.replace("https://events.example/", "https://localhost/"),
+        valid.replace(
+            "https://events.example/",
+            "https://Receiver.Example.Localhost./",
+        ),
+        valid
+            .replace("https://events.example/", "https://receiver.localhost./")
+            .replace(
+                "    allowedPrivateCidrs: []\n",
+                "    allowedPrivateCidrs: [127.0.0.0/8]\n",
+            ),
         valid.replace("/hooks/registry", "//authority-smuggling"),
         valid.replace("/hooks/registry", "/hooks?query=denied"),
         valid.replace(

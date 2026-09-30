@@ -616,7 +616,11 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::PinnedLoopbackHttpsTest if origin.scheme() != "https" => {
                 return Err(DestinationPolicyError::ProductionRequiresHttps);
             }
-            DestinationProfile::ProductionHttps | DestinationProfile::PrivateServiceHttp => {}
+            DestinationProfile::ProductionHttps | DestinationProfile::PrivateServiceHttp => {
+                if origin_uses_localhost_namespace(&origin) {
+                    return Err(DestinationPolicyError::LocalhostNamespaceDenied);
+                }
+            }
             #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::PinnedLoopbackHttpsTest => {}
         }
@@ -1297,6 +1301,8 @@ pub enum DestinationPolicyError {
     ProductionRequiresHttps,
     #[error("private service destination requires HTTP")]
     PrivateServiceRequiresHttp,
+    #[error("destination profile denies the localhost namespace")]
+    LocalhostNamespaceDenied,
     #[error("loopback development destination requires HTTP")]
     DevelopmentRequiresHttp,
     #[error("loopback development destination requires an explicit loopback host")]
@@ -4772,6 +4778,20 @@ fn origin_explicitly_denotes_loopback(origin: &Url) -> bool {
     }
 }
 
+/// RFC 6761 reserves `localhost.` and every name below it for loopback. A
+/// production or private-service binding cannot make one of those names
+/// reachable because their send-time address policies always deny loopback.
+fn origin_uses_localhost_namespace(origin: &Url) -> bool {
+    match origin.host() {
+        Some(::url::Host::Domain(host)) => {
+            let host = host.strip_suffix('.').unwrap_or(host);
+            host.eq_ignore_ascii_case("localhost")
+                || host.to_ascii_lowercase().ends_with(".localhost")
+        }
+        Some(::url::Host::Ipv4(_) | ::url::Host::Ipv6(_)) | None => false,
+    }
+}
+
 fn origin_explicit_private_ip(origin: &Url) -> Option<IpAddr> {
     match origin.host() {
         Some(::url::Host::Ipv4(ip)) => Some(IpAddr::V4(ip)),
@@ -5896,6 +5916,62 @@ mod tests {
             .unwrap_err(),
             DestinationPolicyError::PrivateServiceRequiresHttp
         );
+    }
+
+    #[test]
+    fn non_loopback_profiles_refuse_the_reserved_localhost_namespace_at_binding_time() {
+        for (origin, profile) in [
+            ("https://localhost/", DestinationProfile::ProductionHttps),
+            ("https://LOCALHOST./", DestinationProfile::ProductionHttps),
+            (
+                "https://receiver.example.localhost/",
+                DestinationProfile::ProductionHttps,
+            ),
+            (
+                "https://receiver.example.LOCALHOST./",
+                DestinationProfile::ProductionHttps,
+            ),
+            (
+                "http://localhost:8080/",
+                DestinationProfile::PrivateServiceHttp,
+            ),
+            (
+                "http://receiver.example.localhost:8080/",
+                DestinationProfile::PrivateServiceHttp,
+            ),
+        ] {
+            assert_eq!(
+                DataDestinationPolicy::new(
+                    "destination",
+                    origin,
+                    profile,
+                    &[cidr("10.89.0.0/24")],
+                )
+                .unwrap_err(),
+                DestinationPolicyError::LocalhostNamespaceDenied,
+                "{origin} must fail before the first delivery attempt"
+            );
+        }
+
+        assert_eq!(
+            DataDestinationPolicy::new(
+                "destination",
+                "http://receiver.localhost.:8080/",
+                DestinationProfile::PrivateServiceHttp,
+                &[cidr("127.0.0.0/8")],
+            )
+            .unwrap_err(),
+            DestinationPolicyError::LocalhostNamespaceDenied,
+            "an allowlisted loopback range cannot make the reserved namespace deliverable"
+        );
+
+        DataDestinationPolicy::new(
+            "destination",
+            "https://localhost.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("an ordinary domain containing the label is not in the localhost namespace");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 title: Bind webhook receivers
-description: Bind each event destination a Base Registry Engine package declares to a receiver, share the signing key, build the receiver against a sample request, and list and replay deliveries from the operator host.
+description: Bind each event destination a Base Registry Engine package declares to a receiver, share the signing key, build the receiver against a sample request, and recover deliveries from the operator host.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,7 +17,7 @@ You operate an active registry, or are about to activate one as [deploy a regist
 describes, whose project declares events that name a `webhook` destination, and a receiver is
 waiting for them. At the end of this page every destination identifier the package names has a
 binding in the runtime file, the receiver holds the same signing key and has been built against a
-sample request, and you can list and replay deliveries.
+sample request, and you can list and recover deliveries.
 
 An event is a declaration in the project, a trigger on an entity with a projection of its fields,
 that the runtime delivers after the write commits. A destination is the receiver the declaration
@@ -55,6 +55,9 @@ cannot add fields to a payload. For a receiver on a private network, list the in
 ranges in `allowedPrivateCidrs`. Use `dnsFamily: ipv4Only` only on an IPv4-only network. Optional
 `tls.caBundleRef` and `tls.clientIdentityRef` name PEM secrets for a private certificate authority
 and mutual TLS. `networkProfile: loopbackDevelopmentHttp` exists for local development only.
+The `productionHttps` profile refuses `localhost` and every `*.localhost` name during
+configuration validation, including absolute names with a trailing dot. Use the loopback profile
+for a receiver on the same development host.
 
 Lifecycle events whose transition and state filters permit application have an `internal`
 classification floor: their system request envelope may contain the applier's explanation.
@@ -141,10 +144,10 @@ acknowledge only after durably recording acceptance.
     crates/registry-bregctl/src/webhook_lifecycle.rs;
     crates/registry-breg/src/webhook.rs. */}
 
-## Inspect and replay deliveries
+## Inspect and recover deliveries
 
-Inspect pending, dead-lettered, and expired deliveries, then replay a dead letter after fixing the
-receiver:
+Inspect pending, leased, dead-lettered, and expired deliveries, then replay a dead letter after
+fixing the receiver:
 
 ```sh
 bregctl --format json webhook list \
@@ -157,14 +160,44 @@ bregctl webhook replay \
 ```
 
 The list carries delivery metadata and no record values, and `--limit` accepts 1 to 100. A
-delivery that exhausts its attempts becomes a dead letter with `replayEligible: true` while its
-payload is retained. Successful delivery erases the payload, and retained payloads expire after
-`payloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not proof of
-success: in-flight attempts and completed deliveries are excluded, so confirm effects from the
-receiver's own record. Replay keeps the event id and issues a new generation and idempotency key;
-if the receiver's earlier effect is uncertain, check its state before replaying. A replay whose
-`--expected-generation` no longer matches, whose payload has expired, or whose destination is no
-longer bound is refused with `webhook.operation.refused`, and the list shows which.
+delivery that exhausts its attempts becomes a dead letter with a closed `deadLetterReason` while
+its payload is retained. Older deliveries, and deployments awaiting a schema update, may omit
+that reason. `bindingActive` reports whether the exact captured binding is deployed;
+`replayEligible` is true only while that binding and the retained payload are available.
+Successful delivery erases the payload once no sibling delivery needs it, and retained payloads
+expire after `payloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not
+proof of success: completed
+deliveries are excluded, so confirm effects from the receiver's own record. Replay keeps the event
+id and issues a new generation and idempotency key; if the receiver's earlier effect is uncertain,
+check its state before replaying. A replay whose `--expected-generation` no longer matches, whose
+payload has expired, or whose destination is no longer bound is refused with
+`webhook.operation.refused`.
+
+If `doctor` reports `startup.webhook.retained_bindings` after you correct a destination or local
+handler binding, keep the corrected configuration and use `webhook list`. Rows with
+`bindingActive: false` name the retained work that still pins the earlier binding. Restore that
+exact binding until those rows drain, or stop the runtime and discard each eligible row with the
+generation returned by the list:
+
+```sh
+bregctl webhook discard \
+  --runtime-config /etc/breg/runtime.yaml \
+  --event-id "<eventId>" --delivery-id "<deliveryId>" \
+  --expected-generation "<generation>"
+```
+
+::::danger[Discard prevents every future attempt]
+Discard permanently closes this delivery without sending it under the corrected binding. It does
+not undo a request the receiver may already have accepted. Check the receiver before discarding
+when an earlier effect is uncertain.
+::::
+
+`discardEligible: true` identifies pending work, dead letters with retained payload, and leases
+whose deadline has passed when no proposal receipt is retained. A live lease or any retained
+proposal receipt is refused. A stale generation is also refused, so refresh the list before
+retrying. After discard, the row remains visible as `expired` with a new generation and without
+payload availability. Discarding one delivery leaves the shared payload available while a sibling
+delivery still needs it.
 
 Operator commands connect to PostgreSQL directly. When the database uses a private certificate
 authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
@@ -172,7 +205,7 @@ authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
 {/* Evidence: crates/registry-breg/src/webhook.rs, MAX_WEBHOOK_STATUS_RESULTS;
     crates/registry-breg/src/outbox.rs;
     crates/registry-bregctl/src/webhook_lifecycle.rs;
-    crates/registry-bregctl/src/lib.rs, WebhookListArgs and WebhookReplayArgs;
+    crates/registry-bregctl/src/lib.rs, WebhookListArgs, WebhookReplayArgs, and WebhookDiscardArgs;
     products/breg/quickstart/run.sh. */}
 
 ## Troubleshooting
@@ -181,6 +214,7 @@ authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
 | --- | --- |
 | Activation refuses the package over destinations | Every destination identifier the package names needs one binding, and no binding may name an identifier the package does not. Compare the `eventDestinations` keys with `bregctl explain events`. |
 | `doctor` reports `startup.event_destinations.refused` | Check the key file's owner, mode, and length, the origin against the network profile, and `allowedPrivateCidrs` for a private receiver. |
+| `doctor` reports `startup.webhook.retained_bindings` | Run `webhook list` under the corrected configuration. Restore the exact captured binding until each row drains, or stop the runtime and discard each row where `discardEligible` is true. Wait for a live lease to expire before retrying discard. |
 | The receiver rejects every signature | The runtime signs the raw file bytes. Load the same characters on the receiver without decoding them, and verify against the exact request bytes in the documented signing-input order. |
 | `doctor` reports `startup.instance_id.pending_deliveries` | Pending deliveries were captured under the event source of a previous `identity.instanceId`, and the worker would dead-letter them under the new one. Restore the instance id that ends the stored source the diagnostic names until `webhook list` shows them drained, then change it. |
 | A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |

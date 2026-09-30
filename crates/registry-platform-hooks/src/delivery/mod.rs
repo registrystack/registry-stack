@@ -47,6 +47,6 @@ pub use seams::{
     ProposalCode, ProposalOutcome, ProposalReceiptRecovery, ProposalSummary,
 };
 pub use service::{
-    DeliveryConfig, DeliveryOutcome, DeliveryService, DeliveryStatus, DeliveryStatusKind,
-    DeliveryWorker, MAX_DELIVERY_STATUS_RESULTS,
+    DeliveryConfig, DeliveryFailureReason, DeliveryOutcome, DeliveryService, DeliveryStatus,
+    DeliveryStatusKind, DeliveryWorker, RetainedBindingError, MAX_DELIVERY_STATUS_RESULTS,
 };

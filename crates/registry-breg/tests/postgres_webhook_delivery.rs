@@ -30,7 +30,8 @@ use registry_breg::postgres::{
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{
-    WebhookDeliveryError, WebhookDeliveryService, WebhookDeliveryStatusKind, WebhookWorkOutcome,
+    WebhookDeliveryError, WebhookDeliveryFailureReason, WebhookDeliveryService,
+    WebhookDeliveryStatusKind, WebhookRetainedBindingError, WebhookWorkOutcome,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
@@ -678,11 +679,62 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "destination_binding_refused",
     )
     .await;
+
+    let newer_binding_refused = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-newer-binding-refused",
+        "newer-binding",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_deliveries
+             SET destination_binding_digest = $3
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &newer_binding_refused.event_id,
+                &newer_binding_refused.compiled_delivery_id,
+                &"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ],
+        )
+        .await
+        .expect("administrator installs a newer binding mismatch canary");
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::RetryScheduled)
+    );
+    wait_until_retry_is_due(&database, &newer_binding_refused).await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::DeadLettered)
+    );
+    assert_eq!(receiver.count().await, egress_before_refusals);
     assert_eq!(
         service.verify_retained_bindings().await,
-        Err(WebhookDeliveryError::Unavailable),
-        "a retained replayable dead letter with an incompatible binding blocks startup"
+        Err(WebhookRetainedBindingError::Mismatch {
+            retained_deliveries: 2,
+        }),
+        "retained replayable dead letters with an incompatible binding block startup"
     );
+    let statuses = service
+        .list(1)
+        .await
+        .expect("operator listing remains available under the corrected binding");
+    let binding_status = statuses
+        .first()
+        .expect("the newest superseded delivery remains visible");
+    assert_eq!(binding_status.event_id, newer_binding_refused.event_id);
+    assert_eq!(
+        binding_status.dead_letter_reason,
+        Some(WebhookDeliveryFailureReason::DestinationBindingRefused)
+    );
+    assert!(!binding_status.binding_active);
+    assert!(binding_status.discard_eligible);
     assert_eq!(
         service
             .replay(
@@ -694,23 +746,90 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         Err(WebhookDeliveryError::Unavailable),
         "replay fails closed when the current destination does not match the captured binding"
     );
-    database
-        .admin
-        .execute(
-            "UPDATE registry_internal.registry_webhook_deliveries
-             SET operator_replay = false
-             WHERE event_id = $1 AND compiled_delivery_id = $2",
-            &[
-                &binding_refused.event_id,
-                &binding_refused.compiled_delivery_id,
-            ],
+    assert_eq!(
+        service
+            .discard(
+                newer_binding_refused.event_id,
+                &newer_binding_refused.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Ok(2),
+        "explicit discard closes the newest retained work without replaying it"
+    );
+    assert_eq!(receiver.count().await, egress_before_refusals);
+    assert_eq!(
+        audit_outcomes(
+            &database,
+            &audit_profile,
+            &newer_binding_refused,
+            2,
+            2,
+            "discard",
         )
         .await
-        .expect("administrator disables replay for the incompatible dead letter");
-    service
+        .as_slice(),
+        ["discard_requested", "discard_committed"],
+    );
+    let statuses = service
+        .list(1)
+        .await
+        .expect("bounded listing advances past discarded work");
+    let remaining = statuses
+        .first()
+        .expect("the older retained delivery becomes visible");
+    assert_eq!(remaining.event_id, binding_refused.event_id);
+    assert!(remaining.payload_available);
+    assert!(remaining.discard_eligible);
+    assert_eq!(
+        service
+            .discard(
+                binding_refused.event_id,
+                &binding_refused.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Ok(2),
+        "the operator can drain a retained backlog through a bounded list"
+    );
+    assert_eq!(
+        audit_outcomes(&database, &audit_profile, &binding_refused, 2, 2, "discard",)
+            .await
+            .as_slice(),
+        ["discard_requested", "discard_committed"],
+    );
+    let restarted_service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        "webhook-delivery-instance",
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
+    restarted_service
         .verify_retained_bindings()
         .await
-        .expect("non-replayable and expired or erased dead letters do not block startup");
+        .expect("explicitly discarded retained work no longer blocks corrected startup");
+    let statuses = restarted_service
+        .list(100)
+        .await
+        .expect("discarded work remains visible as expired metadata");
+    let discarded = statuses
+        .iter()
+        .find(|status| status.event_id == binding_refused.event_id)
+        .expect("discarded delivery remains visible");
+    assert_eq!(discarded.generation, 2);
+    assert_eq!(discarded.state, WebhookDeliveryStatusKind::Expired);
+    assert!(!discarded.payload_available);
+    assert!(!discarded.discard_eligible);
+    assert_eq!(discarded.dead_letter_reason, None);
+    assert_eq!(
+        delivery_state(&database, &newer_binding_refused).await,
+        (2, "expired".to_owned(), 2),
+    );
 
     let payload_refused = create_event(
         &database,
@@ -865,6 +984,17 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "worker_interrupted",
     )
     .await;
+    assert_eq!(
+        service
+            .discard(
+                commit_refused.event_id,
+                &commit_refused.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Ok(2),
+        "the recovered pending attempt is explicitly closed before later queue scenarios"
+    );
 
     // A lease whose commit fails after its attempt was recorded sends
     // nothing, and its attempt is answered as interrupted.
@@ -946,6 +1076,17 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         Err(WebhookDeliveryError::Unavailable)
     );
     database.audit_capture().restore();
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        "webhook-delivery-instance",
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
     // The terminal is recorded only after its disposition commits, so the
     // refused entry leaves the committed disposition without it: the writer
     // then refuses every later entry until the destination is repaired.
@@ -963,6 +1104,267 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "terminal",
     )
     .await;
+
+    // Sibling deliveries share one envelope. Their terminal transactions
+    // serialize on the outbox row so the last terminal sibling erases the
+    // payload without making either committed delivery fail.
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    let concurrent_siblings = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-concurrent-siblings",
+        "concurrent-siblings",
+    )
+    .await;
+    let concurrent_sibling_id = "case.created.concurrent-sibling-webhook";
+    add_sibling_delivery(&database, &concurrent_siblings, concurrent_sibling_id).await;
+    let (first_sibling, second_sibling) =
+        tokio::join!(service.deliver_once(), service.deliver_once());
+    assert_eq!(first_sibling, Ok(WebhookWorkOutcome::Delivered));
+    assert_eq!(second_sibling, Ok(WebhookWorkOutcome::Delivered));
+    assert!(!outbox_payload_available(&database, &concurrent_siblings).await);
+    let terminal_sibling_states = database
+        .admin
+        .query(
+            "SELECT state
+               FROM registry_internal.registry_webhook_delivery_state
+              WHERE event_id = $1
+              ORDER BY compiled_delivery_id",
+            &[&concurrent_siblings.event_id],
+        )
+        .await
+        .expect("administrator reads both terminal siblings")
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_sibling_states, ["delivered", "delivered"]);
+
+    // Discard continues in an owned task after an operator client stops
+    // waiting, so an accepted request is always answered after the database
+    // commit resolves.
+    let cancelled_discard = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-discard-cancelled-client",
+        "discard-cancelled-client",
+    )
+    .await;
+    slow_delivery_state_commit(&database, "expired").await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            service.discard(
+                cancelled_discard.event_id,
+                &cancelled_discard.compiled_delivery_id,
+                1,
+            ),
+        )
+        .await
+        .is_err(),
+        "the operator client leaves while the discard commit is in flight"
+    );
+    allow_delivery_state_commit(&database).await;
+    let mut discard_answered = Vec::new();
+    for _ in 0..50 {
+        discard_answered = audit_outcomes(
+            &database,
+            &audit_profile,
+            &cancelled_discard,
+            2,
+            0,
+            "discard",
+        )
+        .await;
+        if discard_answered.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        discard_answered,
+        ["discard_requested", "discard_committed"],
+        "a discard whose caller left still answers its accepted request"
+    );
+    assert_eq!(
+        delivery_state(&database, &cancelled_discard).await,
+        (2, "expired".to_owned(), 0)
+    );
+    assert!(!outbox_payload_available(&database, &cancelled_discard).await);
+
+    // One event may feed more than one compiled delivery. Discarding one
+    // delivery must leave the shared envelope available to every sibling
+    // that can still send or replay it.
+    let sibling_event = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-discard-sibling",
+        "sibling",
+    )
+    .await;
+    let sibling_delivery_id = "case.created.sibling-webhook";
+    add_sibling_delivery(&database, &sibling_event, sibling_delivery_id).await;
+    assert_eq!(
+        service
+            .discard(
+                sibling_event.event_id,
+                &sibling_event.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Ok(2)
+    );
+    assert!(
+        outbox_payload_available(&database, &sibling_event).await,
+        "discard preserves payload bytes while a sibling delivery still needs them"
+    );
+    let statuses = service.list(100).await.expect("sibling states list");
+    let discarded = statuses
+        .iter()
+        .find(|status| {
+            status.event_id == sibling_event.event_id
+                && status.compiled_delivery_id == sibling_event.compiled_delivery_id
+        })
+        .expect("discarded member remains visible");
+    let sibling = statuses
+        .iter()
+        .find(|status| {
+            status.event_id == sibling_event.event_id
+                && status.compiled_delivery_id == sibling_delivery_id
+        })
+        .expect("retained sibling remains visible");
+    assert!(!discarded.payload_available);
+    assert!(sibling.payload_available);
+
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET state = 'leased', attempt = 1, next_attempt_at = NULL,
+                    attempt_started_at = transaction_timestamp(),
+                    lease_expires_at = transaction_timestamp() + interval '10 minutes',
+                    lease_token = gen_random_uuid()
+              WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&sibling_event.event_id, &sibling_delivery_id],
+        )
+        .await
+        .expect("administrator installs an active lease canary");
+    let active_lease = service
+        .list(100)
+        .await
+        .expect("active lease lists")
+        .into_iter()
+        .find(|status| {
+            status.event_id == sibling_event.event_id
+                && status.compiled_delivery_id == sibling_delivery_id
+        })
+        .expect("active sibling lease remains visible");
+    assert_eq!(active_lease.state, WebhookDeliveryStatusKind::Leased);
+    assert!(!active_lease.discard_eligible);
+    assert_eq!(
+        service
+            .discard(sibling_event.event_id, sibling_delivery_id, 1)
+            .await,
+        Err(WebhookDeliveryError::Unavailable),
+        "discard never races a live delivery lease"
+    );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET attempt_started_at = transaction_timestamp() - interval '2 minutes',
+                    lease_expires_at = transaction_timestamp() - interval '1 minute'
+              WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&sibling_event.event_id, &sibling_delivery_id],
+        )
+        .await
+        .expect("administrator expires the lease canary");
+    let expired_lease = service
+        .list(100)
+        .await
+        .expect("expired lease lists")
+        .into_iter()
+        .find(|status| {
+            status.event_id == sibling_event.event_id
+                && status.compiled_delivery_id == sibling_delivery_id
+        })
+        .expect("expired sibling lease remains visible");
+    assert_eq!(expired_lease.state, WebhookDeliveryStatusKind::Leased);
+    assert!(expired_lease.discard_eligible);
+    assert_eq!(
+        service
+            .discard(sibling_event.event_id, sibling_delivery_id, 1)
+            .await,
+        Ok(2),
+        "an expired lease is explicitly recoverable once proposal receipt recovery is clear"
+    );
+    assert!(!outbox_payload_available(&database, &sibling_event).await);
+
+    // A runtime may start against an already activated database before the
+    // successor migration adds the optional reason column. Listing and
+    // delivery continue with the reason omitted until that migration runs.
+    database
+        .admin
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_webhook_delivery_state
+                 DROP COLUMN dead_letter_reason",
+        )
+        .await
+        .expect("administrator presents the prior active storage shape");
+    let legacy_storage_service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        "webhook-delivery-instance",
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
+    legacy_storage_service
+        .list(100)
+        .await
+        .expect("operator list supports the prior active storage shape");
+    receiver.enqueue(ResponsePlan::Status(500)).await;
+    receiver.enqueue(ResponsePlan::Status(500)).await;
+    let legacy_dead_letter = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-prior-storage",
+        "prior-storage",
+    )
+    .await;
+    assert_eq!(
+        legacy_storage_service.deliver_once().await,
+        Ok(WebhookWorkOutcome::RetryScheduled)
+    );
+    wait_until_retry_is_due(&database, &legacy_dead_letter).await;
+    assert_eq!(
+        legacy_storage_service.deliver_once().await,
+        Ok(WebhookWorkOutcome::DeadLettered)
+    );
+    let statuses = legacy_storage_service
+        .list(100)
+        .await
+        .expect("dead letters on the prior active storage shape remain listable");
+    let legacy_status = statuses
+        .iter()
+        .find(|status| status.event_id == legacy_dead_letter.event_id)
+        .expect("prior-shape dead letter remains visible");
+    assert_eq!(legacy_status.dead_letter_reason, None);
 
     assert_webhook_audits_are_closed_and_value_free(&database).await;
 
@@ -1952,6 +2354,51 @@ async fn outbox_payload_available(database: &TestDatabase, event: &CapturedEvent
         .await
         .expect("administrator can inspect retained payload availability")
         .get(0)
+}
+
+async fn add_sibling_delivery(
+    database: &TestDatabase,
+    event: &CapturedEvent,
+    sibling_delivery_id: &str,
+) {
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_deliveries
+                 (event_id, compiled_delivery_id, handler_kind, logical_destination_id,
+                  destination_binding_digest, package_revision, schema_fingerprint,
+                  data_schema, classification_ceiling, authentication_profile, delivery_mode,
+                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
+                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
+                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
+                  deployed_maximum_attempts, dead_letter, operator_replay)
+             SELECT event_id, $3, handler_kind, logical_destination_id,
+                    destination_binding_digest, package_revision, schema_fingerprint,
+                    data_schema, classification_ceiling, authentication_profile, delivery_mode,
+                    attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
+                    exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
+                    maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
+                    deployed_maximum_attempts, dead_letter, operator_replay
+               FROM registry_internal.registry_webhook_deliveries
+              WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &event.event_id,
+                &event.compiled_delivery_id,
+                &sibling_delivery_id,
+            ],
+        )
+        .await
+        .expect("administrator adds a second delivery over the shared envelope");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt, next_attempt_at)
+             VALUES ($1, $2, 1, 'pending', 0, transaction_timestamp())",
+            &[&event.event_id, &sibling_delivery_id],
+        )
+        .await
+        .expect("administrator adds the sibling pending state");
 }
 
 async fn delivery_retry_delay(database: &TestDatabase, event: &CapturedEvent) -> Duration {

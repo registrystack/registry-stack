@@ -7,5 +7,4 @@ source:
   reviewStage: review
 expect:
   queue: corrections
-  applicationMode: manual
   targetElapsed: PT48H

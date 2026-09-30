@@ -1354,16 +1354,30 @@
         "endpoint": {
           "type": "string"
         },
+        "privateKeyJwt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "registryId": {
           "type": "string"
         },
         "tokenRef": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "endpoint",
-        "tokenRef",
         "registryId",
         "accessProfile"
       ],
