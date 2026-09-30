@@ -954,6 +954,48 @@ async fn reapplying_the_active_package_over_stale_grants_records_the_repair() {
 }
 
 #[tokio::test]
+async fn an_unchanged_apply_answers_its_own_request_and_names_the_active_activation() {
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    let config = deployment.config();
+    let first = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("the initial activation");
+    assert!(first.recorded);
+
+    let again = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("a repeated activation");
+    assert!(!again.recorded);
+    assert_eq!(
+        again.activation.activation_id,
+        first.activation.activation_id
+    );
+
+    let entries = operator_audit_entries(&config);
+    assert_eq!(entries.len(), 4);
+    let (requested, finished) = (&entries[2], &entries[3]);
+    assert_eq!(
+        requested["record"]["event"],
+        "messaging.package.activation.requested"
+    );
+    assert_eq!(finished["record"]["outcome"], "unchanged");
+    assert_eq!(requested["correlation"], finished["correlation"]);
+    assert_eq!(
+        finished["record"]["activationId"], requested["record"]["activationId"],
+        "the response answers the activation id its request announced"
+    );
+    assert_ne!(
+        finished["record"]["activationId"],
+        json!(first.activation.activation_id)
+    );
+    assert_eq!(
+        finished["record"]["activeActivationId"],
+        json!(first.activation.activation_id)
+    );
+}
+
+#[tokio::test]
 async fn a_post_migration_role_refusal_rolls_back_the_whole_activation_and_is_audited() {
     let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
     isolated

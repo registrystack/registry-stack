@@ -125,7 +125,9 @@ activation in one locked transaction after request audit. A failed commit is
 read back by its generated activation id and is never reported as a guessed
 failure. Apply observes the runtime role's grants before it grants them, so a
 reapply of the active package that restores stale split-role grants records a
-new activation and is audited as `applied`, never as `unchanged`. Operator
+new activation and is audited as `applied`, never as `unchanged`. An
+`unchanged` response carries the activation id its request announced and names
+the active ledger row separately as `activeActivationId`. Operator
 references are stored and audited only as activation-scoped keyed hashes;
 backup references are bounded. A new digest becomes served only
 after restart (MESSAGING-DEC-06). `/ready` rechecks the active database

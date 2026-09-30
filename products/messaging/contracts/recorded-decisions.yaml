@@ -104,6 +104,7 @@ decisions:
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_template_version_renders_the_same_bytes_across_a_package_upgrade}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: split_role_activation_binds_identity_and_withholds_both_ledgers}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: reapplying_the_active_package_over_stale_grants_records_the_repair}
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: an_unchanged_apply_answers_its_own_request_and_names_the_active_activation}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_post_migration_role_refusal_rolls_back_the_whole_activation_and_is_audited}
   - id: MESSAGING-DEC-07
     subject: A replay is authorized and rendered again before its key is looked up

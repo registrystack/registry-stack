@@ -408,7 +408,8 @@ pub async fn apply(
         audit_request
             .respond(json!({
                 "event": "messaging.package.activation.finished",
-                "activationId": activation.activation_id,
+                "activationId": activation_id,
+                "activeActivationId": activation.activation_id,
                 "packageDigest": activation.package_digest,
                 "planKind": activation.plan_kind.as_str(),
                 "roleMode": activation.role_mode.as_str(),
