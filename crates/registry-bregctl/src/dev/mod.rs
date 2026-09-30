@@ -1396,7 +1396,9 @@ fn reclaimed(state: &mut State) {
     state.database_ready = false;
     state.activated = false;
     state.seeded.clear();
-    // No authority in a reclaimed database can be a seed's own.
+    // No authority in a reclaimed database can be a seed's own, and a
+    // journaled one names a row the removed database held.
+    state.seed_import_authorities.clear();
     state.seed_import_intents.clear();
     state.status = Status::Stopped;
 }
