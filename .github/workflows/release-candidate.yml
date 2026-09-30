@@ -1576,7 +1576,13 @@ jobs:
                 --security-opt no-new-privileges \
                 "${candidate_ref}" --version
             )"
-            test "${observed}" = "${name} ${{ needs.validate.outputs.version }}"
+            expected_image_version="${name} ${{ needs.validate.outputs.version }}"
+            if [[ "${name}" == "registry-render" ]]; then
+              typst_pin="$(sed -n 's/^pub const TYPST_PIN: &str = "\([^" ]*\)";$/\1/p' crates/registry-render/src/lib.rs)"
+              test -n "${typst_pin}"
+              expected_image_version="${expected_image_version} (typst ${typst_pin})"
+            fi
+            test "${observed}" = "${expected_image_version}"
             SYFT_FILE_METADATA_SELECTION=all \
             SYFT_FILE_METADATA_DIGESTS=sha256 \
             syft "${candidate_ref}" \
