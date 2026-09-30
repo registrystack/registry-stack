@@ -308,6 +308,7 @@ class CiChangesTest(unittest.TestCase):
                 "needs.changes.outputs.messaging_postgres == 'true'"
             ),
             "platform-fuzz": "needs.changes.outputs.platform_assurance == 'true'",
+            "evidence-fuzz": "needs.changes.outputs.evidence_assurance == 'true'",
             "platform-coverage": (
                 "needs.changes.outputs.platform_coverage == 'true'"
             ),
@@ -410,6 +411,7 @@ class CiChangesTest(unittest.TestCase):
             "platform-coverage-upload",
             "platform-hygiene",
             "platform-fuzz",
+            "evidence-fuzz",
             "rust-policy",
             "rust-quality",
             "rust-tests",
@@ -483,6 +485,7 @@ class CiChangesTest(unittest.TestCase):
                 "rust-tests",
                 "discovery-contracts",
                 "evidence-contracts",
+                "evidence-fuzz",
                 "relay-v2-contracts",
                 "relay-client-contracts",
                 "breg-contracts",
@@ -532,6 +535,7 @@ class CiChangesTest(unittest.TestCase):
             "platform-quality",
             "platform-hygiene",
             "platform-fuzz",
+            "evidence-fuzz",
             "rust-result",
             "release-tool",
             "release-source-proof",
@@ -550,7 +554,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(34, len(final_needs))
+        self.assertEqual(35, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)

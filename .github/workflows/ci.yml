@@ -69,6 +69,7 @@ jobs:
       casework_postgres: ${{ steps.filter.outputs.casework_postgres }}
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
+      evidence_assurance: ${{ steps.filter.outputs.evidence_assurance }}
       scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
       messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}
       messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
@@ -137,6 +138,9 @@ jobs:
 
       - name: Test platform fuzz runner
         run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py
+
+      - name: Test evidence fuzz runner
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/evidence/scripts/test_run_fuzz_smoke.py
 
       - name: Install pinned actionlint
         shell: bash
@@ -399,6 +403,64 @@ jobs:
           path: |
             products/platform/fuzz/artifacts/${{ matrix.target_a }}/
             products/platform/fuzz/artifacts/${{ matrix.target_b }}/
+          if-no-files-found: ignore
+
+  evidence-fuzz:
+    name: Evidence fuzz smoke (${{ matrix.group }})
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.evidence_assurance == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: verifier
+            target_a: verifier_flattened_jws
+            target_b: verifier_sd_jwt_vc
+          - group: authoring
+            target_a: authoring_openapi
+            target_b: authoring_project
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # nightly
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: evidence-fuzz-${{ matrix.group }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: products/evidence/fuzz -> target
+
+      - name: Install pinned cargo-fuzz
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Smoke fuzz target pair
+        env:
+          FUZZ_TARGET_A: ${{ matrix.target_a }}
+          FUZZ_TARGET_B: ${{ matrix.target_b }}
+        run: products/evidence/scripts/run-fuzz-smoke.sh "$FUZZ_TARGET_A" "$FUZZ_TARGET_B"
+
+      - name: Upload fuzz failures
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-fuzz-${{ matrix.group }}
+          path: |
+            products/evidence/fuzz/artifacts/${{ matrix.target_a }}/
+            products/evidence/fuzz/artifacts/${{ matrix.target_b }}/
           if-no-files-found: ignore
 
   rust-policy:
@@ -2515,6 +2577,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-fuzz
       - relay-v2-contracts
       - relay-client-contracts
       - breg-contracts
