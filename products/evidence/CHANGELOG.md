@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `evidence-oid4vci` omits `response_types_supported` from its OAuth
+  authorization-server metadata. OpenID4VCI 1.0 Final permits the omission
+  for a server that supports only the Pre-Authorized Code Grant, and the
+  service no longer publishes an empty array for this multi-valued member.
+  The metadata still does not advertise an authorization endpoint or an
+  unsupported authorization response (#1785).
+
 - An `http-json` source may declare `evidence` to read one predefined
   assertion from another Evidence deployment. The block pins one reviewed
   audience-scoped definition that supports `signed-jws`, its independently
