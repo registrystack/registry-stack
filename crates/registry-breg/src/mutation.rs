@@ -34,8 +34,8 @@ use crate::audit::{
     RegistryAudit, RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::compiler::{
-    WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
-    WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
+    event_classification_ceiling, WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER,
+    WEBHOOK_INITIAL_BACKOFF_MS, WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
 };
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
@@ -675,6 +675,7 @@ fn exact_entity_event_deliveries(
 ) -> Result<Vec<CompiledEventDelivery>, MutationError> {
     // A widened or substituted serialized inventory would become outbound
     // authority. Re-derive every source-bound member before retaining it.
+    // An inconsistency is a package fault, never invalid caller input.
     let deliveries = registry
         .event_deliveries()
         .deliveries
@@ -688,7 +689,7 @@ fn exact_entity_event_deliveries(
         let event = entity
             .hooks
             .get(&delivery.event_id)
-            .ok_or(MutationError::InvalidRequest)?;
+            .ok_or(MutationError::Unavailable)?;
         let (expected_destination_id, expected_handler_kind) = match event.handler.as_ref() {
             Some(crate::contract::HookHandlerSource::Url { destination_id }) => {
                 (Some(destination_id.as_str()), HookHandlerKind::Url)
@@ -697,19 +698,13 @@ fn exact_entity_event_deliveries(
             // destination, so the delivery row must carry the declared kind
             // and no destination at all.
             Some(handler) => (None, handler.kind()),
-            None => return Err(MutationError::InvalidRequest),
+            None => return Err(MutationError::Unavailable),
         };
         let expected_projection = event.projection.iter().cloned().collect::<Vec<_>>();
-        let classification_ceiling = event
-            .projection
-            .iter()
-            .chain(event_condition_fields(event))
-            .filter_map(|field| entity.fields.get(field))
-            .map(|field| field.classification)
-            .max()
-            .ok_or(MutationError::InvalidRequest)?;
+        let classification_ceiling =
+            event_classification_ceiling(entity, event).ok_or(MutationError::Unavailable)?;
         let data_schema = event_data_schema_binding(registry.registry_id(), entity, event)
-            .map_err(|_| MutationError::InvalidRequest)?;
+            .map_err(|_| MutationError::Unavailable)?;
         if !delivery_ids.insert(delivery.id.as_str())
             || !delivered_events.insert(delivery.event_id.as_str())
             || delivery.id != format!("events.{}.{}.webhook", entity.id, event.id)
@@ -742,7 +737,7 @@ fn exact_entity_event_deliveries(
             || Some(delivery.maximum_payload_bytes)
                 != expected_maximum_event_payload_bytes(registry.registry_id(), entity, event)
         {
-            return Err(MutationError::InvalidRequest);
+            return Err(MutationError::Unavailable);
         }
     }
     if entity
@@ -750,24 +745,9 @@ fn exact_entity_event_deliveries(
         .values()
         .any(|event| event.handler.is_some() && !delivered_events.contains(event.id.as_str()))
     {
-        return Err(MutationError::InvalidRequest);
+        return Err(MutationError::Unavailable);
     }
     Ok(deliveries)
-}
-
-fn event_condition_fields(event: &crate::contract::HookSource) -> impl Iterator<Item = &String> {
-    let mut fields = BTreeSet::new();
-    if let Some(crate::contract::EventConditionSource::Fields {
-        changed,
-        before_equals,
-        after_equals,
-    }) = &event.when
-    {
-        fields.extend(changed.iter());
-        fields.extend(before_equals.keys());
-        fields.extend(after_equals.keys());
-    }
-    fields.into_iter()
 }
 
 fn expected_maximum_event_payload_bytes(

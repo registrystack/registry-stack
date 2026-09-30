@@ -61,7 +61,7 @@ hooks:
   may use all three tests, and `tombstoned` may use `beforeEquals`; invalid
   combinations fail compilation.
 - Lifecycle events use `kind: request_lifecycle` with at least one nonempty
-  `transitions`, `toStates`, or `stages` list. Each nonempty list must match;
+  `transitions` or `toStates` list. Each nonempty list must match;
   field predicates are not available for this trigger.
 - `handler` declares either `kind: url` with the logical `destinationId`, or
   one of the local kinds: `kind: rhai` with a reviewed `script` path, or
@@ -89,12 +89,16 @@ fires even when that field is not in the payload. Activation therefore
 requires the runtime destination to permit the full derived classification,
 but the destination can never add to the compiled projection.
 Lifecycle events are at least as classified as their request entity. Events
-whose transition and destination-state filters permit rejection or a request
-for revision also have an `internal` classification floor, because the system
-request envelope may contain the reviewer's explanation. An omitted filter
-permits both outcomes. Filters that exclude both outcomes, such as approval-only
-transitions or `toStates: [applied]`, keep the ordinary derived classification.
-Stage filters do not lower this floor.
+whose transition and destination-state filters permit application also have
+an `internal` classification floor, because the system request envelope may
+contain an application reason. An omitted filter permits this outcome.
+Filters that exclude it, such as `transitions: [cancel]` or
+`toStates: [cancelled]`, keep the ordinary derived classification.
+
+Compilation and mutation planning use the same classification rule. If the
+runtime detects a delivery inventory that differs from the governed source,
+it refuses the record change with `503 service.unavailable`.
+This is a package or server fault, not invalid caller input.
 
 ### Event evaluation and capture
 
