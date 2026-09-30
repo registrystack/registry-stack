@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use registry_platform_httputil::client::{
-    build_client, OutboundOptions, ServiceBaseUrl, TokenProvider,
+    build_client, OutboundOptions, ServiceBaseUrl, TokenError, TokenProvider,
 };
 use registry_platform_httputil::{read_bounded, validate_response_headers};
 use registry_review_client::{
@@ -2543,6 +2543,19 @@ enum ApplicationExchangeError {
     Transient,
 }
 
+// A credential the authorization server refused, or one the provider cannot
+// use as configured, will not heal by waiting. Blocking it as a denial lets an
+// operator renew the credential and requeue the approved application.
+fn application_token_error(error: TokenError) -> ApplicationExchangeError {
+    match error {
+        TokenError::Refused { .. }
+        | TokenError::Configuration { .. }
+        | TokenError::Invalid { .. }
+        | TokenError::ScopeNarrowed => ApplicationExchangeError::Denied,
+        _ => ApplicationExchangeError::Transient,
+    }
+}
+
 fn retryable_application_status(status: reqwest::StatusCode) -> bool {
     status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
 }
@@ -2565,7 +2578,7 @@ async fn discover_application(
         .token_provider
         .bearer_token()
         .await
-        .map_err(|_| ApplicationExchangeError::Transient)?;
+        .map_err(application_token_error)?;
     let response = executor
         .http
         .get(url)
@@ -2746,7 +2759,7 @@ async fn send_application(
         .token_provider
         .bearer_token()
         .await
-        .map_err(|_| ApplicationExchangeError::Transient)?;
+        .map_err(application_token_error)?;
     let response = executor
         .http
         .post(url)
@@ -3160,6 +3173,52 @@ mod tests {
         assert!(!retryable_application_status(
             reqwest::StatusCode::BAD_REQUEST
         ));
+    }
+
+    #[test]
+    fn a_refused_executor_credential_blocks_as_a_recoverable_denial() {
+        use registry_platform_httputil::client::{OAuthErrorCode, TransportKind};
+
+        for error in [
+            TokenError::Refused {
+                code: OAuthErrorCode::InvalidClient,
+            },
+            TokenError::Refused {
+                code: OAuthErrorCode::UnauthorizedClient,
+            },
+            TokenError::Refused {
+                code: OAuthErrorCode::InvalidGrant,
+            },
+            TokenError::Refused {
+                code: OAuthErrorCode::Other,
+            },
+            TokenError::Configuration { reason: "fixed" },
+            TokenError::Invalid { reason: "fixed" },
+            TokenError::ScopeNarrowed,
+        ] {
+            assert!(
+                matches!(
+                    application_token_error(error),
+                    ApplicationExchangeError::Denied
+                ),
+                "{error:?}"
+            );
+        }
+        for error in [
+            TokenError::Unavailable,
+            TokenError::Transport {
+                kind: TransportKind::Timeout,
+            },
+            TokenError::Protocol { status: 503 },
+        ] {
+            assert!(
+                matches!(
+                    application_token_error(error),
+                    ApplicationExchangeError::Transient
+                ),
+                "{error:?}"
+            );
+        }
     }
 
     fn executor() -> ReviewExecutorClient {

@@ -934,7 +934,11 @@ PostgreSQL negative test.
 
 A review executor authenticates with exactly one of a fixed `tokenRef` or a
 `privateKeyJwt` client assertion, and the runtime fetches a fresh token before
-each discover and apply call. Token acquisition errors are value-free. The
+each discover and apply call. Token acquisition errors are value-free. A
+token the authorization server refuses, or one the provider cannot use as
+configured, blocks the job as `executor-denied` at once, so renewing the
+credential and running `retry-application` resumes it; an unavailable
+provider or a failed token exchange is retried as transient. The
 outbound review lease is four times the request timeout so a token fetch
 cannot outlive it. Dev binds a native executor only to a service client whose
 apply profile, scopes, purpose, and principal match, at most eight of them.
