@@ -923,3 +923,48 @@ permissions lack the assertion scope.
 `multi_purpose_claim_union_is_refused_above_the_issuer_attribute_limit` and
 `multi_purpose_client_is_refused_on_any_authored_exchange_connection` pin
 the dev-side refusals.
+
+## Automatic application recovery and retained webhook discard
+
+Three operator and runtime paths change authority or destroy retained work.
+Each carries an invariant row (BREG-SEC-139 to BREG-SEC-141) and a named
+PostgreSQL negative test.
+
+### Executor credential renewal
+
+A review executor authenticates with exactly one of a fixed `tokenRef` or a
+`privateKeyJwt` client assertion, and the runtime fetches a fresh token before
+each discover and apply call. Token acquisition errors are value-free. The
+outbound review lease is four times the request timeout so a token fetch
+cannot outlive it. Dev binds a native executor only to a service client whose
+apply profile, scopes, purpose, and principal match, at most eight of them.
+
+### Requeueing an application blocked by executor authorization
+
+`bregctl review-recovery retry-application` requeues only an application job
+blocked with `executor-denied`, for the current submitted proposal with its
+exact unexpired approval. It locks the job, submission, request, proposal, and
+approval window rows, keeps the job's idempotency key, and refuses withdrawn,
+unsubmitted, unapproved, and wrong-state requests. The worker still needs
+current source authority when it resumes, so the retry grants nothing the
+executor's corrected credentials or grants do not.
+
+### Discarding a retained delivery
+
+`bregctl webhook discard` permanently closes one pending delivery, dead
+letter with retained payload, or expired lease at its exact generation. The
+generation and lease checks run under `FOR UPDATE` on the delivery state and
+the shared outbox row, and a worker cannot apply after the discard because it
+must still own the lease. A delivery with a proposal receipt is listed as
+ineligible and refused, so a discard never hides a proposal an earlier
+attempt committed or may still be applying. The shared payload stays while a
+sibling delivery needs it. The request is audited before the mutation and
+answered after commit through a readback. Refusals before the request is
+recorded (stale generation, ineligible state, active lease, no payload) are
+not audited.
+
+### Loopback destination names
+
+The shared destination policy refuses `localhost` and `*.localhost`
+(case-insensitive, trailing dot included) early. This only narrows what a
+configuration may name.
