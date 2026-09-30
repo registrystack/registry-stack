@@ -11,6 +11,7 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName, HeaderValue};
+use registry_evidence_client::EvidenceResponseFormat;
 use registry_platform_authcommon::client_assertion::{
     sign_client_assertion, ClientAssertionRequest, DEFAULT_ASSERTION_LIFETIME_SECONDS,
 };
@@ -1314,7 +1315,9 @@ impl HttpTransport {
         let response = request.send().await.map_err(map_transport_error)?;
         if let (Some(evidence), Some((_, verification))) = (&self.evidence, signed_request) {
             reject_response_status(&response)?;
-            if !has_exact_media_type(&response, crate::EVIDENCE_JWS_MEDIA_TYPE) {
+            if !has_single_content_type(&response, |value| {
+                EvidenceResponseFormat::SignedJws.matches_content_type(value)
+            }) {
                 return Err(SourceError::WrongMediaType);
             }
             let bytes = Zeroizing::new(
@@ -2888,8 +2891,20 @@ async fn parse_not_found_response(
 }
 
 fn has_exact_media_type(response: &reqwest::Response, expected: &str) -> bool {
+    has_single_content_type(response, |value| value == expected)
+}
+
+/// Whether the response carries exactly one readable `Content-Type` that
+/// `accepts`. An absent or repeated header is refused whatever it says.
+fn has_single_content_type(
+    response: &reqwest::Response,
+    accepts: impl FnOnce(&str) -> bool,
+) -> bool {
     let mut values = response.headers().get_all(CONTENT_TYPE).iter();
-    matches!(values.next().and_then(|value| value.to_str().ok()), Some(value) if value == expected)
+    values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(accepts)
         && values.next().is_none()
 }
 

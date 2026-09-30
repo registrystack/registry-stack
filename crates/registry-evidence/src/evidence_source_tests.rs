@@ -118,6 +118,38 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
                 let (mut parts, body) = response.into_parts();
                 parts.headers.remove(axum::http::header::CONTENT_LENGTH);
                 let bytes = axum::body::to_bytes(body, 65536).await.unwrap();
+                // Header-only faults keep the genuinely signed body intact.
+                if (12..=16).contains(&mode) {
+                    let content_type = axum::http::header::CONTENT_TYPE;
+                    match mode {
+                        12 => {
+                            parts
+                                .headers
+                                .insert(content_type, "Application/JOSE+JSON".parse().unwrap());
+                        }
+                        13 => {
+                            parts.headers.insert(
+                                content_type,
+                                "application/jose+json; charset=utf-8".parse().unwrap(),
+                            );
+                        }
+                        14 => {
+                            parts.headers.remove(content_type);
+                        }
+                        15 => {
+                            parts
+                                .headers
+                                .append(content_type, EVIDENCE_JWS_MEDIA_TYPE.parse().unwrap());
+                        }
+                        16 => {
+                            parts
+                                .headers
+                                .insert(content_type, "application/jose".parse().unwrap());
+                        }
+                        _ => unreachable!(),
+                    }
+                    return Response::from_parts(parts, Body::from(bytes));
+                }
                 let jws: FlattenedJws = serde_json::from_slice(&bytes).unwrap();
                 let mut payload = serde_json::to_value(decode_evidence(&jws)).unwrap();
                 match mode {
@@ -503,6 +535,60 @@ async fn signed_evidence_source_refuses_untrusted_protocol_results_without_relea
     assert!(released_evidence_ids(&audit).is_empty());
     assert!(!audit.contains("REGION-NORTH"));
     assert!(!audit.contains("synthetic-residence-record-001"));
+}
+
+#[tokio::test]
+async fn signed_evidence_source_compares_the_response_media_type_essence() {
+    let fixture = composed_runtime().await;
+    mount_residence_source_expecting(&fixture.upstream.server, 5).await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    // 12: upper-case essence, 13: a parameter, 14: no Content-Type,
+    // 15: a repeated Content-Type, 16: a different essence.
+    for (mode, accepted) in [
+        (12, true),
+        (13, true),
+        (14, false),
+        (15, false),
+        (16, false),
+    ] {
+        fixture.fault.store(mode, Ordering::SeqCst);
+        let request = residence_request();
+        let response = http
+            .post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!(
+                    "Bearer {}",
+                    access_token_for(&format!("media-type-test-{mode}"), None)
+                ),
+            )
+            .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+            .json(&request)
+            .await;
+        if accepted {
+            response.assert_status_ok();
+            let bytes = response.as_bytes();
+            let evidence = verify_flattened_jws(
+                bytes,
+                fixture.runtime.jwks(),
+                &verification_policy(&fixture.runtime, &request, bytes),
+            )
+            .unwrap();
+            assert_eq!(
+                evidence.supported_values[0].value,
+                PublicValue::String("REGION-NORTH".to_owned()),
+                "mode {mode}"
+            );
+        } else {
+            assert_eq!(
+                response.status_code(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "mode {mode}: {}",
+                response.text()
+            );
+            assert_eq!(response.json::<Value>()["code"], "source.unavailable");
+        }
+    }
 }
 
 #[tokio::test]
