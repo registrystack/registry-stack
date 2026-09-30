@@ -4439,7 +4439,6 @@ fn problem_example(status: &str, code: &str, detail: &str) -> Value {
         "title": match status {
             "400" => "Bad Request",
             "401" => "Unauthorized",
-            "403" => "Forbidden",
             "404" => "Not Found",
             "409" => "Conflict",
             "412" => "Precondition Failed",
