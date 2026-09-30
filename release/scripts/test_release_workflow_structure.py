@@ -413,19 +413,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             module._candidate_image_names("0.33.0"),
             module._candidate_image_names("0.34.0"),
         )
-        # Neither Messaging nor breg-mcp and breg-review join a release until
-        # release_roster names their first one.
-        for version in ("0.35.0", "0.36.0", "0.37.0"):
+        # Neither Messaging, breg-mcp and breg-review, Registry Render, nor
+        # the Evidence OID4VCI image joins a release until release_roster
+        # names their first one.
+        for version in ("0.35.0", "0.36.0", "0.37.0", "0.38.0", "1.0.0"):
             with self.subTest(version=version):
                 self.assertEqual(
                     module._candidate_image_names("0.33.0"),
-                    module._candidate_image_names(version),
-                )
-        for version in ("0.38.0", "1.0.0"):
-            with self.subTest(version=version):
-                self.assertEqual(
-                    module._candidate_image_names("0.37.0")
-                    | {"registry-render", "evidence-oid4vci", "breg-mcp", "breg-review", "messaging"},
                     module._candidate_image_names(version),
                 )
         with mock.patch.object(
@@ -2289,7 +2283,8 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
-            # The new services join at v0.38; historical releases stay unchanged.
+            # The held images join no release until release_roster names
+            # their first one; historical releases stay unchanged.
             "v0.35.0": [
                 "breg",
                 "casework",
@@ -2316,27 +2311,17 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             ],
             "v0.38.0": [
                 "breg",
-                "breg-mcp",
-                "breg-review",
                 "casework",
                 "discovery",
                 "evidence",
-                "evidence-oid4vci",
-                "messaging",
-                "registry-render",
                 "relay",
                 "scheduling",
             ],
             "v1.0.0": [
                 "breg",
-                "breg-mcp",
-                "breg-review",
                 "casework",
                 "discovery",
                 "evidence",
-                "evidence-oid4vci",
-                "messaging",
-                "registry-render",
                 "relay",
                 "scheduling",
             ],
@@ -2408,7 +2393,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
-        for tag in ("v0.35.0", "v0.36.0", "v0.37.0"):
+        for tag in ("v0.35.0", "v0.36.0", "v0.37.0", "v0.38.0", "v1.0.0"):
             with self.subTest(tag=tag, unexpected="messaging"):
                 with_messaging = dict(manifests[tag])
                 with_messaging["images"] = [
@@ -2431,8 +2416,13 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 )
                 self.assertNotEqual(0, rejected.returncode)
 
-        for tag in ("v0.36.0", "v0.37.0"):
-            for service in ("breg-mcp", "breg-review"):
+        for tag in ("v0.36.0", "v0.37.0", "v0.38.0", "v1.0.0"):
+            for service in (
+                "breg-mcp",
+                "breg-review",
+                "registry-render",
+                "evidence-oid4vci",
+            ):
                 with self.subTest(tag=tag, unexpected=service):
                     with_service = dict(manifests[tag])
                     with_service["images"] = [
@@ -2457,16 +2447,19 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                     self.assertNotEqual(0, rejected.returncode)
 
         self.assertIn(
-            "breg|breg-mcp|breg-review|casework|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling)",
+            "breg|casework|discovery|evidence|messaging|mint|relay|scheduling)",
             verify,
         )
         self.assertIn("Registry Casework joins at `v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
         self.assertIn("Registry Messaging", verify)
-        self.assertIn("v0.38.0", verify)
-        self.assertIn("`MESSAGING_FIRST_RELEASE`", verify)
-        self.assertIn("breg|breg-mcp", verify)
-        self.assertIn("`BREG_SERVICES_FIRST_RELEASE`", verify)
+        for constant in (
+            "`BREG_SERVICES_FIRST_RELEASE`",
+            "`MESSAGING_FIRST_RELEASE`",
+            "`RENDER_FIRST_RELEASE`",
+            "`EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`",
+        ):
+            self.assertIn(constant, verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
@@ -2829,8 +2822,8 @@ class MessagingRosterStructureTest(unittest.TestCase):
                 self.assertIn("release_roster", text)
                 self.assertIn("messaging", text.lower())
 
-    def test_the_roster_cli_selects_messaging_from_v0_38(self) -> None:
-        for version, expected in (("0.35.0", "false\n"), ("0.37.99", "false\n"), ("0.38.0", "true\n"), ("v1.0.0", "true\n")):
+    def test_the_roster_cli_names_no_release_until_messaging_joins_one(self) -> None:
+        for version in ("0.35.0", "0.36.0", "0.38.0", "1.0.0", "v1.0.0"):
             with self.subTest(version=version):
                 result = subprocess.run(
                     [
@@ -2844,7 +2837,7 @@ class MessagingRosterStructureTest(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(expected, result.stdout)
+                self.assertEqual("false\n", result.stdout)
                 self.assertEqual("", result.stderr)
         refused = subprocess.run(
             [sys.executable, str(ROOT / MESSAGING_ROSTER), "messaging-in-release", "0.36"],
@@ -2863,11 +2856,10 @@ class MessagingRosterStructureTest(unittest.TestCase):
         assert spec is not None and spec.loader is not None
         roster = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(roster)
-        self.assertEqual((0, 38, 0), roster.MESSAGING_FIRST_RELEASE)
-        self.assertFalse(roster.messaging_in_release((0, 37, 99)))
-        self.assertTrue(roster.messaging_in_release((0, 38, 0)))
-        with mock.patch.object(roster, "MESSAGING_FIRST_RELEASE", None):
-            self.assertFalse(roster.messaging_in_release((1, 0, 0)))
+        self.assertIsNone(roster.MESSAGING_FIRST_RELEASE)
+        for version in ((0, 35, 0), (0, 36, 0), (0, 38, 0), (1, 0, 0)):
+            with self.subTest(version=version, first_release=None):
+                self.assertFalse(roster.messaging_in_release(version))
         with mock.patch.object(roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)):
             self.assertFalse(roster.messaging_in_release((0, 35, 9)))
             self.assertTrue(roster.messaging_in_release((0, 36, 0)))
@@ -3021,10 +3013,10 @@ class BregServicesRosterStructureTest(unittest.TestCase):
                 self.assertIn("release_roster", text)
                 self.assertIn("breg_services_in_release", text)
 
-    def test_the_roster_cli_selects_breg_services_from_v0_38(
+    def test_the_roster_cli_names_no_release_until_the_breg_services_join_one(
         self,
     ) -> None:
-        for version, expected in (("0.36.0", "false\n"), ("0.37.99", "false\n"), ("0.38.0", "true\n"), ("v1.0.0", "true\n")):
+        for version in ("0.36.0", "0.37.0", "0.38.0", "1.0.0", "v1.0.0"):
             with self.subTest(version=version):
                 result = subprocess.run(
                     [
@@ -3038,7 +3030,7 @@ class BregServicesRosterStructureTest(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(expected, result.stdout)
+                self.assertEqual("false\n", result.stdout)
                 self.assertEqual("", result.stderr)
         refused = subprocess.run(
             [
@@ -3064,11 +3056,10 @@ class BregServicesRosterStructureTest(unittest.TestCase):
         assert spec is not None and spec.loader is not None
         roster = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(roster)
-        self.assertEqual((0, 38, 0), roster.BREG_SERVICES_FIRST_RELEASE)
-        self.assertFalse(roster.breg_services_in_release((0, 37, 99)))
-        self.assertTrue(roster.breg_services_in_release((0, 38, 0)))
-        with mock.patch.object(roster, "BREG_SERVICES_FIRST_RELEASE", None):
-            self.assertFalse(roster.breg_services_in_release((1, 0, 0)))
+        self.assertIsNone(roster.BREG_SERVICES_FIRST_RELEASE)
+        for version in ((0, 36, 0), (0, 37, 0), (0, 38, 0), (1, 0, 0)):
+            with self.subTest(version=version, first_release=None):
+                self.assertFalse(roster.breg_services_in_release(version))
         with mock.patch.object(roster, "BREG_SERVICES_FIRST_RELEASE", (0, 37, 0)):
             self.assertFalse(roster.breg_services_in_release((0, 36, 9)))
             self.assertTrue(roster.breg_services_in_release((0, 37, 0)))

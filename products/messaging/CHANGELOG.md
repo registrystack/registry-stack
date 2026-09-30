@@ -21,8 +21,6 @@
   atomically applies migrations, records the package and database identity,
   and establishes runtime grants. Startup and readiness refuse a missing or
   mismatched activation or insufficient runtime privileges (#1731).
-- Add Linux amd64 runtime and operator binaries, a Docker image, and Messaging
-  exports in the unified Node.js and Python clients from v0.38.0.
 - BREAKING: every `messagingctl --format json` report opens with `ok`,
   `command`, and `status`, in that order, as `caseworkctl` and
   `schedulingctl` reports do. `ok` is true exactly when the exit code is 0,
