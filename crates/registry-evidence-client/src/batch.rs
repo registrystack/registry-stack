@@ -138,7 +138,7 @@ redacted_debug!(SdJwtVcBatchResponse);
 /// The status is the one a released batch arrives with, because that is the
 /// only status this document is ever read under: the deployment answered
 /// successfully, and the body was not the document that answer promised.
-fn refusal() -> EvidenceClientError {
+pub(crate) fn refusal() -> EvidenceClientError {
     EvidenceClientError::Protocol {
         status: 200,
         code: None,

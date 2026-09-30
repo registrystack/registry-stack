@@ -30,6 +30,25 @@ pub(crate) fn public_jwk(private_key: &str) -> Value {
     serde_json::to_value(key.public()).expect("the public key serializes")
 }
 
+/// An Ed25519 private JWK built in the test process from a synthetic seed, as
+/// JSON text.
+///
+/// The proof profile pins ES256, so a proof this key signs is a genuine
+/// signature under an algorithm the header never pinned. The seed is an
+/// arbitrary constant rather than key material, exactly like the
+/// specification test vectors elsewhere in the workspace.
+pub(crate) fn ed25519_private_jwk(seed: &[u8; 32]) -> String {
+    let key = ed25519_dalek::SigningKey::from_bytes(seed);
+    json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "alg": "EdDSA",
+        "x": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
+        "d": URL_SAFE_NO_PAD.encode(key.to_bytes()),
+    })
+    .to_string()
+}
+
 /// A signed OpenID4VCI proof JWT presenting the key that signed it.
 pub(crate) fn proof_jwt(private_key: &str, audience: &str, nonce: &str, iat: i64) -> String {
     proof_jwt_with(
