@@ -119,7 +119,7 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
                 parts.headers.remove(axum::http::header::CONTENT_LENGTH);
                 let bytes = axum::body::to_bytes(body, 65536).await.unwrap();
                 // Header-only faults keep the genuinely signed body intact.
-                if (12..=16).contains(&mode) {
+                if (12..=18).contains(&mode) {
                     let content_type = axum::http::header::CONTENT_TYPE;
                     match mode {
                         12 => {
@@ -146,6 +146,8 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
                                 .headers
                                 .insert(content_type, "application/jose".parse().unwrap());
                         }
+                        17 => parts.status = axum::http::StatusCode::CREATED,
+                        18 => parts.status = axum::http::StatusCode::PARTIAL_CONTENT,
                         _ => unreachable!(),
                     }
                     return Response::from_parts(parts, Body::from(bytes));
@@ -588,6 +590,37 @@ async fn signed_evidence_source_compares_the_response_media_type_essence() {
             );
             assert_eq!(response.json::<Value>()["code"], "source.unavailable");
         }
+    }
+}
+
+#[tokio::test]
+async fn signed_evidence_source_accepts_only_http_200() {
+    let fixture = composed_runtime().await;
+    mount_residence_source_expecting(&fixture.upstream.server, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    // 17: 201 Created, 18: 206 Partial Content, each around a genuinely
+    // signed body the canonical client would refuse.
+    for mode in [17, 18] {
+        fixture.fault.store(mode, Ordering::SeqCst);
+        let response = http
+            .post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!(
+                    "Bearer {}",
+                    access_token_for(&format!("status-test-{mode}"), None)
+                ),
+            )
+            .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+            .json(&residence_request())
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mode {mode}: {}",
+            response.text()
+        );
+        assert_eq!(response.json::<Value>()["code"], "source.unavailable");
     }
 }
 

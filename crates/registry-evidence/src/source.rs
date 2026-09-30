@@ -1315,6 +1315,11 @@ impl HttpTransport {
         let response = request.send().await.map_err(map_transport_error)?;
         if let (Some(evidence), Some((_, verification))) = (&self.evidence, signed_request) {
             reject_response_status(&response)?;
+            // The Evidence contract answers success with 200 only, and the
+            // canonical client refuses every other 2xx status.
+            if response.status() != reqwest::StatusCode::OK {
+                return Err(SourceError::Status(SourceStatus::Other));
+            }
             if !has_single_content_type(&response, |value| {
                 EvidenceResponseFormat::SignedJws.matches_content_type(value)
             }) {
