@@ -5166,6 +5166,23 @@ fn request_event_may_include_reason(event: &crate::contract::HookSource) -> bool
     }
 }
 
+/// Derive outbound classification from every value the event can disclose.
+/// Mutation planning uses this same rule when checking the compiled inventory.
+pub(crate) fn event_classification_ceiling(
+    entity: &CompiledEntity,
+    event: &crate::contract::HookSource,
+) -> Option<Classification> {
+    event
+        .projection
+        .iter()
+        .chain(event_condition_fields(event))
+        .filter_map(|field| entity.fields.get(field))
+        .map(|field| field.classification)
+        .chain((event.trigger == EventTrigger::RequestLifecycle).then_some(entity.classification))
+        .chain(request_event_may_include_reason(event).then_some(Classification::Internal))
+        .max()
+}
+
 fn compile_event_delivery_inventory(
     registry_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
@@ -5186,22 +5203,7 @@ fn compile_event_delivery_inventory(
             let (destination_id, handler) =
                 compile_hook_handler(entity, event, handler, hook_origins, assets)?;
             let binding = event_data_schema_binding(registry_id, entity, event)?;
-            let mut classifications = event
-                .projection
-                .iter()
-                .chain(event_condition_fields(event))
-                .filter_map(|field| entity.fields.get(field))
-                .map(|field| field.classification)
-                .collect::<Vec<_>>();
-            if event.trigger == EventTrigger::RequestLifecycle {
-                classifications.push(entity.classification);
-                if request_event_may_include_reason(event) {
-                    classifications.push(Classification::Internal);
-                }
-            }
-            let classification_ceiling = classifications
-                .into_iter()
-                .max()
+            let classification_ceiling = event_classification_ceiling(entity, event)
                 .expect("validated event projection is non-empty");
             Ok(CompiledEventDelivery {
                 id: format!("events.{}.{}.webhook", entity.id, event.id),
