@@ -1,0 +1,30 @@
+{
+  "schema": "registry.assertion-evidence/v1",
+  "assuranceProfile": "evidence-grade",
+  "subjectBinding": "audience-scoped",
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
+  "id": "urn:ulid:01K1EXAMPLE0000000000000000",
+  "type": "Evidence",
+  "supportsRequirement": "urn:example:requirement:v1",
+  "isConformantTo": "urn:example:type:v1",
+  "issuedBy": "urn:example:issuer",
+  "providedBy": "urn:example:provider",
+  "issuedAt": "2026-08-02T00:00:00Z",
+  "observedAt": "2026-08-02T00:00:00Z",
+  "validUntil": "2026-08-03T00:00:00Z",
+  "purpose": "casework",
+  "audience": "urn:example:audience",
+  "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "subjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:concept",
+      "value": false
+    }
+  ]
+}

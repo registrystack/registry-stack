@@ -79,6 +79,7 @@ exclude = [
     "products/breg/wasm-handler-sdk",
     "products/platform/fuzz",
     "products/manifest/fuzz",
+    "products/evidence/fuzz",
 ]
 resolver = "2"
 

@@ -11,6 +11,11 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Exposes the in-crate issuer fixtures to out-of-crate test tooling such as the
+# Evidence fuzz harnesses. Off by default; no production build enables it.
+fixtures = []
+
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
