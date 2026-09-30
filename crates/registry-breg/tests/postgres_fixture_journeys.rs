@@ -92,6 +92,122 @@ const QUICKSTART_INSTANCE_ID: &str = "generic_registry_local";
 // not overlap within this integration-test process.
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+const IMPORT_JOURNEY_SOURCE: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: import-reference-data
+    steps:
+      - id: import-widget
+        entity: widget
+        accessProfile: operator
+        claims: &operator_claims
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request:
+          operation: import
+          items:
+            - {jurisdiction: zone-a, label: imported, note: reference, quantity: 1}
+        expect: {outcome: success, status: 200}
+      - id: list-imported-widget
+        entity: widget
+        accessProfile: operator
+        claims: *operator_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+  - id: refuse-import-outside-boundary
+    steps:
+      - id: import-other-jurisdiction
+        entity: widget
+        accessProfile: operator
+        claims: *operator_claims
+        request:
+          operation: import
+          items:
+            - {jurisdiction: zone-b, label: refused, note: reference, quantity: 1}
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fixture_import_uses_real_ingestion_and_leaves_no_open_authority() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let (compiled, project_source, module_source) = compiled_import_fixture();
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture_with_modules(
+        &project_source,
+        &schema_fingerprint,
+        IMPORT_JOURNEY_SOURCE,
+        vec![PackageModuleSource {
+            id: "fixture-core".to_owned(),
+            path: "sources/modules/fixture-core.yaml".to_owned(),
+            bytes: module_source,
+            assets: Vec::new(),
+        }],
+    );
+    let suite = validate_fixture_journeys(IMPORT_JOURNEY_SOURCE, &compiled)
+        .expect("import journey preflights");
+    let database = TestDatabase::create(8).await;
+    let idp = MockIdp::start().await;
+    let config_path = package.write_runtime_config(&database, &idp);
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package.prepared,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .expect("database prepares");
+    let credentials = credential_bindings_for_tokens(
+        &suite,
+        [
+            (
+                "import-reference-data",
+                "import-widget",
+                operator_token(&idp, true),
+            ),
+            (
+                "import-reference-data",
+                "list-imported-widget",
+                operator_token(&idp, true),
+            ),
+            (
+                "refuse-import-outside-boundary",
+                "import-other-jurisdiction",
+                operator_token(&idp, true),
+            ),
+        ],
+    );
+
+    let receipt = execute_schema_test(
+        prepared_database,
+        &config,
+        &package.prepared,
+        &suite,
+        credentials,
+    )
+    .await
+    .expect("real import journey completes");
+    assert_eq!(
+        receipt.successful_journey_ids(),
+        ["import-reference-data", "refuse-import-outside-boundary"]
+    );
+    let rows = database
+        .admin
+        .query(
+            "SELECT status, committed_items FROM registry_internal.registry_import_authorities",
+            &[],
+        )
+        .await
+        .expect("authority state reads");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.get::<_, String>(0) != "open"));
+    assert_eq!(rows.iter().map(|row| row.get::<_, i64>(1)).sum::<i64>(), 1);
+
+    idp.stop().await;
+    drop(package);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
@@ -1650,6 +1766,27 @@ fn compiled_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
     let registry = compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in Production");
     (registry, project_source)
+}
+
+fn compiled_import_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>, Vec<u8>) {
+    let module = parse_module_yaml(MODULE_SOURCE).expect("import module fixture parses");
+    let project_with_import = String::from_utf8(PROJECT_TEMPLATE.to_vec())
+        .expect("project fixture is UTF-8")
+        .replace(
+            "operations: [create, get, list, patch, batch]",
+            "operations: [create, get, list, patch, import]",
+        );
+    assert!(
+        project_with_import.contains("operations: [create, get, list, patch, import]"),
+        "fixture grants Import explicitly"
+    );
+    let project_source = project_with_import
+        .replace("MODULE_DIGEST", &module_digest(&module))
+        .into_bytes();
+    let project = parse_project_yaml(&project_source).expect("import project fixture parses");
+    let registry = compile_project(&project, &[module], CompileProfile::Production)
+        .expect("import fixture project compiles in Production");
+    (registry, project_source, MODULE_SOURCE.to_vec())
 }
 
 fn compiled_spatial_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {

@@ -537,6 +537,258 @@ seed:
 
 #[test]
 #[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
+fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::Builder::new()
+        .prefix("breg-native-purpose-import-test-")
+        .tempdir_in(binary.parent().unwrap())
+        .unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::canonicalize(temporary.keep()).unwrap();
+    let project = parent.join("registry");
+    let session = Session {
+        project: project.clone(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
+    };
+    session.success(&["init", project.to_str().unwrap()]);
+    let project_file = project.join("registry.yaml");
+    let mut definition: Value =
+        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
+    for entity in definition["entities"].as_array_mut().unwrap() {
+        if entity["id"] == "record-group" {
+            entity["batch"] = json!({"maximumItems": 4, "maximumBytes": 16384});
+        }
+    }
+    for profile in definition["accessProfiles"].as_array_mut().unwrap() {
+        if matches!(profile["id"].as_str(), Some("operator" | "record-reader")) {
+            profile["requesterClients"] = json!(["officer"]);
+            profile["actorKind"] = json!("human");
+        }
+        if profile["id"] == "operator" {
+            // No direct-create permission can satisfy either the journey's
+            // reference setup or the served database's reference seed.
+            profile["permissions"][0]["operations"] = json!(["import", "get", "list"]);
+        }
+    }
+    write(
+        &project_file,
+        serde_norway::to_string(&definition).unwrap().as_bytes(),
+    );
+    write(
+        &project.join("tests/journeys.yaml"),
+        br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: purpose-and-import
+    steps:
+      - id: import-reference
+        entity: record-group
+        accessProfile: operator
+        claims: &operator
+          principal: fixture-officer
+          actorKind: human
+          requesterClient: officer
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request:
+          operation: import
+          items: [{code: journey-group, label: Journey reference}]
+        expect: {outcome: success, status: 200}
+      - id: list-reference
+        entity: record-group
+        accessProfile: operator
+        claims: *operator
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: create-record
+        entity: record
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: create
+          data: {code: journey-record, label: Journey record, status: active}
+        expect: {outcome: success, status: 201, fields: {code: journey-record, status: active}}
+      - id: read-as-same-client
+        entity: record
+        accessProfile: record-reader
+        claims:
+          principal: fixture-officer
+          actorKind: human
+          requesterClient: officer
+          scopes: [registry:generic:read]
+          purpose: registry-reporting
+          directClaims: {registry_record_status: active}
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+"#,
+    );
+    let clients = parent.join("clients.yaml");
+    write(
+        &clients,
+        br#"version: 1
+clients:
+  - id: officer
+    accessProfiles: [operator, record-reader]
+    allowHumanFixture: true
+    scopes: [registry:generic:operate, registry:generic:read]
+    claims:
+      registry_principal: fixture-officer
+      registry_actor_kind: human
+      registry_purpose: [registry-operations, registry-reporting]
+      registry_record_status: active
+seed:
+  - id: reference-seed
+    client: officer
+    entity: record-group
+    accessProfile: operator
+    operation: import
+    data: {code: seed-group, label: Served reference}
+"#,
+    );
+    let [database_port, breg_port, issuer_port] = free_ports();
+    let first = session.report(session.dev(&[
+        "start",
+        "--clients-file",
+        clients.to_str().unwrap(),
+        "--database-port",
+        &database_port.to_string(),
+        "--breg-port",
+        &breg_port.to_string(),
+        "--issuer-port",
+        &issuer_port.to_string(),
+    ]));
+    assert_eq!(first["status"], "ready");
+    let dev = project.join(".breg/dev");
+    let credentials: Value =
+        serde_norway::from_slice(&fs::read(dev.join("schema-test-credentials.yaml")).unwrap())
+            .unwrap();
+    let token_claims = |step: &str| {
+        let binding = credentials["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|binding| binding["stepId"] == step)
+            .unwrap();
+        let name = binding["credential"]["tokenRef"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("secret:file/")
+            .unwrap();
+        let token = fs::read_to_string(dev.join("secrets").join(name)).unwrap();
+        let payload = token.split('.').nth(1).unwrap();
+        let claims: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload)
+                .unwrap(),
+        )
+        .unwrap();
+        (name.to_owned(), claims)
+    };
+    let (write_ref, write_claims) = token_claims("create-record");
+    let (read_ref, read_claims) = token_claims("read-as-same-client");
+    assert_ne!(write_ref, read_ref);
+    for claims in [&write_claims, &read_claims] {
+        assert_eq!(
+            claims.get("azp").or_else(|| claims.get("client_id")),
+            Some(&json!("officer"))
+        );
+        assert!(claims.get("azp").is_none_or(|azp| azp == "officer"));
+        assert!(claims
+            .get("client_id")
+            .is_none_or(|client| client == "officer"));
+        assert_eq!(claims["registry_principal"], "fixture-officer");
+        assert_eq!(claims["registry_actor_kind"], "human");
+    }
+    assert_eq!(write_claims["sub"], read_claims["sub"]);
+    let exact_scope = |claims: &Value, expected: &str| {
+        let scopes: Vec<&str> = match &claims["scope"] {
+            Value::String(scopes) => scopes.split_whitespace().collect(),
+            Value::Array(scopes) => scopes.iter().map(|scope| scope.as_str().unwrap()).collect(),
+            _ => panic!("native credentials must carry the selected scopes"),
+        };
+        assert_eq!(scopes, [expected]);
+    };
+    exact_scope(&write_claims, "registry:generic:operate");
+    exact_scope(&read_claims, "registry:generic:read");
+    assert_eq!(write_claims["registry_purpose"], "registry-operations");
+    assert_eq!(read_claims["registry_purpose"], "registry-reporting");
+    assert_eq!(read_claims["registry_record_status"], "active");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let read_seed = || {
+        runtime.block_on(async {
+            let token = fs::read_to_string(dev.join("secrets/officer-token")).unwrap();
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap()
+                .get(format!(
+                    "http://127.0.0.1:{breg_port}/v1/records/record-groups?accessProfile=operator"
+                ))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let document: Value = response.json().await.unwrap();
+            let items = document["items"].as_array().unwrap();
+            assert_eq!(
+                items.len(),
+                1,
+                "the served database contains only its one import seed"
+            );
+            assert_eq!(items[0]["domainData"]["code"], "seed-group");
+            items[0]["recordIdentifier"].as_str().unwrap().to_owned()
+        })
+    };
+    let seeded_record = read_seed();
+    let authorities = session.success(&[
+        "import-authority",
+        "list",
+        "--runtime-config",
+        dev.join("runtime.yaml").to_str().unwrap(),
+    ]);
+    let rows = authorities["authorities"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_ne!(rows[0]["status"], "open");
+    let authority_id = rows[0]["authorityId"].as_str().unwrap();
+    let checkpoint = dev
+        .join("seeds/reference-seed")
+        .join(format!("{authority_id}.checkpoint.json"));
+    assert!(checkpoint.is_file());
+    session.stop();
+    // Model a crash after the import committed and its authority closed, but
+    // before dev atomically marked the seed complete in its local journal.
+    let state_file = dev.join("state.json");
+    let mut interrupted: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    interrupted["seeded"] = json!([]);
+    interrupted["seedImportAuthorities"] = json!({"reference-seed": authority_id});
+    write(&state_file, &serde_json::to_vec(&interrupted).unwrap());
+    let restarted = session.start();
+    assert_eq!(restarted["status"], "ready");
+    assert_eq!(restarted["packageDigest"], first["packageDigest"]);
+    assert_eq!(read_seed(), seeded_record);
+    let recovered: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    assert_eq!(recovered["seeded"], json!(["reference-seed"]));
+    assert_eq!(recovered["seedImportAuthorities"], json!({}));
+    let after = session.success(&[
+        "import-authority",
+        "list",
+        "--runtime-config",
+        dev.join("runtime.yaml").to_str().unwrap(),
+    ]);
+    assert_eq!(after["authorities"].as_array().unwrap().len(), 1);
+    session.remove();
+    drop(session);
+    fs::remove_dir_all(parent).unwrap();
+}
+
+#[test]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
 fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::Builder::new()

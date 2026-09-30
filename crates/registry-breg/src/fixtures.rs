@@ -33,9 +33,12 @@ use crate::contract::{
     parse_module_yaml, parse_project_yaml, redact_authored_values, ModuleAssetSource,
 };
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
-use crate::data::{validate_field_value, FieldValue};
+use crate::data::{validate_field_value, DataImportOperation, DataImportPlan, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::event_destination::EventDestinationActivationError;
+use crate::import_authority::{
+    ImportAuthorityCloseRequest, ImportAuthorityOpenRequest, ImportAuthorityOperatorService,
+};
 use crate::model::CompiledRoute;
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionPermission, CompiledActionRoute,
@@ -302,6 +305,9 @@ struct StepSource {
     tag = "operation"
 )]
 enum ActionSource {
+    Import {
+        items: Vec<Map<String, Value>>,
+    },
     Create {
         data: Map<String, Value>,
     },
@@ -384,6 +390,7 @@ enum ActionSource {
 impl ActionSource {
     fn operation(&self) -> Operation {
         match self {
+            Self::Import { .. } => Operation::Import,
             Self::Create { .. } => Operation::Create,
             Self::Get { .. } => Operation::Get,
             Self::List { .. } | Self::Query { .. } | Self::ReadPath { .. } => Operation::List,
@@ -400,6 +407,7 @@ impl ActionSource {
 
     fn route_id(&self, entity_id: &str) -> String {
         let suffix = match self {
+            Self::Import { .. } => "import".to_owned(),
             Self::Create { .. } => "create".to_owned(),
             Self::Get { .. } => "get".to_owned(),
             Self::List { .. } | Self::Query { .. } => "list".to_owned(),
@@ -981,7 +989,8 @@ fn validate_action_references(
             etag_ref,
             ..
         } => &[record_ref, etag_ref],
-        ActionSource::Create { .. }
+        ActionSource::Import { .. }
+        | ActionSource::Create { .. }
         | ActionSource::List { .. }
         | ActionSource::Query { .. }
         | ActionSource::Lookup { .. }
@@ -1072,6 +1081,12 @@ fn collect_action_value_record_refs<'a>(
     references: &mut Vec<&'a str>,
 ) -> Result<(), FixtureError> {
     match action {
+        ActionSource::Import { items } => {
+            for item in items {
+                collect_map_value_record_refs(item, references)?;
+            }
+            Ok(())
+        }
         ActionSource::Create { data } | ActionSource::Lookup { values: data, .. } => {
             collect_map_value_record_refs(data, references)
         }
@@ -1556,6 +1571,15 @@ fn validate_action_fields(
         Ok(())
     };
     match action {
+        ActionSource::Import { items } => {
+            if items.is_empty() || items.len() > MAX_TOTAL_STEPS {
+                return Err(FixtureError::JourneyBoundsRefused);
+            }
+            for item in items {
+                validate_data(item)?;
+            }
+            Ok(())
+        }
         ActionSource::Create { data } => validate_data(data),
         ActionSource::Get { .. } | ActionSource::List { .. } => Ok(()),
         ActionSource::Query { .. } | ActionSource::ReadPath { .. } => {
@@ -1949,6 +1973,12 @@ fn internalize_entity_action(
     entity: &crate::model::CompiledEntity,
 ) -> Result<ActionSource, FixtureError> {
     Ok(match action {
+        ActionSource::Import { items } => ActionSource::Import {
+            items: items
+                .iter()
+                .map(|data| internalize_data(entity, data))
+                .collect::<Result<Vec<_>, FixtureError>>()?,
+        },
         ActionSource::Create { data } => ActionSource::Create {
             data: internalize_data(entity, data)?,
         },
@@ -2130,6 +2160,12 @@ fn externalize_action(
     entity: &crate::model::CompiledEntity,
 ) -> Result<ActionSource, FixtureError> {
     Ok(match action {
+        ActionSource::Import { items } => ActionSource::Import {
+            items: items
+                .iter()
+                .map(|data| externalize_data(entity, data))
+                .collect::<Result<Vec<_>, FixtureError>>()?,
+        },
         ActionSource::Create { data } => ActionSource::Create {
             data: externalize_data(entity, data)?,
         },
@@ -2315,19 +2351,24 @@ fn validate_expectation(
                 | Operation::Patch
                 | Operation::Batch
                 | Operation::Invoke
+                | Operation::Import
                 | Operation::Snapshot => 200,
                 Operation::SubmitRequest
                 | Operation::ReviseRequest
                 | Operation::CancelRequest
                 | Operation::ApplyRequest => 200,
-                Operation::Tombstone | Operation::Revisions | Operation::Import => {
+                Operation::Tombstone | Operation::Revisions => {
                     return Err(FixtureError::LogicalReferenceRefused)
                 }
             };
             if expectation.status != expected || expectation.problem_code.is_some() {
                 return Err(FixtureError::JourneyShapeRefused);
             }
-            if matches!(operation, Operation::List | Operation::Batch) {
+            if operation == Operation::Import {
+                if expectation.count.is_some() || !expectation.fields.is_empty() || captures {
+                    return Err(FixtureError::JourneyShapeRefused);
+                }
+            } else if matches!(operation, Operation::List | Operation::Batch) {
                 if expectation.count.is_none() || !expectation.fields.is_empty() || captures {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
@@ -2999,13 +3040,20 @@ async fn execute_schema_test_with_key_source(
                 }
             }
             let bearer_token = bearer.as_ref().map(|token| token.as_str());
-            let request = fixture_request(&journey.id, step, &observations, bearer_token)
-                .map_err(&step_failure)?;
-            let response = runtime
-                .app
-                .call(request)
-                .await
-                .map_err(|error| match error {})?;
+            let response = if matches!(step.action, ActionSource::Import { .. }) {
+                runtime
+                    .execute_import(step, &observations, bearer_token)
+                    .await
+                    .map_err(&step_failure)?
+            } else {
+                let request = fixture_request(&journey.id, step, &observations, bearer_token)
+                    .map_err(&step_failure)?;
+                runtime
+                    .app
+                    .call(request)
+                    .await
+                    .map_err(|error| match error {})?
+            };
             let actual = response.status().as_u16();
             if actual != step.expect.status {
                 return Err(step_failure(FixtureError::ResponseStatusMismatch {
@@ -3043,6 +3091,10 @@ struct SchemaTestRuntime {
     authenticator: Arc<RegistryAuthenticator>,
     verifier: TokenVerifier,
     readiness: Arc<SchemaTestReadiness>,
+    registry: Arc<CompiledRegistry>,
+    package_revision: String,
+    schema_fingerprint: String,
+    import_authority: ImportAuthorityOperatorService,
     #[cfg(feature = "wasm")]
     _wasm_runtime: crate::wasm_runtime::ConfiguredWasmRuntime,
 }
@@ -3099,6 +3151,8 @@ impl SchemaTestRuntime {
             return Err(FixtureError::CandidateBindingRefused);
         }
         let expected = database.expected().clone();
+        let import_authority =
+            database.import_authority_service(audit.clone(), Arc::clone(&registry));
         let read_identity = ReadRuntimeIdentity {
             package_revision: expected.activation_id.clone(),
             schema_fingerprint: expected.schema_fingerprint.clone(),
@@ -3136,7 +3190,7 @@ impl SchemaTestRuntime {
         let mutations = PostgresRecordMutationService::new_with_event_destinations(
             pool.clone(),
             Arc::clone(&registry),
-            expected,
+            expected.clone(),
             config.identity().instance_id(),
             database.lock_key(),
             config.operational_timeouts().record_lock,
@@ -3155,7 +3209,7 @@ impl SchemaTestRuntime {
         });
         let service = Arc::new(
             HttpService::new(
-                registry,
+                Arc::clone(&registry),
                 read_identity,
                 records,
                 Arc::clone(&readiness) as Arc<dyn ReadinessProbe>,
@@ -3175,6 +3229,10 @@ impl SchemaTestRuntime {
             authenticator,
             verifier,
             readiness,
+            registry,
+            package_revision: expected.package_digest,
+            schema_fingerprint: expected.schema_fingerprint,
+            import_authority,
             #[cfg(feature = "wasm")]
             _wasm_runtime: wasm_runtime,
         })
@@ -3202,6 +3260,176 @@ impl SchemaTestRuntime {
             &verified.scopes.into_iter().collect(),
         )
     }
+
+    async fn execute_import(
+        &mut self,
+        step: &ValidatedStep,
+        observations: &BTreeMap<String, Observation>,
+        bearer_token: Option<&str>,
+    ) -> Result<Response<Body>, FixtureError> {
+        let ActionSource::Import { items } = &step.action else {
+            return Err(FixtureError::RequestConstructionRefused);
+        };
+        let token = bearer_token.ok_or(FixtureError::RequestConstructionRefused)?;
+        let mut input = Vec::new();
+        for item in items {
+            let data = resolve_fixture_value_refs(&Value::Object(item.clone()), observations)?;
+            input.extend_from_slice(
+                &canonicalize_json(&json!({"operation":"create", "data": data}))
+                    .map_err(|_| FixtureError::RequestConstructionRefused)?,
+            );
+            input.push(b'\n');
+        }
+        let entity = step
+            .entity
+            .as_deref()
+            .ok_or(FixtureError::RequestConstructionRefused)?;
+        let plan = DataImportPlan::from_jsonl(
+            &self.registry,
+            entity,
+            DataImportOperation::Create,
+            &step.access_profile,
+            &input,
+        )
+        .map_err(|_| FixtureError::RequestConstructionRefused)?;
+        let max_items = i64::try_from(plan.item_count())
+            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+        let input_digests = [plan.input_digest().to_owned()];
+        let authority = self
+            .import_authority
+            .open(ImportAuthorityOpenRequest {
+                entity_id: entity,
+                profile_id: &step.access_profile,
+                max_items,
+                expires_in: std::time::Duration::from_secs(300),
+                input_digests: &input_digests,
+                operator_reference: "schema-test-import",
+                reason: "execute declared fixture import",
+            })
+            .await
+            .map_err(|_| FixtureError::ExecutionRefused)?;
+        let result = self.execute_import_run(step, token, &plan).await;
+        let close = self
+            .import_authority
+            .close(ImportAuthorityCloseRequest {
+                authority_id: authority.authority_id,
+                operator_reference: "schema-test-import",
+                reason: "finish declared fixture import",
+            })
+            .await;
+        if close.is_err() {
+            return Err(FixtureError::ExecutionRefused);
+        }
+        result
+    }
+
+    async fn execute_import_run(
+        &mut self,
+        step: &ValidatedStep,
+        token: &str,
+        plan: &DataImportPlan,
+    ) -> Result<Response<Body>, FixtureError> {
+        let entity_id = step
+            .entity
+            .as_deref()
+            .ok_or(FixtureError::RequestConstructionRefused)?;
+        let entity_route = &self
+            .registry
+            .entities()
+            .get(entity_id)
+            .ok_or(FixtureError::RequestConstructionRefused)?
+            .route;
+        let ingestion_path = format!("/v1/records/{entity_route}/ingestion-runs");
+        let mut path = ingestion_path.clone();
+        path.push_str("?accessProfile=");
+        percent_encode_query_value(&step.access_profile, &mut path);
+        let create = json!({
+            "operation": "create",
+            "profileId": step.access_profile,
+            "packageRevision": self.package_revision,
+            "schemaFingerprint": self.schema_fingerprint,
+            "inputDigest": plan.input_digest(),
+            "inputLength": plan.input_length(),
+            "itemCount": plan.item_count(),
+            "chunkCount": plan.chunks().len(),
+            "chunkAlgorithmVersion": crate::data::RUN_CHUNK_ALGORITHM_VERSION,
+        });
+        let response = self
+            .app
+            .call(authenticated_json_request(
+                Method::POST,
+                &path,
+                token,
+                &create,
+            )?)
+            .await
+            .map_err(|error| match error {})?;
+        if response.status() != StatusCode::CREATED {
+            return Ok(response);
+        }
+        let body = to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+            .await
+            .map_err(|_| FixtureError::ResponseShapeRefused)?;
+        let document = parse_json_strict(&body).map_err(|_| FixtureError::ResponseShapeRefused)?;
+        let run_id = document
+            .pointer("/run/runId")
+            .and_then(Value::as_str)
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let mut last = None;
+        for chunk in plan.chunks() {
+            let chunk_document = parse_json_strict(chunk.canonical_body())
+                .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            let body = json!({
+                "chunkIndex": chunk.index(),
+                "items": chunk_document.get("items").cloned().ok_or(FixtureError::RequestConstructionRefused)?,
+                "digest": chunk.digest(),
+                "prefixDigest": chunk.prefix_digest(),
+            });
+            let mut chunk_path = format!("{ingestion_path}/{run_id}/chunks?accessProfile=");
+            percent_encode_query_value(&step.access_profile, &mut chunk_path);
+            let response = self
+                .app
+                .call(authenticated_json_request(
+                    Method::POST,
+                    &chunk_path,
+                    token,
+                    &body,
+                )?)
+                .await
+                .map_err(|error| match error {})?;
+            if response.status() != StatusCode::OK {
+                return Ok(response);
+            }
+            last = Some(response);
+        }
+        last.ok_or(FixtureError::RequestConstructionRefused)
+    }
+}
+
+fn authenticated_json_request(
+    method: Method,
+    path: &str,
+    token: &str,
+    document: &Value,
+) -> Result<Request<Body>, FixtureError> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .body(json_body(document)?)
+        .map_err(|_| FixtureError::RequestConstructionRefused)?;
+    request.headers_mut().insert(
+        CONTENT_TYPE,
+        "application/json"
+            .parse()
+            .map_err(|_| FixtureError::RequestConstructionRefused)?,
+    );
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        format!("Bearer {token}")
+            .parse()
+            .map_err(|_| FixtureError::RequestConstructionRefused)?,
+    );
+    Ok(request)
 }
 
 fn assert_exact_claims(
@@ -3331,6 +3559,9 @@ fn fixture_request(
     let mut if_match: Option<String> = None;
     let mut extra_query_options = Vec::new();
     match &step.action {
+        ActionSource::Import { .. } => {
+            return Err(FixtureError::RequestConstructionRefused);
+        }
         ActionSource::Create { data } => {
             method = Method::POST;
             body = json_body(&json!({"data": resolve_fixture_value_refs(
@@ -4131,6 +4362,26 @@ fn assert_response(
             }
         }
         ExpectedOutcome::Success => match step.action {
+            ActionSource::Import { .. } => {
+                let object = exact_object(document, &["run", "receipt"])?;
+                let run = object
+                    .get("run")
+                    .and_then(Value::as_object)
+                    .ok_or(FixtureError::ResponseShapeRefused)?;
+                let requested = match &step.action {
+                    ActionSource::Import { items } => items.len() as u64,
+                    _ => unreachable!(),
+                };
+                if run.get("status").and_then(Value::as_str) != Some("complete")
+                    || run.get("complete").and_then(Value::as_bool) != Some(true)
+                    || run.get("itemCount").and_then(Value::as_u64) != Some(requested)
+                    || run.get("committedItems").and_then(Value::as_u64) != Some(requested)
+                    || run.get("nextChunkIndex").and_then(Value::as_u64)
+                        != run.get("chunkCount").and_then(Value::as_u64)
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+            }
             ActionSource::List { .. }
             | ActionSource::Query { .. }
             | ActionSource::ReadPath { .. } => {
@@ -6155,6 +6406,39 @@ mod tests {
         assert_eq!(
             request_action_body(&action, &BTreeMap::new()).unwrap(),
             json!({"proposalVersion":1,"effectDigest":format!("sha256:{}", "a".repeat(64))})
+        );
+    }
+
+    #[test]
+    fn fixture_import_is_a_bounded_success_operation() {
+        let action: ActionSource = serde_json::from_value(json!({
+            "operation": "import",
+            "items": [{"code": "AA"}, {"code": "BB"}]
+        }))
+        .unwrap();
+        assert_eq!(action.operation(), Operation::Import);
+        assert_eq!(action.route_id("country"), "records.country.import");
+        let profile: AccessProfileSource = serde_json::from_value(json!({
+            "id": "loader",
+            "principalClaim": "registry_principal",
+            "operations": ["import"],
+            "writableFields": ["code"],
+            "rowBoundaries": []
+        }))
+        .unwrap();
+        let expectation = ExpectationSource {
+            outcome: ExpectedOutcome::Success,
+            status: 200,
+            fields: Map::new(),
+            count: None,
+            problem_code: None,
+            refusal_code: None,
+            entity_id: None,
+            field_id: None,
+        };
+        assert_eq!(
+            validate_expectation(&expectation, Operation::Import, &profile, false, false),
+            Ok(())
         );
     }
 

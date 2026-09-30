@@ -349,6 +349,11 @@ impl DataChunk {
     pub fn digest(&self) -> &str {
         &self.digest
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn prefix_digest(&self) -> &str {
+        &self.prefix_digest
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]

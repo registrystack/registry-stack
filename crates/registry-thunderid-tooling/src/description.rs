@@ -143,11 +143,15 @@ pub struct MachineClient {
     /// Which of those attribute names are embedded in access tokens.
     pub token_attributes: Vec<String>,
     pub access_token_lifetime_seconds: u32,
-    /// Enable institutional exchange alongside a narrowly authorized bootstrap grant.
+    /// Enable native token exchange. Institutional mappings require the exact
+    /// bootstrap grant; first-party mappings retain the client's authored
+    /// permissions and project only their declared signed claims.
     pub token_exchange: Option<TokenExchangeClient>,
 }
 
-/// The only machine-client permission available before a task grant exists.
+/// The exact permission that bounds an institutional exchange client's
+/// bootstrap token. For a first-party client it identifies one of the
+/// client's authored permissions without narrowing its ordinary credentials.
 #[derive(Debug, Clone)]
 pub struct TokenExchangeClient {
     pub assertion_resource_server_id: String,
@@ -578,16 +582,24 @@ impl IssuerDescription {
                     .filter(|role| role.assigned_agents.contains(&client.agent_id))
                     .flat_map(|role| &role.permissions)
                     .collect();
-                if permissions.is_empty()
-                    || permissions.iter().any(|(server, scopes)| {
-                        server != &exchange.assertion_resource_server_id
-                            || scopes.is_empty()
-                            || scopes
+                let first_party = first_party_clients.contains(&client.client_id);
+                let exact_bootstrap = !permissions.is_empty()
+                    && permissions.iter().all(|(server, scopes)| {
+                        server == &exchange.assertion_resource_server_id
+                            && !scopes.is_empty()
+                            && scopes
                                 .iter()
-                                .any(|scope| scope != &exchange.assertion_scope)
-                    })
-                {
-                    return refuse("exchange clients may receive only their exact bootstrap permission through client credentials");
+                                .all(|scope| scope == &exchange.assertion_scope)
+                    });
+                let authored_first_party_permission = first_party
+                    && permissions.iter().any(|(server, scopes)| {
+                        server == &exchange.assertion_resource_server_id
+                            && scopes.contains(&exchange.assertion_scope)
+                    });
+                if !exact_bootstrap && !authored_first_party_permission {
+                    return refuse(
+                        "exchange client permissions must contain the first-party bound or equal the institutional bootstrap bound",
+                    );
                 }
             }
             if client.token_attributes.len() > 16 {
@@ -1007,6 +1019,23 @@ mod tests {
         assert!(description.validate().is_err());
         let mut description = exchange_description();
         description.roles[0].assigned_agents.clear();
+        assert!(description.validate().is_err());
+    }
+
+    #[test]
+    fn first_party_exchange_preserves_authored_client_permissions() {
+        let mut description = exchange_description();
+        let client_id = description.machine_clients[0].client_id.clone();
+        description.exchange_issuers[0].mapping = ExchangeMapping::FirstParty;
+        description.exchange_issuers[0].clients = vec![client_id];
+        description.exchange_issuers[0].token_attributes =
+            [("registry_purpose".to_owned(), ExchangeAttributeKind::String)].into();
+        description.roles[0].permissions[0]
+            .1
+            .push("evidence:write".into());
+        assert!(description.validate().is_ok());
+
+        description.roles[0].permissions[0].1 = vec!["evidence:write".into()];
         assert!(description.validate().is_err());
     }
 

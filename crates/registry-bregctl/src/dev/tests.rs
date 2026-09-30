@@ -37,6 +37,7 @@ seed: []
         issuer_project: None,
         issuer_owner: None,
         issuer_image: None,
+        purpose_port: None,
         database_port: 55448,
         requires_postgis: false,
         webhook_port: None,
@@ -52,6 +53,7 @@ seed: []
         package_digest: None,
         activated: false,
         seeded: BTreeSet::new(),
+        seed_import_authorities: BTreeMap::new(),
         outputs: vec![],
         binaries: BTreeMap::new(),
         failure: None,
@@ -368,6 +370,86 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
             .filter(|client| !client.access_profiles.is_empty())
             .all(|client| allowed.iter().any(|id| id == &client.id)),
         "each profile-bound client remains in allowedClients: {allowed:?}"
+    );
+}
+
+#[test]
+fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection() {
+    let (_temp, mut state, mut clients, files) = fixture();
+    state.purpose_port = Some(18_092);
+    let operator = clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "operator")
+        .unwrap();
+    operator.claims.insert(
+        "registry_purpose".into(),
+        json!(["record-change", "record-read"]),
+    );
+    operator
+        .claims
+        .insert("registry_record_status".into(), json!("active"));
+    clients
+        .issuer
+        .exchange_issuers
+        .push(config::IssuerConnection {
+            id: "external-operator-authority".into(),
+            issuer: "https://operator.example.test".into(),
+            jwks_endpoint: "https://operator.example.test/jwks".into(),
+            mapping: config::IssuerConnectionMapping::InstitutionalGrant,
+            clients: vec!["operator".into()],
+            token_attributes: BTreeMap::new(),
+        });
+    clients.issuer.exchange_clients.push("operator".into());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+
+    let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
+    assert_eq!(
+        description
+            .machine_clients
+            .iter()
+            .filter(|client| client.client_id == "operator")
+            .count(),
+        1
+    );
+    let operator = description
+        .machine_clients
+        .iter()
+        .find(|client| client.client_id == "operator")
+        .unwrap();
+    assert_eq!(operator.attributes["registry_purpose"], "record-change");
+    assert_eq!(operator.attributes["registry_actor_kind"], "service");
+    assert!(operator.token_exchange.is_some());
+    let purpose = description
+        .exchange_issuers
+        .iter()
+        .find(|issuer| issuer.name == "Local purpose assertion authority")
+        .unwrap();
+    assert_eq!(purpose.clients, ["operator"]);
+    assert_eq!(purpose.token_attributes.len(), 5);
+    assert!(purpose.token_attributes.contains_key("registry_actor_kind"));
+    assert!(purpose.token_attributes.contains_key("registry_principal"));
+    assert!(purpose.token_attributes.contains_key("registry_purpose"));
+    assert!(purpose
+        .token_attributes
+        .contains_key("registry_record_status"));
+    assert!(purpose.token_attributes.contains_key("scope"));
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["oidc"]["allowedClients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|id| *id == "operator")
+            .count(),
+        1
+    );
+    assert_eq!(
+        runtime["authentication"]["oidc"]["assertionIssuers"]["operator"],
+        json!(["https://operator.example.test", "http://127.0.0.1:18092"])
     );
 }
 
@@ -950,13 +1032,95 @@ fn rehearsal_tokens_request_only_the_exact_fixture_scope_subset() {
         assertion_key_input_file: None,
     };
     let step = json!({"claims":{"scopes":["starter:reviewer"]}});
-    let mut remembered = BTreeMap::new();
+    let token = rehearsal_token(&client, &step).unwrap();
 
-    remember_rehearsal_scopes(&mut remembered, &client, &step).unwrap();
-
-    assert_eq!(remembered["supervisor"], ["starter:reviewer"]);
+    assert_eq!(token.scopes, ["starter:reviewer"]);
+    assert_eq!(token.logical_client_id, "supervisor");
     let widened = json!({"claims":{"scopes":["unregistered"]}});
-    assert!(remember_rehearsal_scopes(&mut remembered, &client, &widened).is_err());
+    assert!(rehearsal_token(&client, &widened).is_err());
+}
+
+#[test]
+fn rehearsal_tokens_select_distinct_declared_purposes_on_one_logical_client() {
+    let client = config::Client {
+        id: "officer".into(),
+        access_profiles: vec!["requester".into(), "reader".into()],
+        allow_breg_access: false,
+        allow_human_fixture: false,
+        scopes: vec!["registry:request".into(), "registry:read".into()],
+        claims: BTreeMap::from([
+            ("registry_principal".into(), json!("fixture-officer")),
+            (
+                "registry_purpose".into(),
+                json!(["record-change", "record-read"]),
+            ),
+        ]),
+        test_bindings: Vec::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+        assertion_key_input_file: None,
+    };
+    let change = rehearsal_token(
+        &client,
+        &json!({"claims":{"scopes":["registry:request"],"purpose":"record-change"}}),
+    )
+    .unwrap();
+    let read = rehearsal_token(
+        &client,
+        &json!({"claims":{"scopes":["registry:read"],"purpose":"record-read"}}),
+    )
+    .unwrap();
+
+    assert_eq!(change.logical_client_id, "officer");
+    assert_eq!(read.logical_client_id, "officer");
+    assert_eq!(
+        config::client_token_claims(&client)["registry_actor_kind"],
+        "service"
+    );
+    assert_ne!(change.output_id, read.output_id);
+    assert_eq!(change.purpose.as_deref(), Some("record-change"));
+    assert_eq!(read.purpose.as_deref(), Some("record-read"));
+    assert!(rehearsal_token(
+        &client,
+        &json!({"claims":{"scopes":["registry:read"],"purpose":"undeclared"}}),
+    )
+    .is_err());
+}
+
+#[test]
+fn seed_operation_defaults_to_create_and_accepts_explicit_import() {
+    let create: config::Seed = serde_norway::from_str(
+        "id: create-reference\nclient: operator\nentity: reference\naccessProfile: operator\ndata: {code: AA}\n",
+    )
+    .unwrap();
+    assert_eq!(create.operation, config::SeedOperation::Create);
+    let imported: config::Seed = serde_norway::from_str(
+        "id: import-reference\nclient: operator\nentity: reference\naccessProfile: operator\noperation: import\ndata: {code: AA}\n",
+    )
+    .unwrap();
+    assert_eq!(imported.operation, config::SeedOperation::Import);
+}
+
+#[test]
+fn only_a_closed_authority_on_an_incomplete_atomic_seed_run_may_restart() {
+    use crate::data_lifecycle::DataLifecycleError;
+    use registry_breg_client::BRegIngestionBlockedReason;
+
+    assert!(expired_empty_seed_run(
+        &DataLifecycleError::ImportRunBlocked(Some(
+            BRegIngestionBlockedReason::ImportAuthorityClosed
+        ))
+    ));
+    for error in [
+        DataLifecycleError::ImportRunBlocked(Some(
+            BRegIngestionBlockedReason::ActivePackageChanged,
+        )),
+        DataLifecycleError::ImportRunBlocked(None),
+        DataLifecycleError::ImportRunCancelled,
+        DataLifecycleError::Transport,
+    ] {
+        assert!(!expired_empty_seed_run(&error), "{error:?}");
+    }
 }
 
 #[test]
@@ -1844,6 +2008,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         issuer_project: None,
         issuer_owner: None,
         issuer_image: None,
+        purpose_port: None,
         database_port: 55448,
         requires_postgis: false,
         webhook_port: None,
@@ -1859,6 +2024,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         package_digest: None,
         activated: false,
         seeded: BTreeSet::new(),
+        seed_import_authorities: BTreeMap::new(),
         outputs: vec![],
         binaries: BTreeMap::new(),
         failure: None,
