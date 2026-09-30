@@ -123,8 +123,11 @@ objects, or reach a migration-owned write path. `messagingctl apply` runs all
 pending migrations, grants that bounded runtime access, and appends the
 activation in one locked transaction after request audit. A failed commit is
 read back by its generated activation id and is never reported as a guessed
-failure. Operator references are stored and audited only as activation-scoped
-keyed hashes; backup references are bounded. A new digest becomes served only
+failure. Apply observes the runtime role's grants before it grants them, so a
+reapply of the active package that restores stale split-role grants records a
+new activation and is audited as `applied`, never as `unchanged`. Operator
+references are stored and audited only as activation-scoped keyed hashes;
+backup references are bounded. A new digest becomes served only
 after restart (MESSAGING-DEC-06). `/ready` rechecks the active database
 identity, package digest, schema, effective role grants, and writer health; a
 running process stops being ready when any of those boundaries changes.
