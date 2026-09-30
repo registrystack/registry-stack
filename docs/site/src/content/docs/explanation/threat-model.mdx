@@ -433,6 +433,46 @@ the same path fails at startup, so each replica needs its own path or a standard
 destination. Third, audit records hashed principals and correlation identifiers, so
 operator-side investigation depends on retaining the hashing secret and request context.
 
+## The automated adversary
+
+The model assumes the adversary is automated before it is expert. Publicly disclosed
+vulnerabilities reach commodity exploitation quickly, and every reachable deployment is probed
+continuously at machine speed by tooling that does not need to understand the registry domain to
+try each generic technique against it. Three consequences follow, and the preceding sections
+carry most of the answer.
+
+First, probing must yield no signal. Authorization refusals collapse to one generic
+`evidence.denied` problem, and no-match, ambiguous, missing-fact, and inconsistent-derivation
+outcomes collapse to one public problem shape, so an automated caller cannot learn which check
+failed or read registry membership out of response shape, message, or timing (`V1-I16`). Second,
+the shapes automated scanners look for are absent rather than filtered: the request schema is
+closed with no caller-supplied thresholds, expressions, scripts, paths, headers, or response
+projections (`V1-I01`, `V1-I02`), source calls are fixed by trusted configuration under a
+one-request-per-stage ceiling (`V1-I09`, `V1-I40`), and no route in the request path varies its
+destination or its query shape with request content. Third, work is bounded per request: parsers
+and scripts enforce size, count, and operation ceilings, so a machine-speed stream of requests
+cannot buy unbounded computation from any single one of them.
+
+The parsing surfaces this adversary reaches are fuzzed continuously rather than only at release
+time: the platform and Evidence fuzz smokes run in the nightly sweep and in the merge queue, and
+the manifest smoke runs nightly, over the untrusted input surfaces including the Evidence
+response verifier and the authoring readers.
+{/* Evidence: products/platform/scripts/run-fuzz-smoke.sh and
+     products/evidence/scripts/run-fuzz-smoke.sh run as the platform-fuzz and evidence-fuzz jobs
+     whose assurance tier selects the merge queue in .github/scripts/ci_changes.py, with all
+     three rosters in .github/workflows/nightly-security.yml. */}
+
+Two residual risks sharpen under this adversary, and the [hardening
+checklist](../../security/hardening-checklist/) carries the operator side of each. The human
+controls are the ones automation cannot tire past, so the bundle review, the whole-surface
+disclosure review, and project approval are load-bearing under sustained machine-speed pressure
+rather than ceremony in front of it; and the per-process rate and failed-selector budgets
+multiply with replicas and reset on restart, so edge rate control is part of the enumeration
+defense, not a throughput convenience. Patch velocity is the operator's share of the same
+premise: the repository's dependency advisories carry dated, scoped exceptions with review
+triggers rather than open-ended waivers, so a deployment that lags behind released runtime
+updates keeps exposure the maintainers have already retired.
+
 ## Field encryption draws a boundary inside the database
 
 Base Registry Engine field encryption adds one boundary the other products do not have, drawn inside

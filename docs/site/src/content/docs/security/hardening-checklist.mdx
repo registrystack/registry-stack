@@ -292,6 +292,32 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   `NO_PROXY` and has no application-level proxy, so an ambient proxy variable will not silently
   redirect a source call.
 
+## Assume an automated adversary
+
+The [threat model](../../explanation/threat-model/) treats the adversary as automated before it
+is expert: commodity tooling probes every reachable deployment at machine speed, and the gap
+between a public advisory and attempted exploitation is short. Work these items as part of that
+premise rather than as a separate exercise.
+
+- Take runtime updates on a deliberate cadence, and treat the cadence as a control. Upstream
+  dependency advisories carry dated, scoped exceptions with review triggers rather than
+  open-ended waivers, so exposure the maintainers retire stays retired only in deployments that
+  take the update. Track advisories against your own pinned base images and edge components too:
+  the runtimes' refusal surface protects the process, not the host it runs on.
+  {/* Evidence: each advisory ignore in deny.toml carries a rationale and a review trigger, and
+       the CI gate runs the full cargo deny check with advisories included,
+       .github/workflows/ci.yml. */}
+- Treat sustained machine-speed probing as baseline traffic you alert on, not an incident you
+  wait to notice. Per-process budgets multiply by N replicas and reset on restart, so set the
+  failed-selector budget deliberately as the selector-enumeration defense and put per-client
+  quotas in the gateway, as under [Transport and edge](#transport-and-edge).
+- Keep the probe surface uninformative end to end. The runtimes collapse authorization refusals
+  to one closed problem shape by design, so an edge that adds distinguishing error pages,
+  redirects, or timing differences in front of them reintroduces the oracle the runtime removed.
+- Rehearse the withdraw path before you need it. Under machine-speed exploitation the mean time
+  to withdraw a Relay disclosure or to replace a governed Evidence Gateway bundle is your
+  deployment pipeline's, not the runtime's, so measure that interval once in peacetime.
+
 ## Declared posture, and why neither product has one
 
 Neither maintained runtime asks you to declare an assurance level, and neither exposes a posture
