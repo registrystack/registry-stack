@@ -4485,6 +4485,8 @@ pub struct SourceReconciliationHealth {
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
+    UnsupportedPostgres,
     #[error("the Casework database configuration is invalid")]
     Configuration,
     #[error("the Casework database configuration is invalid: {0}")]

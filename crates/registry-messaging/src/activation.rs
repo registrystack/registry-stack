@@ -29,7 +29,38 @@ fn layout() -> Layout {
 fn platform_error(error: platform::Error) -> StoreError {
     match error {
         platform::Error::Database(error) => error.into(),
+        platform::Error::UnsupportedPostgres => StoreError::UnsupportedPostgres,
         platform::Error::InvalidLayout | platform::Error::Corrupt => StoreError::SchemaVersion,
+    }
+}
+
+fn known_schema_versions() -> Vec<i64> {
+    MIGRATIONS.iter().map(|(version, _)| *version).collect()
+}
+
+fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRefusal> {
+    let known = known_schema_versions();
+    let unexpected = schema
+        .applied
+        .iter()
+        .enumerate()
+        .find_map(|(index, version)| (known.get(index) != Some(version)).then_some(*version))?;
+    if known.last().is_some_and(|latest| unexpected > *latest) {
+        Some(ActivationRefusal::new(
+            "messagingctl.activation.schema-newer",
+            "database",
+            format!(
+                "the database schema contains version {unexpected}, which is newer than this Messaging release"
+            ),
+        ))
+    } else {
+        Some(ActivationRefusal::new(
+            "messagingctl.activation.schema-invalid",
+            "database",
+            format!(
+                "the database schema history is not an ordered prefix of this Messaging release at version {unexpected}"
+            ),
+        ))
     }
 }
 
@@ -147,16 +178,9 @@ pub async fn plan(
             "the runtime credential cannot read the activation ledger; run messagingctl apply with the migration credential",
         )]));
     }
-    let schema = platform::schema_state(
-        &*tx,
-        &layout(),
-        &MIGRATIONS
-            .iter()
-            .map(|(version, _)| *version)
-            .collect::<Vec<_>>(),
-    )
-    .await
-    .map_err(platform_error)?;
+    let schema = platform::schema_state(&*tx, &layout(), &known_schema_versions())
+        .await
+        .map_err(platform_error)?;
     let active = platform::active_activation(&*tx, &layout())
         .await
         .map_err(platform_error)?;
@@ -172,15 +196,8 @@ pub async fn plan(
             "the database belongs to another deployment",
         ));
     }
-    if schema
-        .unknown_version(&MIGRATIONS.iter().map(|(v, _)| *v).collect::<Vec<_>>())
-        .is_some()
-    {
-        refusals.push(ActivationRefusal::new(
-            "messagingctl.activation.schema-newer",
-            "database",
-            "the database schema is newer than this Messaging release",
-        ));
+    if let Some(refusal) = schema_history_refusal(&schema) {
+        refusals.push(refusal);
     }
     if let (Some(active), Some(role)) = (&active, observation) {
         if active.role_mode == RoleMode::Split && role.mode == RoleMode::Single {
@@ -240,16 +257,9 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
             "the runtime credential cannot read the activation ledger; run messagingctl apply with the migration credential",
         )]));
     }
-    let schema = platform::schema_state(
-        &*tx,
-        &layout(),
-        &MIGRATIONS
-            .iter()
-            .map(|(version, _)| *version)
-            .collect::<Vec<_>>(),
-    )
-    .await
-    .map_err(platform_error)?;
+    let schema = platform::schema_state(&*tx, &layout(), &known_schema_versions())
+        .await
+        .map_err(platform_error)?;
     let history = platform::activation_history(&*tx, &layout())
         .await
         .map_err(platform_error)?;
@@ -305,6 +315,15 @@ pub async fn apply(
     let tx = client.transaction().await?;
     tx.query_one("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
         .await?;
+    let schema = platform::schema_state(&*tx, &layout(), &known_schema_versions())
+        .await
+        .map_err(platform_error)?;
+    if let Some(refusal) = schema_history_refusal(&schema) {
+        let refusals = vec![refusal];
+        drop(tx);
+        respond_refused(&mut audit_request, activation_id, package_digest, &refusals).await?;
+        return Err(ActivationError::Refused(refusals));
+    }
     let migration_role: String = tx.query_one("SELECT current_user::text", &[]).await?.get(0);
     let split = migration_role != runtime_role;
     let current_active = platform::active_activation(&*tx, &layout())
@@ -508,4 +527,34 @@ async fn respond_refused(
 
 fn valid_operator_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{platform, schema_history_refusal};
+
+    fn schema(applied: &[i64]) -> platform::SchemaState {
+        platform::SchemaState {
+            applied: applied.to_vec(),
+            pending: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn schema_history_accepts_every_known_prefix() {
+        for applied in [&[][..], &[1][..], &[1, 2][..]] {
+            assert!(schema_history_refusal(&schema(applied)).is_none());
+        }
+    }
+
+    #[test]
+    fn schema_history_distinguishes_newer_and_invalid_versions() {
+        let newer = schema_history_refusal(&schema(&[1, 2, 99])).expect("a newer version");
+        assert_eq!(newer.code, "messagingctl.activation.schema-newer");
+        assert!(newer.message.contains("version 99"));
+
+        let invalid = schema_history_refusal(&schema(&[2])).expect("an invalid history");
+        assert_eq!(invalid.code, "messagingctl.activation.schema-invalid");
+        assert!(invalid.message.contains("version 2"));
+    }
 }

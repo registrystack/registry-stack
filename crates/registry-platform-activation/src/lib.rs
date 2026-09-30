@@ -117,6 +117,8 @@ fn valid_identifier(value: &str) -> bool {
 pub enum Error {
     #[error("the activation layout contains an invalid PostgreSQL identifier")]
     InvalidLayout,
+    #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
+    UnsupportedPostgres,
     #[error("the activation ledger is corrupt")]
     Corrupt,
     #[error(transparent)]
@@ -276,11 +278,23 @@ pub async fn schema_state(
 }
 
 /// Whether a relation visible through this connection's search path exists.
+/// Refuses PostgreSQL older than 17 before reading an activation or migration ledger.
 pub async fn relation_exists(client: &impl GenericClient, relation: &str) -> Result<bool, Error> {
-    Ok(client
-        .query_one("SELECT to_regclass($1) IS NOT NULL", &[&relation])
-        .await?
-        .get(0))
+    let row = client
+        .query_one(
+            "SELECT current_setting('server_version_num')::integer, to_regclass($1) IS NOT NULL",
+            &[&relation],
+        )
+        .await?;
+    verify_postgres_version(row.get(0))?;
+    Ok(row.get(1))
+}
+
+fn verify_postgres_version(version_num: i32) -> Result<(), Error> {
+    if version_num < 170_000 {
+        return Err(Error::UnsupportedPostgres);
+    }
+    Ok(())
 }
 
 /// Read the latest activation row, if the database has been activated.
@@ -902,6 +916,19 @@ pub async fn grant_runtime_role(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn postgres_version_floor_refuses_16_and_accepts_17_or_newer() {
+        for version in [150_000, 160_999, 169_999] {
+            assert!(matches!(
+                verify_postgres_version(version),
+                Err(Error::UnsupportedPostgres)
+            ));
+        }
+        for version in [170_000, 170_011, 180_000] {
+            assert!(verify_postgres_version(version).is_ok());
+        }
+    }
 
     #[test]
     fn layouts_accept_only_unquoted_postgres_identifiers() {

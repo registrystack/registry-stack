@@ -30,21 +30,21 @@ const ACTIVATION_MIGRATION: &str = include_str!("../migrations/0002_activations.
 pub(crate) const MIGRATIONS: [(i64, &str); 2] =
     [(1, MESSAGING_MIGRATION), (2, ACTIVATION_MIGRATION)];
 
-/// Serializes operator-run migrations on one session lock. A second migrator
-/// waits here instead of racing the migrations table's primary key. The key
-/// spells the ASCII bytes of "messagin".
+/// Shared advisory-lock key for schema migration and package activation. Its
+/// ASCII bytes spell "messagin".
 pub(crate) const MIGRATION_LOCK_KEY: i64 = 0x6d65_7373_6167_696e;
 
-/// Serializes package activations on one transaction lock, so two operators
-/// applying the same package record it once. The key spells "msgledgr".
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
+    UnsupportedPostgres,
     #[error("the Messaging database configuration is invalid")]
     Configuration,
     #[error("the Messaging database secret could not be resolved: {0}")]
     SecretConfiguration(String),
     #[error("the Messaging database schema is not the version this runtime expects")]
     SchemaVersion,
+    #[cfg(feature = "postgres-test")]
     #[error("the Messaging migration lock was not held when it was released")]
     MigrationLock,
     // Both carry the driver's own account of what went wrong. Neither the
@@ -172,6 +172,7 @@ impl PostgresStore {
 
     /// Apply every schema version not yet applied, under the migration lock.
     /// Running it again, or twice at once, applies nothing twice.
+    #[cfg(feature = "postgres-test")]
     pub async fn migrate(&self) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         client
@@ -253,6 +254,7 @@ impl PostgresStore {
     }
 }
 
+#[cfg(feature = "postgres-test")]
 async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), StoreError> {
     client
         .batch_execute(
@@ -306,7 +308,8 @@ pub(crate) async fn migrate_in(
         .collect::<Vec<_>>();
     if applied
         .iter()
-        .any(|version| !MIGRATIONS.iter().any(|(known, _)| known == version))
+        .enumerate()
+        .any(|(index, version)| MIGRATIONS.get(index).map(|(known, _)| known) != Some(version))
     {
         return Err(StoreError::SchemaVersion);
     }

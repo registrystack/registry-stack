@@ -1,5 +1,7 @@
 # Registry Scheduling
 
+PostgreSQL 17 or newer is required for package activation and runtime startup.
+
 Registry Scheduling gives a registry a coordinated booking surface: published
 openings, exact-time offerings over interchangeable resource pools, published
 arrival windows with channel subquotas, holds, and accountable bookings, over

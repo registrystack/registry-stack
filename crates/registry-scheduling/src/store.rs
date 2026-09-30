@@ -138,6 +138,8 @@ fn system_clock() -> SharedClock {
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
+    UnsupportedPostgres,
     #[error("the Scheduling database configuration is invalid")]
     Configuration,
     #[error("the Scheduling database secret could not be resolved: {0}")]

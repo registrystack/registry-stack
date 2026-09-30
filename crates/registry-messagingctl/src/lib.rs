@@ -496,6 +496,10 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "database_activation",
             "Use the Messaging release that owns the recorded schema version.",
         ),
+        "messagingctl.activation.schema-invalid" => (
+            "database_activation",
+            "Restore a database whose migration history is an ordered prefix of this Messaging release.",
+        ),
         "messagingctl.activation.invalid-reference" => (
             "command_arguments",
             "Correct the operator or backup reference bounds, then retry.",

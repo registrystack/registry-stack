@@ -2,7 +2,8 @@
 
 `registry-platform-activation` is the single PostgreSQL implementation of the
 package activation ledger and its runtime-role boundary for the stateful
-Registry Stack products.
+Registry Stack products. Activation and runtime checks require PostgreSQL 17
+or newer, matching the maintained database support floor.
 
 The crate owns the product-neutral parts of activation: ledger reads and
 appends, deployment database identity checks, active-package startup checks,
