@@ -102,7 +102,8 @@ pub(super) struct FileRule {
     pub prefix: &'static str,
     pub suffix: &'static str,
     pub relative_to_document: bool,
-    /// Only governed authoring YAML/JSON is loaded. Keys/scripts/fonts remain navigation targets.
+    /// Whether the target is loaded as an authoring document. Only YAML and JSON targets are
+    /// loaded, whatever this says; keys, scripts, and fonts remain navigation targets.
     pub index_target: bool,
 }
 

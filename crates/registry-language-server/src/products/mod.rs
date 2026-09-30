@@ -50,6 +50,15 @@ fn read_text(root: &Path, path: &Path) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// Governed authoring documents are YAML or JSON. A file with any other extension, whether a
+/// rule follows it or a pattern scans it, is never read: keys, scripts, and fonts named from a
+/// project stay navigation targets.
+fn is_authoring_document(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension, "yaml" | "yml" | "json"))
+}
+
 fn safe_relative(value: &str) -> Option<PathBuf> {
     let path = Path::new(value);
     if value.is_empty()
@@ -209,7 +218,8 @@ pub(crate) fn is_project_document(
     let Some(entry) = entry_path(root, product) else {
         return false;
     };
-    is_safe_authored_file(root, path)
+    is_authoring_document(path)
+        && is_safe_authored_file(root, path)
         && (documents.contains_key(path)
             || document_rules(root, path, &entry, product)
                 .iter()
@@ -467,7 +477,7 @@ pub(crate) fn load_documents(
     let mut seen = BTreeSet::new();
     let mut bytes = 0usize;
     while let Some(path) = pending.pop_first() {
-        if !seen.insert(path.clone()) {
+        if !is_authoring_document(&path) || !seen.insert(path.clone()) {
             continue;
         }
         if seen.len() > MAX_INDEXED_PROJECT_DOCUMENTS
@@ -819,5 +829,86 @@ fn messaging_template_files(
                 },
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn project(files: &[(&str, &str)]) -> TempDir {
+        let directory = TempDir::new().unwrap();
+        for (relative, contents) in files {
+            let path = directory.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        directory
+    }
+
+    fn loaded(directory: &TempDir, product: ProductKind) -> BTreeSet<String> {
+        let root = directory.path().canonicalize().unwrap();
+        load_documents(&root, product, &BTreeMap::new())
+            .unwrap()
+            .documents
+            .into_keys()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn casework_follows_only_authoring_source_descriptions() {
+        for (description, followed) in [
+            ("keys/signing.key", false),
+            ("keys/signing.pem", false),
+            ("imports/source-description", false),
+            ("imports/source-description.yaml", true),
+            ("imports/source-description.yml", true),
+            ("imports/source-description.json", true),
+        ] {
+            let directory = project(&[
+                (
+                    "casework.yaml",
+                    &format!(
+                        "kind: CaseworkProject\n\
+                         sources: [{{id: regional, description: {description}}}]\n"
+                    ),
+                ),
+                (description, "sourceId: regional\n"),
+            ]);
+            assert_eq!(
+                loaded(&directory, ProductKind::Casework).contains(description),
+                followed,
+                "{description}"
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_reads_only_authoring_mappings() {
+        let directory = project(&[
+            (
+                "origins.yaml",
+                "schemaVersion: registry-discovery/origins/v1alpha1\n",
+            ),
+            ("mappings/adult.yaml", "mappingId: adult\n"),
+            ("mappings/other.yml", "mappingId: other\n"),
+            ("mappings/signing.key", "mappingId: key\n"),
+            ("mappings/README", "mappingId: readme\n"),
+        ]);
+        assert_eq!(
+            loaded(&directory, ProductKind::Discovery),
+            BTreeSet::from([
+                "origins.yaml".to_owned(),
+                "mappings/adult.yaml".to_owned(),
+                "mappings/other.yml".to_owned(),
+            ])
+        );
     }
 }

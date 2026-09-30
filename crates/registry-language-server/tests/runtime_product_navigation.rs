@@ -480,6 +480,42 @@ fn plural_casework_source_descriptions_resolve_each_owned_request() {
     }
 }
 
+// A source description is authored YAML or JSON. A description that names any other file, such
+// as a signing key, must not make the server read it, even when its bytes parse as YAML.
+#[test]
+fn casework_source_descriptions_follow_only_authoring_documents() {
+    const SOURCE: &str = "sourceId: regional\nrequest: {requestEntity: correction}\n";
+    for (description, followed) in [
+        ("keys/signing.key", false),
+        ("keys/signing.pem", false),
+        ("imports/source-description", false),
+        ("imports/source-description.yaml", true),
+        ("imports/source-description.yml", true),
+        ("imports/source-description.json", true),
+    ] {
+        let project = Project::new(&[
+            file(
+                "casework.yaml",
+                &format!(
+                    "kind: CaseworkProject\n\
+                     queues: [{{id: triage}}]\n\
+                     sources:\n  \
+                     - id: regional\n    \
+                     description: {description}\n    \
+                     requests: [{{entity: <|entity-use|>correction, queue: triage}}]\n"
+                ),
+            ),
+            file(description, SOURCE),
+        ]);
+        let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
+        let definitions = index.definitions_at(
+            &project.path("casework.yaml"),
+            project.cursor("casework.yaml", "entity-use"),
+        );
+        assert_eq!(definitions.len(), usize::from(followed), "{description}");
+    }
+}
+
 #[test]
 fn scheduling_reopen_and_messaging_bodies_use_owned_document_contracts() {
     let project=Project::new(&[
