@@ -159,7 +159,7 @@ Once the copy serves, work through these:
   that key accepts each one once. Their attempt count is rewound with the rest of the row, so the
   audit records the same attempt number for each of them twice. Deliveries completed before the backup point are
   not sent again, and delivered events are not recalled. Inspect what is pending with
-  `bregctl webhook list`; see [Inspect and replay deliveries](../../breg-webhooks/#inspect-and-replay-deliveries).
+  `bregctl webhook list`; see [Inspect and recover deliveries](../../breg-webhooks/#inspect-and-recover-deliveries).
 - **The audit is not rewound.** The runtime audit file and its companion keep every entry the
   original wrote after the backup point, including the commits and deliveries the restore lost, and
   the adopted copy appends to the same files. A delivery pending at the backup point is therefore

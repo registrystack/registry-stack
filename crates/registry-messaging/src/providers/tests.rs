@@ -469,35 +469,50 @@ async fn an_activated_provider_resolving_to_loopback_is_refused_before_connectin
     let mut relay = smtp_connection(&stub);
     relay["host"] = json!("localhost");
     relay["tls"] = json!("starttls");
-    let gateway = http_connection_to(
-        &format!("https://localhost:{port}/v1/"),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/gateway-token"}),
-    );
-    let project = project(
-        json!({"mail-relay": relay, "sms-gateway": gateway}),
-        |_| {},
-        &[
-            ("callback-token", CALLBACK_TOKEN),
-            ("gateway-token", b"gateway-token-value"),
-        ],
-    );
+    let secrets: &[(&str, &[u8])] = &[
+        ("callback-token", CALLBACK_TOKEN),
+        ("gateway-token", b"gateway-token-value"),
+    ];
+    let relay_project = project(json!({"mail-relay": relay}), |_| {}, secrets);
     let mut transports = Transports::new();
     activate_providers(
-        &project.config,
-        &project.loaded,
-        &project.secrets,
+        &relay_project.config,
+        &relay_project.loaded,
+        &relay_project.secrets,
         &mut transports,
     )
     .expect("providers activate");
 
-    // Both kinds refuse the resolved loopback address before any byte
-    // leaves, and the attempt is not sent, so the worker may retry it.
-    let not_sent = SendOutcome::Transient { retry_after: None };
+    // The smtp provider refuses the resolved loopback address before any
+    // byte leaves, and the attempt is not sent, so the worker may retry it.
     let relay = transports.get("mail-relay").expect("smtp transport");
-    assert_eq!(relay.send(&email()).await, not_sent);
+    assert_eq!(
+        relay.send(&email()).await,
+        SendOutcome::Transient { retry_after: None }
+    );
     assert_eq!(stub.recorded().connections, 0);
-    let gateway = transports.get("sms-gateway").expect("http transport");
-    assert_eq!(gateway.send(&sms()).await, not_sent);
+
+    // An http provider cannot name the reserved localhost namespace in a
+    // production profile at all: the fixed destination refuses it before
+    // activation, so no send is ever attempted.
+    let gateway = http_connection_to(
+        &format!("https://localhost:{port}/v1/"),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/gateway-token"}),
+    );
+    let gateway_project = project(json!({"sms-gateway": gateway}), |_| {}, secrets);
+    let refused = activate_providers(
+        &gateway_project.config,
+        &gateway_project.loaded,
+        &gateway_project.secrets,
+        &mut Transports::new(),
+    )
+    .expect_err("a localhost http provider does not activate");
+    assert_eq!(refused.provider, "sms-gateway");
+    assert!(
+        refused.reason.contains("localhost namespace"),
+        "{}",
+        refused.reason
+    );
     assert_eq!(accepted.load(Ordering::SeqCst), 0, "no connection was made");
 }
 

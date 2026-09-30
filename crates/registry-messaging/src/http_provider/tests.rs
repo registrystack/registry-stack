@@ -1080,27 +1080,27 @@ fn production(base_url: &str) -> HttpProviderSettings {
 }
 
 #[tokio::test]
-async fn a_production_provider_name_resolving_to_loopback_is_refused_before_connecting() {
+async fn a_production_provider_named_in_the_localhost_namespace_is_refused_at_activation() {
     let (port, accepted) = counting_listener().await;
     let secrets = secrets(&[("token", TOKEN)]);
-    let provider = activate(
-        &production(&format!("https://localhost:{port}/v1/")),
-        &plain_package(false),
-        scripts(JSON_PREPARE, None),
-        &secrets,
-    );
-    let content = content();
-
-    let sent = provider.send(&message(&content)).await;
-
-    assert_eq!(sent.outcome, SendOutcome::Transient { retry_after: None });
-    let Some(HttpFailure::Destination(error)) = sent.detail.failure else {
-        panic!("expected a destination refusal, got {:?}", sent.detail);
-    };
-    assert_eq!(
-        error.delivery_certainty(),
-        DestinationDeliveryCertainty::NotSent
-    );
+    for base_url in [
+        format!("https://localhost:{port}/v1/"),
+        format!("https://gateway.localhost.:{port}/v1/"),
+    ] {
+        let Err(error) = production(&base_url).activate(
+            "gateway",
+            &plain_package(false),
+            scripts(JSON_PREPARE, None),
+            None,
+            &secrets.resolver,
+        ) else {
+            panic!("{base_url} must not activate");
+        };
+        assert!(
+            error.to_string().contains("localhost namespace"),
+            "{base_url}: {error}"
+        );
+    }
     assert_eq!(accepted.load(Ordering::SeqCst), 0, "no connection was made");
 }
 
