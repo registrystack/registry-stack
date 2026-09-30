@@ -326,6 +326,10 @@ def validate_npm_packages(
                     raise ClientRegistryError(
                         f"root npm package {path.name} unexpectedly exposes the casework facade"
                     )
+                if any(name.startswith("package/messaging/") for name in names):
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} unexpectedly exposes the messaging facade"
+                    )
             if metadata.get("optionalDependencies") != expected_optional:
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"
@@ -385,6 +389,10 @@ def validate_wheels(
             ):
                 raise ClientRegistryError(
                     f"Python wheel {path.name} unexpectedly contains the casework namespace"
+                )
+            if any(name.startswith("registry_client/messaging/") for name in names):
+                raise ClientRegistryError(
+                    f"Python wheel {path.name} unexpectedly contains the messaging namespace"
                 )
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
