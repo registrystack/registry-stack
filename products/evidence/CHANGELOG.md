@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- An `http-json` source may declare `evidence` to read one predefined
+  assertion from another Evidence deployment. The block pins one reviewed
+  audience-scoped definition that supports `signed-jws`, its independently
+  accepted public keys in `trustedJwks`, optional `revokedKeyIds`,
+  `maximumAssertionLifetimeSeconds`, and `clockSkewSeconds`. Rust draws a
+  fresh request nonce for every acquisition, sends the request with the
+  ordinary source credential, and verifies the signed answer before
+  projection; the preparation script supplies only the subjects, and
+  extraction sees only `{"values": {...}}` keyed by concept handle. The
+  source needs a fixed `POST` path ending in `/v1/evidence`, `query:
+  forbidden`, `jsonBody: required`, and no `Accept` override, and it cannot
+  declare `batch`, `unresolvedProblem`, or `forwardAccessAttribution: true`.
+  Every selector in the pinned definition must use `valueOrigin: request`:
+  the upstream authenticates this service's own source credential, so an
+  `authenticated-context` or `authenticated-grant` selector is refused at
+  configuration validation (#1774).
+
+- `evidence-oid4vci` validates the complete discovered Evidence catalog
+  against the Evidence request contract, and refuses the whole catalog when
+  any one definition fails, instead of advertising the valid remainder.
+  `CredentialCatalog::derive` now returns a `Result`. Each offered selector
+  must carry exactly the published field set with values of the published
+  type and bounds, checked before an offer secret or exchange state exists,
+  so an unusable request is refused before a wallet spends its single-use
+  code (#1773).
+
+- `registry-evidence-client` publishes its offline request contract for an
+  integrator that owns its HTTP transport:
+  `EvidenceDefinitionsDocument::validate_for_request`,
+  `DefinitionSelector::accepts_request_values`,
+  `PreparedEvidenceRequest::prepare`,
+  `PreparedEvidenceRequest::claim_request_json`, which claims the single
+  send, and `RetainedEvidenceVerification::from_prepared`. None of them
+  performs I/O.
+
+- BREAKING: a requirement's `subjectRoles[].role` is limited to 64 bytes
+  instead of 128, in the bundle schema and at startup, to match the Evidence
+  request contract. A bundle with a longer role now fails startup; shorten
+  the role and every grant, request, and derivation input that names it.
+
 - Publish an `evidence-oid4vci` Docker image from v0.38.0 alongside the
   existing release binary (#1760).
 
