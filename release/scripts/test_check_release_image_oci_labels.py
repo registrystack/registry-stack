@@ -648,7 +648,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             build_calls = [
                 call for call in read_calls(docker_log) if call[:2] == ["buildx", "build"]
             ]
-            self.assertEqual(20, len(build_calls))
+            self.assertEqual(24, len(build_calls))
             dockerfiles = []
             for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
@@ -675,6 +675,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 {
                     str(ROOT / "release/docker/Dockerfile.discovery"),
                     str(ROOT / "release/docker/Dockerfile.evidence"),
+                    str(ROOT / "release/docker/Dockerfile.evidence-oid4vci"),
+                    str(ROOT / "release/docker/Dockerfile.registry-render"),
                     str(ROOT / "release/docker/Dockerfile.breg"),
                     str(ROOT / "release/docker/Dockerfile.breg-mcp"),
                     str(ROOT / "release/docker/Dockerfile.breg-review"),
@@ -694,6 +696,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             for name in (
                 "discovery",
                 "evidence",
+                "evidence-oid4vci",
+                "registry-render",
                 "breg",
                 "breg-mcp",
                 "breg-review",
@@ -721,6 +725,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                             (
                                 "relay",
                                 "evidence",
+                                "evidence-oid4vci",
+                                "registry-render",
                                 "discovery",
                                 "breg",
                                 "breg-mcp",
@@ -750,6 +756,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 {
                     "correct-discovery-first",
                     "correct-evidence-first",
+                    "correct-evidence-oid4vci-first",
+                    "correct-registry-render-first",
                     "correct-breg-first",
                     "correct-breg-mcp-first",
                     "correct-breg-review-first",
@@ -779,7 +787,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 for call in python_calls
                 if call and call[0].endswith("compare-release-image-layouts.py")
             ]
-            self.assertEqual(10, len(comparisons))
+            self.assertEqual(12, len(comparisons))
             self.assertEqual(1, sum("--rootfs-only" in call for call in comparisons))
 
 

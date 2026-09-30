@@ -55,10 +55,21 @@ can use either one as a source through the same fixed HTTP request it makes to a
 
 ## How it ships
 
+Choose a published `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest).
+
 Each release publishes reproducible binaries for the runtime, the `evidencectl` authoring tool,
-and the wallet delivery service, with an installer that verifies checksums before installing. Each release also publishes container images built on a distroless base with no shell,
-running as a non-root user, and records the digest of every image it promotes. Pin that digest
-rather than a movable tag.
+and the wallet delivery service, with an installer that verifies checksums before installing. It
+also publishes `ghcr.io/registrystack/evidence:<tag>`, built on Distroless `cc-debian13` with no
+shell and running as the nonroot user. The image runs `/usr/local/bin/evidence serve` with
+`/etc/registry-evidence/runtime.yaml` and uses `/var/lib/registry-evidence` as its working
+directory. Mount the runtime file, bundle, and secrets read-only, and mount the audit directory
+read-write. The release manifest records the exact promoted digest. Deploy that digest instead of
+the mutable tag.
+
+Starting with v0.38.0, an eligible published release also carries the separate
+`ghcr.io/registrystack/evidence-oid4vci:<tag>` image. Its installation and runtime paths are in
+[Configure Evidence OID4VCI delivery](../../configure/evidence-oid4vci/#install-the-adapter).
 
 The release ships no Helm chart or hosted offering. A Docker Compose file is a reasonable adapter
 around the published image, and
@@ -66,7 +77,9 @@ around the published image, and
 shows the shape: the reviewed bundle mounted unchanged, a separate runtime file and secret root,
 a persistent audit volume, and TLS in front.
 
-{/* Evidence: crates/registry-evidencectl/install.sh; release/docker/Dockerfile.evidence; release/VERIFY.md; products/evidence/README.md. */}
+{/* Evidence: crates/registry-evidencectl/install.sh; release/docker/Dockerfile.evidence;
+    release/scripts/release_roster.py, EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE;
+    release/VERIFY.md; products/evidence/README.md. */}
 
 ## What stays your job
 

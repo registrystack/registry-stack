@@ -16,6 +16,14 @@ runtime and into `caseworkctl apply`, records each activation in the
 `casework migrate` and `caseworkctl db migrate`
 (`crates/registry-casework/src/activation.rs`, `caseworkctl plan|apply|status`).
 
+`registry-platform-activation` now owns the product-neutral ledger reads and
+appends, `databaseId` and active-package comparisons, role observation,
+runtime grants, indirect-authority and default-privilege checks, and lost
+acknowledgement read-back. Casework retains its migrations, lock order,
+stranded-work and source-generation hooks, audit wording, and refusal mapping
+inside the same activation transaction. This moves implementation ownership;
+the Casework invariants and executable tests below remain the product contract.
+
 ### Threat
 
 Before the change, the runtime migrated the schema, registered source
@@ -388,3 +396,12 @@ family (review_http).
   BReg adapter ships.
 - The inbox still refuses a whole page with `work-item.proposal-changed` when
   the source's binding generation moved; only single-item reads changed.
+
+### PostgreSQL support floor
+
+Activation and startup require PostgreSQL 17 or newer. The shared activation
+boundary checks the server version before observing migration or activation
+relations, including an empty database. Older servers refuse with an upgrade
+instruction before migrations or activation writes. The shared
+`postgres_version_floor_precedes_missing_ledger_observation` database test
+covers that entry point; unit tests pin the 16/17 version boundary.

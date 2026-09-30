@@ -259,6 +259,18 @@ jobs:
             "bregctl ${REHEARSAL_VERSION}"
           IFS=. read -r release_major release_minor _release_patch \
             <<<"${REHEARSAL_VERSION}"
+          discoveryctl_in_release="$(python3 release/scripts/release_roster.py \
+            discoveryctl-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${discoveryctl_in_release}" == true ]]; then
+            test "$("dist/bin/discoveryctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+              "discoveryctl ${REHEARSAL_VERSION}"
+          fi
+          scheduling_binary_in_release="$(python3 release/scripts/release_roster.py \
+            scheduling-binary-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${scheduling_binary_in_release}" == true ]]; then
+            test "$("dist/bin/scheduling-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+              "scheduling ${REHEARSAL_VERSION}"
+          fi
           breg_services_in_release="$(python3 release/scripts/release_roster.py \
             breg-services-in-release "${REHEARSAL_VERSION}")"
           if [[ "${breg_services_in_release}" == true ]]; then
@@ -296,6 +308,32 @@ jobs:
               "messagingctl ${REHEARSAL_VERSION}"
             test "$(dist/image-bin/messagingctl --version)" = \
               "messagingctl ${REHEARSAL_VERSION}"
+          fi
+
+          render_in_release="$(python3 release/scripts/release_roster.py \
+            render-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${render_in_release}" == true ]]; then
+            render_binary="${GITHUB_WORKSPACE}/dist/bin/registry-render-v${REHEARSAL_VERSION}-linux-amd64"
+            typst_pin="$(sed -n 's/^pub const TYPST_PIN: &str = "\([^" ]*\)";$/\1/p' crates/registry-render/src/lib.rs)"
+            test -n "${typst_pin}"
+            expected_render_version="registry-render ${REHEARSAL_VERSION} (typst ${typst_pin})"
+            test "$("${render_binary}" --version)" = "${expected_render_version}"
+            test "$(dist/image-bin/registry-render --version)" = "${expected_render_version}"
+            render_project="${RUNNER_TEMP}/release-render-project"
+            render_package="${RUNNER_TEMP}/release-render-package"
+            "${render_binary}" init "${render_project}"
+            "${render_binary}" check --bundle "${render_project}"
+            "${render_binary}" package --bundle "${render_project}" --output "${render_package}"
+            "${render_binary}" compile --bundle "${render_package}" --type letter \
+              --data "${render_project}/fixtures/data.json" --issued-at 2026-01-01T00:00:00Z \
+              --strict --out "${RUNNER_TEMP}/release-render-letter.pdf"
+            test -s "${RUNNER_TEMP}/release-render-letter.pdf"
+          fi
+          oid4vci_image_in_release="$(python3 release/scripts/release_roster.py \
+            evidence-oid4vci-image-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${oid4vci_image_in_release}" == true ]]; then
+            test "$(dist/image-bin/evidence-oid4vci --version)" = \
+              "evidence-oid4vci ${REHEARSAL_VERSION}"
           fi
 
       - name: Set up Docker Buildx for advisory evidence
@@ -427,6 +465,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
+            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install exact Zig toolchain
@@ -452,6 +491,11 @@ jobs:
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg casework)
+          fi
+          messaging_in_release="$(python3 release/scripts/release_roster.py \
+            messaging-in-release "${CLIENT_VERSION}")"
+          if [[ "${messaging_in_release}" == true ]]; then
+            clients+=(messaging)
           fi
           for client in "${clients[@]}"; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
@@ -515,7 +559,7 @@ jobs:
           if [[ "${unified_client}" -eq 1 ]]; then
             client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
             platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-            for client in discovery evidence relay breg casework; do
+            for client in "${clients[@]}"; do
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
             done
@@ -545,7 +589,7 @@ jobs:
               test -z "$(find node_modules/@registrystack/client \
                 -maxdepth 1 -name '*.node' -print -quit)"
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
-                -maxdepth 1 -name '*.node' | wc -l)" -eq 5
+                -maxdepth 1 -name '*.node' | wc -l)" -eq "${#clients[@]}"
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
                 "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
               node smoke-registry-client-package.js

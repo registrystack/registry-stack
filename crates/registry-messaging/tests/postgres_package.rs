@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Database-backed package ledger tests: `messagingctl apply` previews and
-//! records a package, the runtime serves only the package the ledger names
-//! active, `package.expectedDigest` pins it, and a template version renders
-//! the same bytes across a package upgrade that adds a new version.
+//! Database-backed activation tests: `messagingctl plan` previews and
+//! `messagingctl apply` records a package, the runtime serves only the
+//! package the shared ledger names active, `package.expectedDigest` pins it,
+//! and a template version renders the same bytes across an upgrade.
 //!
 //! Every test runs in its own schema inside the database named by
 //! `MESSAGING_TEST_DATABASE_URL`. A test binary that passes because its
@@ -15,24 +15,27 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use registry_messaging::activation::{ActivationChange, ActivationError, ApplyRequest};
 use registry_messaging::config::{RuntimeConfig, RuntimeConfigError};
 use registry_messaging::package::{load_package, package_inputs, write_package_inputs};
 use registry_messaging::runtime::{
-    apply_package, migrate_from_path, serve_from_path, PackageChange, RuntimeError,
+    activation_plan, apply_activation, apply_package, migrate_from_path, serve_from_path,
+    PackageChange, RuntimeError,
 };
+use registry_messaging::store::PostgresStore;
 use registry_messaging_core::{Package, TemplatePreviewRequest};
 use registry_platform_audit::AuditDestination;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-/// The ledger lock key `apply_package` takes, the ASCII bytes of
-/// "msgledgr".
-const LEDGER_LOCK_KEY: i64 = 0x6d73_676c_6564_6772;
+/// The activation lock key, the ASCII bytes of "messagin".
+const LEDGER_LOCK_KEY: i64 = 0x6d65_7373_6167_696e;
 
 /// One isolated schema and the secret reference that reaches it.
 struct Isolated {
     schema: String,
     reference: String,
+    migration_reference: String,
     admin: tokio_postgres::Client,
 }
 
@@ -55,8 +58,53 @@ async fn isolated_schema() -> Isolated {
     Isolated {
         schema,
         reference: format!("secret:env/{secret_name}"),
+        migration_reference: format!("secret:env/{secret_name}"),
         admin,
     }
+}
+
+async fn isolated_split_schema() -> (Isolated, String, String) {
+    let base = std::env::var("MESSAGING_TEST_DATABASE_URL")
+        .expect("MESSAGING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let suffix = Uuid::new_v4().simple().to_string();
+    let schema = format!("messaging_{suffix}");
+    let migration_role = format!("msg_migration_{suffix}");
+    let runtime_role = format!("msg_runtime_{suffix}");
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .expect("connect the messaging test database");
+    tokio::spawn(async move { connection.await.expect("the messaging admin connection") });
+    admin
+        .batch_execute(&format!(
+            "CREATE ROLE {migration_role} LOGIN PASSWORD 'messaging-test'; \
+         CREATE ROLE {runtime_role} LOGIN PASSWORD 'messaging-test'; \
+         CREATE SCHEMA {schema} AUTHORIZATION {migration_role}"
+        ))
+        .await
+        .expect("split Messaging roles and schema");
+    let scoped = |role: &str| {
+        let mut url = url::Url::parse(&base).expect("the test database URL");
+        url.set_username(role).expect("a role in the URL");
+        url.set_password(Some("messaging-test"))
+            .expect("a password in the URL");
+        url.query_pairs_mut()
+            .append_pair("options", &format!("-csearch_path={schema}"));
+        url.to_string()
+    };
+    let runtime_name = format!("MESSAGING_RUNTIME_{}", suffix.to_ascii_uppercase());
+    let migration_name = format!("MESSAGING_MIGRATION_{}", suffix.to_ascii_uppercase());
+    std::env::set_var(&runtime_name, scoped(&runtime_role));
+    std::env::set_var(&migration_name, scoped(&migration_role));
+    (
+        Isolated {
+            schema,
+            reference: format!("secret:env/{runtime_name}"),
+            migration_reference: format!("secret:env/{migration_name}"),
+            admin,
+        },
+        migration_role,
+        runtime_role,
+    )
 }
 
 impl Isolated {
@@ -65,7 +113,7 @@ impl Isolated {
         self.admin
             .query(
                 &format!(
-                    "SELECT package_digest FROM {}.messaging_package_ledger ORDER BY sequence",
+                    "SELECT package_digest FROM {}.messaging_activations ORDER BY apply_order",
                     self.schema
                 ),
                 &[],
@@ -112,6 +160,7 @@ fn copy_tree(from: &Path, to: &Path) {
 struct Deployment {
     root: tempfile::TempDir,
     reference: String,
+    migration_reference: String,
     package_generation: Cell<u32>,
 }
 
@@ -133,6 +182,7 @@ impl Deployment {
         let deployment = Self {
             root,
             reference: isolated.reference.clone(),
+            migration_reference: isolated.migration_reference.clone(),
             package_generation: Cell::new(0),
         };
         deployment.install_project();
@@ -175,12 +225,13 @@ impl Deployment {
         let runtime = json!({
             "apiVersion": registry_messaging_core::MESSAGING_RUNTIME_API_VERSION,
             "kind": registry_messaging_core::MESSAGING_RUNTIME_KIND,
+        "identity": {"databaseId": "messaging-test"},
             "package": package,
             "listener": {"bind": free_port().to_string(), "tlsTermination": "development-loopback"},
             "secretProviders": {"environment": {}},
             "database": {
                 "runtimeUrlRef": self.reference,
-                "migrationUrlRef": self.reference,
+                "migrationUrlRef": self.migration_reference,
                 "testOnlyPlaintext": true
             },
             "authentication": {"oidc": {
@@ -275,7 +326,7 @@ async fn migrated(isolated: &Isolated) -> Deployment {
     let deployment = Deployment::new(isolated);
     migrate_from_path(deployment.runtime_path())
         .await
-        .expect("messaging migrate");
+        .expect("the test schema migrations");
     deployment
 }
 
@@ -310,18 +361,17 @@ async fn startup_opens_the_audit_writer_before_serving() {
 }
 
 #[tokio::test]
-async fn apply_previews_by_default_records_once_and_is_idempotent() {
+async fn plan_is_read_only_and_apply_records_once_and_is_idempotent() {
     let isolated = isolated_schema().await;
     let deployment = migrated(&isolated).await;
     let digest = deployment.loaded().digest().to_owned();
 
-    let preview = apply_package(&deployment.config(), false)
+    let preview = activation_plan(&deployment.config())
         .await
-        .expect("apply preview");
+        .expect("activation plan");
     assert_eq!(preview.package_digest, digest);
     assert_eq!(preview.active_digest, None);
-    assert_eq!(preview.change, PackageChange::Activate);
-    assert!(!preview.applied);
+    assert_eq!(preview.change, ActivationChange::Activate);
     assert!(isolated.ledger().await.is_empty());
     let operator_audit = match deployment
         .config()
@@ -382,8 +432,87 @@ async fn apply_previews_by_default_records_once_and_is_idempotent() {
 }
 
 #[tokio::test]
-async fn package_apply_preview_ignores_a_refused_audit_destination_and_apply_refuses_before_effect()
-{
+async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal() {
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    isolated
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO {}.messaging_schema_migrations(version,applied_at) VALUES(99,now())",
+                isolated.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("a schema version from a future release");
+
+    let preview = activation_plan(&deployment.config())
+        .await
+        .expect("the future schema has an actionable plan refusal");
+    assert_eq!(preview.refusals.len(), 1);
+    assert_eq!(
+        preview.refusals[0].code,
+        "messagingctl.activation.schema-newer"
+    );
+    assert!(preview.refusals[0].message.contains("version 99"));
+
+    let config = deployment.config();
+    let refused = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect_err("apply refuses a future schema");
+    match refused {
+        RuntimeError::Activation(ActivationError::Refused(refusals)) => {
+            assert_eq!(refusals.len(), 1);
+            assert_eq!(refusals[0].code, "messagingctl.activation.schema-newer");
+        }
+        other => panic!("expected a schema refusal, got {other}"),
+    }
+    assert!(isolated.ledger().await.is_empty());
+
+    let versions: Vec<i64> = isolated
+        .admin
+        .query(
+            &format!(
+                "SELECT version FROM {}.messaging_schema_migrations ORDER BY version",
+                isolated.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the unchanged schema history")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(versions, [1, 2, 99]);
+
+    let operator_audit = match config
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    let entries: Vec<Value> = std::fs::read_to_string(operator_audit)
+        .expect("the operator audit destination")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["record"]["outcome"], "refused");
+    assert_eq!(
+        entries[1]["record"]["refusals"],
+        json!(["messagingctl.activation.schema-newer"])
+    );
+}
+
+#[tokio::test]
+async fn package_plan_ignores_a_refused_audit_destination_and_apply_refuses_before_effect() {
     let isolated = isolated_schema().await;
     let deployment = migrated(&isolated).await;
     let blocked_parent = deployment.root.path().join("audit-parent-is-a-file");
@@ -391,11 +520,10 @@ async fn package_apply_preview_ignores_a_refused_audit_destination_and_apply_ref
     let mut config = deployment.config();
     config.audit.path = Some(blocked_parent.join("audit.jsonl"));
 
-    let preview = apply_package(&config, false)
+    let preview = activation_plan(&config)
         .await
         .expect("a preview does not open the audit destination");
-    assert_eq!(preview.change, PackageChange::Activate);
-    assert!(!preview.applied);
+    assert_eq!(preview.change, ActivationChange::Activate);
     assert!(isolated.ledger().await.is_empty());
 
     let refused = apply_package(&config, true)
@@ -439,15 +567,16 @@ async fn apply_reports_the_active_digest_it_read_under_the_ledger_lock() {
         .admin
         .batch_execute(&format!(
             "BEGIN; SELECT pg_advisory_xact_lock({LEDGER_LOCK_KEY}); \
-             INSERT INTO {}.messaging_package_ledger (package_digest, runtime_version, activated_at) \
-             VALUES ('{concurrent}', 'test', now())",
+             INSERT INTO {}.messaging_activations \
+               (activation_id,apply_order,package_digest,database_id,plan_kind,applied_at,role_mode) \
+             VALUES (gen_random_uuid(),1,'{concurrent}','messaging-test','initial',now(),'single')",
             isolated.schema
         ))
         .await
         .unwrap();
     let apply = tokio::spawn({
         let config = config.clone();
-        async move { apply_package(&config, true).await }
+        async move { apply_activation(&config, &ApplyRequest::default()).await }
     });
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
@@ -473,8 +602,11 @@ async fn apply_reports_the_active_digest_it_read_under_the_ledger_lock() {
     isolated.admin.batch_execute("COMMIT").await.unwrap();
 
     let applied = apply.await.unwrap().expect("apply");
-    assert!(applied.applied);
-    assert_eq!(applied.active_digest.as_deref(), Some(concurrent.as_str()));
+    assert!(applied.recorded);
+    assert_eq!(
+        applied.activation.predecessor_package_digest.as_deref(),
+        Some(concurrent.as_str())
+    );
     let operator_audit = match config
         .audit
         .destination()
@@ -492,20 +624,21 @@ async fn apply_reports_the_active_digest_it_read_under_the_ledger_lock() {
         .filter(|entry| entry["phase"] == "response")
         .collect();
     assert_eq!(finished.len(), 1);
-    assert_eq!(finished[0]["record"]["activeDigest"], concurrent.as_str());
+    assert_eq!(
+        finished[0]["record"]["predecessorPackageDigest"],
+        concurrent.as_str()
+    );
 }
 
 #[tokio::test]
 async fn the_runtime_refuses_a_package_the_ledger_does_not_name_active() {
     let isolated = isolated_schema().await;
     let deployment = migrated(&isolated).await;
-    assert!(
-        matches!(
-            deployment.serve_error().await,
-            RuntimeError::PackageNotApplied { .. }
-        ),
-        "an unapplied package is refused"
-    );
+    let unapplied = deployment.serve_error().await;
+    assert!(matches!(
+        unapplied,
+        RuntimeError::Activation(ActivationError::NotActivated)
+    ));
 
     apply_package(&deployment.config(), true)
         .await
@@ -514,13 +647,11 @@ async fn the_runtime_refuses_a_package_the_ledger_does_not_name_active() {
     deployment.add_reminder_version_two();
     let edited = deployment.loaded().digest().to_owned();
     assert_ne!(applied, edited);
-    match deployment.serve_error().await {
-        RuntimeError::PackageLedgerMismatch { active, package } => {
-            assert_eq!(active, applied);
-            assert_eq!(package, edited);
-        }
-        other => panic!("expected a ledger mismatch, got {other}"),
-    }
+    let mismatch = deployment.serve_error().await;
+    assert!(matches!(
+        mismatch,
+        RuntimeError::Activation(ActivationError::PackageNotActive)
+    ));
     assert!(
         !deployment
             .config()
@@ -607,4 +738,317 @@ async fn a_template_version_renders_the_same_bytes_across_a_package_upgrade() {
         .unwrap()
         .starts_with("[v2] Hello Ada"));
     assert_eq!(upgraded["parts"]["subject"], before[0]["parts"]["subject"]);
+}
+
+#[tokio::test]
+async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
+    let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
+    let deployment = Deployment::new(&isolated);
+    let config = deployment.config();
+    let applied = apply_activation(
+        &config,
+        &ApplyRequest {
+            operator_reference: Some("change-42".to_owned()),
+            backup_references: vec!["snapshot-2026-09-29".to_owned()],
+        },
+    )
+    .await
+    .expect("one transactional split-role activation");
+    assert_eq!(applied.schema_versions_applied, [1, 2]);
+    assert!(applied.recorded);
+    assert_eq!(applied.activation.database_id, "messaging-test");
+    assert_eq!(applied.activation.role_mode.as_str(), "split");
+    assert!(applied
+        .activation
+        .operator_reference_hash
+        .as_deref()
+        .is_some_and(|value| value.starts_with("hmac-sha256:")));
+    assert_eq!(
+        applied.activation.backup_references,
+        ["snapshot-2026-09-29"]
+    );
+
+    let privilege = isolated.admin.query_one(
+        &format!(
+            "SELECT has_table_privilege('{runtime_role}', '{schema}.messaging_activations', 'SELECT'), \
+                    has_table_privilege('{runtime_role}', '{schema}.messaging_activations', 'INSERT'), \
+                    has_table_privilege('{runtime_role}', '{schema}.messaging_schema_migrations', 'INSERT'), \
+                    has_table_privilege('{runtime_role}', '{schema}.messaging_messages', 'INSERT')",
+            schema = isolated.schema,
+        ),
+        &[],
+    ).await.expect("runtime grants");
+    assert_eq!(
+        (
+            privilege.get(0),
+            privilege.get(1),
+            privilege.get(2),
+            privilege.get(3)
+        ),
+        (true, false, false, true)
+    );
+
+    let secrets = config.secret_resolver().expect("secrets");
+    let runtime =
+        PostgresStore::connect_runtime(&config.database, &secrets).expect("runtime store");
+    registry_messaging::activation::check_runtime(
+        &runtime,
+        config.database_id(),
+        deployment.loaded().digest(),
+    )
+    .await
+    .expect("the activated runtime boundary");
+    let wrong_identity = registry_messaging::activation::check_runtime(
+        &runtime,
+        "another-deployment",
+        deployment.loaded().digest(),
+    )
+    .await
+    .expect_err("the database identity is exact");
+    assert!(matches!(
+        wrong_identity,
+        ActivationError::DatabaseIdMismatch
+    ));
+
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "GRANT INSERT ON {schema}.messaging_activations TO {runtime_role}",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("temporarily widen the runtime role");
+    let widened = registry_messaging::activation::check_runtime(
+        &runtime,
+        config.database_id(),
+        deployment.loaded().digest(),
+    )
+    .await
+    .expect_err("a widened runtime role is refused");
+    assert!(matches!(widened, ActivationError::RoleModeWeakened));
+
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "REVOKE INSERT ON {schema}.messaging_activations FROM {runtime_role}; \
+             REVOKE INSERT ON {schema}.messaging_messages FROM {runtime_role}",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("make runtime grants stale");
+    let stale = registry_messaging::activation::check_runtime(
+        &runtime,
+        config.database_id(),
+        deployment.loaded().digest(),
+    )
+    .await
+    .expect_err("incomplete runtime grants are refused");
+    assert!(matches!(stale, ActivationError::GrantsStale));
+
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "REVOKE SELECT ON {schema}.messaging_activations FROM {runtime_role}",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("make the activation ledger unreadable");
+    let unreadable = registry_messaging::activation::status(&runtime)
+        .await
+        .expect_err("status refuses an unreadable ledger");
+    match unreadable {
+        ActivationError::Refused(refusals) => assert_eq!(
+            refusals[0].code,
+            "messagingctl.activation.ledger-unreadable"
+        ),
+        other => panic!("expected a ledger refusal, got {other}"),
+    }
+}
+
+/// Every entry the operator process wrote to its audit destination.
+fn operator_audit_entries(config: &RuntimeConfig) -> Vec<Value> {
+    let path = match config
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    std::fs::read_to_string(path)
+        .expect("the operator audit destination")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn reapplying_the_active_package_over_stale_grants_records_the_repair() {
+    let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
+    let deployment = Deployment::new(&isolated);
+    let config = deployment.config();
+    let first = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("the initial split-role activation");
+    assert!(first.recorded);
+
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "REVOKE INSERT ON {schema}.messaging_messages FROM {runtime_role}",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("make runtime grants stale");
+    let preview = activation_plan(&config)
+        .await
+        .expect("a plan over stale grants");
+    assert_eq!(preview.change, ActivationChange::Activate);
+    assert_eq!(preview.grants_current, Some(false));
+
+    let repaired = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("a reapply restores the runtime grants");
+    assert!(
+        repaired.recorded,
+        "restoring stale grants is a change the ledger records"
+    );
+    assert_ne!(
+        repaired.activation.activation_id,
+        first.activation.activation_id
+    );
+    assert_eq!(
+        repaired.activation.predecessor_package_digest.as_deref(),
+        Some(deployment.loaded().digest())
+    );
+    let digest = deployment.loaded().digest().to_owned();
+    assert_eq!(isolated.ledger().await, [digest.clone(), digest.clone()]);
+
+    let entries = operator_audit_entries(&config);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries[2]["record"]["event"],
+        "messaging.package.activation.requested"
+    );
+    assert_eq!(
+        entries[3]["record"]["event"],
+        "messaging.package.activation.finished"
+    );
+    assert_eq!(entries[3]["record"]["outcome"], "applied");
+    assert_eq!(entries[3]["record"]["applied"], true);
+    assert_eq!(
+        entries[3]["record"]["activationId"],
+        entries[2]["record"]["activationId"]
+    );
+
+    let secrets = config.secret_resolver().expect("secrets");
+    let runtime =
+        PostgresStore::connect_runtime(&config.database, &secrets).expect("runtime store");
+    registry_messaging::activation::check_runtime(&runtime, config.database_id(), &digest)
+        .await
+        .expect("the repaired runtime boundary");
+    let settled = activation_plan(&config).await.expect("a settled plan");
+    assert_eq!(settled.change, ActivationChange::None);
+}
+
+#[tokio::test]
+async fn an_unchanged_apply_answers_its_own_request_and_names_the_active_activation() {
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    let config = deployment.config();
+    let first = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("the initial activation");
+    assert!(first.recorded);
+
+    let again = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("a repeated activation");
+    assert!(!again.recorded);
+    assert_eq!(
+        again.activation.activation_id,
+        first.activation.activation_id
+    );
+
+    let entries = operator_audit_entries(&config);
+    assert_eq!(entries.len(), 4);
+    let (requested, finished) = (&entries[2], &entries[3]);
+    assert_eq!(
+        requested["record"]["event"],
+        "messaging.package.activation.requested"
+    );
+    assert_eq!(finished["record"]["outcome"], "unchanged");
+    assert_eq!(requested["correlation"], finished["correlation"]);
+    assert_eq!(
+        finished["record"]["activationId"], requested["record"]["activationId"],
+        "the response answers the activation id its request announced"
+    );
+    assert_ne!(
+        finished["record"]["activationId"],
+        json!(first.activation.activation_id)
+    );
+    assert_eq!(
+        finished["record"]["activeActivationId"],
+        json!(first.activation.activation_id)
+    );
+}
+
+#[tokio::test]
+async fn a_post_migration_role_refusal_rolls_back_the_whole_activation_and_is_audited() {
+    let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
+    isolated
+        .admin
+        .batch_execute(&format!("ALTER ROLE {runtime_role} SUPERUSER"))
+        .await
+        .expect("make the runtime role too powerful");
+    let deployment = Deployment::new(&isolated);
+    let config = deployment.config();
+
+    let refused = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect_err("activation refuses a runtime superuser after checking its effective grants");
+    match refused {
+        RuntimeError::Activation(ActivationError::Refused(refusals)) => assert_eq!(
+            refusals[0].code,
+            "messagingctl.activation.role-mode-weakened"
+        ),
+        other => panic!("expected a role-boundary refusal, got {other}"),
+    }
+
+    let row = isolated
+        .admin
+        .query_one(
+            &format!(
+                "SELECT to_regclass('{schema}.messaging_schema_migrations')::text, \
+                        to_regclass('{schema}.messaging_activations')::text",
+                schema = isolated.schema,
+            ),
+            &[],
+        )
+        .await
+        .expect("inspect the rolled-back schema");
+    assert_eq!(row.get::<_, Option<String>>(0), None);
+    assert_eq!(row.get::<_, Option<String>>(1), None);
+
+    let operator_audit = match config
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    let entries: Vec<Value> = std::fs::read_to_string(operator_audit)
+        .expect("the operator audit destination")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["record"]["outcome"], "refused");
 }

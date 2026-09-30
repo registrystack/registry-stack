@@ -162,24 +162,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // for this database. Startup serves only that package, on the database
     // the ledger recorded, and writes no activation state of its own.
     let active = store
-        .active_activation()
+        .check_active_package(&crate::store::ActivePackage {
+            database_id: config.database_id(),
+            package_digest: &package_digest,
+        })
         .await
-        .map_err(database_step("activation check"))?
-        .ok_or(StoreError::NotActivated)
         .map_err(database_step("activation check"))?;
-    if active.database_id != config.database_id() {
-        return Err(database_step("activation check")(
-            StoreError::DatabaseIdMismatch,
-        ));
-    }
-    if active.package_digest != package_digest {
-        return Err(database_step("activation check")(
-            StoreError::PackageNotActive {
-                active: active.package_digest,
-                candidate: package_digest,
-            },
-        ));
-    }
     match store
         .effective_role_mode()
         .await

@@ -44,6 +44,8 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
         discovery = f"discovery-{tag}-linux-amd64"
         core.append(discovery)
         image_bins.append(("discovery", discovery))
+    if release_roster.discoveryctl_in_release(parsed):
+        core.append(f"discoveryctl-{tag}-linux-amd64")
     breg: list[str] = []
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-linux-amd64", f"bregctl-{tag}-linux-amd64"]
@@ -92,10 +94,20 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     ]
     if parsed >= MINT_RETIREMENT_VERSION:
         common.remove(f"mint-{tag}-linux-amd64")
+    if release_roster.render_in_release(parsed):
+        common.append(f"registry-render-{tag}-linux-amd64")
     core.extend(common)
     for image_name in ("evidence", "mint", "relay"):
         if image_name != "mint" or parsed < MINT_RETIREMENT_VERSION:
             image_bins.append((image_name, f"{image_name}-{tag}-linux-amd64"))
+    if release_roster.evidence_oid4vci_image_in_release(parsed):
+        image_bins.append(
+            ("evidence-oid4vci", f"evidence-oid4vci-{tag}-linux-amd64")
+        )
+    if release_roster.render_in_release(parsed):
+        image_bins.append(
+            ("registry-render", f"registry-render-{tag}-linux-amd64")
+        )
     return {
         "core": core,
         "breg": breg,
@@ -279,18 +291,22 @@ def merge(
         | inputs["messaging"]
     )
     final_bin_roster: list[str] = []
-    if shard_rosters["core"] and shard_rosters["core"][0].startswith("discovery-"):
-        final_bin_roster.append(shard_rosters["core"][0])
+    discovery_assets = [
+        asset for asset in shard_rosters["core"]
+        if asset.startswith(("discovery-", "discoveryctl-"))
+    ]
+    final_bin_roster.extend(discovery_assets)
     final_bin_roster.extend(shard_rosters["breg"])
     final_bin_roster.extend(shard_rosters["casework"])
-    # The Scheduling runtime ships only inside its image; its operator tool is
-    # a published binary.
+    # Scheduling's operator tool predates its standalone runtime binary.
     final_bin_roster.extend(
-        asset for asset in shard_rosters["scheduling"] if asset.startswith("schedulingctl-")
+        asset for asset in shard_rosters["scheduling"]
+        if asset.startswith("schedulingctl-")
+        or release_roster.scheduling_binary_in_release(release_roster.parse_version(version))
     )
     final_bin_roster.extend(shard_rosters["messaging"])
     final_bin_roster.extend(
-        asset for asset in shard_rosters["core"] if not asset.startswith("discovery-")
+        asset for asset in shard_rosters["core"] if asset not in discovery_assets
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)

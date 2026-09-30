@@ -35,6 +35,12 @@ include_discovery=0
 if ((version_major > 0 || version_minor >= 24)); then
   include_discovery=1
 fi
+include_discoveryctl=0
+discoveryctl_in_release="$(python3 "${script_dir}/release_roster.py" \
+  discoveryctl-in-release "${version}")"
+if [[ "${discoveryctl_in_release}" == true ]]; then
+  include_discoveryctl=1
+fi
 include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
@@ -57,6 +63,12 @@ include_scheduling=0
 if ((version_major > 0 || version_minor >= 33)); then
   include_scheduling=1
 fi
+include_scheduling_binary=0
+scheduling_binary_in_release="$(python3 "${script_dir}/release_roster.py" \
+  scheduling-binary-in-release "${version}")"
+if [[ "${scheduling_binary_in_release}" == true ]]; then
+  include_scheduling_binary=1
+fi
 # From 0.36.0 schedulingctl is a release binary and each stateful product
 # image carries its operator tool beside the runtime binary.
 include_operator_tools=0
@@ -70,6 +82,23 @@ messaging_in_release="$(python3 "${script_dir}/release_roster.py" \
   messaging-in-release "${version}")"
 if [[ "${messaging_in_release}" == true ]]; then
   include_messaging=1
+fi
+# Registry Render first ships as both a release binary and image in the release
+# named by release_roster.py.
+include_render=0
+render_in_release="$(python3 "${script_dir}/release_roster.py" \
+  render-in-release "${version}")"
+if [[ "${render_in_release}" == true ]]; then
+  include_render=1
+fi
+# The Evidence OID4VCI binary predates its image. Keep publishing the binary for
+# historical versions and stage it as image input only from its first image
+# release.
+include_evidence_oid4vci_image=0
+evidence_oid4vci_image_in_release="$(python3 "${script_dir}/release_roster.py" \
+  evidence-oid4vci-image-in-release "${version}")"
+if [[ "${evidence_oid4vci_image_in_release}" == true ]]; then
+  include_evidence_oid4vci_image=1
 fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
@@ -219,6 +248,17 @@ build_payload() {
     cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence dist/image-bin/evidence
+    if [[ "${include_evidence_oid4vci_image}" -eq 1 ]]; then
+      cp target/release/evidence-oid4vci dist/image-bin/evidence-oid4vci
+    fi
+
+    if [[ "${include_render}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-render --bin registry-render
+      cp target/release/registry-render \
+        "dist/bin/registry-render-${RELEASE_TAG}-linux-amd64"
+      cp target/release/registry-render dist/image-bin/registry-render
+    fi
 
     if [[ "${include_discovery}" -eq 1 ]]; then
       cargo build --release --locked \
@@ -226,6 +266,12 @@ build_payload() {
         --bin discovery
       cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
       cp target/release/discovery dist/image-bin/discovery
+    fi
+    if [[ "${include_discoveryctl}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-discoveryctl --bin discoveryctl
+      cp target/release/discoveryctl \
+        "dist/bin/discoveryctl-${RELEASE_TAG}-linux-amd64"
     fi
   fi
 
@@ -271,7 +317,7 @@ build_payload() {
     cargo build --release --locked \
       -p registry-scheduling --bin scheduling
     cp target/release/scheduling dist/image-bin/scheduling
-    if [[ "${group}" == scheduling ]]; then
+    if [[ "${group}" == scheduling || "${include_scheduling_binary}" -eq 1 ]]; then
       cp target/release/scheduling \
         "dist/bin/scheduling-${RELEASE_TAG}-linux-amd64"
     fi
@@ -402,12 +448,16 @@ docker run --rm \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \
   --env RELEASE_INCLUDE_DISCOVERY="${include_discovery}" \
+  --env RELEASE_INCLUDE_DISCOVERYCTL="${include_discoveryctl}" \
   --env RELEASE_INCLUDE_BREG="${include_breg}" \
   --env RELEASE_INCLUDE_BREG_SERVICES="${include_breg_services}" \
   --env RELEASE_INCLUDE_CASEWORK="${include_casework}" \
   --env RELEASE_INCLUDE_SCHEDULING="${include_scheduling}" \
+  --env RELEASE_INCLUDE_SCHEDULING_BINARY="${include_scheduling_binary}" \
   --env RELEASE_INCLUDE_OPERATOR_TOOLS="${include_operator_tools}" \
   --env RELEASE_INCLUDE_MESSAGING="${include_messaging}" \
+  --env RELEASE_INCLUDE_RENDER="${include_render}" \
+  --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -438,6 +488,9 @@ if [[ ("${group}" == all || "${group}" == core) && "${include_discovery}" -eq 1 
   bin_assets+=("discovery-${tag}-linux-amd64")
   image_bin_binaries+=(discovery)
 fi
+if [[ ("${group}" == all || "${group}" == core) && "${include_discoveryctl}" -eq 1 ]]; then
+  bin_assets+=("discoveryctl-${tag}-linux-amd64")
+fi
 if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; then
   bin_assets+=(
     "breg-${tag}-linux-amd64"
@@ -465,7 +518,7 @@ if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq
     image_bin_binaries+=(caseworkctl)
   fi
 fi
-if [[ "${group}" == scheduling && "${include_scheduling}" -eq 1 ]]; then
+if [[ ("${group}" == scheduling || ("${group}" == all && "${include_scheduling_binary}" -eq 1)) && "${include_scheduling}" -eq 1 ]]; then
   bin_assets+=("scheduling-${tag}-linux-amd64")
 fi
 if [[ ("${group}" == all || "${group}" == scheduling) && "${include_operator_tools}" -eq 1 ]]; then
@@ -497,6 +550,13 @@ if [[ "${group}" == all || "${group}" == core ]]; then
     "relayctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(evidence relay)
+  if [[ "${include_evidence_oid4vci_image}" -eq 1 ]]; then
+    image_bin_binaries+=(evidence-oid4vci)
+  fi
+  if [[ "${include_render}" -eq 1 ]]; then
+    bin_assets+=("registry-render-${tag}-linux-amd64")
+    image_bin_binaries+=(registry-render)
+  fi
 fi
 
 for asset in "${bin_assets[@]}"; do

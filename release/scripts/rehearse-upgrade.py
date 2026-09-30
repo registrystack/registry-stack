@@ -1678,7 +1678,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
 
 
 # ---------------------------------------------------------------------------
-# Messaging: migrate, apply the starter, schedule and cancel messages, upgrade,
+# Messaging: activate the starter, schedule and cancel messages, upgrade,
 # compare.
 
 
@@ -1726,10 +1726,6 @@ class Messaging:
             ALTER SCHEMA public OWNER TO messaging_migration;
             REVOKE ALL ON SCHEMA public FROM PUBLIC;
             GRANT USAGE ON SCHEMA public TO messaging_runtime;
-            ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
-              GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO messaging_runtime;
-            ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
-              GRANT USAGE, SELECT ON SEQUENCES TO messaging_runtime;
         """)
         write_secret(self.secrets / "runtime-database-url",
                      self.postgres.url("messaging_runtime", runtime, "messaging"))
@@ -1740,13 +1736,6 @@ class Messaging:
         write_secret(self.secrets / "jwks.json",
                      json.dumps({"keys": [self.keys.rsa_jwk(MESSAGING_KID)]}))
 
-    def grant_existing(self) -> None:
-        self.postgres.sql("messaging", """
-            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public
-              TO messaging_runtime;
-            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO messaging_runtime;
-        """)
-
     def author(self, side: Side) -> None:
         side.run("messagingctl", "init", str(self.project))
         side.run("messagingctl", "check", "--project", str(self.project))
@@ -1755,6 +1744,7 @@ class Messaging:
         dump_yaml(self.runtime, {
             "apiVersion": "registry.registrystack.org/messaging-runtime/v1alpha1",
             "kind": "MessagingRuntimeConfig",
+            "identity": {"databaseId": "messaging-upgrade-rehearsal"},
             "package": {"root": str(self.package)},
             "listener": {"bind": f"127.0.0.1:{self.port}",
                          "tlsTermination": "development-loopback",
@@ -1815,9 +1805,9 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     messaging.provision()
     messaging.author(old)
     runtime = ["--runtime-config", str(messaging.runtime)]
-    old.run("messaging", *runtime, "migrate")
-    messaging.grant_existing()
-    old.run("messagingctl", "apply", "--runtime-config", str(messaging.runtime), "--apply")
+    old.run("messagingctl", "plan", "--runtime-config", str(messaging.runtime))
+    old.run("messagingctl", "apply", "--runtime-config", str(messaging.runtime))
+    old.run("messagingctl", "status", "--runtime-config", str(messaging.runtime))
     ready = f"http://127.0.0.1:{messaging.port}/ready"
     service = Service(old, "messaging", [*runtime, "serve"], work / "messaging-old.log", ready)
     try:
@@ -1833,12 +1823,10 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
         service.stop()
     before_counts = postgres.row_counts("messaging")
 
-    new.run("messaging", *runtime, "migrate")
-    messaging.grant_existing()
     new.run("messagingctl", "check", "--runtime-config", str(messaging.runtime))
     # The ledger must still name the package on disk: a dry run that reports
     # a change means the upgrade lost the activation.
-    ledger = new.run_json("messagingctl", "--format", "json", "apply", "--runtime-config",
+    ledger = new.run_json("messagingctl", "--format", "json", "plan", "--runtime-config",
                           str(messaging.runtime))
     differences = []
     if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(

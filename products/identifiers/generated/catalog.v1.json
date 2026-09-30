@@ -3366,7 +3366,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "d814589772d9b5956b67c54aaa0e1f43f2e7869fbd75c02fb8fe5dee37b5710f",
+        "sha256": "39e0445aa4e04afa8fb237d123d3e5f5540cad0740ec4683a00812501069a419",
         "mediaType": "application/schema+json"
       }
     },

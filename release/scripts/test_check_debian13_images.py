@@ -56,6 +56,8 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             {
                 Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
+                Path("release/docker/Dockerfile.evidence-oid4vci"),
+                Path("release/docker/Dockerfile.registry-render"),
                 Path("release/docker/Dockerfile.breg"),
                 Path("release/docker/Dockerfile.breg-mcp"),
                 Path("release/docker/Dockerfile.breg-review"),
@@ -70,6 +72,8 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             {
                 Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
+                Path("release/docker/Dockerfile.evidence-oid4vci"),
+                Path("release/docker/Dockerfile.registry-render"),
                 Path("release/docker/Dockerfile.breg"),
                 Path("release/docker/Dockerfile.breg-mcp"),
                 Path("release/docker/Dockerfile.breg-review"),
@@ -421,11 +425,14 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 f"install -m 0755 /workspace/image-bin/{tool} "
                 f"/workspace/runtime-root/usr/local/bin/{tool}"
             )
-            install = (
-                f"    && if [ -e /workspace/image-bin/{tool} ]; then \\\n"
-                f"        {command}; \\\n"
-                "    fi \\\n"
-            )
+            if contract.get("tool_required"):
+                install = f"    && {command} \\\n"
+            else:
+                install = (
+                    f"    && if [ -e /workspace/image-bin/{tool} ]; then \\\n"
+                    f"        {command}; \\\n"
+                    "    fi \\\n"
+                )
             normalization = f"    && {POLICY.RUNTIME_ROOT_NORMALIZATION}\n"
             mutations = {
                 "missing": lambda text: text.replace(install, ""),
@@ -455,6 +462,40 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                             ),
                             failures,
                         )
+
+    def test_first_release_operator_tools_cannot_be_optional(self) -> None:
+        relative = Path("release/docker/Dockerfile.messaging")
+        contract = POLICY.HTTP_PROBE_DOCKERFILES[relative]
+        self.assertTrue(contract["tool_required"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+            dockerfile = root / relative
+            tool = contract["tool"]
+            command = (
+                f"install -m 0755 /workspace/image-bin/{tool} "
+                f"/workspace/runtime-root/usr/local/bin/{tool}"
+            )
+            dockerfile.write_text(
+                dockerfile.read_text(encoding="utf-8").replace(
+                    f"    && {command} \\\n",
+                    f"    && if [ -e /workspace/image-bin/{tool} ]; then \\\n"
+                    f"        {command}; \\\n"
+                    "    fi \\\n",
+                ),
+                encoding="utf-8",
+            )
+
+            failures = POLICY.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    str(relative) in failure
+                    and "must be required by every release image build" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
 
     def test_operator_tool_never_becomes_the_image_entrypoint(self) -> None:
         for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():

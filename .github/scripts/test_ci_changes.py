@@ -1322,6 +1322,40 @@ class CiChangesTest(unittest.TestCase):
                 with self.subTest(path=path, output=output):
                     self.assertTrue(outputs[output])
 
+    def test_platform_coverage_has_the_shared_activation_database(self) -> None:
+        step = next(
+            step for step in self.workflow_jobs["platform-coverage"]["steps"]
+            if step.get("name") == "Enforce platform line coverage"
+        )
+        self.assertEqual(
+            step["env"]["DISPATCH_TEST_DATABASE_URL"],
+            step["env"]["ACTIVATION_TEST_DATABASE_URL"],
+        )
+
+    def test_source_client_tutorial_includes_messaging_before_release_admission(self) -> None:
+        script = next(
+            step["run"] for step in self.workflow_jobs["evidence-tutorials"]["steps"]
+            if step.get("name") == "Assemble the client package the application tutorial imports"
+        )
+        self.assertIn("--include-messaging", script)
+        self.assertIn("--python-profile ci", script)
+
+    def test_shared_activation_selects_every_database_consumer_on_pull_requests(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-platform-activation/src/lib.rs",),
+            pull_request=True,
+        )
+        for package in (
+            "registry-platform-activation",
+            "registry-casework",
+            "registry-scheduling",
+            "registry-messaging",
+        ):
+            self.assertIn(package, outputs["rust_packages"])
+        for lane in ("casework_postgres", "scheduling_postgres", "messaging_postgres"):
+            self.assertTrue(outputs[lane], lane)
+
     def test_breg_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
         # Each page's tutorial_test frontmatter is the source of truth for
         # which tutorials the gate replays. A replayed page missing here would

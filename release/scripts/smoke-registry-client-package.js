@@ -2,7 +2,8 @@
 'use strict';
 
 const assert = require('node:assert');
-const { breg, casework, discovery, evidence, relay } = require('@registrystack/client');
+const client = require('@registrystack/client');
+const { breg, casework, discovery, evidence, relay } = client;
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
 assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
@@ -20,5 +21,12 @@ assert.ok(new relay.RelayClient({
   authorization: { static: 'placeholder-token' },
 }));
 assert.ok(new casework.CaseworkClient({ baseUrl: 'https://casework.invalid' }));
+
+// Messaging joins published packages in v0.38.0. Older release smokes retain
+// their original namespaces; source CI also exercises it before admission.
+if (Object.hasOwn(client, 'messaging')) {
+  assert.strictEqual(typeof client.messaging.MessagingClient, 'function');
+  assert.ok(new client.messaging.MessagingClient({ baseUrl: 'https://messaging.invalid' }));
+}
 
 console.log('Unified Node Registry client package smoke passed');

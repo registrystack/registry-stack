@@ -111,12 +111,13 @@ mod tests {
     fn messaging_publishes_its_runtime_and_package_commands() {
         let catalog = catalog();
         for invocation in [
-            "messaging migrate",
             "messaging serve",
             "messagingctl init",
             "messagingctl check",
             "messagingctl preview",
+            "messagingctl plan",
             "messagingctl apply",
+            "messagingctl status",
             "messagingctl messages list",
             "messagingctl messages show",
             "messagingctl messages retry",

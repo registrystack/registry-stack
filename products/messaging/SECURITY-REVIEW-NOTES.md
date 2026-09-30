@@ -114,12 +114,25 @@ parses/compiles only those buffers. Later file replacements cannot change
 rendered or executed bytes. Symbolic links, unknown files, excessive sizes,
 and excessive file counts are refused.
 
-`messaging serve` refuses to start unless the ledger's active digest equals
-the installed package. `messagingctl apply --apply` writes that product-owned
-ledger under its advisory lock, with request audit before mutation and an
-established outcome afterward. A new digest becomes served only after restart
-(MESSAGING-DEC-06). `/ready` checks the active ledger and writer health; a
-running process stops being ready when another package is activated.
+`messaging serve` reads the shared activation ledger and refuses unless its
+active database identity and digest equal the configured deployment and
+installed package. It also verifies the exact schema and effective runtime
+role. In split-role mode the runtime can read both ledgers and use product
+tables, but cannot write either ledger, own Messaging objects, create schema
+objects, or reach a migration-owned write path. `messagingctl apply` runs all
+pending migrations, grants that bounded runtime access, and appends the
+activation in one locked transaction after request audit. A failed commit is
+read back by its generated activation id and is never reported as a guessed
+failure. Apply observes the runtime role's grants before it grants them, so a
+reapply of the active package that restores stale split-role grants records a
+new activation and is audited as `applied`, never as `unchanged`. An
+`unchanged` response carries the activation id its request announced and names
+the active ledger row separately as `activeActivationId`. Operator
+references are stored and audited only as activation-scoped keyed hashes;
+backup references are bounded. A new digest becomes served only
+after restart (MESSAGING-DEC-06). `/ready` rechecks the active database
+identity, package digest, schema, effective role grants, and writer health; a
+running process stops being ready when any of those boundaries changes.
 
 Editable projects remain separate from installed packages. Repackage and
 explicitly apply a new digest before restarting. Accepted messages keep their
@@ -131,8 +144,7 @@ mounts remain refused; copy the installed package into place instead
 (MESSAGING-DEC-24).
 
 Tests: `config.rs::a_pinned_package_digest_must_equal_the_digest_of_the_package_read`,
-`runtime.rs::the_runtime_serves_only_the_package_the_ledger_names_active`,
-the `package.rs` loader tests, and the `postgres_package` suite.
+the `package.rs` loader tests, and the PostgreSQL activation and package suites.
 
 ## Listeners and metrics
 
@@ -857,3 +869,12 @@ The required AWS IAM authority, origination registration, regional availability,
 and external secret rotation remain operator responsibilities. Temporary
 credentials are loaded at activation and require replacement plus restart
 before expiry. This does not relax the caller's Messaging access profile.
+
+### PostgreSQL support floor
+
+Activation and startup require PostgreSQL 17 or newer. The shared activation
+boundary checks the server version before observing migration or activation
+relations, including an empty database. Older servers refuse with an upgrade
+instruction before migrations or activation writes. The shared
+`postgres_version_floor_precedes_missing_ledger_observation` database test
+covers that entry point; unit tests pin the 16/17 version boundary.

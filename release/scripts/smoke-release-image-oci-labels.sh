@@ -6,7 +6,7 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
-images=(relay evidence discovery breg breg-mcp breg-review casework scheduling messaging)
+images=(relay evidence evidence-oid4vci discovery registry-render breg breg-mcp breg-review casework scheduling messaging)
 # The stateful product images carry their operator tool beside the runtime.
 operator_tools=(bregctl caseworkctl schedulingctl messagingctl)
 relay_dockerfile="${repo_root}/release/docker/Dockerfile.relay"

@@ -5248,6 +5248,7 @@ dependencies = [
  "registry-casework-client",
  "registry-casework-core",
  "registry-evidence",
+ "registry-platform-activation",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
@@ -5898,6 +5899,7 @@ dependencies = [
  "rcgen",
  "registry-messaging-client",
  "registry-messaging-core",
+ "registry-platform-activation",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
@@ -6025,6 +6027,18 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "registry-platform-activation"
+version = "0.38.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]
@@ -6532,6 +6546,7 @@ dependencies = [
  "http",
  "jsonschema",
  "jsonwebtoken",
+ "registry-platform-activation",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",

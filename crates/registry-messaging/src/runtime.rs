@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Service assembly: `messaging migrate` applies the schema with the
-//! migration credential, and `messaging serve` loads the configuration and
-//! the package, checks the store and the package ledger, opens the audit
+//! Service assembly: `messaging serve` loads the configuration and
+//! the package, checks the store and shared activation ledger, opens the audit
 //! writer with its keyed-reference secret, and serves the public listener beside the optional
 //! operator-private metrics listener.
 //!
-//! The runtime serves only the package the ledger names active. A changed
-//! package on disk is refused at startup until `messagingctl apply` records
-//! it, and a recorded package takes effect when the runtime restarts.
+//! The runtime serves only the database identity and package the ledger names
+//! active, under the role boundary that activation recorded. A changed
+//! package is refused until `messagingctl apply` records it and the runtime
+//! restarts.
 //!
 //! Every step that can refuse a deployment runs before either listener
 //! binds, so a mis-provisioned deployment never answers a request.
@@ -37,10 +37,11 @@ use serde::Serialize;
 use thiserror::Error;
 use tracing_subscriber::filter::LevelFilter;
 
+use crate::activation::{self, ActivationError, ApplyRequest};
 use crate::audit::MessagingAudit;
 use crate::auth::MessagingAuthenticator;
 use crate::config::{describe_secret_failure, RetentionConfig, RuntimeConfig, RuntimeConfigError};
-use crate::dispatch::{dispatcher, Actor, MessageDispatcher, MessageSender, Transports};
+use crate::dispatch::{dispatcher, MessageDispatcher, MessageSender, Transports};
 use crate::http::{metrics_router, router, HttpState, Readiness};
 use crate::limits::{CallbackLimits, CallerLimits, CALLBACK_BURST, CALLBACK_REQUESTS_PER_MINUTE};
 use crate::messages::{MessageReader, MessageService, MessageStore};
@@ -49,7 +50,7 @@ use crate::providers::{activate_providers, ProviderActivationError};
 use crate::retention::{
     erase_expired, RetentionActor, RetentionError, RetentionReport, RetentionSweep, SWEEP_INTERVAL,
 };
-use crate::store::{LedgerWriteError, PostgresStore, StoreError};
+use crate::store::{PostgresStore, StoreError};
 
 /// The event the audit writer records when a runtime starts serving.
 const RUNTIME_STARTED_EVENT: &str = "messaging.runtime.started";
@@ -73,7 +74,6 @@ pub fn command() -> Command {
                 .required(true),
         )
         .subcommand_required(true)
-        .subcommand(Command::new("migrate").about("Apply Messaging database migrations"))
         .subcommand(Command::new("serve").about("Run the Messaging HTTP service"))
 }
 
@@ -99,7 +99,6 @@ pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("migrate") => migrate_from_path(path).await,
         Some("serve") => {
             let shutdown = shutdown_signal()?;
             serve_from_path_until(path, transports, shutdown).await
@@ -135,6 +134,7 @@ fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
     move |source| RuntimeError::Database { stage, source }
 }
 
+#[cfg(feature = "postgres-test")]
 pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let secrets = config.secret_resolver()?;
@@ -182,77 +182,22 @@ pub async fn apply_package(
 ) -> Result<PackageApply, RuntimeError> {
     let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
-    let store = PostgresStore::connect_migration(&config.database, &secrets)
-        .map_err(database_step("migration database configuration"))?;
-    store
-        .ready()
-        .await
-        .map_err(database_step("schema readiness check"))?;
-    let active_digest = store
-        .active_package_digest()
-        .await
-        .map_err(database_step("package ledger read"))?;
     let package_digest = loaded.package.digest().to_owned();
-    let change = if active_digest.as_deref() == Some(package_digest.as_str()) {
+    let runtime = PostgresStore::connect_runtime(&config.database, &secrets)
+        .map_err(database_step("runtime database configuration"))?;
+    let plan = activation::plan(&runtime, config.database_id(), &package_digest).await?;
+    let active_digest = plan.active_digest.clone();
+    let change = if plan.change == activation::ActivationChange::None {
         PackageChange::None
     } else {
         PackageChange::Activate
     };
-    let mut audit = if apply && change == PackageChange::Activate {
-        let audit = open_audit(config, &secrets, Some("messagingctl")).await?;
-        Some(
-            audit
-                .begin(serde_json::json!({
-                    "event": "messaging.package.activation.requested",
-                    "packageDigest": package_digest,
-                    "actor": Actor::OperatorTool.to_json(),
-                }))
-                .await
-                .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?,
-        )
+    let applied = if apply && change == PackageChange::Activate {
+        apply_activation(config, &ApplyRequest::default())
+            .await?
+            .recorded
     } else {
-        None
-    };
-    let (active_digest, applied) = match audit.as_mut() {
-        Some(request) => {
-            let written = match store
-                .apply_package(
-                    &package_digest,
-                    registry_platform_buildinfo::DISPLAY_VERSION,
-                )
-                .await
-            {
-                Ok(written) => written,
-                Err(LedgerWriteError::Store(source)) => {
-                    return Err(RuntimeError::Database {
-                        stage: "package ledger write",
-                        source,
-                    })
-                }
-                // The dropped request records the activation `unfinished`.
-                Err(LedgerWriteError::Commit(source)) => {
-                    return Err(RuntimeError::OutcomeUnknown {
-                        stage: "package ledger write",
-                        source: StoreError::Query(source),
-                    })
-                }
-            };
-            request
-                .respond(serde_json::json!({
-                    "event": "messaging.package.activation.finished",
-                    "packageDigest": package_digest,
-                    "activeDigest": written.predecessor,
-                    "applied": written.recorded,
-                    "actor": Actor::OperatorTool.to_json(),
-                }))
-                .await
-                .map_err(|error| RuntimeError::AuditUnconfirmed {
-                    action: "package activation",
-                    detail: error.to_string(),
-                })?;
-            (written.predecessor, written.recorded)
-        }
-        None => (active_digest, false),
+        false
     };
     Ok(PackageApply {
         package_digest,
@@ -260,6 +205,51 @@ pub async fn apply_package(
         change,
         applied,
     })
+}
+
+pub async fn activation_plan(
+    config: &RuntimeConfig,
+) -> Result<activation::ActivationPlan, RuntimeError> {
+    let loaded = config.load_package()?;
+    let secrets = config.secret_resolver()?;
+    let store = PostgresStore::connect_runtime(&config.database, &secrets)
+        .map_err(database_step("runtime database configuration"))?;
+    Ok(activation::plan(&store, config.database_id(), loaded.package.digest()).await?)
+}
+
+pub async fn activation_status(
+    config: &RuntimeConfig,
+) -> Result<activation::ActivationStatus, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = PostgresStore::connect_runtime(&config.database, &secrets)
+        .map_err(database_step("runtime database configuration"))?;
+    Ok(activation::status(&store).await?)
+}
+
+pub async fn apply_activation(
+    config: &RuntimeConfig,
+    request: &ApplyRequest,
+) -> Result<activation::ActivationApplied, RuntimeError> {
+    let loaded = config.load_package()?;
+    let secrets = config.secret_resolver()?;
+    let runtime = PostgresStore::connect_runtime(&config.database, &secrets)
+        .map_err(database_step("runtime database configuration"))?;
+    let runtime_role = runtime
+        .current_user()
+        .await
+        .map_err(database_step("runtime role read"))?;
+    let migration = PostgresStore::connect_migration(&config.database, &secrets)
+        .map_err(database_step("migration database configuration"))?;
+    let audit = open_audit(config, &secrets, Some("messagingctl")).await?;
+    Ok(activation::apply(
+        &migration,
+        &runtime_role,
+        config.database_id(),
+        loaded.package.digest(),
+        request,
+        &audit,
+    )
+    .await?)
 }
 
 /// Read-only access for `messagingctl messages list`, `show`, and action
@@ -401,15 +391,7 @@ pub async fn assemble(
     let secrets = config.secret_resolver()?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)
         .map_err(database_step("runtime database configuration"))?;
-    store
-        .ready()
-        .await
-        .map_err(database_step("schema readiness check"))?;
-    let active = store
-        .active_package_digest()
-        .await
-        .map_err(database_step("package ledger read"))?;
-    check_active_package(active.as_deref(), loaded.package.digest())?;
+    activation::check_runtime(&store, config.database_id(), loaded.package.digest()).await?;
 
     let mut transports = transports;
     let callbacks = Arc::new(activate_providers(
@@ -491,6 +473,7 @@ pub async fn assemble(
             authenticator,
             readiness: Readiness::Store {
                 store: store.clone(),
+                database_id: config.database_id().to_owned(),
                 package_digest: loaded.package.digest().to_owned(),
                 audit: Arc::clone(&audit),
             },
@@ -606,21 +589,6 @@ async fn stop_requested(mut stopped: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-/// Refuse to serve a package the ledger does not name active: none was
-/// ever applied, or the package on disk changed since the last apply.
-fn check_active_package(active: Option<&str>, package: &str) -> Result<(), RuntimeError> {
-    match active {
-        None => Err(RuntimeError::PackageNotApplied {
-            package: package.to_owned(),
-        }),
-        Some(active) if active != package => Err(RuntimeError::PackageLedgerMismatch {
-            active: active.to_owned(),
-            package: package.to_owned(),
-        }),
-        Some(_) => Ok(()),
-    }
-}
-
 /// The start record: the runtime version, the active package digest, and
 /// the retention periods this deployment enforces. It names no principal,
 /// contact, or secret.
@@ -683,18 +651,10 @@ async fn open_audit(
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    #[error(transparent)]
+    Activation(#[from] ActivationError),
     #[error("the messaging command arguments are invalid")]
     Arguments,
-    #[error(
-        "the Messaging package ledger names no active package; record package {package} with \
-         messagingctl apply before serving"
-    )]
-    PackageNotApplied { package: String },
-    #[error(
-        "the Messaging package on disk ({package}) is not the package the ledger names active \
-         ({active}); record it with messagingctl apply, then restart"
-    )]
-    PackageLedgerMismatch { active: String, package: String },
     #[error("MESSAGING_LOG must be one of error, warn, or info")]
     Logging,
     #[error(transparent)]
@@ -790,17 +750,23 @@ mod tests {
         assert!(command()
             .try_get_matches_from(["messaging", "--runtime-config", "/etc/messaging.yaml"])
             .is_err());
-        for subcommand in ["migrate", "serve"] {
-            let matches = command()
-                .try_get_matches_from([
-                    "messaging",
-                    "--runtime-config",
-                    "/etc/messaging.yaml",
-                    subcommand,
-                ])
-                .unwrap();
-            assert_eq!(matches.subcommand_name(), Some(subcommand));
-        }
+        let matches = command()
+            .try_get_matches_from([
+                "messaging",
+                "--runtime-config",
+                "/etc/messaging.yaml",
+                "serve",
+            ])
+            .unwrap();
+        assert_eq!(matches.subcommand_name(), Some("serve"));
+        assert!(command()
+            .try_get_matches_from([
+                "messaging",
+                "--runtime-config",
+                "/etc/messaging.yaml",
+                "migrate"
+            ])
+            .is_err());
         assert!(command()
             .try_get_matches_from([
                 "messaging",
@@ -855,22 +821,5 @@ mod tests {
         let written = std::fs::read_to_string(&audit).unwrap();
         assert_eq!(written.lines().count(), 1);
         assert!(written.contains(RUNTIME_STARTED_EVENT));
-    }
-
-    #[test]
-    fn the_runtime_serves_only_the_package_the_ledger_names_active() {
-        let package = format!("sha256:{}", "a".repeat(64));
-        let other = format!("sha256:{}", "b".repeat(64));
-        assert!(check_active_package(Some(&package), &package).is_ok());
-        let error = check_active_package(None, &package).unwrap_err();
-        assert!(matches!(error, RuntimeError::PackageNotApplied { .. }));
-        assert!(error.to_string().contains("messagingctl apply"));
-        let error = check_active_package(Some(&other), &package).unwrap_err();
-        assert!(matches!(error, RuntimeError::PackageLedgerMismatch { .. }));
-        let message = error.to_string();
-        assert!(
-            message.contains(&package) && message.contains(&other),
-            "{message}"
-        );
     }
 }

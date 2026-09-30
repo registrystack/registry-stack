@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add `registry-platform-activation`, the shared PostgreSQL activation ledger,
+  database identity, and runtime privilege checks used by Casework, Scheduling,
+  and Messaging. Products keep ownership of transactions, migrations, audit,
+  and package-specific activation hooks (#1731).
+
 ## v0.37.0 - 2026-09-29
 
 - Add `registry-platform-ratelimit`, a shared crate with two in-memory
