@@ -45,9 +45,12 @@ filename.
 
 The active root workflows provide two event-specific checks:
 
-- `.github/workflows/ci.yml` runs a required one-minute smoke for each target
-  when a pull request changes a platform crate, fuzz harness, or shared Cargo
-  dependency input.
+- `.github/workflows/ci.yml` runs its `platform-fuzz` job when a platform
+  crate, fuzz harness, or shared Cargo dependency input changed and the event
+  is a merge queue check, a push to `main`, the nightly schedule, or a manual
+  full dispatch. It does not run on an ordinary pull request, and the
+  `ci:full` label does not add it there: review-time platform checks are the
+  platform quality gates, and the fuzz smoke is merge and trunk assurance.
 - `.github/workflows/nightly-security.yml` runs the platform smoke as part of
   the scheduled security suite.
 
