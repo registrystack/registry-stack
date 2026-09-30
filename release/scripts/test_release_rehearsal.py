@@ -370,8 +370,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertIn("clients=(discovery evidence relay)", build)
         self.assertIn('for client in "${clients[@]}"', build)
-        self.assertIn('messaging-in-release "${CLIENT_VERSION}"', build)
-        self.assertIn("clients+=(messaging)", build)
+        # The unified client carries no Messaging namespace until Messaging
+        # joins a release.
+        self.assertNotIn("messaging", build)
         helper_call = "release/scripts/build-linux-node-client"
         self.assertIn(helper_call, build)
         for argument in (

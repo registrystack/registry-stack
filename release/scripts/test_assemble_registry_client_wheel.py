@@ -2,22 +2,20 @@
 from __future__ import annotations
 
 import csv
-import contextlib
 import importlib.util
 import io
-import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
+import unittest
 import zipfile
 from pathlib import Path
-from unittest import TestCase, main, mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework", "messaging")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
@@ -33,29 +31,16 @@ def load_module():
     return module
 
 
-class AssembleRegistryClientWheelTest(TestCase):
+class AssembleRegistryClientWheelTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "0.38.0"
-        self.facade = self.directory / "registry-stack-client-py"
-        shutil.copytree(ROOT / "crates/registry-stack-client-py", self.facade)
-        pyproject = self.facade / "pyproject.toml"
-        configured_version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
-        pyproject.write_text(
-            pyproject.read_text(encoding="utf-8").replace(
-                f'version = "{configured_version}"', f'version = "{self.version}"'
-            ),
-            encoding="utf-8",
-        )
-        facade_init = self.facade / "python/registry_client/__init__.py"
-        facade_init.write_text(
-            facade_init.read_text(encoding="utf-8").replace(
-                f'__version__ = "{configured_version}"', f'__version__ = "{self.version}"'
-            ),
-            encoding="utf-8",
-        )
+        self.version = tomllib.loads(
+            (ROOT / "crates/registry-stack-client-py/pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        )["project"]["version"]
         self.wheels: dict[str, Path] = {}
         for product in PRODUCTS:
             wheel = self.directory / (
@@ -88,8 +73,7 @@ class AssembleRegistryClientWheelTest(TestCase):
             self.wheels[product] = wheel
 
     def run_assembler(
-        self, *, version: str | None = None, include_casework: bool = False,
-        include_messaging: bool = False
+        self, *, version: str | None = None, include_casework: bool = False
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -101,25 +85,9 @@ class AssembleRegistryClientWheelTest(TestCase):
         ]
         if include_casework:
             command.append("--include-casework")
-        if include_messaging:
-            command.append("--include-messaging")
         for product, wheel in self.wheels.items():
             command.extend((f"--{product}-wheel", str(wheel)))
-        module = load_module()
-        module.FACADE = self.facade
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        argv = [str(SCRIPT), *command[2:]]
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(
-            stdout
-        ), contextlib.redirect_stderr(stderr):
-            try:
-                returncode = module.main()
-            except SystemExit as exc:
-                returncode = int(exc.code)
-        return subprocess.CompletedProcess(
-            command, returncode, stdout.getvalue(), stderr.getvalue()
-        )
+        return subprocess.run(command, capture_output=True, text=True, check=False)
 
     def test_assembles_one_installable_distribution_identity(self) -> None:
         result = self.run_assembler()
@@ -196,15 +164,15 @@ class AssembleRegistryClientWheelTest(TestCase):
         for product in PRODUCTS:
             self.assertIn(f"`registry_client.{product}`", description)
 
-    def test_assembled_facade_imports_all_six_product_namespaces(self) -> None:
+    def test_assembled_facade_imports_all_five_product_namespaces(self) -> None:
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
         # The fixture modules exercise facade imports without claiming a native
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, relay, breg, casework, messaging; "
-            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT, casework.PRODUCT, messaging.PRODUCT)"
+            "from registry_client import discovery, evidence, relay, breg, casework; "
+            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT, casework.PRODUCT)"
         )
         imported = subprocess.run(
             [
@@ -214,10 +182,7 @@ class AssembleRegistryClientWheelTest(TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(imported.returncode, 0, imported.stderr)
-        self.assertEqual(
-            imported.stdout.strip(),
-            "discovery evidence relay breg casework messaging",
-        )
+        self.assertEqual(imported.stdout.strip(), "discovery evidence relay breg casework")
 
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:
         result = self.run_assembler()
@@ -233,19 +198,6 @@ class AssembleRegistryClientWheelTest(TestCase):
                 }
             self.assertTrue(legacy_paths)
             self.assertTrue(unified_paths.isdisjoint(legacy_paths), product)
-
-    def test_local_messaging_override_assembles_without_admitting_a_release(self) -> None:
-        module = load_module()
-        with mock.patch.object(
-            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 39, 0)
-        ):
-            refused = self.run_assembler()
-            self.assertEqual(2, refused.returncode)
-            self.assertIn("--include-messaging", refused.stderr)
-            result = self.run_assembler(include_messaging=True)
-            self.assertEqual(0, result.returncode, result.stderr)
-            with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
-                self.assertIn("registry_client/messaging/native.abi3.so", archive.namelist())
 
     def test_rejects_a_malformed_version_without_a_traceback(self) -> None:
         result = self.run_assembler(version="not-a-version")
@@ -322,4 +274,4 @@ class AssembleRegistryClientWheelTest(TestCase):
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main()

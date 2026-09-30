@@ -5,7 +5,6 @@
 // project, never against a checkout.
 
 import assert from 'node:assert';
-import * as client from '@registrystack/client';
 import { breg, casework, discovery, evidence, relay } from '@registrystack/client';
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
@@ -49,12 +48,5 @@ assert.ok(new relay.RelayClient({
   authorization: { static: 'placeholder-token' },
 }));
 assert.ok(new casework.CaseworkClient({ baseUrl: 'https://casework.invalid' }));
-
-// Messaging joins published packages in v0.38.0. Older release smokes retain
-// their original namespaces; source CI also exercises it before admission.
-if (Object.hasOwn(client, 'messaging')) {
-  assert.strictEqual(typeof client.messaging.MessagingClient, 'function');
-  assert.ok(new client.messaging.MessagingClient({ baseUrl: 'https://messaging.invalid' }));
-}
 
 console.log('Unified Node Registry client package ESM smoke passed');

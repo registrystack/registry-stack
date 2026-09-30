@@ -1,8 +1,8 @@
 # Registry Messaging Python binding
 
-This internal PyO3 binding is not published separately. Beginning with Registry
-Stack v0.38.0, its namespace and native extension ship inside the public
-`registry-stack-client` wheel. Built on its own, it is used like this:
+This internal PyO3 binding is not published. Registry Messaging has not
+joined a release, so the public `registry-stack-client` wheel leaves it out
+until Messaging does. Built on its own, it is used like this:
 
 ```python
 import registry_messaging_client as messaging

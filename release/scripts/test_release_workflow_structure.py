@@ -1160,13 +1160,6 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("node-root-registry", node_smoke)
         self.assertIn("smoke-registry-client-package.js", node_smoke)
         self.assertIn("smoke-registry-client-package.mjs", node_smoke)
-        self.assertIn('messaging-in-release "${CLIENT_VERSION}"', node_smoke)
-        self.assertIn(
-            'if [[ "${messaging_in_release}" == true ]]; then\n'
-            '      expected_addons=$((expected_addons + 1))\n'
-            "    fi",
-            node_smoke,
-        )
         self.assertIn(
             "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
             node_smoke,
@@ -1308,13 +1301,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         _, document = workflow("release-candidate.yml")
         node = step_run(document, "clients", "Smoke Node client packages")
         count = node.split("expected_addons=4", 1)[1].split('test "$(find', 1)[0]
-        for admitted, expected in (("false", "5"), ("true", "6")):
-            with self.subTest(messaging_in_release=admitted):
+        for include_casework, expected in (("0", "4"), ("1", "5")):
+            with self.subTest(include_casework=include_casework):
                 result = subprocess.run(
                     [
                         "bash",
                         "-c",
-                        f"include_casework=1\nmessaging_in_release={admitted}\n"
+                        f"include_casework={include_casework}\n"
                         f"expected_addons=4{count}\nprintf '%s' \"${{expected_addons}}\"",
                     ],
                     capture_output=True,
@@ -1326,7 +1319,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         stem = python.split('wheel_stem="registry_${client}_client"', 1)[1].split(
             'wheel="${wheel_stem}', 1
         )[0]
-        for product in ("breg", "casework", "messaging", "discovery", "evidence", "relay"):
+        for product in ("breg", "casework", "discovery", "evidence", "relay"):
             with self.subTest(product=product):
                 result = subprocess.run(
                     [
@@ -1340,7 +1333,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                     text=True,
                     check=True,
                 )
-                suffix = "_native" if product in {"breg", "casework", "messaging"} else ""
+                suffix = "_native" if product in {"breg", "casework"} else ""
                 self.assertEqual(f"registry_{product}_client{suffix}", result.stdout)
 
     def test_scopes_canonical_cache_to_exact_builder_recipe(self) -> None:
@@ -1512,7 +1505,8 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
 
 
 class MessagingClientWorkflowStructureTest(unittest.TestCase):
-    """Client packaging follows Messaging's shared release boundary."""
+    """The unified clients carry no Messaging namespace until Messaging joins a
+    release; the change that names its first release adds it back."""
 
     def test_render_and_oid4vci_smokes_follow_the_shared_release_roster(self) -> None:
         for name, job in (
@@ -1535,23 +1529,14 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
                 self.assertIn("--issued-at 2026-01-01T00:00:00Z", smoke)
                 self.assertIn('--strict --out "${RUNNER_TEMP}/release-render-letter.pdf"', smoke)
 
-    def test_release_client_jobs_select_messaging_from_the_shared_roster(self) -> None:
-        for name, job, steps in (
-            ("release-candidate.yml", "clients", ("Build Python client wheels", "Build Node client packages")),
-            ("release-rehearsal.yml", "node-clients", ("Build, package, and smoke Linux Node clients",)),
+    def test_release_client_jobs_package_no_messaging_client(self) -> None:
+        for name, job in (
+            ("release-candidate.yml", "clients"),
+            ("release-rehearsal.yml", "node-clients"),
         ):
-            for step in steps:
-                with self.subTest(workflow=name, step=step):
-                    _, document = workflow(name)
-                    build = step_run(document, job, step)
-                    self.assertIn('messaging-in-release "${CLIENT_VERSION}"', build)
-                    self.assertIn('clients+=(messaging)', build)
-        _, candidate = workflow("release-candidate.yml")
-        python = step_run(candidate, "clients", "Build Python client wheels")
-        self.assertIn('--messaging-wheel', python)
-        self.assertIn('"${messaging_wheel_args[@]}"', python)
-        node = step_run(candidate, "clients", "Build Node client packages")
-        self.assertIn('platform_clients+=(messaging)', node)
+            with self.subTest(workflow=name, job=job):
+                _, document = workflow(name)
+                self.assertNotIn("messaging", repr(document["jobs"][job]).lower())
 
 
 class MacOSFipsWorkflowStructureTest(unittest.TestCase):
