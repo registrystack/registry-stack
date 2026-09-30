@@ -167,6 +167,24 @@ fn reserved_claim(name: &str) -> bool {
     ) || name.starts_with("registry_grant_")
 }
 
+/// The address the transient JWKS listener binds.
+///
+/// ThunderID runs in a bridge-networked container and fetches the JWKS from
+/// `host.docker.internal`. Docker Desktop and OrbStack on macOS forward that
+/// name to the host's loopback interface, so loopback is enough there. Linux
+/// Engine maps the name to the bridge gateway (`--add-host
+/// host.docker.internal:host-gateway`), which a loopback-only listener never
+/// sees, so Linux binds every interface. The listener serves one public key,
+/// lives only while the rehearsal tokens are acquired, and carries no
+/// protected endpoint.
+fn jwks_bind_address() -> std::net::IpAddr {
+    if cfg!(target_os = "linux") {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+    } else {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    }
+}
+
 /// Acquire all alternate-purpose credentials while one bounded JWKS listener
 /// is live. Every exchange authenticates as the original authored client.
 pub(super) async fn exchange_tokens(
@@ -201,7 +219,7 @@ pub(super) async fn exchange_tokens(
             async move { Json(jwks) }
         }),
     );
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+    let listener = tokio::net::TcpListener::bind((jwks_bind_address(), port))
         .await
         .context("the retained purpose assertion port is unavailable")?;
     let server = tokio::spawn(async move {
@@ -388,6 +406,18 @@ mod tests {
             ]
             .into()
         );
+    }
+
+    #[test]
+    fn jwks_listener_is_reachable_through_the_container_host_gateway() {
+        let address = jwks_bind_address();
+        if cfg!(target_os = "linux") {
+            // host.docker.internal is the bridge gateway, not loopback.
+            assert!(address.is_unspecified());
+        } else {
+            // Docker Desktop and OrbStack forward the name to loopback.
+            assert!(address.is_loopback());
+        }
     }
 
     #[test]
