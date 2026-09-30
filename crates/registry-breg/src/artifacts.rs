@@ -3214,7 +3214,9 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         "200"
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
-    for (status, problems) in problem_responses(spec.route.operation) {
+    for (status, problems) in
+        problem_responses(spec.route.operation, operation_has_row_boundaries(spec))
+    {
         let examples = problems
             .iter()
             .map(|problem| {
@@ -4181,7 +4183,27 @@ struct ProblemExample {
     detail: &'static str,
 }
 
-fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<ProblemExample>> {
+fn operation_has_row_boundaries(spec: OpenApiOperationSpec<'_>) -> bool {
+    let profile_has_boundaries = |profile_id: &str| {
+        spec.entity
+            .access_profiles
+            .get(profile_id)
+            .is_some_and(|profile| !profile.row_boundaries.is_empty())
+    };
+    match spec.access_profiles {
+        OpenApiAccessProfiles::All => spec
+            .route
+            .access_profiles
+            .iter()
+            .any(|profile_id| profile_has_boundaries(profile_id)),
+        OpenApiAccessProfiles::Selected(profile_id) => profile_has_boundaries(profile_id),
+    }
+}
+
+fn problem_responses(
+    operation: Operation,
+    has_row_boundaries: bool,
+) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
             "400",
@@ -4251,18 +4273,6 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
         operation,
         Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
     ) {
-        if matches!(
-            operation,
-            Operation::Create | Operation::Patch | Operation::Batch
-        ) {
-            responses.insert(
-                "403",
-                vec![ProblemExample {
-                    code: "authorization.refused",
-                    detail: "The mutation is outside the caller's authorized record boundary.",
-                }],
-            );
-        }
         responses.insert(
             "503",
             vec![ProblemExample {
@@ -4288,6 +4298,15 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
             vec![ProblemExample {
                 code: "unsupported.media_type",
                 detail: "The request media type is not supported.",
+            }],
+        );
+    }
+    if matches!(operation, Operation::Create | Operation::Batch) && has_row_boundaries {
+        responses.insert(
+            "412",
+            vec![ProblemExample {
+                code: "precondition.failed",
+                detail: "The mutation precondition failed.",
             }],
         );
     }

@@ -61,7 +61,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "b1dd61180f3101b4d0e768fc99906b5614f89000bc31145d1fb4855f0105f558",
-        revision: "sha256:c9cbbc4a788cc17dc62785bce5c9a013c1d94a98886e967ce64bbc39353661b7",
+        revision: "sha256:5c2b472b44f9ea26f8618cec960a8e808fa92d3c8920877da3e01c8b2d51bc03",
     },
 ];
 

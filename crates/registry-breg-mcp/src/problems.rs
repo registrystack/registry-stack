@@ -58,8 +58,9 @@ impl ToolErrorCode {
             Self::NotFound => "No application with that identifier is available to you.",
             Self::ApplicationNotEditable => "The application can no longer be changed here.",
             Self::StaleApplication => {
-                "The application changed since it was read, possibly by an earlier call that \
-                 already applied. Read its status before trying again."
+                "The registry refused this change because a required condition was not met. \
+                 Review the request and any existing application; try again only after \
+                 correcting the request or permissions."
             }
             Self::IdempotencyConflict => {
                 "An earlier identical request is still being processed or differed. Try again."
