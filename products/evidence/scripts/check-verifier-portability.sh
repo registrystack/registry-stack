@@ -65,4 +65,34 @@ if [[ "$found_forbidden" -ne 0 ]]; then
   exit 1
 fi
 
-printf 'Evidence verifier dependencies stay portable.\n'
+# The verifier's `fixtures` feature exposes its test issuer fixtures to the
+# Evidence fuzz harnesses, which live outside the workspace. The verifier's own
+# tests reach those fixtures through `cfg(test)`, so no workspace package needs
+# the feature on any edge, and none may enable it: a production build must never
+# link a signer over a known test key.
+feature_tree=$(
+  cargo tree \
+    --locked \
+    --manifest-path "$repository_root/Cargo.toml" \
+    --workspace \
+    --edges features \
+    --invert registry-evidence-verifier \
+    --target all
+)
+case "$feature_tree" in
+registry-evidence-verifier\ v*) ;;
+*)
+  printf 'The inverted feature tree for registry-evidence-verifier is not rooted at it.\n' >&2
+  exit 1
+  ;;
+esac
+case "$feature_tree" in
+*'registry-evidence-verifier feature "fixtures"'*)
+  printf '%s\n' \
+    'A workspace package enables registry-evidence-verifier/fixtures.' \
+    'Find it with: cargo tree --workspace --edges features --invert registry-evidence-verifier --target all' >&2
+  exit 1
+  ;;
+esac
+
+printf 'Evidence verifier dependencies stay portable and no workspace package enables its fixtures.\n'
