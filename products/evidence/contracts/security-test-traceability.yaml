@@ -10,6 +10,7 @@ entries:
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_refuses_untrusted_protocol_results_without_release}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_schema_matches_runtime_constraints}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_pins_revocations_and_refuses_invalid_preparation}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_refuses_selectors_the_upstream_resolves_from_its_caller}
   - id: sec-provider-public-projection
     tests:
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_excludes_private_configuration_fields}

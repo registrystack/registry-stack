@@ -1013,7 +1013,8 @@ $defs:
           public keys. Rust generates the request nonce, verifies the complete signed
           answer, and exposes only a values object keyed by the declared concept handles.
           Requires a fixed POST path ending in /v1/evidence, a required JSON body, forbidden
-          query, no Accept override, and no batch or unresolvedProblem declaration.
+          query, no Accept override, no batch or unresolvedProblem declaration, and
+          request-origin selectors only.
         $ref: '#/$defs/evidence-source'
       forwardAccessAttribution:
         description: >-
@@ -1301,7 +1302,12 @@ $defs:
     properties:
       profile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
       valueOrigin:
-        enum: [request, authenticated-context, authenticated-grant]
+        description: >-
+          Only request-origin selectors are accepted. The upstream authenticates this
+          service's own source credential, so it would resolve an authenticated-context or
+          authenticated-grant selector from that credential rather than from the
+          downstream caller's subject.
+        const: request
       fields:
         type: array
         minItems: 1

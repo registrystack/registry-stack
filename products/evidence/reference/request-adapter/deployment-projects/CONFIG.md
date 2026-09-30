@@ -455,7 +455,7 @@ The `evidence` object contains:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. |
+| `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws` and whose selectors all declare `valueOrigin: request`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. |
 | `trustedJwks` | yes | A JWKS object with 1 through 33 explicitly accepted public signing keys. Private key material and unusable keys are refused. |
 | `revokedKeyIds` | no | Up to 33 distinct thumbprint key identifiers that must be refused, including keys still present in `trustedJwks`. Omission means none. |
 | `maximumAssertionLifetimeSeconds` | yes | Maximum accepted upstream assertion lifetime, from 1 through 31536000 seconds. Choose the shortest lifetime the integration needs. |
@@ -490,10 +490,14 @@ fn prepare(selectors, context) {
 }
 ```
 
-Use the roles, profiles, and value origins in your pinned definition. Omit
-`values` for an authenticated-context or authenticated-grant selector. Scripts
-cannot override the requirement, purpose, nonce, trust policy, or format.
-The request size limit includes the runtime's complete Evidence envelope.
+Use the roles and profiles in your pinned definition. Every selector in that
+definition must declare `valueOrigin: request`, and the script supplies its
+values. The upstream authenticates this service's own source credential, not
+the downstream caller, so it would resolve an `authenticated-context` selector
+from that credential and cannot receive an `authenticated-grant` selector's
+task grant. Configuration validation refuses either origin. Scripts cannot
+override the requirement, purpose, nonce, trust policy, or format. The request
+size limit includes the runtime's complete Evidence envelope.
 
 After verification, the source exposes only
 `{"values": {"<concept-handle>": <verified-value>}}`. Point `projection` at

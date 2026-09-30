@@ -544,6 +544,8 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
         "holder-bound",
         "unsigned",
         "batch-format",
+        "authenticated-context",
+        "authenticated-grant",
     ] {
         let mut candidate = baseline.clone();
         let source = &mut candidate["sources"]["source-b"];
@@ -595,6 +597,10 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
                 source["evidence"]["contract"]["definitions"][0]["responseFormats"] =
                     json!(["signed-jws", "sd-jwt-vc-batch"])
             }
+            "authenticated-context" | "authenticated-grant" => {
+                source["evidence"]["contract"]["definitions"][0]["subjects"][0]["selector"]
+                    ["valueOrigin"] = json!(mode)
+            }
             _ => unreachable!(),
         }
         assert!(!runtime_accepts(&candidate), "runtime accepted {mode}");
@@ -610,6 +616,41 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
             "ordinary schema refused {mode}"
         );
     }
+}
+
+#[tokio::test]
+async fn signed_evidence_source_refuses_selectors_the_upstream_resolves_from_its_caller() {
+    let fixture = composed_runtime().await;
+    let baseline: Value = serde_norway::from_slice(
+        &fs::read(fixture.downstream.bundle_root.join("evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    // The upstream would resolve these origins from the downstream service's
+    // own source credential, never from the downstream caller's subject.
+    for origin in ["authenticated-context", "authenticated-grant"] {
+        let mut candidate = baseline.clone();
+        candidate["sources"]["source-b"]["evidence"]["contract"]["definitions"][0]["subjects"][0]
+            ["selector"]["valueOrigin"] = json!(origin);
+        let Err(error) =
+            crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
+        else {
+            panic!("runtime accepted {origin}");
+        };
+        assert_eq!(
+            error.to_string(),
+            "configuration violates the Evidence Version 1 contract: a signed Evidence source \
+             accepts only request-origin selectors, because the upstream would resolve an \
+             authenticated selector from this service's own source credential",
+            "{origin}"
+        );
+    }
+    assert!(fixture.requests.lock().await.is_empty());
+    assert!(fixture
+        .token_server
+        .received_requests()
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
