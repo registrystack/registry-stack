@@ -9,6 +9,8 @@ entries:
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_feeds_a_verifiable_holder_bound_credential}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_refuses_untrusted_protocol_results_without_release}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_refuses_untrusted_response_headers}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_compares_the_response_media_type_essence}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_accepts_only_http_200}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_schema_matches_runtime_constraints}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_pins_revocations_and_refuses_invalid_preparation}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_refuses_selectors_the_upstream_resolves_from_its_caller}
