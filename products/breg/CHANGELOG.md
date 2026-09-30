@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- An upgraded runtime and `bregctl` keep verifying and serving a database a
+  release before subject access-log storage activated, without an apply. The
+  next successor apply installs the storage.
+
 ## v0.37.0 - 2026-09-29
 
 - BREAKING: a record or query `400` names the member or parameter at fault
