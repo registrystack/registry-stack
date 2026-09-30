@@ -519,7 +519,10 @@ fn multi_purpose_client_is_refused_on_an_authored_first_party_connection() {
             config::IssuerConnectionMapping::FirstParty => {
                 let refusal = parsed.unwrap_err().to_string();
                 assert!(refusal.contains("first-party connection"), "{refusal}");
-                assert!(refusal.contains("more than one registry_purpose"), "{refusal}");
+                assert!(
+                    refusal.contains("more than one registry_purpose"),
+                    "{refusal}"
+                );
             }
         }
     }
@@ -1171,6 +1174,62 @@ fn seed_operation_defaults_to_create_and_accepts_explicit_import() {
     )
     .unwrap();
     assert_eq!(imported.operation, config::SeedOperation::Import);
+}
+
+#[test]
+fn only_the_exact_unjournaled_seed_authority_is_recovered() {
+    use registry_breg::import_authority::{ImportAuthority, ImportAuthorityStatus};
+
+    let digest = "a".repeat(64);
+    let orphan_id = uuid::Uuid::new_v4();
+    let orphan = ImportAuthority {
+        authority_id: orphan_id,
+        entity_id: "reference".into(),
+        profile_id: "loader".into(),
+        operation: "create".into(),
+        max_items: 1,
+        committed_items: 0,
+        input_digests: vec![digest.clone()],
+        activation_id: uuid::Uuid::new_v4(),
+        opened_at: chrono::Utc::now(),
+        expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+        status: ImportAuthorityStatus::Open,
+        closed_at: None,
+    };
+    assert_eq!(
+        unjournaled_seed_authority(
+            std::slice::from_ref(&orphan),
+            "reference",
+            "loader",
+            &digest
+        ),
+        Some(orphan_id)
+    );
+    // Anything this seed would not have opened, or that already did work,
+    // is an operator's authority and is never closed on its behalf.
+    let variants: [fn(&mut ImportAuthority); 8] = [
+        |a| a.status = ImportAuthorityStatus::Closed,
+        |a| a.entity_id = "other".into(),
+        |a| a.profile_id = "other".into(),
+        |a| a.operation = "update".into(),
+        |a| a.max_items = 2,
+        |a| a.committed_items = 1,
+        |a| a.input_digests = vec!["b".repeat(64)],
+        |a| a.input_digests.push("b".repeat(64)),
+    ];
+    for (index, change) in variants.iter().enumerate() {
+        let mut other = orphan.clone();
+        change(&mut other);
+        assert_eq!(
+            unjournaled_seed_authority(&[other], "reference", "loader", &digest),
+            None,
+            "variant {index}"
+        );
+    }
+    assert_eq!(
+        unjournaled_seed_authority(&[], "reference", "loader", &digest),
+        None
+    );
 }
 
 #[test]

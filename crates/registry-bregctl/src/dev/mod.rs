@@ -2948,7 +2948,9 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
 
 fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     use crate::data_lifecycle::{run_import, DataImportRequest};
+    use crate::import_authority_lifecycle::ImportAuthorityCliError;
     use registry_breg::data::DataImportOperation;
+    use registry_breg::import_authority::ImportAuthorityError;
 
     let root = state.root();
     let runtime_config = root.join("runtime.yaml");
@@ -3049,18 +3051,56 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             state.save()?;
         }
     }
-    let authority = crate::import_authority_lifecycle::open(
-        &crate::import_authority_lifecycle::OpenArguments {
-            runtime_config: &runtime_config,
-            entity: &seed.entity,
-            profile: &seed.access_profile,
-            max_items: 1,
-            expires_in: "10m",
-            input_sha256: std::slice::from_ref(&input_digest),
-            operator_reference: &operator_reference,
-            reason: "load declared local seed",
-        },
-    )
+    let open_arguments = crate::import_authority_lifecycle::OpenArguments {
+        runtime_config: &runtime_config,
+        entity: &seed.entity,
+        profile: &seed.access_profile,
+        max_items: 1,
+        expires_in: "10m",
+        input_sha256: std::slice::from_ref(&input_digest),
+        operator_reference: &operator_reference,
+        reason: "load declared local seed",
+    };
+    let authority = match crate::import_authority_lifecycle::open(&open_arguments) {
+        Err(ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen)) => {
+            // An interruption between the open commit and the journal save
+            // above leaves an open authority no local state names, and the
+            // one-open-per-entity index then refuses every replacement until
+            // it expires. The row keeps only a keyed hash of the operator
+            // reference, so the orphan is recognized by what this exact seed
+            // would have opened. Without a journal entry no checkpoint was
+            // written and no chunk was submitted, so closing it is safe.
+            let listed = crate::import_authority_lifecycle::list(&runtime_config).map_err(
+                |error| anyhow::anyhow!("cannot list import authorities: {error:?}"),
+            )?;
+            let orphan = unjournaled_seed_authority(
+                &listed,
+                &seed.entity,
+                &seed.access_profile,
+                &input_digest,
+            )
+            .with_context(|| {
+                format!(
+                    "an import authority this seed did not open is already open for entity {}; \
+                     close it with `bregctl import-authority close` or let it expire, then start again",
+                    seed.entity
+                )
+            })?;
+            crate::import_authority_lifecycle::close(
+                &crate::import_authority_lifecycle::CloseArguments {
+                    runtime_config: &runtime_config,
+                    authority_id: &orphan.to_string(),
+                    operator_reference: &operator_reference,
+                    reason: "recover unjournaled local seed",
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("cannot close unjournaled seed authority: {error:?}")
+            })?;
+            crate::import_authority_lifecycle::open(&open_arguments)
+        }
+        opened => opened,
+    }
     .map_err(|error| anyhow::anyhow!("cannot open seed import authority: {error:?}"))?;
     let authority_id = authority.authority_id.to_string();
     state
@@ -3101,6 +3141,31 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     state.seeded.insert(seed.id.clone());
     state.save()?;
     Ok(())
+}
+
+/// The open authority an interrupted seed opened but never journaled: the
+/// exact entity, profile, one-item bound, and input digest `import_seed`
+/// requests, with nothing committed under it.
+fn unjournaled_seed_authority(
+    authorities: &[registry_breg::import_authority::ImportAuthority],
+    entity: &str,
+    profile: &str,
+    input_digest: &str,
+) -> Option<uuid::Uuid> {
+    use registry_breg::import_authority::ImportAuthorityStatus;
+
+    authorities
+        .iter()
+        .find(|authority| {
+            authority.status == ImportAuthorityStatus::Open
+                && authority.entity_id == entity
+                && authority.profile_id == profile
+                && authority.operation == "create"
+                && authority.max_items == 1
+                && authority.committed_items == 0
+                && authority.input_digests == [input_digest]
+        })
+        .map(|authority| authority.authority_id)
 }
 
 fn expired_empty_seed_run(error: &crate::data_lifecycle::DataLifecycleError) -> bool {
