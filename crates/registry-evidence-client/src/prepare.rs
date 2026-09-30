@@ -16,9 +16,9 @@ use registry_evidence_verifier::{
     model::HolderPublicKey,
     sdjwt_vc::holder_thumbprint,
     verifier::{
-        EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedOutputDocument,
-        ExpectedSubjectDocument, MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CLOCK_SKEW_SECONDS,
-        MINIMUM_ASSERTION_LIFETIME_SECONDS,
+        revoked_key_ids_are_usable, EvidenceVerificationPolicyDocument, ExpectedFormDocument,
+        ExpectedOutputDocument, ExpectedSubjectDocument, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+        MAXIMUM_CLOCK_SKEW_SECONDS, MINIMUM_ASSERTION_LIFETIME_SECONDS,
     },
     AssuranceProfile,
 };
@@ -257,12 +257,29 @@ pub struct PreparedEvidenceRequest {
 }
 
 impl PreparedEvidenceRequest {
+    /// Prepare a request offline for an integrator that owns its HTTP transport.
+    ///
+    /// Uses the same validation and fresh nonce as [`crate::EvidenceClient::prepare`].
+    /// The integrator sends the returned bytes once and retains an independent
+    /// verification context before receiving the response.
+    pub fn prepare(
+        spec: EvidenceRequestSpec,
+        revoked_key_ids: Vec<String>,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::new_with_revoked_key_ids(spec, revoked_key_ids)
+    }
+
     /// Validate a specification, generate its nonce, and close its policy.
     pub(crate) fn new_with_revoked_key_ids(
         spec: EvidenceRequestSpec,
         revoked_key_ids: Vec<String>,
     ) -> Result<Self, EvidenceClientError> {
         validate(&spec)?;
+        revoked_key_ids_are_usable(&revoked_key_ids).map_err(|_| {
+            EvidenceClientError::configuration(
+                "the revoked key identifiers must be unique RFC 7638 thumbprints within the verifier bound",
+            )
+        })?;
         let nonce = RequestNonce::generate()?;
         let response_format = spec.response_format;
 
@@ -322,9 +339,21 @@ impl PreparedEvidenceRequest {
     ///
     /// This performs no I/O. Selector values are present because they are part
     /// of the request, so callers should retain the returned bytes with the
-    /// same care as the original selector input.
+    /// same care as the original selector input. This inspection does not spend
+    /// the request's single send. A caller-owned transport must use
+    /// [`Self::claim_request_json`] for the bytes it sends.
     pub fn request_json(&self) -> Result<Vec<u8>, EvidenceClientError> {
         serialize_request(&self.body)
+    }
+
+    /// Claim this request's single send and serialize the exact bytes to send.
+    ///
+    /// The claim is taken before serialization. A caller-owned transport must
+    /// call this once immediately before its one I/O attempt. A second call is
+    /// refused, including after the first transport attempt fails.
+    pub fn claim_request_json(&self) -> Result<Vec<u8>, EvidenceClientError> {
+        self.claim_single_send()?;
+        self.request_json()
     }
 
     /// The response encoding selected before this request is sent.
@@ -1605,6 +1634,44 @@ mod tests {
                 "a prepared request may be sent once; prepare again for a fresh nonce"
             )
         );
+    }
+
+    #[test]
+    fn caller_owned_transport_claims_request_bytes_exactly_once() {
+        let prepared = PreparedEvidenceRequest::prepare(spec(), Vec::new())
+            .expect("the offline request is prepared");
+        let request = prepared
+            .claim_request_json()
+            .expect("the first send receives request bytes");
+        assert!(!request.is_empty());
+        assert_eq!(
+            prepared
+                .claim_request_json()
+                .expect_err("the second send is refused before serialization"),
+            EvidenceClientError::configuration(
+                "a prepared request may be sent once; prepare again for a fresh nonce"
+            )
+        );
+        prepared
+            .request_json()
+            .expect("inspection remains available after the send is claimed");
+    }
+
+    #[test]
+    fn offline_preparation_refuses_unusable_revocation_identifiers() {
+        let key_id = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
+        for revoked_key_ids in [
+            vec!["not-a-thumbprint".to_owned()],
+            vec![key_id.clone(), key_id],
+        ] {
+            assert_eq!(
+                PreparedEvidenceRequest::prepare(spec(), revoked_key_ids)
+                    .expect_err("the offline policy refuses unusable revocation identifiers"),
+                EvidenceClientError::configuration(
+                    "the revoked key identifiers must be unique RFC 7638 thumbprints within the verifier bound"
+                )
+            );
+        }
     }
 
     #[test]
