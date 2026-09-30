@@ -280,9 +280,7 @@ impl SelectorField {
                 },
                 SelectorValue::String(value),
             ) => (*minimum_bytes..=*maximum_bytes).contains(&(value.len() as u64)),
-            (Self::Date { .. }, SelectorValue::String(value)) => {
-                value.len() == 10 && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
-            }
+            (Self::Date { .. }, SelectorValue::String(value)) => canonical_date(value),
             (
                 Self::Integer {
                     minimum, maximum, ..
@@ -322,6 +320,15 @@ impl DefinitionSelector {
                     .is_some_and(|value| field.accepts(value))
             })
     }
+}
+
+/// Whether `value` is a calendar date spelled exactly `YYYY-MM-DD`: the
+/// runtime's selector rule, which also refuses spellings Chrono parses but
+/// does not format back to the same bytes, such as `+2024-1-01`.
+fn canonical_date(value: &str) -> bool {
+    value.len() == 10
+        && NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == value)
 }
 
 fn invalid_contract() -> EvidenceClientError {
@@ -742,6 +749,15 @@ mod tests {
             SelectorValue::String("2026-02-30".to_owned()),
         );
         cases.push(("invalid date", invalid_date));
+
+        for spelling in ["+2024-1-01", "2024-01- 1", "-024-01-01"] {
+            let mut non_canonical_date = valid_selector_values();
+            non_canonical_date.insert(
+                "recorded_on".to_owned(),
+                SelectorValue::String(spelling.to_owned()),
+            );
+            cases.push(("non-canonical date spelling", non_canonical_date));
+        }
 
         let mut integer_outside_range = valid_selector_values();
         integer_outside_range.insert("sequence".to_owned(), SelectorValue::Integer(11));
