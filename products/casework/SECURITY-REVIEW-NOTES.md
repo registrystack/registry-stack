@@ -396,3 +396,12 @@ family (review_http).
   BReg adapter ships.
 - The inbox still refuses a whole page with `work-item.proposal-changed` when
   the source's binding generation moved; only single-item reads changed.
+
+### PostgreSQL support floor
+
+Activation and startup require PostgreSQL 17 or newer. The shared activation
+boundary checks the server version before observing migration or activation
+relations, including an empty database. Older servers refuse with an upgrade
+instruction before migrations or activation writes. The shared
+`postgres_version_floor_precedes_missing_ledger_observation` database test
+covers that entry point; unit tests pin the 16/17 version boundary.

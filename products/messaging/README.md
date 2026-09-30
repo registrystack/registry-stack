@@ -1,5 +1,7 @@
 # Registry Messaging
 
+PostgreSQL 17 or newer is required for package activation and runtime startup.
+
 Registry Messaging delivers operational messages, SMS and email, on behalf of
 authorized callers. The caller decides why and when to send and who the
 recipient is; Messaging owns rendering from reviewed templates, delivery

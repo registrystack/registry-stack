@@ -864,3 +864,12 @@ The required AWS IAM authority, origination registration, regional availability,
 and external secret rotation remain operator responsibilities. Temporary
 credentials are loaded at activation and require replacement plus restart
 before expiry. This does not relax the caller's Messaging access profile.
+
+### PostgreSQL support floor
+
+Activation and startup require PostgreSQL 17 or newer. The shared activation
+boundary checks the server version before observing migration or activation
+relations, including an empty database. Older servers refuse with an upgrade
+instruction before migrations or activation writes. The shared
+`postgres_version_floor_precedes_missing_ledger_observation` database test
+covers that entry point; unit tests pin the 16/17 version boundary.

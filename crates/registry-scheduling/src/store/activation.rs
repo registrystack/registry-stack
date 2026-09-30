@@ -45,6 +45,7 @@ fn activation_layout() -> Layout {
 fn platform_error(error: platform_activation::Error) -> StoreError {
     match error {
         platform_activation::Error::Database(error) => error.into(),
+        platform_activation::Error::UnsupportedPostgres => StoreError::UnsupportedPostgres,
         platform_activation::Error::InvalidLayout | platform_activation::Error::Corrupt => {
             StoreError::Corrupt
         }

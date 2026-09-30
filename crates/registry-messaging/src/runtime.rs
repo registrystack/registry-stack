@@ -134,6 +134,7 @@ fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
     move |source| RuntimeError::Database { stage, source }
 }
 
+#[cfg(feature = "postgres-test")]
 pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let secrets = config.secret_resolver()?;
@@ -588,8 +589,6 @@ async fn stop_requested(mut stopped: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-/// Refuse to serve a package the ledger does not name active: none was
-/// ever applied, or the package on disk changed since the last apply.
 /// The start record: the runtime version, the active package digest, and
 /// the retention periods this deployment enforces. It names no principal,
 /// contact, or secret.
@@ -656,16 +655,6 @@ pub enum RuntimeError {
     Activation(#[from] ActivationError),
     #[error("the messaging command arguments are invalid")]
     Arguments,
-    #[error(
-        "the Messaging package ledger names no active package; record package {package} with \
-         messagingctl apply before serving"
-    )]
-    PackageNotApplied { package: String },
-    #[error(
-        "the Messaging package on disk ({package}) is not the package the ledger names active \
-         ({active}); record it with messagingctl apply, then restart"
-    )]
-    PackageLedgerMismatch { active: String, package: String },
     #[error("MESSAGING_LOG must be one of error, warn, or info")]
     Logging,
     #[error(transparent)]

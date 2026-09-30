@@ -22,11 +22,11 @@ the package directory and ends at a serving deployment.
 
 ## What you provide
 
-- **One PostgreSQL database and two login credentials.** The migration credential owns the Casework
+- **One PostgreSQL 17 or newer database and two login credentials.** The migration credential owns the Casework
   schema, and `caseworkctl apply` uses it to migrate the schema and activate a package. The runtime
   credential serves requests and the background workers, and only reads the activation ledger.
-  Casework creates no extension and no role, and its migrations carry no version-gated SQL; the
-  product's own database suites run against PostgreSQL 17. The runtime requires TLS on both
+  Casework creates no extension and no role. Activation and startup refuse an older server.
+  The runtime requires TLS on both
   connections and refuses a plaintext one.
 - **One OpenID Connect issuer.** Casework verifies bearer access tokens and issues none. Configure
   the issuer to add the exact human-identity assertion, `registry_actor_kind: human` by default,

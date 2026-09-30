@@ -432,6 +432,86 @@ async fn plan_is_read_only_and_apply_records_once_and_is_idempotent() {
 }
 
 #[tokio::test]
+async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal() {
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    isolated
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO {}.messaging_schema_migrations(version,applied_at) VALUES(99,now())",
+                isolated.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("a schema version from a future release");
+
+    let preview = activation_plan(&deployment.config())
+        .await
+        .expect("the future schema has an actionable plan refusal");
+    assert_eq!(preview.refusals.len(), 1);
+    assert_eq!(
+        preview.refusals[0].code,
+        "messagingctl.activation.schema-newer"
+    );
+    assert!(preview.refusals[0].message.contains("version 99"));
+
+    let config = deployment.config();
+    let refused = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect_err("apply refuses a future schema");
+    match refused {
+        RuntimeError::Activation(ActivationError::Refused(refusals)) => {
+            assert_eq!(refusals.len(), 1);
+            assert_eq!(refusals[0].code, "messagingctl.activation.schema-newer");
+        }
+        other => panic!("expected a schema refusal, got {other}"),
+    }
+    assert!(isolated.ledger().await.is_empty());
+
+    let versions: Vec<i64> = isolated
+        .admin
+        .query(
+            &format!(
+                "SELECT version FROM {}.messaging_schema_migrations ORDER BY version",
+                isolated.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the unchanged schema history")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(versions, [1, 2, 99]);
+
+    let operator_audit = match config
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    let entries: Vec<Value> = std::fs::read_to_string(operator_audit)
+        .expect("the operator audit destination")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["record"]["outcome"], "refused");
+    assert_eq!(
+        entries[1]["record"]["refusals"],
+        json!(["messagingctl.activation.schema-newer"])
+    );
+}
+
+#[tokio::test]
 async fn package_plan_ignores_a_refused_audit_destination_and_apply_refuses_before_effect() {
     let isolated = isolated_schema().await;
     let deployment = migrated(&isolated).await;

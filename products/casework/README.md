@@ -1,5 +1,7 @@
 # Registry Casework
 
+PostgreSQL 17 or newer is required for package activation and runtime startup.
+
 Registry Casework gives a team one accountable inbox for source-owned work and
 source-neutral reviews requested by another service. It can run without a
 registry source for submitted-context reviews, or connect governed sources such

@@ -175,6 +175,7 @@ invariants:
       and ledger reads while withholding ledger writes, ownership, schema
       creation, and migration-owned write paths. Startup verifies the exact
       schema, database identity, package digest, and effective role boundary.
+      Activation and startup require PostgreSQL 17 or newer.
     refusal: >-
       Nothing to refuse at the caller for minimized telemetry. Refuse apply
       before commit when identity or role authority is wrong, and refuse

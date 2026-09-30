@@ -176,3 +176,39 @@ async fn ledger_identity_and_split_role_share_one_postgres_boundary() {
         .expect("join PostgreSQL connection")
         .expect("PostgreSQL connection completes");
 }
+
+#[tokio::test]
+async fn postgres_version_floor_precedes_missing_ledger_observation() {
+    let (client, connection) = tokio_postgres::connect(&database_url(), NoTls)
+        .await
+        .expect("connect to disposable PostgreSQL");
+    let connection_task = tokio::spawn(connection);
+    let version: i32 = client
+        .query_one("SELECT current_setting('server_version_num')::integer", &[])
+        .await
+        .expect("server version")
+        .get(0);
+    let missing = format!("missing_{}", Uuid::new_v4().simple());
+    let result = registry_platform_activation::relation_exists(&client, &missing).await;
+    if version < 170_000 {
+        assert!(matches!(
+            result,
+            Err(registry_platform_activation::Error::UnsupportedPostgres)
+        ));
+        assert!(matches!(
+            active_activation(&client, &layout()).await,
+            Err(registry_platform_activation::Error::UnsupportedPostgres)
+        ));
+        assert!(matches!(
+            registry_platform_activation::schema_state(&client, &layout(), &[1]).await,
+            Err(registry_platform_activation::Error::UnsupportedPostgres)
+        ));
+    } else {
+        assert!(!result.expect("supported server"));
+    }
+    drop(client);
+    connection_task
+        .await
+        .expect("connection task")
+        .expect("connection closes");
+}
