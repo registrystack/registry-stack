@@ -62,7 +62,7 @@
     - ['`action.evidence_failed`', '503', 'An immediate-action handler declared an Evidence dependency that could not be acquired or accepted: the provider did not answer, or the assertion was refused, failed verification, or exceeded the retention bound. `fieldPath` names the declared Evidence alias when the failure is bound to one. No effects commit.']
     - ['`unsupported.media_type`', '415', 'A body without the required `Content-Type`.']
     - ['`precondition.required`', '428', 'A route that requires `If-Match` was called without it.']
-    - ['`precondition.failed`', '412', '`If-Match` did not match the current revision.']
+    - ['`precondition.failed`', '412', '`If-Match` did not match the current revision, or a proposed create, patch, or batch row was outside the caller''s authorized boundary. Boundary refusals are value-free and retrying the unchanged request cannot succeed.']
     - ['`mutation.conflict`', '409', 'A constraint or workflow rule refused the write. A storage-pattern failure includes the declared `entityId` and `fieldId`; correct the input before retrying. A 409 does not imply that retrying an unchanged request can succeed.']
     - ['`idempotency.conflict`', '409', 'The `Idempotency-Key` was reused with a different request.']
     - ['`ingestion.profile_mismatch`', '403', 'The selected profile is not the one the run bound, or does not satisfy the compiled batch route for the bound operation. A run id grants nothing on its own.']
