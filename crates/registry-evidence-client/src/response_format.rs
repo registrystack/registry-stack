@@ -3,7 +3,7 @@
 use registry_evidence_verifier::{EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE};
 use serde::{Deserialize, Serialize};
 
-use crate::batch::EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE;
+use crate::{batch::EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, problem::essence};
 
 /// The signed Evidence response encoding one prepared request expects.
 ///
@@ -38,6 +38,17 @@ impl EvidenceResponseFormat {
             Self::SdJwtVc => EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
             Self::SdJwtVcBatch => EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
         }
+    }
+
+    /// Whether a response `Content-Type` value names this format's media type.
+    ///
+    /// This is the comparison the client applies to every answer it reads: the
+    /// media-type essence without regard to case, with any parameters ignored.
+    /// Refusing an absent or repeated header is the caller's decision, because
+    /// only the caller holds the whole header map.
+    #[must_use]
+    pub fn matches_content_type(self, value: &str) -> bool {
+        essence(value).eq_ignore_ascii_case(self.media_type())
     }
 
     /// Whether one response in this format is a single thing verification can
@@ -81,6 +92,30 @@ mod tests {
             EvidenceResponseFormat::SdJwtVcBatch.media_type(),
             EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE
         );
+    }
+
+    #[test]
+    fn a_content_type_matches_by_essence_without_case_or_parameters() {
+        let format = EvidenceResponseFormat::SignedJws;
+        for accepted in [
+            "application/jose+json",
+            "Application/JOSE+JSON",
+            "application/jose+json; charset=utf-8",
+            " application/jose+json ;profile=x",
+        ] {
+            assert!(format.matches_content_type(accepted), "{accepted}");
+        }
+        for refused in [
+            "",
+            "application/jose",
+            "application/json",
+            "application/jose+json+x",
+            "application/jose+json, application/jose+json",
+        ] {
+            assert!(!format.matches_content_type(refused), "{refused}");
+        }
+        assert!(EvidenceResponseFormat::SdJwtVc.matches_content_type(EVIDENCE_SD_JWT_VC_MEDIA_TYPE));
+        assert!(!EvidenceResponseFormat::SdJwtVc.matches_content_type(EVIDENCE_JWS_MEDIA_TYPE));
     }
 
     /// The format is retained beside the policy, so its serialization is part of
