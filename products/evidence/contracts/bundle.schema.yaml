@@ -1013,8 +1013,8 @@ $defs:
           public keys. Rust generates the request nonce, verifies the complete signed
           answer, and exposes only a values object keyed by the declared concept handles.
           Requires a fixed POST path ending in /v1/evidence, a required JSON body, forbidden
-          query, no Accept override, no batch or unresolvedProblem declaration, and
-          request-origin selectors only.
+          query, no Accept override, no batch or unresolvedProblem declaration, no
+          forwardAccessAttribution, and request-origin selectors only.
         $ref: '#/$defs/evidence-source'
       forwardAccessAttribution:
         description: >-
@@ -1163,6 +1163,7 @@ $defs:
               - required: [batch]
               - required: [unresolvedProblem]
           properties:
+            forwardAccessAttribution: {const: false}
             request:
               required: [path]
               properties:

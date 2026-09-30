@@ -2949,6 +2949,7 @@ impl SourceConfig {
                 batch,
                 unresolved_problem,
                 evidence,
+                forward_access_attribution,
                 ..
             } => {
                 validate_source_origin(base_url)?;
@@ -2993,6 +2994,9 @@ impl SourceConfig {
                     evidence.validate(request)?;
                     if batch.is_some() || unresolved_problem.is_some() {
                         return invalid("signed Evidence sources cannot declare source batching or unresolved Problem Details");
+                    }
+                    if *forward_access_attribution {
+                        return invalid("a signed Evidence source cannot set forwardAccessAttribution, because the upstream authorizes and audits this service's own source credential");
                     }
                 }
                 if let Some(problem) = unresolved_problem {

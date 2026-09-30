@@ -546,6 +546,7 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
         "batch-format",
         "authenticated-context",
         "authenticated-grant",
+        "forward-attribution",
     ] {
         let mut candidate = baseline.clone();
         let source = &mut candidate["sources"]["source-b"];
@@ -601,6 +602,7 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
                 source["evidence"]["contract"]["definitions"][0]["subjects"][0]["selector"]
                     ["valueOrigin"] = json!(mode)
             }
+            "forward-attribution" => source["forwardAccessAttribution"] = json!(true),
             _ => unreachable!(),
         }
         assert!(!runtime_accepts(&candidate), "runtime accepted {mode}");
@@ -651,6 +653,28 @@ async fn signed_evidence_source_refuses_selectors_the_upstream_resolves_from_its
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn signed_evidence_source_refuses_forwarded_access_attribution() {
+    let fixture = composed_runtime().await;
+    let mut candidate: Value = serde_norway::from_slice(
+        &fs::read(fixture.downstream.bundle_root.join("evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    candidate["sources"]["source-b"]["forwardAccessAttribution"] = json!(true);
+    let Err(error) =
+        crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
+    else {
+        panic!("runtime accepted forwarded access attribution");
+    };
+    assert_eq!(
+        error.to_string(),
+        "configuration violates the Evidence Version 1 contract: a signed Evidence source \
+         cannot set forwardAccessAttribution, because the upstream authorizes and audits this \
+         service's own source credential"
+    );
+    assert!(fixture.requests.lock().await.is_empty());
 }
 
 #[tokio::test]
