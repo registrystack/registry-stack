@@ -577,7 +577,7 @@ SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/nightly-security.yml": frozenset(
-        {"platform", "release_tool"}
+        {"evidence_assurance", "platform", "release_tool"}
     ),
     ".github/workflows/nightly-rust-coverage.yml": frozenset(
         {"platform", "release_tool"}
@@ -1108,9 +1108,10 @@ def classify(
     )
     # Evidence fuzz smoke follows the platform fuzz policy: broad assurance
     # for the merge queue and the nightly sweep, deferred out of review.
-    evidence_assurance = bool(affected & EVIDENCE_PACKAGES) and (
-        full_sweep or not pull_request
-    )
+    evidence_assurance = (
+        bool(affected & EVIDENCE_PACKAGES)
+        or "evidence_assurance" in security_workflow_gates
+    ) and (full_sweep or not pull_request)
     config_conformance = (
         complete
         or any(matches(path, *CONFIG_CONFORMANCE_INPUTS) for path in paths)
