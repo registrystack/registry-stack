@@ -119,7 +119,7 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
                 parts.headers.remove(axum::http::header::CONTENT_LENGTH);
                 let bytes = axum::body::to_bytes(body, 65536).await.unwrap();
                 // Header-only faults keep the genuinely signed body intact.
-                if (12..=18).contains(&mode) {
+                if (12..=22).contains(&mode) {
                     let content_type = axum::http::header::CONTENT_TYPE;
                     match mode {
                         12 => {
@@ -148,6 +148,32 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
                         }
                         17 => parts.status = axum::http::StatusCode::CREATED,
                         18 => parts.status = axum::http::StatusCode::PARTIAL_CONTENT,
+                        19 => {
+                            parts.headers.remove("traceparent");
+                        }
+                        20 => {
+                            let traceparent = parts.headers["traceparent"].clone();
+                            parts.headers.append("traceparent", traceparent);
+                        }
+                        21 => {
+                            parts.headers.insert(
+                                "traceparent",
+                                "00-00000000000000000000000000000000-0123456789abcdef-01"
+                                    .parse()
+                                    .unwrap(),
+                            );
+                        }
+                        22 => {
+                            for index in
+                                0..registry_platform_httputil::MAXIMUM_RESPONSE_HEADER_FIELDS
+                            {
+                                parts.headers.insert(
+                                    axum::http::HeaderName::try_from(format!("x-filler-{index}"))
+                                        .unwrap(),
+                                    "1".parse().unwrap(),
+                                );
+                            }
+                        }
                         _ => unreachable!(),
                     }
                     return Response::from_parts(parts, Body::from(bytes));
@@ -609,6 +635,39 @@ async fn signed_evidence_source_accepts_only_http_200() {
                 format!(
                     "Bearer {}",
                     access_token_for(&format!("status-test-{mode}"), None)
+                ),
+            )
+            .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+            .json(&residence_request())
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mode {mode}: {}",
+            response.text()
+        );
+        assert_eq!(response.json::<Value>()["code"], "source.unavailable");
+    }
+}
+
+#[tokio::test]
+async fn signed_evidence_source_refuses_untrusted_response_headers() {
+    let fixture = composed_runtime().await;
+    mount_residence_source_expecting(&fixture.upstream.server, 4).await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    // 19: no traceparent, 20: a repeated traceparent, 21: a traceparent
+    // whose all-zero trace ID W3C Trace Context forbids, 22: more header
+    // fields than the canonical client reads. Each keeps a genuinely signed
+    // body the canonical client would still refuse.
+    for mode in [19, 20, 21, 22] {
+        fixture.fault.store(mode, Ordering::SeqCst);
+        let response = http
+            .post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!(
+                    "Bearer {}",
+                    access_token_for(&format!("header-test-{mode}"), None)
                 ),
             )
             .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)

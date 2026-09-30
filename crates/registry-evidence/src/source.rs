@@ -16,7 +16,7 @@ use registry_platform_authcommon::client_assertion::{
     sign_client_assertion, ClientAssertionRequest, DEFAULT_ASSERTION_LIFETIME_SECONDS,
 };
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_httputil::{read_bounded, BoundedReadError};
+use registry_platform_httputil::{read_bounded, validate_response_headers, BoundedReadError};
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
@@ -1314,6 +1314,14 @@ impl HttpTransport {
         }
         let response = request.send().await.map_err(map_transport_error)?;
         if let (Some(evidence), Some((_, verification))) = (&self.evidence, signed_request) {
+            // Like the canonical client, bound the header block and require
+            // exactly one canonical traceparent before any other field.
+            if validate_response_headers(response.headers()).is_err() {
+                return Err(SourceError::ResponseTooLarge);
+            }
+            if registry_platform_httpsec::response_trace_id(response.headers()).is_err() {
+                return Err(SourceError::Verification);
+            }
             reject_response_status(&response)?;
             // The Evidence contract answers success with 200 only, and the
             // canonical client refuses every other 2xx status.
