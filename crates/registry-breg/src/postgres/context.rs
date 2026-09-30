@@ -537,6 +537,23 @@ impl ClaimContext {
         validate_recipients(&self.recipients)?;
         Ok(())
     }
+
+    /// Check one prospective record with the same typed canonical values that
+    /// the generated PostgreSQL row policies compare. A false result is an
+    /// ordinary authorization refusal; malformed compiled context remains an
+    /// internal error.
+    pub(crate) fn authorizes_record_snapshot(
+        &self,
+        entity: &crate::model::CompiledEntity,
+        row: &serde_json::Map<String, Value>,
+        record_id: Uuid,
+    ) -> Result<bool> {
+        self.validate()?;
+        if entity.id != self.entity_id {
+            return Err(invalid_context());
+        }
+        snapshot_matches_boundaries(entity, row, record_id, &self.row_boundaries)
+    }
 }
 
 /// One organization plus at most 63 groups, each a bounded context value.
@@ -2127,6 +2144,19 @@ fn validate_snapshot_boundaries(
     record_id: Uuid,
     boundaries: &[RowBoundaryContext],
 ) -> Result<()> {
+    if snapshot_matches_boundaries(entity, row, record_id, boundaries)? {
+        Ok(())
+    } else {
+        Err(invalid_context())
+    }
+}
+
+fn snapshot_matches_boundaries(
+    entity: &crate::model::CompiledEntity,
+    row: &serde_json::Map<String, Value>,
+    record_id: Uuid,
+    boundaries: &[RowBoundaryContext],
+) -> Result<bool> {
     for boundary in boundaries {
         let actual = if boundary.field() == entity.canonical_id.id {
             record_id.to_string()
@@ -2142,11 +2172,11 @@ fn validate_snapshot_boundaries(
             RowBoundaryContext::Equals { value, .. } if &actual == value => {}
             RowBoundaryContext::In { values, .. } if values.contains(&actual) => {}
             RowBoundaryContext::Equals { .. } | RowBoundaryContext::In { .. } => {
-                return Err(invalid_context());
+                return Ok(false);
             }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn canonical_snapshot_field_value(
