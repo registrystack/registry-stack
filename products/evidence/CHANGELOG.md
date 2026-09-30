@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - `evidence-oid4vci` omits `response_types_supported` from its OAuth
   authorization-server metadata. OpenID4VCI 1.0 Final permits the omission
   for a server that supports only the Pre-Authorized Code Grant, and the
@@ -43,6 +45,19 @@
   `PreparedEvidenceRequest::claim_request_json`, which claims the single
   send, and `RetainedEvidenceVerification::from_prepared`. None of them
   performs I/O.
+
+- An `http-json` source may set `forwardAccessAttribution: true` to send the
+  verified requester and authorized purpose, base64url encoded, in the
+  reserved `Registry-Access-Requester` and `Registry-Access-Purpose` headers.
+  The headers grant no source authority; the source must trust this service
+  as an intermediary on its own terms.
+
+- An inline proof `jwk` in `evidence-oid4vci` accepts only the `kty`, `crv`,
+  `x`, `y`, `alg`, `kid`, and `use` members, with `use` only as `sig`, the
+  same closed set a `did:jwk` proof already had. A key carrying any other
+  member is refused instead of having the member dropped.
+  `registry-evidence-client` refuses a holder-bound batch answer whose
+  credential count differs from the number of presented holder keys.
 
 - BREAKING: a requirement's `subjectRoles[].role` is limited to 64 bytes
   instead of 128, in the bundle schema and at startup, to match the Evidence

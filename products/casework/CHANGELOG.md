@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - BREAKING: package activation (`caseworkctl plan`, `apply`, and `status`) and
   `casework serve` startup refuse a PostgreSQL server older than 17 with an
   upgrade instruction, before any migration or activation write. Operators

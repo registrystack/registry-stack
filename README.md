@@ -115,7 +115,8 @@ installer: download `discovery-<tag>-linux-amd64` or
 `registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
 check it against the release checksum chain. Registry Scheduling publishes a
-container image only; it has no released binary or installer yet. Registry
+`scheduling-<tag>-linux-amd64` runtime binary and `schedulingctl` binaries
+beside its container image, and no installer. Registry
 Messaging has not joined a release, so no release carries a Messaging binary,
 image, or installer. Container images for `breg`, `casework`, `scheduling`,
 `relay`, `evidence`, and `discovery` are published as `ghcr.io/registrystack/<name>:<tag>`. Which
