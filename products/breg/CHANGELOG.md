@@ -43,7 +43,8 @@
   authority bound to the item's digest, drives the production ingestion run,
   and closes the authority. An interrupted start resumes the same run, and
   one interrupted before it journaled the authority it opened recovers that
-  exact one-item, zero-progress authority; any other open authority on the
+  exact one-item, zero-progress authority only when it opened no earlier
+  than the intent dev saved before asking; any other open authority on the
   entity is refused by name and left to `bregctl import-authority close`
   (#1772).
 
