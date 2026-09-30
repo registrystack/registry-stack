@@ -11,6 +11,7 @@ pub mod examples;
 mod export_client;
 mod prepare_source;
 mod private;
+mod purpose;
 #[cfg(test)]
 mod tests;
 
@@ -231,6 +232,10 @@ struct State {
     issuer_owner: Option<String>,
     #[serde(default)]
     issuer_image: Option<String>,
+    /// Session-owned loopback assertion endpoint used only while issuing
+    /// multi-purpose rehearsal tokens.
+    #[serde(default)]
+    purpose_port: Option<u16>,
     database_port: u16,
     /// Fixed at first start from the compiled schema; retained with the database.
     #[serde(default)]
@@ -250,6 +255,11 @@ struct State {
     package_digest: Option<String>,
     activated: bool,
     seeded: BTreeSet<String>,
+    /// Import authorities opened for a seed but not yet closed. Keeping the
+    /// identifiers makes a failed start recover its own authority before it
+    /// retries the seed.
+    #[serde(default)]
+    seed_import_authorities: BTreeMap<String, String>,
     outputs: Vec<CredentialOutput>,
     /// Installed prerequisites this session resolved, keyed by command name.
     /// A state document written by an earlier session records none.
@@ -526,9 +536,16 @@ fn read_state(root: &Path) -> Result<State> {
     }
     ports(state.breg_port, state.issuer_port, state.database_port)?;
     if state.webhook_port.is_some_and(|port| {
-        port == 0 || [state.breg_port, state.issuer_port, state.database_port].contains(&port)
+        port == 0
+            || [state.breg_port, state.issuer_port, state.database_port].contains(&port)
+            || state.purpose_port == Some(port)
     }) {
         bail!("retained webhook receiver needs a distinct nonzero loopback port");
+    }
+    if state.purpose_port.is_some_and(|port| {
+        port == 0 || [state.breg_port, state.issuer_port, state.database_port].contains(&port)
+    }) {
+        bail!("retained purpose authority needs a distinct nonzero loopback port");
     }
     Ok(state)
 }
@@ -588,6 +605,7 @@ enum PortRole {
     Issuer,
     Database,
     Receiver,
+    Purpose,
 }
 
 impl PortRole {
@@ -597,6 +615,7 @@ impl PortRole {
             PortRole::Issuer => "issuer",
             PortRole::Database => "PostgreSQL database",
             PortRole::Receiver => "webhook receiver",
+            PortRole::Purpose => "purpose assertion authority",
         }
     }
     fn flag(self) -> Option<&'static str> {
@@ -604,7 +623,7 @@ impl PortRole {
             PortRole::Breg => Some("--breg-port"),
             PortRole::Issuer => Some("--issuer-port"),
             PortRole::Database => Some("--database-port"),
-            PortRole::Receiver => None,
+            PortRole::Receiver | PortRole::Purpose => None,
         }
     }
 }
@@ -656,7 +675,10 @@ fn receiver_port(state: &State) -> Result<u16> {
     loop {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
-        if ![state.breg_port, state.issuer_port, state.database_port].contains(&port) {
+        if ![state.breg_port, state.issuer_port, state.database_port].contains(&port)
+            && state.purpose_port != Some(port)
+            && state.webhook_port != Some(port)
+        {
             return Ok(port);
         }
     }
@@ -1010,6 +1032,7 @@ fn start(args: StartArgs) -> Result<Value> {
                 .issuer_image
                 .clone()
                 .or_else(|| previous.and_then(|s| s.issuer_image.clone())),
+            purpose_port: None,
             database_port: args
                 .database_port
                 .or(previous.map(|s| s.database_port))
@@ -1028,10 +1051,22 @@ fn start(args: StartArgs) -> Result<Value> {
             package_digest: None,
             activated: false,
             seeded: BTreeSet::new(),
+            seed_import_authorities: BTreeMap::new(),
             outputs: vec![],
             binaries: BTreeMap::new(),
             failure: None,
         };
+        let needs_purpose_authority = clients
+            .clients
+            .iter()
+            .any(|client| config::client_purposes(client).is_ok_and(|values| values.len() > 1));
+        if needs_purpose_authority {
+            state.purpose_port = issuer_owner
+                .as_ref()
+                .and_then(|owner| owner.purpose_port)
+                .or_else(|| previous.and_then(|state| state.purpose_port))
+                .or(Some(receiver_port(&state)?));
+        }
         ports(state.breg_port, state.issuer_port, state.database_port)?;
         for (port, role) in [
             (state.breg_port, PortRole::Breg),
@@ -1041,6 +1076,9 @@ fn start(args: StartArgs) -> Result<Value> {
         }
         if state.issuer_project.is_none() {
             probe(state.issuer_port, PortRole::Issuer)?;
+        }
+        if let Some(port) = state.purpose_port {
+            probe(port, PortRole::Purpose)?;
         }
         if !compiled.event_deliveries().deliveries.is_empty()
             && clients.event_destinations.is_empty()
@@ -1074,6 +1112,9 @@ fn start(args: StartArgs) -> Result<Value> {
     probe(state.breg_port, PortRole::Breg)?;
     if state.issuer_project.is_none() {
         probe(state.issuer_port, PortRole::Issuer)?;
+    }
+    if let Some(port) = state.purpose_port {
+        probe(port, PortRole::Purpose)?;
     }
     if let Some(port) = state.webhook_port {
         probe(port, PortRole::Receiver)?;
@@ -1178,6 +1219,9 @@ fn initialize(
             private::create(&path, bytes)?;
         }
         config::prepare(&stage, original, clients)?;
+        if original.issuer_project.is_none() && original.purpose_port.is_some() {
+            purpose::prepare(&stage)?;
+        }
         let mut state = original.clone();
         for client in &clients.clients {
             for (destination, key) in [
@@ -2406,7 +2450,7 @@ fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()>
         .enable_all()
         .build()
         .context("cannot build the dev token runtime")?;
-    runtime.block_on(token_async_with_scopes(state, id, scopes))
+    runtime.block_on(token_async_with_claims(state, id, id, scopes, id))
 }
 
 async fn token_async(state: &State, id: &str) -> Result<()> {
@@ -2421,10 +2465,16 @@ async fn token_async(state: &State, id: &str) -> Result<()> {
         .with_context(|| format!("the retained client {id} is not registered"))?
         .scopes
         .clone();
-    token_async_with_scopes(state, id, scopes).await
+    token_async_with_claims(state, id, id, scopes, id).await
 }
 
-async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()> {
+async fn token_async_with_claims(
+    state: &State,
+    credential_id: &str,
+    token_client_id: &str,
+    scopes: Vec<String>,
+    output_id: &str,
+) -> Result<()> {
     use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 
     let root = state.root();
@@ -2433,7 +2483,10 @@ async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -
         .parse()
         .context("the dev issuer token endpoint is invalid")?;
     let key_bytes = private::read(
-        &root.join("credentials").join(id).join("assertion-key.jwk"),
+        &root
+            .join("credentials")
+            .join(credential_id)
+            .join("assertion-key.jwk"),
         4096,
     )?;
     let key_text =
@@ -2441,7 +2494,7 @@ async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -
     let key = registry_platform_crypto::PrivateJwk::parse(&key_text)
         .map_err(|_| anyhow::anyhow!("the retained client key is unusable"))?;
     let provider = PrivateKeyJwt::new(
-        PrivateKeyJwtConfig::new(endpoint, id.to_owned(), key)
+        PrivateKeyJwtConfig::new(endpoint, token_client_id.to_owned(), key)
             // ThunderID v1.0.1 checks the assertion audience against the
             // issuer identifier, not the token endpoint.
             .with_audience(issuer.clone())
@@ -2464,7 +2517,7 @@ async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -
         bail!("the dev issuer returned an invalid compact token");
     }
     private::replace(
-        &root.join("secrets").join(format!("{id}-token")),
+        &root.join("secrets").join(format!("{output_id}-token")),
         text.as_bytes(),
     )
 }
@@ -2552,7 +2605,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         MAX_BYTES,
     )?)?;
     let mut bindings = Vec::new();
-    let mut rehearsal_scopes = BTreeMap::<String, Vec<String>>::new();
+    let mut rehearsal_tokens = BTreeSet::new();
     for journey in journeys["journeys"]
         .as_array()
         .context("journeys must contain an array")?
@@ -2568,8 +2621,10 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             let step_id = step["id"].as_str().context("journey step requires an id")?;
             let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
             let credential = if let Some(client) = explicit {
-                remember_rehearsal_scopes(&mut rehearsal_scopes, client, step)?;
-                json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
+                let token = rehearsal_token(client, step)?;
+                let token_ref = token.output_id.clone();
+                rehearsal_tokens.insert(token);
+                json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
             } else if step["claims"]
                 .as_object()
                 .is_some_and(|claims| claims.is_empty())
@@ -2577,14 +2632,76 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
                 json!({"type":"anonymous"})
             } else {
                 let client = journey_client(clients, journey_id, step_id, profile)?;
-                remember_rehearsal_scopes(&mut rehearsal_scopes, client, step)?;
-                json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
+                let token = rehearsal_token(client, step)?;
+                let token_ref = token.output_id.clone();
+                rehearsal_tokens.insert(token);
+                json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
             };
             bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
         }
     }
-    for (client, scopes) in rehearsal_scopes {
-        token_with_scopes(state, &client, scopes)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot build the dev rehearsal token runtime")?;
+    let purpose_owner = if state.purpose_port.is_some() {
+        borrowed_owner(state)?
+    } else {
+        None
+    };
+    let purpose_session_id = purpose_owner
+        .as_ref()
+        .map_or(&state.instance_id, |owner| &owner.instance_id);
+    let mut purpose_requests = Vec::new();
+    for token in rehearsal_tokens {
+        let client = clients
+            .clients
+            .iter()
+            .find(|client| client.id == token.logical_client_id)
+            .context("the rehearsal token client is missing")?;
+        let purposes = config::client_purposes(client)?;
+        if purposes.len() > 1
+            && purposes.first().and_then(|purpose| purpose.as_deref()) != token.purpose.as_deref()
+        {
+            purpose_requests.push(purpose::PurposeTokenRequest {
+                client_id: token.logical_client_id,
+                subject: registry_thunderid_tooling::local::agent_id(
+                    purpose_session_id,
+                    &client.id,
+                ),
+                scopes: token.scopes,
+                purpose: token
+                    .purpose
+                    .context("a multi-purpose rehearsal token must select a purpose")?,
+                claims: config::client_token_claims(client),
+                output_id: token.output_id,
+            });
+        } else {
+            runtime.block_on(token_async_with_claims(
+                state,
+                &token.logical_client_id,
+                &token.logical_client_id,
+                token.scopes,
+                &token.output_id,
+            ))?;
+        }
+    }
+    if !purpose_requests.is_empty() {
+        let port = state
+            .purpose_port
+            .context("multi-purpose rehearsal tokens need a retained assertion port")?;
+        let authority_root = purpose_owner
+            .as_ref()
+            .map(|owner| owner.root())
+            .unwrap_or_else(|| root.clone());
+        runtime.block_on(purpose::exchange_tokens(
+            &root,
+            &authority_root,
+            &state.issuer_origin(),
+            &state.audience(),
+            port,
+            &purpose_requests,
+        ))?;
     }
     let credentials = json!({"apiVersion":"registry.registrystack.org/breg-schema-test-credentials/v1","kind":"SchemaTestCredentials","bindings":bindings});
     private::replace(
@@ -2630,11 +2747,15 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     state.save()
 }
 
-fn remember_rehearsal_scopes(
-    remembered: &mut BTreeMap<String, Vec<String>>,
-    client: &config::Client,
-    step: &Value,
-) -> Result<()> {
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RehearsalToken {
+    logical_client_id: String,
+    scopes: Vec<String>,
+    purpose: Option<String>,
+    output_id: String,
+}
+
+fn rehearsal_token(client: &config::Client, step: &Value) -> Result<RehearsalToken> {
     let scopes = step["claims"]["scopes"]
         .as_array()
         .context("an authenticated journey step must declare scopes")?
@@ -2649,16 +2770,33 @@ fn remember_rehearsal_scopes(
     if scopes.iter().any(|scope| !client.scopes.contains(scope)) {
         bail!("journey scopes exceed the bound local client's registered scopes");
     }
-    match remembered.get(&client.id) {
-        Some(existing) if existing != &scopes => {
-            bail!("one local client cannot bind journey steps with different scope sets")
-        }
-        None => {
-            remembered.insert(client.id.clone(), scopes);
-        }
-        _ => {}
+    let purpose = step["claims"]
+        .get("purpose")
+        .map(|purpose| {
+            purpose
+                .as_str()
+                .map(str::to_owned)
+                .context("journey purpose must be a string")
+        })
+        .transpose()?;
+    let purposes = config::client_purposes(client)?;
+    if !purposes.iter().any(|declared| declared == &purpose) {
+        bail!("journey purpose exceeds the bound local client's declared purposes");
     }
-    Ok(())
+    let claim_set = serde_json::to_vec(&json!({
+        "client": client.id,
+        "scopes": scopes,
+        "purpose": purpose,
+    }))?;
+    let digest = config::hash(&claim_set);
+    let prefix = client.id.chars().take(36).collect::<String>();
+    let output_id = format!("{prefix}-journey-{}", &digest[..16]);
+    Ok(RehearsalToken {
+        logical_client_id: client.id.clone(),
+        scopes,
+        purpose,
+        output_id,
+    })
 }
 
 /// Clear only this journal's rebuild outputs, preserving predecessor packages.
@@ -2764,16 +2902,24 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
         if state.seeded.contains(&seed.id) {
             continue;
         }
+        let operation = match seed.operation {
+            config::SeedOperation::Create => registry_breg::contract::Operation::Create,
+            config::SeedOperation::Import => registry_breg::contract::Operation::Import,
+        };
         let route = compiled
             .routes()
             .routes
             .iter()
             .find(|r| {
                 r.entity_id == seed.entity
-                    && r.operation == registry_breg::contract::Operation::Create
+                    && r.operation == operation
                     && r.access_profiles.contains(&seed.access_profile)
             })
-            .context("seed requires an authored create route and explicit permitted profile")?;
+            .context("seed requires an authored operation route and explicit permitted profile")?;
+        if seed.operation == config::SeedOperation::Import {
+            import_seed(state, seed)?;
+            continue;
+        }
         let mut url = reqwest::Url::parse(&state.breg_origin())?.join(&route.path)?;
         url.query_pairs_mut()
             .append_pair("accessProfile", &seed.access_profile);
@@ -2798,4 +2944,170 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
         state.save()?;
     }
     Ok(())
+}
+
+fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
+    use crate::data_lifecycle::{run_import, DataImportRequest};
+    use registry_breg::data::DataImportOperation;
+
+    let root = state.root();
+    let runtime_config = root.join("runtime.yaml");
+    let operator_reference = format!("breg-dev-seed-{}", seed.id);
+    let seed_root = root.join("seeds").join(&seed.id);
+    private::directory(&root.join("seeds"))?;
+    private::directory(&seed_root)?;
+    let input = seed_root.join("input.jsonl");
+    let mut input_bytes = serde_json::to_vec(&json!({
+        "operation": "create",
+        "data": seed.data,
+    }))?;
+    input_bytes.push(b'\n');
+    private::replace(&input, &input_bytes)?;
+    let input_digest = config::hash(&input_bytes);
+    let package = root.join("build/package");
+    let token = root.join("secrets").join(format!("{}-token", seed.client));
+    let breg_origin = state.breg_origin();
+    if let Some(authority_id) = state.seed_import_authorities.get(&seed.id).cloned() {
+        let checkpoint = seed_root.join(format!("{authority_id}.checkpoint.json"));
+        if checkpoint.exists() {
+            let resumed = run_import(DataImportRequest {
+                package: &package,
+                breg_url: &breg_origin,
+                access_token_file: &token,
+                entity: &seed.entity,
+                operation: DataImportOperation::Create,
+                profile: &seed.access_profile,
+                input: &input,
+                checkpoint: &checkpoint,
+                max_chunks: None,
+            });
+            match resumed {
+                Ok(resumed) => {
+                    if !resumed.complete || resumed.committed_items != 1 {
+                        bail!(
+                            "interrupted import seed did not resume to exactly one committed item"
+                        );
+                    }
+                    crate::import_authority_lifecycle::close(
+                        &crate::import_authority_lifecycle::CloseArguments {
+                            runtime_config: &runtime_config,
+                            authority_id: &authority_id,
+                            operator_reference: &operator_reference,
+                            reason: "finish resumed local seed",
+                        },
+                    )
+                    .map_err(|error| {
+                        anyhow::anyhow!("cannot close resumed seed authority: {error:?}")
+                    })?;
+                    state.seed_import_authorities.remove(&seed.id);
+                    state.seeded.insert(seed.id.clone());
+                    state.save()?;
+                    return Ok(());
+                }
+                Err(error) if expired_empty_seed_run(&error) => {
+                    // One seed item is one atomic chunk. `run_import` returns
+                    // a completed run before considering blocked status, so
+                    // this exact blocked result proves the expired run has
+                    // committed zero items. Close is idempotent for a terminal
+                    // authority; keep the old UUID checkpoint as evidence and
+                    // open a fresh authority below.
+                    crate::import_authority_lifecycle::close(
+                        &crate::import_authority_lifecycle::CloseArguments {
+                            runtime_config: &runtime_config,
+                            authority_id: &authority_id,
+                            operator_reference: &operator_reference,
+                            reason: "replace expired zero-progress local seed",
+                        },
+                    )
+                    .map_err(|close_error| {
+                        anyhow::anyhow!("cannot settle expired seed authority: {close_error:?}")
+                    })?;
+                    state.seed_import_authorities.remove(&seed.id);
+                    state.save()?;
+                }
+                Err(error) => {
+                    return Err(anyhow::anyhow!(
+                        "cannot safely resume interrupted import seed: {error:?}"
+                    ));
+                }
+            }
+        } else {
+            // The journal was saved immediately after opening the authority.
+            // The ingestion sidecar may already name a zero-progress run, but
+            // without a checkpoint no chunk was submitted or committed. It is
+            // therefore safe to close and replace this authority.
+            crate::import_authority_lifecycle::close(
+                &crate::import_authority_lifecycle::CloseArguments {
+                    runtime_config: &runtime_config,
+                    authority_id: &authority_id,
+                    operator_reference: &operator_reference,
+                    reason: "recover unopened local seed",
+                },
+            )
+            .map_err(|error| anyhow::anyhow!("cannot close unopened seed authority: {error:?}"))?;
+            state.seed_import_authorities.remove(&seed.id);
+            state.save()?;
+        }
+    }
+    let authority = crate::import_authority_lifecycle::open(
+        &crate::import_authority_lifecycle::OpenArguments {
+            runtime_config: &runtime_config,
+            entity: &seed.entity,
+            profile: &seed.access_profile,
+            max_items: 1,
+            expires_in: "10m",
+            input_sha256: std::slice::from_ref(&input_digest),
+            operator_reference: &operator_reference,
+            reason: "load declared local seed",
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("cannot open seed import authority: {error:?}"))?;
+    let authority_id = authority.authority_id.to_string();
+    state
+        .seed_import_authorities
+        .insert(seed.id.clone(), authority_id.clone());
+    state.save()?;
+
+    let checkpoint = seed_root.join(format!("{authority_id}.checkpoint.json"));
+    let outcome = run_import(DataImportRequest {
+        package: &package,
+        breg_url: &breg_origin,
+        access_token_file: &token,
+        entity: &seed.entity,
+        operation: DataImportOperation::Create,
+        profile: &seed.access_profile,
+        input: &input,
+        checkpoint: &checkpoint,
+        max_chunks: None,
+    })
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "synthetic import seed was interrupted; its authority and checkpoint were retained for a safe resume: {error:?}"
+        )
+    })?;
+    if !outcome.complete || outcome.committed_items != 1 {
+        bail!("synthetic import seed did not complete exactly one item; its authority and checkpoint were retained for a safe resume");
+    }
+    crate::import_authority_lifecycle::close(&crate::import_authority_lifecycle::CloseArguments {
+        runtime_config: &runtime_config,
+        authority_id: &authority_id,
+        operator_reference: &operator_reference,
+        reason: "finish declared local seed",
+    })
+    .map_err(|error| {
+        anyhow::anyhow!("cannot close seed import authority after import: {error:?}")
+    })?;
+    state.seed_import_authorities.remove(&seed.id);
+    state.seeded.insert(seed.id.clone());
+    state.save()?;
+    Ok(())
+}
+
+fn expired_empty_seed_run(error: &crate::data_lifecycle::DataLifecycleError) -> bool {
+    matches!(
+        error,
+        crate::data_lifecycle::DataLifecycleError::ImportRunBlocked(Some(
+            registry_breg_client::BRegIngestionBlockedReason::ImportAuthorityClosed
+        ))
+    )
 }

@@ -33,6 +33,8 @@ const OTHER: &str = "urn:registry:gate0:other";
 const AUTHORITY_RESOURCE: &str = "urn:registry:gate0:authority";
 const CLIENT: &str = "gate0-agent-a";
 const SECOND_CLIENT: &str = "gate0-agent-b";
+const PURPOSE_CLIENT: &str = "gate0-purpose-agent";
+const PURPOSE_SUBJECT: &str = "0197aaaa-0000-7000-8000-0000000000a3";
 const AUTHORITY_ID: &str = "0197aaaa-0000-7000-8000-0000000000b3";
 const BOOTSTRAP_SCOPE: &str = "grants:assert";
 const TARGET_SCOPE: &str = "records:get";
@@ -83,7 +85,7 @@ struct PublicKeys {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl PublicKeys {
-    fn start(a: String, b: String) -> Result<Self> {
+    fn start(a: String, b: String, purpose: String) -> Result<Self> {
         // Only generated public JWKS are served. Docker Desktop resolves this
         // host through host.docker.internal; no protected endpoint lives here.
         let listener =
@@ -110,6 +112,8 @@ impl PublicKeys {
                         Some(&a)
                     } else if request.starts_with("GET /b/jwks ") {
                         Some(&b)
+                    } else if request.starts_with("GET /purpose/jwks ") {
+                        Some(&purpose)
                     } else {
                         None
                     };
@@ -144,7 +148,7 @@ impl Drop for PublicKeys {
     }
 }
 
-fn resource(id: &str, identifier: &str, handle: &str, action: &str) -> ResourceServer {
+fn resource(id: &str, identifier: &str, handle: &str, actions: &[&str]) -> ResourceServer {
     ResourceServer {
         id: id.into(),
         name: format!("Gate0 {handle} {id}"),
@@ -155,11 +159,14 @@ fn resource(id: &str, identifier: &str, handle: &str, action: &str) -> ResourceS
             handle: handle.into(),
             parent: None,
             description: "Acceptance resource".into(),
-            actions: vec![Action {
-                name: action.into(),
-                handle: action.into(),
-                description: "Acceptance operation".into(),
-            }],
+            actions: actions
+                .iter()
+                .map(|action| Action {
+                    name: (*action).into(),
+                    handle: (*action).into(),
+                    description: "Acceptance operation".into(),
+                })
+                .collect(),
         }],
     }
 }
@@ -168,24 +175,58 @@ fn description(
     port: u16,
     id: &str,
     keys: &PublicKeys,
-    client_keys: [String; 2],
+    client_keys: [String; 3],
 ) -> IssuerDescription {
     let machine_clients = client_keys
         .into_iter()
         .enumerate()
-        .map(|(i, public_jwks)| MachineClient {
-            agent_id: format!("0197aaaa-0000-7000-8000-0000000000a{}", i + 1),
-            name: format!("Gate0 Agent {i}"),
-            description: "Synthetic agent".into(),
-            client_id: if i == 0 { CLIENT } else { SECOND_CLIENT }.into(),
-            public_jwks,
-            attributes: BTreeMap::new(),
-            token_attributes: vec![],
-            access_token_lifetime_seconds: 300,
-            token_exchange: Some(TokenExchangeClient {
-                assertion_resource_server_id: AUTHORITY_ID.into(),
-                assertion_scope: BOOTSTRAP_SCOPE.into(),
-            }),
+        .map(|(i, public_jwks)| {
+            let (attributes, token_attributes) = if i == 2 {
+                (
+                    [
+                        ("jurisdiction".into(), json!("north")),
+                        ("registry_actor_kind".into(), json!("human")),
+                        (
+                            "registry_principal".into(),
+                            json!("synthetic-purpose-principal"),
+                        ),
+                    ]
+                    .into(),
+                    vec![
+                        "jurisdiction".into(),
+                        "registry_actor_kind".into(),
+                        "registry_principal".into(),
+                    ],
+                )
+            } else {
+                (BTreeMap::new(), vec![])
+            };
+            MachineClient {
+                agent_id: format!("0197aaaa-0000-7000-8000-0000000000a{}", i + 1),
+                name: format!("Gate0 Agent {i}"),
+                description: "Synthetic agent".into(),
+                client_id: match i {
+                    0 => CLIENT,
+                    1 => SECOND_CLIENT,
+                    _ => PURPOSE_CLIENT,
+                }
+                .into(),
+                public_jwks,
+                attributes,
+                token_attributes,
+                access_token_lifetime_seconds: 300,
+                token_exchange: Some(if i < 2 {
+                    TokenExchangeClient {
+                        assertion_resource_server_id: AUTHORITY_ID.into(),
+                        assertion_scope: BOOTSTRAP_SCOPE.into(),
+                    }
+                } else {
+                    TokenExchangeClient {
+                        assertion_resource_server_id: "0197aaaa-0000-7000-8000-0000000000b1".into(),
+                        assertion_scope: TARGET_SCOPE.into(),
+                    }
+                }),
+            }
         })
         .collect();
     IssuerDescription {
@@ -206,33 +247,51 @@ fn description(
                 "0197aaaa-0000-7000-8000-0000000000b1",
                 TARGET,
                 "records",
-                "get",
+                &["get", "patch"],
             ),
             resource(
                 "0197aaaa-0000-7000-8000-0000000000b2",
                 OTHER,
                 "records",
-                "get",
+                &["get"],
             ),
-            resource(AUTHORITY_ID, AUTHORITY_RESOURCE, "grants", "assert"),
+            resource(AUTHORITY_ID, AUTHORITY_RESOURCE, "grants", &["assert"]),
         ],
-        roles: vec![Role {
-            id: "0197aaaa-0000-7000-8000-0000000000c1".into(),
-            name: "Gate0 Bootstrap".into(),
-            description: "Assertion lookup only".into(),
-            permissions: vec![(AUTHORITY_ID.into(), vec![BOOTSTRAP_SCOPE.into()])],
-            assigned_agents: vec![
-                "0197aaaa-0000-7000-8000-0000000000a1".into(),
-                "0197aaaa-0000-7000-8000-0000000000a2".into(),
-            ],
-            assigned_users: vec![],
-            assigned_applications: vec![],
-        }],
+        roles: vec![
+            Role {
+                id: "0197aaaa-0000-7000-8000-0000000000c1".into(),
+                name: "Gate0 Bootstrap".into(),
+                description: "Assertion lookup only".into(),
+                permissions: vec![(AUTHORITY_ID.into(), vec![BOOTSTRAP_SCOPE.into()])],
+                assigned_agents: vec![
+                    "0197aaaa-0000-7000-8000-0000000000a1".into(),
+                    "0197aaaa-0000-7000-8000-0000000000a2".into(),
+                ],
+                assigned_users: vec![],
+                assigned_applications: vec![],
+            },
+            Role {
+                id: "0197aaaa-0000-7000-8000-0000000000c2".into(),
+                name: "Gate0 Purpose Client".into(),
+                description: "Two authored record permissions".into(),
+                permissions: vec![(
+                    "0197aaaa-0000-7000-8000-0000000000b1".into(),
+                    vec![TARGET_SCOPE.into(), "records:patch".into()],
+                )],
+                assigned_agents: vec!["0197aaaa-0000-7000-8000-0000000000a3".into()],
+                assigned_users: vec![],
+                assigned_applications: vec![],
+            },
+        ],
         machine_clients,
         compatibility_clients: vec![],
         interactive_applications: vec![],
         synthetic_users: vec![],
-        schema_attributes: vec![],
+        schema_attributes: vec![
+            "jurisdiction".into(),
+            "registry_actor_kind".into(),
+            "registry_principal".into(),
+        ],
         exchange_issuers: ["a", "b", "unavailable"]
             .iter()
             .enumerate()
@@ -246,6 +305,22 @@ fn description(
                 clients: vec![],
                 token_attributes: Default::default(),
             })
+            .chain(std::iter::once(ExchangeIssuer {
+                id: "0197aaaa-0000-7000-8000-0000000000d4".into(),
+                name: "Gate0 Purpose Authority".into(),
+                issuer: keys.issuer("purpose"),
+                jwks_endpoint: format!("{}/jwks", keys.issuer("purpose")),
+                mapping: ExchangeMapping::FirstParty,
+                clients: vec![PURPOSE_CLIENT.into()],
+                token_attributes: [
+                    ("jurisdiction".into(), ExchangeAttributeKind::String),
+                    ("registry_actor_kind".into(), ExchangeAttributeKind::String),
+                    ("registry_principal".into(), ExchangeAttributeKind::String),
+                    ("registry_purpose".into(), ExchangeAttributeKind::String),
+                    ("scope".into(), ExchangeAttributeKind::String),
+                ]
+                .into(),
+            }))
             .collect(),
     }
 }
@@ -473,9 +548,11 @@ fn run(root: &Path) -> Result<()> {
         .map_err(|_| "state permissions failed")?;
     let (client_key, client_jwks) = key("client-a");
     let (second_key, second_jwks) = key("client-b");
+    let (purpose_client_key, purpose_client_jwks) = key("purpose-client");
     let (authority_key, authority_jwks) = key("authority-a");
     let (other_key, other_jwks) = key("authority-b");
-    let keys = PublicKeys::start(authority_jwks, other_jwks)?;
+    let (purpose_key, purpose_jwks) = key("purpose-authority");
+    let keys = PublicKeys::start(authority_jwks, other_jwks, purpose_jwks)?;
     let socket = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "issuer port unavailable")?;
     let port = socket
         .local_addr()
@@ -488,7 +565,7 @@ fn run(root: &Path) -> Result<()> {
         port,
         &random(),
         &keys,
-        [client_jwks, second_jwks],
+        [client_jwks, second_jwks, purpose_client_jwks],
     ))?;
     let issuer = live.issuer();
     let discovery = loop {
@@ -583,6 +660,99 @@ fn run(root: &Path) -> Result<()> {
         "shared provider lost grant bounds",
     )?;
     println!("PASS Gate0.shared-private-key-jwt-provider");
+
+    let (status, direct_purpose) = post(
+        &issuer,
+        &purpose_client_key,
+        PURPOSE_CLIENT,
+        None,
+        TARGET,
+        TARGET_SCOPE,
+    )?;
+    check(status == 200, "purpose client credentials refused")?;
+    let direct_purpose = verified(token(&direct_purpose)?, &jwks)?;
+    check(
+        direct_purpose["sub"] == PURPOSE_SUBJECT,
+        "purpose client subject differs from its registered agent",
+    )?;
+
+    for (purpose, scope) in [
+        ("synthetic-enrolment", TARGET_SCOPE),
+        ("synthetic-correction", "records:patch"),
+    ] {
+        let time = now();
+        let input = json!({
+            "iss": keys.issuer("purpose"),
+            "sub": PURPOSE_SUBJECT,
+            "aud": &issuer,
+            "iat": time,
+            "nbf": time,
+            "exp": time + 60,
+            "jti": random(),
+            "scope": scope,
+            "jurisdiction": "north",
+            "registry_actor_kind": "human",
+            "registry_principal": "synthetic-purpose-principal",
+            "registry_purpose": purpose,
+        });
+        let assertion = signed(&purpose_key, "purpose-authority", &input)?;
+        let (_, purpose_claims) = exchanged(
+            &issuer,
+            &purpose_client_key,
+            PURPOSE_CLIENT,
+            &assertion,
+            TARGET,
+            scope,
+            &jwks,
+        )?;
+        check(
+            purpose_claims["client_id"] == PURPOSE_CLIENT
+                && purpose_claims
+                    .get("azp")
+                    .is_none_or(|azp| azp == PURPOSE_CLIENT),
+            "first-party exchange changed the authenticated client",
+        )?;
+        check(
+            purpose_claims["sub"] == direct_purpose["sub"],
+            "first-party exchange changed the registered agent subject",
+        )?;
+        check(
+            purpose_claims["registry_purpose"] == purpose,
+            "first-party exchange changed the selected purpose",
+        )?;
+        let exact_scope = purpose_claims["scope"]
+            .as_str()
+            .is_some_and(|observed| observed == scope)
+            || purpose_claims["scope"]
+                .as_array()
+                .is_some_and(|observed| observed.len() == 1 && observed[0].as_str() == Some(scope));
+        if !exact_scope {
+            let includes_selected = purpose_claims["scope"].as_str().is_some_and(|observed| {
+                observed.split_ascii_whitespace().any(|item| item == scope)
+            }) || purpose_claims["scope"]
+                .as_array()
+                .is_some_and(|observed| observed.iter().any(|item| item.as_str() == Some(scope)));
+            check(
+                !includes_selected,
+                "first-party exchange widened the selected scope",
+            )?;
+            return Err("first-party exchange replaced the selected scope");
+        }
+        check(
+            purpose_claims["registry_actor_kind"] == "human"
+                && purpose_claims["registry_principal"] == "synthetic-purpose-principal"
+                && purpose_claims["jurisdiction"] == "north",
+            "first-party exchange dropped authored identity or boundary claims",
+        )?;
+        check(
+            GRANT_ATTRIBUTES
+                .iter()
+                .filter(|name| !matches!(**name, "registry_actor_kind" | "registry_purpose"))
+                .all(|name| purpose_claims.get(*name).is_none()),
+            "first-party exchange manufactured institutional grant authority",
+        )?;
+    }
+    println!("PASS Gate0.same-client-two-purpose-two-scope-first-party-exchange");
 
     let mut breg = original.clone();
     breg["registry_grant_bounds"] = json!({"type":"breg","permissions":[{"collection":"synthetic_records","operations":["get","list","submit_request"]}]});
@@ -861,8 +1031,8 @@ fn run(root: &Path) -> Result<()> {
         "wrong assertion audience accepted",
     )?;
     check(
-        keys.requests.load(Ordering::Relaxed) >= 2,
-        "container did not fetch both authority JWKS over host networking",
+        keys.requests.load(Ordering::Relaxed) >= 3,
+        "container did not fetch every authority JWKS over host networking",
     )?;
     println!("PASS Gate0.scopes-token-types-expiry-audience-and-host-jwks");
     println!("PASS Gate0.complete (pinned issuer; resource-server tests remain separate)");

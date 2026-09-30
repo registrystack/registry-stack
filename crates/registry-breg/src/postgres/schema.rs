@@ -716,6 +716,23 @@ impl PreparedSchemaTestDatabase {
             lock_key: self.lock_key,
         }
     }
+
+    pub(crate) fn import_authority_service(
+        &self,
+        audit: crate::audit::RegistryAudit,
+        registry: std::sync::Arc<CompiledRegistry>,
+    ) -> crate::import_authority::ImportAuthorityOperatorService {
+        crate::import_authority::ImportAuthorityOperatorService::new_for_schema_test(
+            self.expected.clone(),
+            self.expected_catalog.clone(),
+            self.lock_key,
+            self.migration_connection.clone(),
+            self.migration_role.clone(),
+            self.runtime_role.clone(),
+            audit,
+            registry,
+        )
+    }
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]

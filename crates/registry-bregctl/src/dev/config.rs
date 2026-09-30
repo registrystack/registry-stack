@@ -201,6 +201,52 @@ pub(super) struct Client {
     pub assertion_key_input_file: Option<PathBuf>,
 }
 
+/// The purposes one logical local client may request in a schema-test step.
+///
+/// A scalar `registry_purpose` keeps the original one-purpose form. An array
+/// declares a closed set; the first value remains the ordinary dev token's
+/// purpose, while rehearsal tokens may select any declared member.
+pub(super) fn client_purposes(client: &Client) -> Result<Vec<Option<String>>> {
+    let Some(value) = client.claims.get("registry_purpose") else {
+        return Ok(vec![None]);
+    };
+    let values = match value {
+        Value::String(value) => vec![value.clone()],
+        Value::Array(values) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .context("registry_purpose entries must be strings")
+            })
+            .collect::<Result<Vec<_>>>()?,
+        _ => bail!("registry_purpose must be a string or a list of strings"),
+    };
+    if values.is_empty()
+        || values.len() > 16
+        || values
+            .iter()
+            .any(|value| value.is_empty() || value.len() > 256)
+        || values.iter().collect::<BTreeSet<_>>().len() != values.len()
+    {
+        bail!("registry_purpose needs 1..16 distinct bounded values");
+    }
+    Ok(values.into_iter().map(Some).collect())
+}
+
+/// Return the exact authored client claims with the ordinary machine default
+/// made explicit. Direct credentials and exchanged credentials must carry the
+/// same actor semantics even when the author omits this optional teaching
+/// marker.
+pub(super) fn client_token_claims(client: &Client) -> BTreeMap<String, Value> {
+    let mut claims = client.claims.clone();
+    claims
+        .entry("registry_actor_kind".to_owned())
+        .or_insert_with(|| json!("service"));
+    claims
+}
+
 fn is_false(value: &bool) -> bool {
     !value
 }
@@ -219,7 +265,17 @@ pub(super) struct Seed {
     pub client: String,
     pub entity: String,
     pub access_profile: String,
+    #[serde(default)]
+    pub operation: SeedOperation,
     pub data: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SeedOperation {
+    #[default]
+    Create,
+    Import,
 }
 
 /// The governed identifier grammar of a registry project.
@@ -347,6 +403,7 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         {
             bail!("local client scopes or claims exceed their bounds");
         }
+        client_purposes(client)?;
         match (&client.client_id_file, &client.assertion_key_file) {
             (None, None) => (),
             (Some(id), Some(key)) if id != key => {
@@ -377,8 +434,15 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             private::check(path, false)?;
         }
     }
+    let generated_purpose_connection = usize::from(clients.clients.iter().any(|client| {
+        client
+            .claims
+            .get("registry_purpose")
+            .and_then(Value::as_array)
+            .is_some_and(|purposes| purposes.len() > 1)
+    }));
     if clients.issuer.resources.len() > 7
-        || clients.issuer.exchange_issuers.len() > 8
+        || clients.issuer.exchange_issuers.len() + generated_purpose_connection > 8
         || clients.issuer.interactive_applications.len() > 8
         || clients.issuer.browser_clients.len() > 8
         || clients.issuer.synthetic_users.len() > 32
@@ -1038,12 +1102,16 @@ pub(super) fn issuer_description(
         .clients
         .iter()
         .map(|client| {
-            let mut claims = client.claims.clone();
-            // An omitted local marker describes the ordinary machine client.
-            // Explicit human and agent teaching identities retain their kind.
-            claims
-                .entry("registry_actor_kind".to_owned())
-                .or_insert_with(|| json!("service"));
+            let mut claims = client_token_claims(client);
+            let purposes = client_purposes(client)?;
+            match purposes.first().and_then(|purpose| purpose.as_deref()) {
+                Some(purpose) => {
+                    claims.insert("registry_purpose".to_owned(), json!(purpose));
+                }
+                None => {
+                    claims.remove("registry_purpose");
+                }
+            }
             let directory = root.join("credentials").join(&client.id);
             let public: Value =
                 serde_json::from_slice(&private::read(&directory.join("public.jwk"), 4096)?)?;
@@ -1107,6 +1175,53 @@ pub(super) fn issuer_description(
             assertion_resource_server_id: role.permissions[0].0.clone(),
             assertion_scope: client.scopes[0].clone(),
         });
+    }
+    let mut purpose_clients = Vec::new();
+    for client in &clients.clients {
+        if client_purposes(client)?.len() > 1 {
+            purpose_clients.push(super::purpose::PurposeClient {
+                client_id: client.id.clone(),
+                subject: registry_thunderid_tooling::local::agent_id(
+                    &state.instance_id,
+                    &client.id,
+                ),
+                claims: client_token_claims(client),
+            });
+        }
+    }
+    if !purpose_clients.is_empty() {
+        let port = state
+            .purpose_port
+            .context("multi-purpose clients need a retained purpose assertion port")?;
+        for purpose_client in &purpose_clients {
+            let id = &purpose_client.client_id;
+            let client = clients
+                .clients
+                .iter()
+                .find(|client| &client.id == id)
+                .context("a multi-purpose client is missing")?;
+            let machine = description
+                .machine_clients
+                .iter_mut()
+                .find(|machine| machine.client_id == *id)
+                .context("a multi-purpose registration is missing")?;
+            let role = description
+                .roles
+                .iter()
+                .find(|role| role.assigned_agents.contains(&machine.agent_id))
+                .context("a multi-purpose bootstrap role is missing")?;
+            machine.token_exchange = Some(TokenExchangeClient {
+                assertion_resource_server_id: role.permissions[0].0.clone(),
+                assertion_scope: client.scopes[0].clone(),
+            });
+        }
+        description
+            .exchange_issuers
+            .push(super::purpose::exchange_issuer(
+                &state.instance_id,
+                port,
+                &purpose_clients,
+            )?);
     }
     for issuer in &clients.issuer.exchange_issuers {
         description.exchange_issuers.push(ExchangeIssuer {
@@ -1270,15 +1385,25 @@ pub(super) fn assertion_issuers(
             .context("shared issuer owner has invalid retained clients")
         })
         .transpose()?;
-    let composition = owner
-        .as_ref()
-        .map_or(&clients.issuer, |owner| &owner.issuer);
+    let authority_clients = owner.as_ref().unwrap_or(clients);
+    let composition = &authority_clients.issuer;
     let mut authorities: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for connection in &composition.exchange_issuers {
         for client in &connection.clients {
             let registered = authorities.entry(client.clone()).or_default();
             if !registered.contains(&connection.issuer) {
                 registered.push(connection.issuer.clone());
+            }
+        }
+    }
+    if let Some(port) = state.purpose_port {
+        let purpose_issuer = format!("http://127.0.0.1:{port}");
+        for client in &authority_clients.clients {
+            if client_purposes(client)?.len() > 1 {
+                let registered = authorities.entry(client.id.clone()).or_default();
+                if !registered.contains(&purpose_issuer) {
+                    registered.push(purpose_issuer.clone());
+                }
             }
         }
     }
@@ -1302,21 +1427,21 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     // A browser application explicitly using this session's default BREG
     // audience is a local OAuth client. Other-resource apps remain outside
     // BREG admission; governed profiles and token scopes still authorize calls.
-    let allowed_clients = clients
+    let mut allowed_clients = clients
         .clients
         .iter()
         .filter(|client| !client.access_profiles.is_empty() || client.allow_breg_access)
-        .map(|client| &client.id)
-        .chain(
-            clients
-                .issuer
-                .interactive_applications
-                .iter()
-                .filter(|app| app.audience.is_none())
-                .map(|app| &app.id),
-        )
-        .chain(clients.issuer.browser_clients.iter())
+        .map(|client| client.id.clone())
         .collect::<Vec<_>>();
+    allowed_clients.extend(
+        clients
+            .issuer
+            .interactive_applications
+            .iter()
+            .filter(|app| app.audience.is_none())
+            .map(|app| app.id.clone()),
+    );
+    allowed_clients.extend(clients.issuer.browser_clients.iter().cloned());
     let assertion_issuers = assertion_issuers(state, clients)?;
     // The local registry serves with the migration role, the one-role mode
     // a small deployment runs in. The schema-test rehearsal stays split,
