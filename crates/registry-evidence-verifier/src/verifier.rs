@@ -2140,6 +2140,33 @@ mod tests {
         )
     }
 
+    /// Sign one flattened JWS over caller-supplied protected-header and payload
+    /// bytes, so a test can present a segment no serializer would produce, such
+    /// as one padded past a byte ceiling, while the signature stays authentic
+    /// over exactly those bytes.
+    async fn sign_flattened_protected_bytes(
+        protected_bytes: &[u8],
+        payload_bytes: &[u8],
+    ) -> (Vec<u8>, PublicJwk) {
+        let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
+        let signer = LocalJwkSigner::new(private).expect("signer builds");
+        let protected = URL_SAFE_NO_PAD.encode(protected_bytes);
+        let payload = URL_SAFE_NO_PAD.encode(payload_bytes);
+        let signature = signer
+            .sign(format!("{protected}.{payload}").as_bytes())
+            .await
+            .expect("test JWS signs");
+        let jws = FlattenedJws {
+            protected,
+            payload,
+            signature: URL_SAFE_NO_PAD.encode(signature),
+        };
+        (
+            serde_json::to_vec(&jws).expect("JWS serializes"),
+            signer.public_jwk(),
+        )
+    }
+
     const FIXTURE_NONCE: &str = "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I";
 
     fn fixture_evidence() -> Evidence {
@@ -2310,6 +2337,146 @@ mod tests {
             "{}B",
             "A".repeat(42)
         )));
+    }
+
+    /// A key identifier that carries a thumbprint's length without being a
+    /// canonical RFC 7638 encoding is refused on every path that reads one:
+    /// the presented protected header, the pinned trusted key set, and the
+    /// revoked-key denylist.
+    #[tokio::test]
+    async fn non_canonical_key_identifiers_are_refused_on_every_path() {
+        // Forty-three base64url characters that decode to thirty-two bytes
+        // whose re-encoding is not the identifier itself.
+        let non_canonical = format!("{}B", "A".repeat(42));
+        assert!(!key_identifier_is_thumbprint(&non_canonical));
+
+        let evidence = fixture_evidence();
+        let now: DateTime<Utc> = "2026-08-02T12:00:00Z".parse().expect("time parses");
+        let policy = policy_for(&evidence, now);
+        let payload = serde_json::to_vec(&evidence).expect("evidence serializes");
+
+        // Presented header: the header pin refuses the identifier before any
+        // key is looked up.
+        let header = json!({
+            "alg": "ES256",
+            "kid": non_canonical,
+            "typ": EVIDENCE_JWS_TYP,
+            "cty": EVIDENCE_JWS_CTY
+        });
+        let (jws, public) = sign_payload_bytes(PRIVATE_JWK, header, &payload).await;
+        let jwks = jwks_document(public, []).expect("JWKS builds");
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::ProtectedHeader)
+        );
+
+        // Pinned trust: a key set entry whose own kid is not canonical is
+        // refused rather than matched.
+        let header = json!({
+            "alg": "ES256",
+            "kid": KEY_ID,
+            "typ": EVIDENCE_JWS_TYP,
+            "cty": EVIDENCE_JWS_CTY
+        });
+        let (jws, public) = sign_payload_bytes(PRIVATE_JWK, header, &payload).await;
+        let mut jwks = jwks_document(public, []).expect("JWKS builds");
+        jwks.keys[0]["kid"] = Value::String(non_canonical.clone());
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::Key)
+        );
+
+        // Denylist: a revoked-key list carrying the same identifier is refused
+        // before verification reads the response.
+        let mut revoked = policy.clone();
+        revoked.revoked_key_ids = vec![non_canonical];
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &revoked),
+            Err(VerificationError::Key)
+        );
+    }
+
+    /// The byte ceilings on a stored flattened JWS. Every sibling here is a
+    /// fully signed, otherwise-valid response whose padding is JSON
+    /// whitespace, so each refusal isolates exactly one bound: the decoded
+    /// protected header, the decoded payload, the decoded signature segment,
+    /// and the serialized response as a whole.
+    #[tokio::test]
+    async fn verifier_refuses_serializations_past_the_byte_ceilings() {
+        let evidence = fixture_evidence();
+        let payload = serde_json::to_vec(&evidence).expect("evidence serializes");
+        let now: DateTime<Utc> = "2026-08-02T12:00:00Z".parse().expect("time parses");
+        let policy = policy_for(&evidence, now);
+        let header = json!({
+            "alg": "ES256",
+            "kid": KEY_ID,
+            "typ": EVIDENCE_JWS_TYP,
+            "cty": EVIDENCE_JWS_CTY
+        });
+        let header_bytes = serde_json::to_vec(&header).expect("header serializes");
+        let jwks = jwks_document(fixture_signer().await.public_jwk(), []).expect("JWKS builds");
+
+        // A payload exactly at MAX_PAYLOAD_BYTES still verifies...
+        let padded = [
+            payload.clone(),
+            vec![b' '; MAX_PAYLOAD_BYTES - payload.len()],
+        ]
+        .concat();
+        let (jws, _) = sign_flattened_protected_bytes(&header_bytes, &padded).await;
+        assert!(verify_flattened_jws(&jws, &jwks, &policy).is_ok());
+
+        // ...and one byte over the same ceiling is refused on the segment's
+        // size alone, before the payload is parsed or compared to the
+        // published contract.
+        let over = [padded, vec![b' ']].concat();
+        let (jws, _) = sign_flattened_protected_bytes(&header_bytes, &over).await;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::Payload)
+        );
+
+        // The protected header carries the same pair of bounds.
+        let padded_header = [
+            header_bytes.clone(),
+            vec![b' '; MAX_PROTECTED_BYTES - header_bytes.len()],
+        ]
+        .concat();
+        let (jws, _) = sign_flattened_protected_bytes(&padded_header, &payload).await;
+        assert!(verify_flattened_jws(&jws, &jwks, &policy).is_ok());
+
+        let over_header = [padded_header, vec![b' ']].concat();
+        let (jws, _) = sign_flattened_protected_bytes(&over_header, &payload).await;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::ProtectedHeader)
+        );
+
+        // A signature segment decoded past its ceiling is refused on its size
+        // alone, before the signature it carries is verified.
+        let (jws, _) = sign_flattened_protected_bytes(&header_bytes, &payload).await;
+        let mut value: Value = serde_json::from_slice(&jws).expect("JWS parses");
+        let signature = URL_SAFE_NO_PAD
+            .decode(value["signature"].as_str().expect("signature segment"))
+            .expect("signature decodes");
+        value["signature"] = Value::String(
+            URL_SAFE_NO_PAD.encode([signature, vec![0u8; MAX_PROTECTED_BYTES]].concat()),
+        );
+        let oversized = serde_json::to_vec(&value).expect("JWS serializes");
+        assert_eq!(
+            verify_flattened_jws(&oversized, &jwks, &policy),
+            Err(VerificationError::Signature)
+        );
+
+        // A whole serialization past MAX_JWS_BYTES is refused by the
+        // whole-response ceiling before any segment is read: the same
+        // oversized-payload construction that drew a Payload refusal above now
+        // draws MalformedJws, because the response exceeds the total ceiling.
+        let huge = [payload.clone(), vec![b' '; 200_000]].concat();
+        let (jws, _) = sign_flattened_protected_bytes(&header_bytes, &huge).await;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::MalformedJws)
+        );
     }
 
     #[tokio::test]
@@ -3613,6 +3780,45 @@ mod tests {
             .encode(serde_json::to_vec(&json!([salt, name, value])).expect("disclosure serializes"))
     }
 
+    /// The digest a disclosure's bytes hash to under the issuance profile.
+    fn disclosure_digest(disclosure: &str) -> String {
+        URL_SAFE_NO_PAD.encode(presentation_disclosure_hash(disclosure))
+    }
+
+    /// Re-sign the fixture credential over caller-mutated claims, keeping the
+    /// presented disclosures, so a test can present a signed payload no issuer
+    /// would produce while the signature stays authentic.
+    async fn reissued_with_claims(disclosures: &[String], claims: &Map<String, Value>) -> String {
+        let header = json!({"alg": "ES256", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP});
+        let payload = serde_json::to_vec(claims).expect("claims serialize");
+        let reissued = sign_compact_jwt(&header, &payload, PRIVATE_JWK).await;
+        join_sd_jwt(&reissued, disclosures)
+    }
+
+    /// Re-issue the fixture credential with `disclosures[0]` replaced by a
+    /// caller-built disclosure, re-signing the payload so the signed digest set
+    /// commits to the replacement. A refusal of the result therefore comes
+    /// from the disclosure's own content, not from an unresolved digest.
+    async fn reissued_with_replacement_disclosure(
+        jwt: &str,
+        disclosures: &[String],
+        replacement: &str,
+    ) -> String {
+        let mut claims = sd_jwt_claims(jwt);
+        let root = claims
+            .get_mut("_sd")
+            .and_then(Value::as_array_mut)
+            .expect("root digest array");
+        let slot = root
+            .iter()
+            .position(|digest| digest.as_str() == Some(&disclosure_digest(&disclosures[0])))
+            .expect("the replaced disclosure's digest is signed");
+        root[slot] = Value::String(disclosure_digest(replacement));
+        let mut presented = disclosures.to_vec();
+        presented[0] = replacement.to_owned();
+        reissued_with_claims(&presented, &claims).await
+    }
+
     /// Decode the signed JWT payload of an issued serialization.
     fn sd_jwt_claims(jwt: &str) -> Map<String, Value> {
         let encoded = jwt.split('.').nth(1).expect("payload segment");
@@ -3763,6 +3969,68 @@ mod tests {
         );
     }
 
+    /// The disclosure salt window and the encoded-disclosure byte ceiling.
+    /// Issuance never leaves the window, so each case re-signs the credential
+    /// against a replacement disclosure the signed digest set genuinely
+    /// commits to; the refusals therefore come from the salt and length
+    /// checks, not from an unresolved digest.
+    #[tokio::test]
+    async fn sd_jwt_refuses_disclosures_outside_the_salt_window_and_over_the_byte_ceiling() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        let original: Vec<Value> = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(&disclosures[0])
+                .expect("fixture disclosure decodes"),
+        )
+        .expect("fixture disclosure parses");
+        let name = original[1].as_str().expect("name is a string").to_owned();
+        let value = original[2].clone();
+
+        // The window's two edges still resolve and verify...
+        for edge in [16usize, 64] {
+            let replacement = encode_disclosure(
+                &URL_SAFE_NO_PAD.encode(vec![0u8; edge]),
+                &name,
+                value.clone(),
+            );
+            let reissued =
+                reissued_with_replacement_disclosure(&jwt, &disclosures, &replacement).await;
+            assert!(
+                verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy).is_ok(),
+                "a {edge}-byte salt is inside the window"
+            );
+        }
+
+        // ...and one byte outside either edge is refused.
+        for outside in [15usize, 65] {
+            let replacement = encode_disclosure(
+                &URL_SAFE_NO_PAD.encode(vec![0u8; outside]),
+                &name,
+                value.clone(),
+            );
+            let reissued =
+                reissued_with_replacement_disclosure(&jwt, &disclosures, &replacement).await;
+            assert_eq!(
+                verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
+                Err(VerificationError::Disclosure)
+            );
+        }
+
+        // An encoded disclosure past MAX_DISCLOSURE_BYTES is refused on its
+        // length alone, before its digest is resolved.
+        let oversized = encode_disclosure(
+            &URL_SAFE_NO_PAD.encode([0u8; 16]),
+            &name,
+            json!("A".repeat(8300)),
+        );
+        let reissued = reissued_with_replacement_disclosure(&jwt, &disclosures, &oversized).await;
+        assert_eq!(
+            verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+    }
+
     #[tokio::test]
     async fn sd_jwt_added_disclosure_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
@@ -3784,6 +4052,105 @@ mod tests {
         repeated.push(disclosures[0].clone());
         assert_eq!(
             verify_sd_jwt_vc(join_sd_jwt(&jwt, &repeated).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+    }
+
+    /// Duplicate digests in the signed digest set. Version 1 issues complete
+    /// credentials, so one digest claiming two signed slots, whether listed
+    /// twice at the root, twice inside one nested set, or once at each
+    /// location, is a mutation. Each case re-signs the payload so the
+    /// duplication is genuinely signed, not merely presented.
+    #[tokio::test]
+    async fn sd_jwt_duplicate_signed_digests_rejected() {
+        // The same digest listed twice in the root set.
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        let mut claims = sd_jwt_claims(&jwt);
+        let root = claims
+            .get_mut("_sd")
+            .and_then(Value::as_array_mut)
+            .expect("root digest array");
+        let repeated = root[0].clone();
+        root.push(repeated);
+        let reissued = reissued_with_claims(&disclosures, &claims).await;
+        assert_eq!(
+            verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        // Field disclosures inside one container object, for the nested cases.
+        async fn structured_sd_jwt_vc() -> (String, JwksDocument, EvidenceVerificationPolicy) {
+            let mut evidence = fixture_evidence();
+            evidence.supported_values = vec![SupportedValue {
+                provides_value_for: "urn:example:concept:birth-certificate".to_owned(),
+                value: PublicValue::Structured(StructuredValue {
+                    form: StructuredValueForm::ReviewedStructuredValue,
+                    schema: "urn:example:schema:birth-certificate:v1".to_owned(),
+                    fields: BTreeMap::from([
+                        ("dateOfBirth".to_owned(), json!("2000-05-23")),
+                        ("familyName".to_owned(), json!("Smith")),
+                    ]),
+                }),
+            }];
+            let projections = BTreeMap::from([(
+                "urn:example:concept:birth-certificate".to_owned(),
+                "birthCertificate".to_owned(),
+            )]);
+            let signer = fixture_signer().await;
+            let input = crate::sdjwt_vc::issuance_input(&evidence, None, &projections)
+                .expect("structured evidence maps");
+            let serialized = signer
+                .sign_sd_jwt_vc(input)
+                .await
+                .expect("SD-JWT VC serializes");
+            let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+            let policy = policy_for(
+                &evidence,
+                "2026-08-02T12:00:00Z".parse().expect("time parses"),
+            );
+            (serialized, jwks, policy)
+        }
+
+        // The same digest listed twice inside one nested set.
+        let (serialized, jwks, policy) = structured_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        let mut claims = sd_jwt_claims(&jwt);
+        let nested = claims
+            .get_mut("birthCertificate")
+            .and_then(Value::as_object_mut)
+            .expect("container object")
+            .get_mut("_sd")
+            .and_then(Value::as_array_mut)
+            .expect("nested digest array");
+        let repeated = nested[0].clone();
+        nested.push(repeated);
+        let reissued = reissued_with_claims(&disclosures, &claims).await;
+        assert_eq!(
+            verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        // One digest claimed at the root and inside the nested set: the two
+        // locations cannot both own it.
+        let mut claims = sd_jwt_claims(&jwt);
+        let nested_first = claims
+            .get("birthCertificate")
+            .and_then(Value::as_object)
+            .expect("container object")
+            .get("_sd")
+            .and_then(Value::as_array)
+            .expect("nested digest array")[0]
+            .clone();
+        let root = claims
+            .get_mut("_sd")
+            .and_then(Value::as_array_mut)
+            .expect("root digest array");
+        root.push(nested_first);
+        root.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        let reissued = reissued_with_claims(&disclosures, &claims).await;
+        assert_eq!(
+            verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
             Err(VerificationError::Disclosure)
         );
     }
