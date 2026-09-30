@@ -434,6 +434,28 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             private::check(path, false)?;
         }
     }
+    // Every multi-purpose client shares the one generated first-party purpose
+    // connection, which projects the union of their claim names plus the
+    // signer-generated claims. The issuer bounds that union, not each client.
+    let mut purpose_claims = BTreeSet::new();
+    for client in &clients.clients {
+        if client_purposes(client)?.len() > 1 {
+            purpose_claims.extend(client_token_claims(client).into_keys());
+            purpose_claims.extend(
+                super::purpose::GENERATED_CLAIMS
+                    .iter()
+                    .map(|name| (*name).to_owned()),
+            );
+        }
+    }
+    let limit = registry_thunderid_tooling::description::MAX_FIRST_PARTY_TOKEN_ATTRIBUTES;
+    if purpose_claims.len() > limit {
+        bail!(
+            "multi-purpose clients may together project at most {limit} distinct token claims, \
+             counting registry_actor_kind, registry_purpose, and scope; they project {}",
+            purpose_claims.len()
+        );
+    }
     let generated_purpose_connection = usize::from(clients.clients.iter().any(|client| {
         client
             .claims
@@ -664,6 +686,25 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
                 .any(|client| !clients.issuer.exchange_clients.contains(client))
         {
             bail!("local exchange connections require distinct bounded IDs and declared exchange clients");
+        }
+        if matches!(connection.mapping, IssuerConnectionMapping::FirstParty) {
+            for id in &connection.clients {
+                let multi_purpose = clients
+                    .clients
+                    .iter()
+                    .find(|client| &client.id == id)
+                    .map(client_purposes)
+                    .transpose()?
+                    .is_some_and(|purposes| purposes.len() > 1);
+                if multi_purpose {
+                    bail!(
+                        "client {id} declares more than one registry_purpose, so its purposes are \
+                         signed by the generated purpose connection; it cannot also be listed on \
+                         the first-party connection {}",
+                        connection.id
+                    );
+                }
+            }
         }
     }
     let mut app_ids = BTreeSet::new();

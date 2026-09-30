@@ -296,6 +296,11 @@ an exact scope subset and, when the client declares several purposes, one
 declared `purpose`. The rehearsal obtains a separate short-lived issuer token
 for every distinct `(scopes, purpose)` claim set while keeping the same OAuth
 client identity. An undeclared scope or purpose is refused before schema test.
+Every multi-purpose client shares one generated first-party signer, so the
+distinct claim names of all of them together, counting `registry_actor_kind`,
+`registry_purpose`, and `scope`, may number at most 16, and a multi-purpose
+client cannot also be listed on an authored `first_party` exchange connection.
+Both are refused when the clients file is read.
 
 A seed defaults to `operation: create`. The illustrative `reference-record`
 entity and `reference-loader` profile must be authored in the project, with an
