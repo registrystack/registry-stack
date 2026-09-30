@@ -2153,6 +2153,7 @@ impl PostgresRecordMutationService {
                     ),
                     MutationError::PreconditionFailed
                     | MutationError::Conflict
+                    | MutationError::AuthorizationRefused
                     | MutationError::FieldPatternViolation { .. } => (
                         IngestionAttemptOutcome::Refused,
                         Some(IngestionServiceError::PreconditionFailed),
