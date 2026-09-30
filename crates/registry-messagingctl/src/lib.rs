@@ -10,9 +10,10 @@
 //!   reports the package digest and renders every template's sample.
 //! - `preview` renders one template version with given data, offline, and
 //!   in JSON prints the exact bytes the runtime's preview route answers.
-//! - `apply` compares the package with the database's package ledger, and
-//!   with `--apply` records it as the package the runtime serves after its
-//!   next restart.
+//! - `plan` reads the configured package, activation ledger, schema, and
+//!   runtime role without writing; `apply` performs that activation with
+//!   migration authority; `status` reads the resulting history with the
+//!   runtime credential.
 //! - `messages list` and `messages show` read accepted messages with the
 //!   recipient masked; `messages retry`, `settle`, and `cancel` report what
 //!   the action would do to one message, and with `--apply` do it. Each
@@ -47,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_messaging::activation::{ActivationError, ActivationRefusal, ApplyRequest};
 use registry_messaging::config::{RuntimeConfig, RuntimeConfigError};
 use registry_messaging::http::preview_json;
 use registry_messaging::messages::{
@@ -58,8 +60,8 @@ use registry_messaging::package::{
 };
 use registry_messaging::retention::RetentionError;
 use registry_messaging::runtime::{
-    apply_package, erase_expired_as_operator, message_reader, message_store, PackageChange,
-    RuntimeError,
+    activation_plan, activation_status, apply_activation, erase_expired_as_operator,
+    message_reader, message_store, RuntimeError,
 };
 use registry_messaging_core::{
     ContentRefusal, MessageDispatch, MessageStatus, ProblemCode, TemplatePreviewRequest,
@@ -100,9 +102,12 @@ enum Command {
     Check(CheckArgs),
     /// Render one template version with the given data, offline.
     Preview(PreviewArgs),
-    /// Compare the package with the package ledger, and record it with
-    /// --apply.
+    /// Report what activating the configured package would change, without writing.
+    Plan(ActivationArgs),
+    /// Apply schema changes and record the configured package as active.
     Apply(ApplyArgs),
+    /// Report the active package, activation history, schema, and role mode.
+    Status(ActivationArgs),
     /// Read accepted messages, and retry, settle, or cancel one.
     #[command(subcommand)]
     Messages(MessagesCommand),
@@ -301,12 +306,21 @@ struct PreviewArgs {
 
 #[derive(Debug, Args)]
 struct ApplyArgs {
+    #[command(flatten)]
+    activation: ActivationArgs,
+    /// Change or ticket reference; stored only as an activation-scoped keyed hash.
+    #[arg(long, value_name = "TEXT")]
+    operator_reference: Option<String>,
+    /// Backup or snapshot reference recorded with this activation. Repeatable.
+    #[arg(long = "backup", value_name = "REF")]
+    backups: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct ActivationArgs {
     /// Absolute path to the runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
-    /// Record the package in the ledger. Without it, only report the change.
-    #[arg(long)]
-    apply: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -351,7 +365,7 @@ enum View {
     Package,
     Check,
     Preview,
-    Apply,
+    Activation,
     MessageList,
     MessageShow,
     MessageAction,
@@ -450,8 +464,7 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         ),
         "package.outcome-unknown" => (
             "database",
-            "Run messagingctl apply without --apply to see which package the ledger names \
-             active before applying again.",
+            "Run messagingctl status to see which activation the ledger records before applying again.",
         ),
         "audit.unconfirmed" => (
             "audit",
@@ -460,6 +473,36 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         "audit.unavailable" => (
             "audit",
             "Restore the audit destination, then retry; nothing was changed.",
+        ),
+        "messagingctl.activation.not-activated"
+        | "messagingctl.activation.package-not-active"
+        | "messagingctl.activation.grants-stale" => (
+            "database_activation",
+            "Run messagingctl plan with the runtime configuration, then apply with the migration credential.",
+        ),
+        "messagingctl.activation.database-id-mismatch" => (
+            "database_activation",
+            "Use the database belonging to this deployment, or restore the configured deployment identity.",
+        ),
+        "messagingctl.activation.role-mode-weakened" => (
+            "database_activation",
+            "Restore the split-role ownership and grants, then rerun messagingctl plan.",
+        ),
+        "messagingctl.activation.ledger-unreadable" => (
+            "database_activation",
+            "Restore the runtime credential's read access to the activation ledger, then retry.",
+        ),
+        "messagingctl.activation.schema-newer" => (
+            "database_activation",
+            "Use the Messaging release that owns the recorded schema version.",
+        ),
+        "messagingctl.activation.schema-invalid" => (
+            "database_activation",
+            "Restore a database whose migration history is an ordered prefix of this Messaging release.",
+        ),
+        "messagingctl.activation.invalid-reference" => (
+            "command_arguments",
+            "Correct the operator or backup reference bounds, then retry.",
         ),
         "database.unavailable" => (
             "database",
@@ -575,7 +618,9 @@ where
         Command::Package(args) => package(&args),
         Command::Check(args) => check(&args.source),
         Command::Preview(args) => preview(&args),
-        Command::Apply(args) => apply(&args.runtime_config, args.apply),
+        Command::Plan(args) => plan(&args.runtime_config),
+        Command::Apply(args) => apply(&args),
+        Command::Status(args) => status(&args.runtime_config),
         Command::Messages(command) => messages(&command),
         Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args),
     };
@@ -589,7 +634,9 @@ fn command_path(command: &Command) -> &'static str {
         Command::Package(_) => "package",
         Command::Check(_) => "check",
         Command::Preview(_) => "preview",
+        Command::Plan(_) => "plan",
         Command::Apply(_) => "apply",
+        Command::Status(_) => "status",
         Command::Messages(MessagesCommand::List(_)) => "messages list",
         Command::Messages(MessagesCommand::Show(_)) => "messages show",
         Command::Messages(MessagesCommand::Retry(_)) => "messages retry",
@@ -660,7 +707,7 @@ fn init(directory: &Path) -> Outcome {
                 "created": created,
                 "next": [
                     "Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.",
-                    "Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messaging migrate, then messagingctl apply --apply, then messaging serve.",
+                    "Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messagingctl plan, then messagingctl apply, then messaging serve.",
                 ],
             }),
             View::Init,
@@ -923,7 +970,7 @@ fn async_runtime() -> Result<tokio::runtime::Runtime, Outcome> {
         })
 }
 
-fn apply(path: &Path, record: bool) -> Outcome {
+fn plan(path: &Path) -> Outcome {
     let config = match RuntimeConfig::load(path) {
         Ok(config) => config,
         Err(error) => return config_refusal(&error),
@@ -932,18 +979,101 @@ fn apply(path: &Path, record: bool) -> Outcome {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
-    match runtime.block_on(apply_package(&config, record)) {
-        Ok(applied) => Outcome::new(
+    match runtime.block_on(activation_plan(&config)) {
+        Ok(plan) => {
+            let refused = !plan.refusals.is_empty();
+            let diagnostics = activation_diagnostics(&plan.refusals);
+            let report = json!({
+                "ok": !refused,
+                "runtimeConfig": path,
+                "packageDigest": plan.package_digest,
+                "activeDigest": plan.active_digest,
+                "change": plan.change,
+                "databaseId": plan.database_id,
+                "planKind": plan.plan_kind,
+                "pendingSchemaVersions": plan.pending_schema_versions,
+                "runtimeRoleMode": plan.runtime_role_mode,
+                "grantsCurrent": plan.grants_current,
+                "refusals": plan.refusals,
+                "diagnostics": diagnostics,
+            });
+            if refused {
+                Outcome {
+                    report,
+                    exit: DOMAIN_REFUSAL_EXIT,
+                    view: View::Activation,
+                    raw_json: None,
+                }
+            } else {
+                Outcome::new(report, View::Activation)
+            }
+        }
+        Err(error) => apply_failure(error),
+    }
+}
+
+fn apply(args: &ApplyArgs) -> Outcome {
+    let path = &args.activation.runtime_config;
+    let config = match RuntimeConfig::load(path) {
+        Ok(config) => config,
+        Err(error) => return config_refusal(&error),
+    };
+    let runtime = match async_runtime() {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
+    };
+    let request = ApplyRequest {
+        operator_reference: args.operator_reference.clone(),
+        backup_references: args.backups.clone(),
+    };
+    match runtime.block_on(apply_activation(&config, &request)) {
+        Ok(applied) => {
+            let change = if applied.recorded { "activate" } else { "none" };
+            let active_digest = if applied.recorded {
+                applied.activation.predecessor_package_digest.clone()
+            } else {
+                Some(applied.activation.package_digest.clone())
+            };
+            Outcome::new(
+                json!({
+                "ok": true,
+                "runtimeConfig": path,
+                "packageDigest": applied.activation.package_digest,
+                "activeDigest": active_digest,
+                "change": change,
+                "applied": applied.recorded,
+                "restartRequired": applied.recorded,
+                "activation": applied.activation,
+                "schemaVersionsApplied": applied.schema_versions_applied,
+                }),
+                View::Activation,
+            )
+        }
+        Err(error) => apply_failure(error),
+    }
+}
+
+fn status(path: &Path) -> Outcome {
+    let config = match RuntimeConfig::load(path) {
+        Ok(config) => config,
+        Err(error) => return config_refusal(&error),
+    };
+    let runtime = match async_runtime() {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
+    };
+    match runtime.block_on(activation_status(&config)) {
+        Ok(status) => Outcome::new(
             json!({
                 "ok": true,
                 "runtimeConfig": path,
-                "packageDigest": applied.package_digest,
-                "activeDigest": applied.active_digest,
-                "change": applied.change,
-                "applied": applied.applied,
-                "restartRequired": applied.applied,
+                "active": status.active,
+                "history": status.history,
+                "schemaVersion": status.schema_version,
+                "runtimeRoleMode": status.runtime_role_mode,
+                "grantsCurrent": status.grants_current,
             }),
-            View::Apply,
+            View::Activation,
         ),
         Err(error) => apply_failure(error),
     }
@@ -953,18 +1083,96 @@ fn apply(path: &Path, record: bool) -> Outcome {
 fn apply_failure(error: RuntimeError) -> Outcome {
     match error {
         RuntimeError::Config(error) => config_refusal(&error),
+        RuntimeError::Activation(ActivationError::Refused(refusals)) => {
+            activation_refused(refusals)
+        }
+        RuntimeError::Activation(ActivationError::NotActivated) => Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "messagingctl.activation.not-activated",
+            "database",
+            error.to_string(),
+        ),
+        RuntimeError::Activation(ActivationError::DatabaseIdMismatch) => Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "messagingctl.activation.database-id-mismatch",
+            "identity.databaseId",
+            error.to_string(),
+        ),
+        RuntimeError::Activation(ActivationError::PackageNotActive) => Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "messagingctl.activation.package-not-active",
+            "package",
+            error.to_string(),
+        ),
+        RuntimeError::Activation(ActivationError::RoleModeWeakened) => Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "messagingctl.activation.role-mode-weakened",
+            "database.runtimeUrlRef",
+            error.to_string(),
+        ),
+        RuntimeError::Activation(ActivationError::GrantsStale) => Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "messagingctl.activation.grants-stale",
+            "database.runtimeUrlRef",
+            error.to_string(),
+        ),
+        RuntimeError::Activation(ActivationError::AppliedUnaudited { .. }) => {
+            audit_unconfirmed(&error)
+        }
+        RuntimeError::Activation(ActivationError::OutcomeUnknown { .. }) => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "package.outcome-unknown",
+            "database",
+            error.to_string(),
+        ),
+        RuntimeError::Activation(ActivationError::Audit(_)) => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "audit.unavailable",
+            "audit",
+            error.to_string(),
+        ),
         RuntimeError::AuditUnconfirmed { .. } => audit_unconfirmed(&error),
         RuntimeError::OutcomeUnknown { .. } => Outcome::refused(
             OPERATIONAL_FAILURE_EXIT,
             "package.outcome-unknown",
             "database",
             format!(
-                "{error}; run messagingctl apply without --apply to see which package the \
-                 ledger names active before applying again"
+                "{error}; run messagingctl status to see which activation the ledger records \
+                 before applying again"
             ),
         ),
         error => database_unavailable(&error),
     }
+}
+
+fn activation_refused(refusals: Vec<ActivationRefusal>) -> Outcome {
+    Outcome {
+        report: json!({
+            "ok": false,
+            "diagnostics": activation_diagnostics(&refusals),
+            "refusals": refusals,
+        }),
+        exit: DOMAIN_REFUSAL_EXIT,
+        view: View::Activation,
+        raw_json: None,
+    }
+}
+
+fn activation_diagnostics(refusals: &[ActivationRefusal]) -> Vec<Value> {
+    refusals
+        .iter()
+        .map(|refusal| {
+            let (artifact, suggested_action) = guidance(refusal.code, DOMAIN_REFUSAL_EXIT);
+            json!({
+                "severity": "error",
+                "code": refusal.code,
+                "artifact": artifact,
+                "path": refusal.path,
+                "message": refusal.message,
+                "suggestedAction": suggested_action,
+            })
+        })
+        .collect()
 }
 
 /// A change was committed, and its audit outcome record was not written.
@@ -1375,7 +1583,7 @@ fn render_human(
         View::Package => render_package(report, stdout),
         View::Check => render_check(report, stdout),
         View::Preview => render_preview(report, stdout),
-        View::Apply => render_apply(report, stdout),
+        View::Activation => render_activation(report, stdout),
         View::MessageList => render_message_list(report, stdout),
         View::MessageShow => render_message_show(report, stdout),
         View::MessageAction => render_message_action(report, stdout),
@@ -1527,21 +1735,30 @@ fn render_preview(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> 
     Ok(())
 }
 
-fn render_apply(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    writeln!(stdout, "package digest: {}", text(&report["packageDigest"]))?;
-    writeln!(
-        stdout,
-        "active digest: {}",
-        report["activeDigest"].as_str().unwrap_or("none")
-    )?;
-    let change = if report["change"] == json!(PackageChange::None) {
-        "none: the ledger already names this package active"
-    } else if report["applied"] == json!(true) {
-        "recorded: restart the runtime to serve this package"
-    } else {
-        "activate: run again with --apply to record this package"
-    };
-    writeln!(stdout, "change: {change}")
+fn render_activation(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    if let Some(digest) = report.get("packageDigest").and_then(Value::as_str) {
+        writeln!(stdout, "package digest: {digest}")?;
+    }
+    if let Some(change) = report.get("change").and_then(Value::as_str) {
+        writeln!(stdout, "change: {change}")?;
+    }
+    if let Some(active) = report.get("active") {
+        writeln!(
+            stdout,
+            "active: {}",
+            active
+                .get("packageDigest")
+                .and_then(Value::as_str)
+                .unwrap_or("none")
+        )?;
+    }
+    if let Some(version) = report.get("schemaVersion") {
+        writeln!(stdout, "schema version: {}", text(version))?;
+    }
+    if let Some(mode) = report.get("runtimeRoleMode").and_then(Value::as_str) {
+        writeln!(stdout, "runtime role mode: {mode}")?;
+    }
+    Ok(())
 }
 
 fn render_retention(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
@@ -1700,6 +1917,8 @@ accessProfiles:
         format!(
             r"apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
 kind: MessagingRuntimeConfig
+identity:
+  databaseId: messaging-test
 package:
   root: {root}/package
 listener:
@@ -2476,6 +2695,14 @@ audit:
 
     #[test]
     fn a_post_commit_apply_or_retention_failure_is_not_reported_as_database_unavailable() {
+        let unavailable = RuntimeError::Activation(ActivationError::Audit("refused".to_owned()));
+        let (exit, code, message) = diagnostic(&apply_failure(unavailable));
+        assert_eq!(
+            (exit, code.as_str()),
+            (OPERATIONAL_FAILURE_EXIT, "audit.unavailable")
+        );
+        assert!(message.contains("activation audit failed"), "{message}");
+
         let unconfirmed = RuntimeError::AuditUnconfirmed {
             action: "package activation",
             detail: "refused".to_owned(),
@@ -2496,10 +2723,7 @@ audit:
             (exit, code.as_str()),
             (OPERATIONAL_FAILURE_EXIT, "package.outcome-unknown")
         );
-        assert!(
-            message.contains("run messagingctl apply without --apply"),
-            "{message}"
-        );
+        assert!(message.contains("run messagingctl status"), "{message}");
 
         let unconfirmed = RuntimeError::AuditUnconfirmed {
             action: "retention batch",
@@ -2532,5 +2756,43 @@ audit:
             (OPERATIONAL_FAILURE_EXIT, "database.unavailable")
         );
         assert!(message.contains("batches committed before"), "{message}");
+    }
+
+    #[test]
+    fn activation_boundary_failures_are_actionable_domain_refusals() {
+        let cases = [
+            (
+                ActivationError::NotActivated,
+                "messagingctl.activation.not-activated",
+                "database",
+            ),
+            (
+                ActivationError::DatabaseIdMismatch,
+                "messagingctl.activation.database-id-mismatch",
+                "identity.databaseId",
+            ),
+            (
+                ActivationError::PackageNotActive,
+                "messagingctl.activation.package-not-active",
+                "package",
+            ),
+            (
+                ActivationError::RoleModeWeakened,
+                "messagingctl.activation.role-mode-weakened",
+                "database.runtimeUrlRef",
+            ),
+            (
+                ActivationError::GrantsStale,
+                "messagingctl.activation.grants-stale",
+                "database.runtimeUrlRef",
+            ),
+        ];
+        for (error, expected_code, expected_path) in cases {
+            let outcome = apply_failure(RuntimeError::Activation(error));
+            let (exit, code, _) = diagnostic(&outcome);
+            assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+            assert_eq!(code, expected_code);
+            assert_eq!(outcome.report["diagnostics"][0]["path"], expected_path);
+        }
     }
 }

@@ -29,7 +29,7 @@ RUST_TOOLCHAIN = "1.95.0"
 PURPOSES = {"candidate_input", "review_only"}
 MINT_RETIREMENT_VERSION = (0, 31, 0)
 MACOS_FIPS_ARCHIVE_MINIMUM_VERSION = (0, 33, 0)
-# The Scheduling runtime ships only inside its image; its operator tool is a
+# Scheduling has no macOS runtime asset; its operator tool is a native
 # release binary from this version.
 SCHEDULINGCTL_MINIMUM_VERSION = (0, 36, 0)
 

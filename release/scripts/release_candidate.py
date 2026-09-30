@@ -86,6 +86,8 @@ BREG_SERVICES_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {
     "breg-mcp",
     "breg-review",
 }
+RENDER_RUNTIME_IMAGE_NAMES = {"registry-render"}
+EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES = {"evidence-oid4vci"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -125,7 +127,12 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/{image}.{suffix}.json"
-    for image in MESSAGING_RUNTIME_IMAGE_NAMES | BREG_SERVICES_RUNTIME_IMAGE_NAMES
+    for image in (
+        MESSAGING_RUNTIME_IMAGE_NAMES
+        | BREG_SERVICES_RUNTIME_IMAGE_NAMES
+        | RENDER_RUNTIME_IMAGE_NAMES
+        | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+    )
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -162,6 +169,10 @@ def _candidate_image_names(version: str) -> set[str]:
         image_names = image_names | BREG_SERVICES_RUNTIME_IMAGE_NAMES
     if release_roster.messaging_in_release(parsed):
         image_names = image_names | MESSAGING_RUNTIME_IMAGE_NAMES
+    if release_roster.render_in_release(parsed):
+        image_names = image_names | RENDER_RUNTIME_IMAGE_NAMES
+    if release_roster.evidence_oid4vci_image_in_release(parsed):
+        image_names = image_names | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
     return image_names
 
 
@@ -441,6 +452,8 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             ] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"
+    if release_roster.discoveryctl_in_release(version_tuple):
+        inventory[f"discoveryctl-{tag}-linux-amd64"] = "binary"
     if version_tuple >= BREG_RELEASE_MINIMUM_VERSION:
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"breg-{tag}-{platform}"] = "binary"
@@ -458,12 +471,16 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         inventory[f"casework-{tag}-install.sh"] = "installer"
         inventory["casework-install.sh"] = "installer"
     if version_tuple >= OPERATOR_TOOL_MINIMUM_VERSION:
-        # The Scheduling runtime ships only inside its image.
+        # Scheduling runtime binaries join after the existing operator tool.
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"schedulingctl-{tag}-{platform}"] = "binary"
+    if release_roster.scheduling_binary_in_release(version_tuple):
+        inventory[f"scheduling-{tag}-linux-amd64"] = "binary"
     if release_roster.messaging_in_release(version_tuple):
         inventory[f"messaging-{tag}-linux-amd64"] = "binary"
         inventory[f"messagingctl-{tag}-linux-amd64"] = "binary"
+    if release_roster.render_in_release(version_tuple):
+        inventory[f"registry-render-{tag}-linux-amd64"] = "binary"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:

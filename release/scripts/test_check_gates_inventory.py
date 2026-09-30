@@ -1210,6 +1210,14 @@ class GateInventoryTest(unittest.TestCase):
             if step.get("name") == "Prove production Linux Node client recipe"
         )
         self.assertIn("for client in discovery evidence relay", proof)
+        # The source facade loads every binding from its platform package.
+        # Both the build loop and the copy loop must include Messaging.
+        self.assertEqual(
+            proof.count(
+                "for client in discovery evidence relay breg casework messaging; do"
+            ),
+            2,
+        )
         self.assertIn("release/scripts/build-linux-node-client", proof)
         self.assertIn('--target "${{ matrix.target }}"', proof)
         self.assertIn('--napi-platform "${{ matrix.napi_platform }}"', proof)

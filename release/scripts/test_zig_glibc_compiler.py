@@ -295,9 +295,9 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "target = pathlib.Path('target/release')\n"
             "target.mkdir(parents=True, exist_ok=True)\n"
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
-            "'evidencectl', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
+            "'evidencectl', 'evidence-oid4vci', 'discovery', 'discoveryctl', 'breg', 'bregctl', "
             "'casework', 'caseworkctl', 'scheduling', 'schedulingctl', 'messaging', "
-            "'messagingctl'):\n"
+            "'messagingctl', 'registry-render'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
@@ -324,7 +324,13 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "'registry-manifest', 'relay', 'relayctl']\n"
             "if parsed >= (0, 24, 0):\n"
             "    core.insert(0, 'discovery')\n"
+            "if release_roster.discoveryctl_in_release(parsed):\n"
+            "    core.append('discoveryctl')\n"
+            "if release_roster.render_in_release(parsed):\n"
+            "    core.append('registry-render')\n"
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
+            "if release_roster.breg_services_in_release(parsed):\n"
+            "    breg += ['breg-mcp', 'breg-review']\n"
             "selected = (core if group in ('all', 'core') else []) + "
             "(breg if group in ('all', 'breg') else []) + "
             "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else []) + "
@@ -332,9 +338,15 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "(['schedulingctl'] if parsed >= (0, 36, 0) and group in ('all', 'scheduling') else []) + "
             "(['messaging', 'messagingctl'] if release_roster.messaging_in_release(parsed) and group in ('all', 'messaging') else [])\n"
             "for name in selected:\n"
-            "    if name != 'scheduling' or group == 'scheduling':\n"
+            "    if name != 'scheduling' or group == 'scheduling' or release_roster.scheduling_binary_in_release(parsed):\n"
             "        (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
             "images = ['discovery', 'breg', 'casework', 'scheduling', 'messaging', 'evidence', 'relay']\n"
+            "if release_roster.breg_services_in_release(parsed):\n"
+            "    images += ['breg-mcp', 'breg-review']\n"
+            "if release_roster.evidence_oid4vci_image_in_release(parsed):\n"
+            "    images.append('evidence-oid4vci')\n"
+            "if release_roster.render_in_release(parsed):\n"
+            "    images.append('registry-render')\n"
             "if parsed >= (0, 36, 0):\n"
             "    images += ['bregctl', 'caseworkctl', 'schedulingctl', 'messagingctl']\n"
             "for name in images:\n"
@@ -359,25 +371,6 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         }
         for relative in ("dist/bin", "dist/image-bin"):
             (self.root / relative).mkdir(parents=True)
-
-    def set_messaging_first_release(self, first_release: tuple[int, int, int]) -> None:
-        """Name a hypothetical first Messaging release in the fixture's roster.
-
-        Messaging has not joined a release, so the production roster is None.
-        Rewriting the fixture's copy covers the inclusion path without any
-        production knob.
-        """
-        roster = self.scripts / "release_roster.py"
-        unset = "MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = None\n"
-        text = roster.read_text(encoding="utf-8")
-        self.assertIn(unset, text)
-        roster.write_text(
-            text.replace(
-                unset,
-                f"MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = {first_release!r}\n",
-            ),
-            encoding="utf-8",
-        )
 
     def run_payload(
         self,
@@ -511,6 +504,37 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([], breg)
 
+    def test_core_stages_render_and_oid4vci_image_only_from_v0_38(self) -> None:
+        result, historical_calls = self.run_payload(version="0.37.99", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            any("registry-render" in call["args"] for call in historical_calls)
+        )
+        historical_bin, historical_images = self.staged()
+        self.assertFalse(any(name.startswith("registry-render-") for name in historical_bin))
+        self.assertNotIn("registry-render", historical_images)
+        self.assertNotIn("evidence-oid4vci", historical_images)
+
+        result, current_calls = self.run_payload(version="0.38.0", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-render",
+                "--bin",
+                "registry-render",
+            ],
+            [call["args"] for call in current_calls],
+        )
+        current_bin, current_images = self.staged()
+        self.assertIn("registry-render-v0.38.0-linux-amd64", current_bin)
+        self.assertIn("discoveryctl-v0.38.0-linux-amd64", current_bin)
+        self.assertIn("registry-render", current_images)
+        self.assertIn("evidence-oid4vci", current_images)
+
     def test_casework_group_builds_both_exact_binary_targets_from_v0_30(self) -> None:
         result, calls = self.run_payload(version="0.30.0", group="casework")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -603,10 +627,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                             (self.root / "dist/image-bin" / name).read_text(),
                         )
 
-    def test_no_version_builds_messaging_until_the_roster_names_a_first_release(
-        self,
-    ) -> None:
-        for version in ("0.35.0", "0.36.0", "1.0.0"):
+    def test_historical_versions_do_not_build_messaging(self) -> None:
+        for version in ("0.35.0", "0.36.0", "0.37.99"):
             for group in ("messaging", "all"):
                 with self.subTest(version=version, group=group):
                     result, calls = self.run_payload(version=version, group=group)
@@ -625,12 +647,11 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
     def test_messaging_group_builds_both_exact_binary_targets_from_its_first_release(
         self,
     ) -> None:
-        self.set_messaging_first_release((0, 36, 0))
-        result, calls = self.run_payload(version="0.35.0", group="messaging")
+        result, calls = self.run_payload(version="0.37.99", group="messaging")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([], calls)
         self.assertEqual([], list((self.root / "dist/bin").iterdir()))
-        result, calls = self.run_payload(version="0.36.0", group="messaging")
+        result, calls = self.run_payload(version="0.38.0", group="messaging")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             [
@@ -656,7 +677,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [call["args"] for call in calls],
         )
         self.assertEqual(
-            ["messaging-v0.36.0-linux-amd64", "messagingctl-v0.36.0-linux-amd64"],
+            ["messaging-v0.38.0-linux-amd64", "messagingctl-v0.38.0-linux-amd64"],
             sorted(path.name for path in (self.root / "dist/bin").iterdir()),
         )
         self.assertEqual(
@@ -788,15 +809,16 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             ("0.31.0", ("core", "breg", "casework")),
             # Messaging has not joined a release, so its shard is empty.
             ("0.35.0", groups_with_messaging),
+            (
+                "0.38.0",
+                groups_with_messaging,
+            ),
         ):
             with self.subTest(version=version):
                 self.assert_merged_groups_equivalent_to_all(version, groups)
-        self.set_messaging_first_release((0, 36, 0))
-        with self.subTest(version="0.36.0", messaging_first_release=(0, 36, 0)):
-            self.assert_merged_groups_equivalent_to_all("0.36.0", groups_with_messaging)
-            self.assertTrue(
-                (self.root / "merge-0.36.0/merged-groups/image-bin/messaging").is_file()
-            )
+        self.assertTrue(
+            (self.root / "merge-0.38.0/merged-groups/image-bin/messaging").is_file()
+        )
 
     def test_v0_36_merged_groups_with_operator_tools_are_equivalent_to_all(
         self,

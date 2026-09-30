@@ -88,7 +88,7 @@ if ((version_major > 0 || version_minor >= 30)) ||
    [[ "${include_casework_override}" -eq 1 ]]; then
   include_casework=1
 fi
-# The Scheduling runtime ships only inside its image; its operator tool is a
+# Scheduling has no macOS runtime asset; its operator tool is a native
 # release binary from 0.36.0.
 include_schedulingctl=0
 if ((version_major > 0 || version_minor >= 36)); then

@@ -1097,8 +1097,12 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
     let other = format!("sha256:{}", "0".repeat(64));
     harness
         .execute(
-            "INSERT INTO messaging_package_ledger (package_digest, runtime_version, activated_at) \
-             VALUES ($1, 'test', now())",
+            "INSERT INTO messaging_activations \
+               (activation_id, apply_order, package_digest, predecessor_package_digest, \
+                database_id, plan_kind, applied_at, role_mode) \
+             SELECT gen_random_uuid(), apply_order + 1, $1, package_digest, \
+                    database_id, 'successor', now(), role_mode \
+               FROM messaging_activations ORDER BY apply_order DESC LIMIT 1",
             &[&other],
         )
         .await;
@@ -1106,6 +1110,28 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
     assert_eq!(problem["code"], "service.unavailable");
     assert_eq!(harness.call("GET", "/health", None).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn readiness_rechecks_the_database_identity_recorded_after_startup() {
+    let harness = Harness::start().await;
+    assert_eq!(harness.call("GET", "/ready", None).await.0, StatusCode::OK);
+
+    let digest = harness.package.digest().to_owned();
+    harness
+        .execute(
+            "INSERT INTO messaging_activations \
+               (activation_id, apply_order, package_digest, predecessor_package_digest, \
+                database_id, plan_kind, applied_at, role_mode) \
+             SELECT gen_random_uuid(), apply_order + 1, $1, package_digest, \
+                    'another-deployment', 'successor', now(), role_mode \
+               FROM messaging_activations ORDER BY apply_order DESC LIMIT 1",
+            &[&digest],
+        )
+        .await;
+    let (status, problem) = harness.call("GET", "/ready", None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
 }
 
 /// Put one message's dispatch job in the unknown outcome an operator

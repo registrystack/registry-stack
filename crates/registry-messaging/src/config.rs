@@ -87,6 +87,9 @@ pub const MAXIMUM_TLS_TRUST_PROFILES: usize = 64;
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(required, with = "IdentityConfig"))]
+    pub identity: Option<IdentityConfig>,
     pub package: RuntimePackageConfig,
     pub listener: ListenerConfig,
     #[serde(default)]
@@ -107,6 +110,16 @@ pub struct RuntimeConfig {
     /// addition to the system roots.
     #[serde(default)]
     pub tls_trust_profiles: BTreeMap<String, TlsTrustProfileConfig>,
+}
+
+/// The logical database identity this deployment owns. It is independent of
+/// the connection URL and PostgreSQL database name.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityConfig {
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub database_id: String,
 }
 
 /// One provider's runtime half. The package declares the provider's kind,
@@ -335,7 +348,26 @@ impl RuntimeConfig {
         Ok(loaded)
     }
 
+    #[must_use]
+    pub fn database_id(&self) -> &str {
+        self.identity
+            .as_ref()
+            .map_or("", |identity| identity.database_id.as_str())
+    }
+
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
+        let identity = self
+            .identity
+            .as_ref()
+            .ok_or(RuntimeConfigError::MissingIdentity)?;
+        let database_id = identity.database_id.as_str();
+        if database_id.trim().is_empty()
+            || database_id.trim() != database_id
+            || database_id.len() > 256
+            || database_id.chars().any(char::is_control)
+        {
+            return Err(RuntimeConfigError::InvalidIdentity);
+        }
         self.package.check()?;
         self.secret_providers.check()?;
         self.audit.destination()?;
@@ -653,6 +685,10 @@ fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
 
 #[derive(Debug, Error)]
 pub enum RuntimeConfigError {
+    #[error("identity.databaseId is required; add identity.databaseId with the logical id of the database this deployment owns")]
+    MissingIdentity,
+    #[error("identity.databaseId must be non-empty, at most 256 bytes, without surrounding whitespace or control characters")]
+    InvalidIdentity,
     #[error(transparent)]
     Shared(#[from] registry_platform_config::RuntimeConfigError),
     #[error(transparent)]
@@ -709,6 +745,7 @@ impl RuntimeConfigError {
     #[must_use]
     pub fn path(&self) -> &str {
         match self {
+            Self::MissingIdentity | Self::InvalidIdentity => "identity.databaseId",
             Self::Shared(error) => error.field(),
             Self::Block(error) => error.field(),
             Self::InvalidAuditDestination(_) => "audit",
@@ -745,6 +782,7 @@ pub(crate) mod tests {
         json!({
             "apiVersion": MESSAGING_RUNTIME_API_VERSION,
             "kind": MESSAGING_RUNTIME_KIND,
+        "identity": {"databaseId": "messaging-test"},
             "package": {"root": root.join("package")},
             "listener": {"bind": "127.0.0.1:8107", "tlsTermination": "development-loopback"},
             "secretProviders": {"file": {"root": root.join("secrets")}, "environment": {}},
@@ -814,6 +852,35 @@ pub(crate) mod tests {
 
     fn base() -> Value {
         runtime_value(Path::new("/placeholder"))
+    }
+
+    #[test]
+    fn database_identity_is_required_bounded_and_value_free() {
+        let mut runtime = base();
+        runtime.as_object_mut().unwrap().remove("identity");
+        let error = load(runtime).unwrap_err();
+        assert_eq!(error.path(), "identity.databaseId");
+        assert!(error
+            .to_string()
+            .contains("identity.databaseId is required"));
+        for database_id in [
+            "",
+            " ",
+            " production",
+            "production ",
+            "private\nidentity",
+            &"x".repeat(257),
+        ] {
+            let mut runtime = base();
+            runtime["identity"] = json!({"databaseId": database_id});
+            let error = load(runtime).unwrap_err();
+            assert_eq!(error.path(), "identity.databaseId");
+            assert!(matches!(error, RuntimeConfigError::InvalidIdentity));
+            assert!(!error.to_string().contains("private"));
+        }
+        let mut runtime = base();
+        runtime["identity"] = json!({"databaseId": "x".repeat(256)});
+        assert_eq!(load(runtime).unwrap().database_id().len(), 256);
     }
 
     #[test]

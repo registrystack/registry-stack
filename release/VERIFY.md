@@ -164,7 +164,9 @@ manifest="registry-stack-${tag}-release-manifest.json"
 jq -e --arg tag "${tag}" '
   ($tag | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") |
     {major: (.major | tonumber), minor: (.minor | tonumber)}) as $version |
-  (if ($version.major > 0 or $version.minor >= 33)
+  (if ($version.major > 0 or $version.minor >= 38)
+   then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "relay", "scheduling"]
+   elif $version.minor >= 33
    then ["breg", "casework", "discovery", "evidence", "relay", "scheduling"]
    elif $version.minor >= 31
    then ["breg", "casework", "discovery", "evidence", "relay"]
@@ -193,27 +195,23 @@ jq -e --arg tag "${tag}" '
 Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
 Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Base
 Registry Engine joins at `v0.26.0`, Registry Casework joins at `v0.30.0`,
-and Registry Scheduling joins at `v0.33.0`. Mint is retired from `v0.31.0`;
-historical releases retain their original roster.
-The citizen MCP gateway `breg-mcp` and the citizen review page `breg-review`,
-the two supporting services beside Base Registry Engine, have not joined a
-release, so no release manifest names their images.
-`BREG_SERVICES_FIRST_RELEASE` in `release/scripts/release_roster.py` decides
-their first release; the pull request that admits them sets the constant and
-adds both names to the roster above.
-Registry Messaging has not joined a release, so no release manifest names a
-`messaging` image. `MESSAGING_FIRST_RELEASE` in
-`release/scripts/release_roster.py` decides its first release; Messaging joins
-a release in the pull request that adopts the shared platform activation crate
-(issue #1731) in place of `messaging migrate`, and that pull request sets the
-constant and adds `messaging` to the roster above.
+and Registry Scheduling joins at `v0.33.0`. The citizen MCP gateway and review
+page (`breg-mcp` and `breg-review`), Registry Messaging, Registry Render, and
+the separate Evidence OID4VCI adapter image join at `v0.38.0`.
+`BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
+`RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
+`release/scripts/release_roster.py` own these boundaries. v0.38.0 also adds the
+Linux amd64 Scheduling runtime and `discoveryctl` assets
+beside the existing Discovery runtime asset. Earlier releases require a source
+build of `discoveryctl`. Mint is retired from `v0.31.0`; historical releases
+retain their original roster.
 The final release tags recorded in the manifest must resolve to the same digests
 as their candidate bindings:
 
 ```sh
 while IFS=$'\t' read -r name digest final_ref; do
   case "${name}" in
-    breg|casework|discovery|evidence|messaging|mint|relay|scheduling) ;;
+    breg|breg-mcp|breg-review|casework|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling) ;;
     *) echo "unexpected release image: ${name}" >&2; exit 1 ;;
   esac
   resolved_digest="$(crane digest "${final_ref}")"
@@ -249,10 +247,9 @@ tar -tzf "${evidence}"
 Starting with `v0.21.0`, the archive contains image-specific SPDX and Syft
 reports and Grype reports for `evidence`, `mint`, and `relay`, joined by
 `discovery` from `v0.24.0`, `breg` from `v0.26.0`, and `casework` from
-`v0.30.0`, with `scheduling` from `v0.33.0`. No archive contains `breg-mcp`
-or `breg-review` reports until those services join a release, and no archive
-contains `messaging` reports until Messaging joins a release. Mint reports
-are excluded from `v0.31.0` onward; `v0.19.x` and
+`v0.30.0`, with `scheduling` from `v0.33.0`. Reports for `breg-mcp`,
+`breg-review`, `messaging`, `registry-render`, and `evidence-oid4vci` join from
+`v0.38.0`. Mint reports are excluded from `v0.31.0` onward; `v0.19.x` and
 `v0.20.x` archives contain those reports for `relay`
 only. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names
@@ -279,6 +276,9 @@ renewed definition digest. This DiffID-based contract avoids an in-tree manifest
 when the source revision label changes. The temporary rootfs is deleted after the
 decision and is not a release asset. `release/OPERATIONS.md` gives the exact
 private-candidate recovery and evidence-regeneration procedure for a failed gate.
+
+From `v0.38.0`, the checksum-covered Linux amd64 binary payload also includes `discoveryctl`
+and the standalone Scheduling runtime, alongside their existing runtime and operator artifacts.
 
 ## Verify client registries
 

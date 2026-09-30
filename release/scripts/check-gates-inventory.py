@@ -1084,6 +1084,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             'PUBLIC_PACKAGES = (\n    # Retired public names stay denylisted so cleanup can never delete history.',
             '    "discovery",\n',
             '    "evidence",\n',
+            '    "evidence-oid4vci",\n',
+            '    "registry-render",\n',
             '    "mint",\n',
             '    "breg",\n',
             '    "casework",\n',

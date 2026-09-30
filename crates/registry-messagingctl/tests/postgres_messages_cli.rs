@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Database-backed tests of `messagingctl messages` and `messagingctl
-//! retention`: the built binary lists, shows, retries, settles, and cancels
-//! messages the runtime accepted, erases what retention says is due,
-//! previews each action unless `--apply` is given, and never prints a
-//! contact, template data, or a principal.
+//! Database-backed tests of the built `messagingctl`: plan, apply, and status
+//! share the activation contract; message commands list, show, retry, settle,
+//! and cancel accepted messages; retention erases what is due; and no report
+//! prints a contact, template data, or a principal.
 //!
 //! Every test runs in its own schema inside the database named by
 //! `MESSAGING_TEST_DATABASE_URL`. A test binary that passes because its
@@ -52,6 +51,73 @@ fn json(runtime: &Path, arguments: &[&str]) -> (i32, Value) {
     let report =
         serde_json::from_str(&stdout).unwrap_or_else(|error| panic!("{error}: {stdout} {stderr}"));
     (code, report)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_apply_and_status_are_one_operator_journey() {
+    let harness = Harness::start().await;
+    let runtime = harness.runtime_path();
+    let digest = harness.package.digest().to_owned();
+    assert_eq!(
+        harness
+            .execute("DELETE FROM messaging_activations", &[])
+            .await,
+        1
+    );
+
+    let (code, plan) = json(&runtime, &["plan"]);
+    assert_eq!(code, 0, "{plan}");
+    assert_eq!(plan["command"], "plan");
+    assert_eq!(plan["packageDigest"], digest);
+    assert_eq!(plan["activeDigest"], Value::Null);
+    assert_eq!(plan["change"], "activate");
+    assert_eq!(plan["databaseId"], "notRecorded");
+
+    let (code, status) = json(&runtime, &["status"]);
+    assert_eq!(code, 0, "{status}");
+    assert_eq!(status["active"], Value::Null);
+    assert_eq!(status["history"].as_array().unwrap().len(), 0);
+
+    let (code, applied) = json(
+        &runtime,
+        &[
+            "apply",
+            "--operator-reference",
+            "change-42",
+            "--backup",
+            "snapshot-1",
+        ],
+    );
+    assert_eq!(code, 0, "{applied}");
+    assert_eq!(applied["command"], "apply");
+    assert_eq!(applied["packageDigest"], digest);
+    assert_eq!(applied["change"], "activate");
+    assert_eq!(applied["applied"], true);
+    assert_eq!(applied["restartRequired"], true);
+    assert_eq!(
+        applied["activation"]["backupReferences"],
+        serde_json::json!(["snapshot-1"])
+    );
+
+    let (code, status) = json(&runtime, &["status"]);
+    assert_eq!(code, 0, "{status}");
+    assert_eq!(status["active"]["packageDigest"], digest);
+    assert_eq!(status["history"].as_array().unwrap().len(), 1);
+
+    let (code, plan) = json(&runtime, &["plan"]);
+    assert_eq!(code, 0, "{plan}");
+    assert_eq!(plan["activeDigest"], digest);
+    assert_eq!(plan["change"], "none");
+
+    let (code, unchanged) = json(&runtime, &["apply"]);
+    assert_eq!(code, 0, "{unchanged}");
+    assert_eq!(unchanged["activeDigest"], digest);
+    assert_eq!(unchanged["change"], "none");
+    assert_eq!(unchanged["applied"], false);
+
+    let (code, refused) = json(&runtime, &["apply", "--apply"]);
+    assert_eq!(code, 2, "{refused}");
+    assert_eq!(refused["diagnostics"][0]["code"], "usage.invalid");
 }
 
 /// The harness's messages in three states: one failed because its

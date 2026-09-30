@@ -81,6 +81,8 @@ DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 DOCKERFILES = (
     Path("release/docker/Dockerfile.discovery"),
     Path("release/docker/Dockerfile.evidence"),
+    Path("release/docker/Dockerfile.evidence-oid4vci"),
+    Path("release/docker/Dockerfile.registry-render"),
     Path("release/docker/Dockerfile.breg"),
     Path("release/docker/Dockerfile.breg-mcp"),
     Path("release/docker/Dockerfile.breg-review"),
@@ -171,6 +173,16 @@ HTTP_PROBE_DOCKERFILES = {
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/evidence"]',
         "command": 'CMD ["serve", "--runtime-config", "/etc/registry-evidence/runtime.yaml"]',
     },
+    Path("release/docker/Dockerfile.evidence-oid4vci"): {
+        "binary": "evidence-oid4vci",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/evidence-oid4vci"]',
+        "command": 'CMD ["serve", "--config", "/etc/registry-evidence-oid4vci/runtime.yaml"]',
+    },
+    Path("release/docker/Dockerfile.registry-render"): {
+        "binary": "registry-render",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/registry-render"]',
+        "command": 'CMD ["serve", "--runtime-config", "/etc/registry-render/runtime.yaml"]',
+    },
     Path("release/docker/Dockerfile.breg"): {
         "binary": "breg",
         "tool": "bregctl",
@@ -202,6 +214,7 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.messaging"): {
         "binary": "messaging",
         "tool": "messagingctl",
+        "tool_required": True,
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/messaging"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-messaging/runtime.yaml", "serve"]',
     },
@@ -700,6 +713,13 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 failures.append(
                     f"{relative}: {tool} operator tool must precede timestamp "
                     "normalization"
+                )
+            if contract.get("tool_required") and (
+                f"if [ -e /workspace/image-bin/{tool} ]" in texts[relative]
+            ):
+                failures.append(
+                    f"{relative}: {tool} operator tool must be required by every "
+                    "release image build"
                 )
         if "environment" not in contract and "\nENV " in f"\n{runtime}":
             failures.append(

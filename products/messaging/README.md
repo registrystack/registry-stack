@@ -1,5 +1,7 @@
 # Registry Messaging
 
+PostgreSQL 17 or newer is required for package activation and runtime startup.
+
 Registry Messaging delivers operational messages, SMS and email, on behalf of
 authorized callers. The caller decides why and when to send and who the
 recipient is; Messaging owns rendering from reviewed templates, delivery
@@ -8,21 +10,21 @@ attempt. It is a native Rust runtime over PostgreSQL with no broker.
 
 ## Status
 
-Not yet released. Messaging builds from source in this repository, and no
-Registry Stack release carries a Messaging binary, container image, or client
-yet; it joins a release once it adopts the shared platform activation ledger.
+Not yet released. Messaging builds from source in this repository and now
+uses the shared platform activation ledger. Registry Stack 0.38.0 is planned
+to be the first release carrying its binaries, container image, and clients.
 
 Pre-1.0 and under construction. This version is the product skeleton:
 
-- the `messaging` runtime with `migrate` and `serve`, the converged runtime
+- the `messaging` runtime with `serve`, the converged runtime
   configuration, and the package's access profiles;
 - OIDC bearer authentication, access-profile resolution, and the per-process audit
   journal, which records the runtime start and every template preview;
 - the package: providers, sender profiles, and versioned templates rendered
   with bounded, loader-free Jinja, a JSON Schema per version, exact locales,
   and SMS segment counting;
-- the package ledger: the runtime serves only the package digest
-  `messagingctl apply` recorded, and a change applies on restart;
+- the shared activation ledger: the runtime serves only the configured
+  database identity and package digest `messagingctl apply` recorded;
 - the unauthenticated `/health` and `/ready` routes, the authenticated
   message submission, status, cancel, and template preview routes, the
   provider callback routes each provider's verifier authenticates, and
@@ -44,9 +46,9 @@ Pre-1.0 and under construction. This version is the product skeleton:
 - retention: payloads and records erased their configured periods after a
   message reached a terminal state, by the runtime's hourly sweep or on
   demand;
-- `messagingctl init`, `package`, `check`, `preview`, `apply`, `messages list`,
-  `show`, `retry`, `settle`, and `cancel`, `retention erase-expired`, and
-  `dev` with `dev token` for a local session;
+- `messagingctl init`, `package`, `check`, `preview`, `plan`, `apply`,
+  `status`, `messages list`, `show`, `retry`, `settle`, and `cancel`,
+  `retention erase-expired`, and `dev` with `dev token` for a local session;
 - the Rust client for health, readiness, submit, status, cancel, and template
   preview, with Node.js and Python bindings;
 - the security invariant matrix, the problem catalog, and the generated
@@ -92,7 +94,7 @@ with the caller's source of record.
 | Crate | Owns |
 |---|---|
 | `registry-messaging-core` | Access profiles and their decisions, the package manifest, template checking and rendering, SMS segment counting, message visibility, the problem vocabulary, wire names and DTOs. No I/O. |
-| `registry-messaging` | The runtime and the `messaging` binary: configuration, the package loader and digest, authentication, HTTP, metrics, the PostgreSQL store and package ledger, and the audit journal. |
+| `registry-messaging` | The runtime and the `messaging` binary: configuration, the package loader and digest, authentication, HTTP, metrics, the PostgreSQL store and shared activation ledger, and the audit journal. |
 | `registry-messagingctl` | Adopter and local operator tooling, the `messagingctl` binary. |
 | `registry-messaging-client` | The bounded Rust client over the runtime's HTTP contract. |
 
@@ -165,20 +167,21 @@ messagingctl check --runtime-config /abs/path/runtime.yaml
 messagingctl preview --runtime-config /abs/path/runtime.yaml \
   appointment-reminder 1 --locale fr \
   --data ./notices/templates/appointment-reminder/1/sample.json
-messaging --runtime-config /abs/path/runtime.yaml migrate
-messagingctl apply --runtime-config /abs/path/runtime.yaml --apply
+messagingctl plan --runtime-config /abs/path/runtime.yaml
+messagingctl apply --runtime-config /abs/path/runtime.yaml
+messagingctl status --runtime-config /abs/path/runtime.yaml
 messaging --runtime-config /abs/path/runtime.yaml serve
 ```
 
 `--data` names a JSON file, read relative to the directory the command runs
 in like any other relative path; each template version's `sample.json`
-serves. `migrate` uses the migration connection and is safe to run from several
-processes at once. `messagingctl apply` without `--apply` reports whether the
-package differs from the one the ledger names active; with `--apply` it
-records it after request audit and confirms the established outcome in its
-process stream. `serve` refuses to start against a database whose applied schema
-it does not recognize, or whose ledger does not name the package on disk, so
-a package change takes effect on restart after `apply --apply`. Every
+serves. `messagingctl plan` and `status` use the runtime credential in
+read-only transactions. `messagingctl apply` uses the migration credential to
+apply pending migrations, grant a separate runtime role only the required
+runtime access, and append the activation in one locked transaction. `serve`
+refuses an unknown schema, a different database identity or package, stale
+runtime grants, or a weakened split-role boundary. A package change takes
+effect on restart after `apply`. Every
 `messagingctl` command takes `--format human|json` and exits 0 on success, 1
 on a refusal, 2 on a usage error, and 3 when a file, secret, or database could
 not be reached. A human failure is one `error[CODE] PATH: MESSAGE` line on
@@ -207,7 +210,7 @@ never hand-edited.
 | Route | Authentication | Answer |
 |---|---|---|
 | `GET /health` | none | `200` with an empty body while the process serves |
-| `GET /ready` | none | `200` when the database carries every expected migration and its package ledger names the served package active, and its audit writer is healthy, `503 service.unavailable` otherwise |
+| `GET /ready` | none | `200` when the database carries every expected migration, its activation ledger names the configured database identity and served package active under the current runtime role, and its audit writer is healthy, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again; `429 rate-limit.exceeded` past the caller's rate and `429 quota.exceeded` past the profile's daily limit, both with `Retry-After` |
 | `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the recipient's channel with the value `redacted`, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |

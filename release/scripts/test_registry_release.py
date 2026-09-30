@@ -2314,6 +2314,46 @@ class RegistryReleaseTest(TestCase):
             package_body,
         )
 
+    def test_release_image_version_check_expects_render_typst_pin(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        scan_body = assemble[
+            assemble.index("Verify and scan exact candidate images"):assemble.index(
+                "Assemble public payload and validate version-appropriate install inputs"
+            )
+        ]
+        self.assertNotIn(
+            'test "${observed}" = "${name} ${{ needs.validate.outputs.version }}"',
+            scan_body,
+        )
+        start = scan_body.index('expected_image_version="${name} ')
+        final = 'test "${observed}" = "${expected_image_version}"'
+        end = scan_body.index(final, start) + len(final)
+        snippet = "\n".join(
+            line.strip() for line in scan_body[start:end].splitlines()
+        ).replace("${{ needs.validate.outputs.version }}", "0.38.0")
+        lib = (ROOT / "crates/registry-render/src/lib.rs").read_text(encoding="utf-8")
+        pin = lib.split('pub const TYPST_PIN: &str = "', 1)[1].split('"', 1)[0]
+
+        def check(name: str, observed: str) -> int:
+            return subprocess.run(
+                ["bash", "-c", "set -euo pipefail\n" + snippet],
+                cwd=ROOT,
+                env={**os.environ, "name": name, "observed": observed},
+                capture_output=True,
+                check=False,
+            ).returncode
+
+        self.assertEqual(
+            0, check("registry-render", f"registry-render 0.38.0 (typst {pin})")
+        )
+        self.assertNotEqual(0, check("registry-render", "registry-render 0.38.0"))
+        for name in ("relay", "evidence-oid4vci", "breg-mcp", "messaging"):
+            self.assertEqual(0, check(name, f"{name} 0.38.0"))
+            self.assertNotEqual(0, check(name, f"{name} 0.38.0 (typst {pin})"))
+
     def test_candidate_workflow_uses_only_the_current_release_roster(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
@@ -2582,7 +2622,7 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|breg|breg-mcp|breg-review|casework|scheduling|messaging|relay)",
+            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|relay)",
             image_recipe,
         )
         self.assertNotIn("registry-relay)", image_recipe)
@@ -2976,6 +3016,13 @@ class RegistryReleaseTest(TestCase):
             inventory = {name: version for name in previous}
             if tuple(int(part) for part in version.split(".")) >= (0, 36, 0):
                 inventory["schedulingctl"] = version
+            version_tuple = tuple(map(int, version.split(".")))
+            if module.release_roster.render_in_release(version_tuple):
+                inventory["registry-render"] = version
+            if module.release_roster.breg_services_in_release(version_tuple):
+                inventory.update({"breg-mcp": version, "breg-review": version})
+            if module.release_roster.discoveryctl_in_release(version_tuple):
+                inventory["discoveryctl"] = version
             return inventory
 
         # No version ships Messaging while the roster names no first release.
@@ -3095,20 +3142,27 @@ class RegistryReleaseTest(TestCase):
         }
         # No version ships either service while the roster names no first
         # release, including the current and the next minor.
-        self.assertIsNone(module.release_roster.BREG_SERVICES_FIRST_RELEASE)
-        for version in ("0.36.0", "0.37.0", "1.0.0"):
-            with self.subTest(version=version, roster=None):
-                current = {name: version for name in published}
-                self.assertEqual(
-                    [], module.artifact_inventory_errors(version, current)
-                )
-                for service in ("breg-mcp", "breg-review"):
-                    self.assertNotEqual(
-                        [],
-                        module.artifact_inventory_errors(
-                            version, current | {service: version}
-                        ),
+        with mock.patch.object(module.release_roster, "BREG_SERVICES_FIRST_RELEASE", None):
+            for version in ("0.36.0", "0.37.0", "1.0.0"):
+                with self.subTest(version=version, roster=None):
+                    current = {name: version for name in published}
+                    if module.release_roster.render_in_release(tuple(map(int, version.split(".")))):
+                        current["registry-render"] = version
+                    version_tuple = tuple(map(int, version.split(".")))
+                    if module.release_roster.discoveryctl_in_release(version_tuple):
+                        current["discoveryctl"] = version
+                    if module.release_roster.messaging_in_release(version_tuple):
+                        current.update({"messaging": version, "messagingctl": version})
+                    self.assertEqual(
+                        [], module.artifact_inventory_errors(version, current)
                     )
+                    for service in ("breg-mcp", "breg-review"):
+                        self.assertNotEqual(
+                            [],
+                            module.artifact_inventory_errors(
+                                version, current | {service: version}
+                            ),
+                        )
 
         # A hypothetical first release keeps the inclusion path covered.
         with mock.patch.object(
@@ -4714,6 +4768,10 @@ def write_manifest(
     if load_release_roster().breg_services_in_release(version_tuple):
         artifacts["breg-mcp"] = version
         artifacts["breg-review"] = version
+    if load_release_roster().discoveryctl_in_release(version_tuple):
+        artifacts["discoveryctl"] = version
+    if load_release_roster().render_in_release(version_tuple):
+        artifacts["registry-render"] = version
     if load_release_roster().messaging_in_release(version_tuple):
         artifacts["messaging"] = version
         artifacts["messagingctl"] = version

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: package activation (`schedulingctl plan`, `apply`, and `status`) and
+  `scheduling serve` startup refuse a PostgreSQL server older than 17 with an
+  upgrade instruction, before any migration or activation write. Operators
+  on PostgreSQL 16 or older must upgrade the database server before
+  upgrading Scheduling.
 - BREAKING: publish the `v1alpha2` HTTP contract with typed opaque
   `externalReferences` on hold and appointment
   documents and to hold or direct-booking admissions. Hold confirmation,
@@ -9,6 +14,12 @@
   set. Add the owner-scoped `GET /v1/appointments` filter over one exact
   product, record type, and record identifier tuple, with bounded paging whose
   cursor is bound to both the caller and filter.
+
+- Add a standalone Linux amd64 runtime binary from v0.38.0, alongside the
+  existing Docker image and operator binary.
+- Share activation ledger and runtime privilege checks with Casework and
+  Messaging. Activation now detects the loss of any required table DML
+  privilege, including when other required privileges remain granted (#1731).
 
 ## v0.37.0 - 2026-09-29
 

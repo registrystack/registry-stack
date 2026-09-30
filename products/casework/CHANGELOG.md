@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: package activation (`caseworkctl plan`, `apply`, and `status`) and
+  `casework serve` startup refuse a PostgreSQL server older than 17 with an
+  upgrade instruction, before any migration or activation write. Operators
+  on PostgreSQL 16 or older must upgrade the database server before
+  upgrading Casework.
+- Share activation ledger and runtime privilege checks with Scheduling and
+  Messaging. Activation now detects the loss of any required table DML
+  privilege, including when other required privileges remain granted (#1731).
+
 ## v0.37.0 - 2026-09-29
 
 - BREAKING: the `Registry-Source-Profile` header is the only input that

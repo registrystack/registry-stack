@@ -1,6 +1,6 @@
 ---
 title: Run Registry Render in serve mode
-description: Build Registry Render, write its runtime configuration, provision its API key, start serve mode behind your TLS proxy, and read and ship its audit log.
+description: Install or build Registry Render, write its runtime configuration, provision its API key, start serve mode behind your TLS proxy, and read and ship its audit log.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,12 +16,13 @@ answering them. At the end of this page one `registry-render` process serves you
 address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
 authentication with a per-render audit trail, and shuts down within a bounded window.
 
-Registry Render is pre-release software for institutional pilots. There is no published installer
-yet, so this page builds the binary from source; release packaging follows the standard roster
-checklist.
+Registry Render is pre-release software for institutional pilots. It has not joined a published
+release. The release roster admits its binaries and container image starting with v0.38.0. Until a
+release at or after that boundary is published, build the binary from source.
 
 {/* Evidence: products/render/ACCEPTANCE.md;
-    products/render/DEFINITION-OF-DONE.md. */}
+    products/render/DEFINITION-OF-DONE.md;
+    release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release. */}
 
 [Rendering your first document](../../tutorials/first-render-document/) covers the bundle side:
 scaffolding, authoring, and packaging. This page starts from a package directory.
@@ -54,14 +55,48 @@ scaffolding, authoring, and packaging. This page starts from a package directory
     crates/registry-render/src/audit.rs, RenderAudit;
     crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot. */}
 
-## Build the binary
+## Install or build the binary
+
+For a published v0.38.0 or later release, choose `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), then follow the
+release verification procedure at
+`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md` before installing its
+Linux amd64 asset. Set `TAG` to that tag. After verification:
+
+```sh
+tag="${TAG:?set TAG to a published tag that includes Registry Render}"
+mkdir -p ~/.local/bin
+install -m 0755 "registry-render-${tag}-linux-amd64" ~/.local/bin/registry-render
+export PATH="$HOME/.local/bin:$PATH"
+registry-render --version
+```
+
+This replaces any existing `~/.local/bin/registry-render`. Preserve that file first when you need a
+rollback path.
+
+The same release publishes `ghcr.io/registrystack/registry-render:<tag>`. The image runs
+`/usr/local/bin/registry-render` from Distroless `cc-debian13` as the `nonroot` user. It starts
+`serve` with `/etc/registry-render/runtime.yaml`, uses `/var/lib/registry-render` as its working
+directory, and leaves the template package outside the image. Mount the runtime file and package
+read-only. Keep the mounted API key owned by UID 65532 with mode `0400` or `0600`, and the writable
+audit directory owned by UID 65532 with mode `0700`. Deploy the image by the digest authenticated
+through `release/VERIFY.md`.
+
+The loopback listener below needs a TLS proxy in the same network namespace. For a proxy in
+another container, set `listener.bind` to Render's private container address. Render refuses a
+wildcard address such as `0.0.0.0`.
+
+{/* Evidence: release/scripts/build-release-binaries.sh, registry-render asset staging;
+    release/docker/Dockerfile.registry-render;
+    crates/registry-render/src/runtime.rs, validate_bind. */}
 
 From a Registry Stack checkout, build with the workspace lockfile, because the pinned compression
 stack is part of Render's byte contract:
 
 ```sh
 cargo build --release --locked -p registry-render
-target/release/registry-render --version
+export PATH="$PWD/target/release:$PATH"
+registry-render --version
 ```
 
 The version line names the release and the Typst pin, for example `registry-render <version> (typst
@@ -132,7 +167,7 @@ drop the renders it exists to protect, and startup refuses both ends.
 Start the process with the runtime file, and check both endpoints before sending traffic:
 
 ```sh
-target/release/registry-render serve --runtime-config /etc/registry-render/runtime.yaml &
+registry-render serve --runtime-config /etc/registry-render/runtime.yaml &
 curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```

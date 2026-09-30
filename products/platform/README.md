@@ -17,6 +17,7 @@ integration-test fixtures.
 
 | Crate | Purpose |
 | --- | --- |
+| [`registry-platform-activation`](../../crates/registry-platform-activation/README.md) | Shared PostgreSQL activation ledger, database identity binding, startup package checks, and runtime-role boundary enforcement. |
 | [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Shared JSON Lines audit writer, durable file acceptance, rotation, and keyed reference helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
 | [`registry-platform-buildinfo`](crates/registry-platform-buildinfo/README.md) | Shared build and version metadata. |

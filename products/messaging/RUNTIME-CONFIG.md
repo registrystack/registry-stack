@@ -1,7 +1,7 @@
 # Messaging runtime configuration
 
 Messaging reads one versioned operator document selected with
-`messaging --runtime-config ABSOLUTE_FILE serve` or `migrate`, and
+`messaging --runtime-config ABSOLUTE_FILE serve`, and
 `messagingctl check --runtime-config ABSOLUTE_FILE` checks the same document
 offline. The selected file path and every operated resource path are
 absolute. The document is at most one mebibyte.
@@ -442,16 +442,18 @@ optional `--revision TEXT` records provenance. `--dry-run` reports the plan
 without writing. Use `check --project PROJECT` and `preview --project PROJECT`
 while authoring, and `--package DIRECTORY` for installed output.
 
-### The package ledger
+### Package activation
 
 The package identity is the shared SHA-256 digest of `SHA256SUMS`. The runtime
 verifies the envelope and optional pin, then rechecks each bounded file buffer
 against its verified digest before parsing or compiling it. Rendering and
 scripts use those owned buffers; later filesystem changes cannot replace
-the bytes accepted at startup. `messagingctl apply
---runtime-config FILE` reports whether the package on disk differs from the
-one the database's package ledger names active; with `--apply` it records the
-package. `messaging serve` refuses to start unless the package on disk has the
-digest the ledger names active, so a package change takes effect when the
-runtime restarts after `apply --apply`, and an edited file never changes what
-a running deployment sends.
+the bytes accepted at startup. `messagingctl plan --runtime-config FILE`
+reports the package, database identity, pending schema versions, and runtime
+role boundary without writing. `messagingctl apply --runtime-config FILE`
+applies that plan in one locked transaction. `messagingctl status
+--runtime-config FILE` reads activation history with the runtime credential.
+`messaging serve` refuses unless the package and `identity.databaseId` equal
+the active row and the runtime role still has the recorded authority. A
+package change takes effect on restart after `apply`, and an edited file never
+changes what a running deployment sends.

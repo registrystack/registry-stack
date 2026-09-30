@@ -110,6 +110,42 @@ You need:
 - A published `https` origin for the credential issuer identifier this service will serve. A
   wallet compares this origin exactly against the `aud` of every proof it signs.
 
+## Install the adapter
+
+The Evidence Gateway toolset installer installs `evidence-oid4vci` beside `evidence` and
+`evidencectl`:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+evidence-oid4vci --version
+```
+
+Starting with v0.38.0, the release roster also admits the separate
+`ghcr.io/registrystack/evidence-oid4vci:<tag>` image. Until a release at or after that boundary is
+published, no public image exists under that name. The image runs
+`/usr/local/bin/evidence-oid4vci` from Distroless `cc-debian13` as the `nonroot` user. It starts
+`serve` with `/etc/registry-evidence-oid4vci/runtime.yaml` and uses
+`/var/lib/registry-evidence-oid4vci` as its working directory. Mount the runtime file and its
+referenced key files read-only. The mounted `tokenClient.privateKeyFile` must be owned by UID 65532
+with mode `0400` or `0600`; startup refuses a key owned by another user. To retain another runtime
+file path, override the image command with `serve --config <file>`. The image packages the existing
+adapter binary, so it keeps the same frozen profile and single-replica limit described on this
+page. Follow the release
+verification procedure at
+`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, and deploy the image
+by the digest that procedure authenticates rather than by the tag alone.
+
+The loopback listener in the example needs a TLS proxy in the same network namespace. For a proxy
+in another container, set `listener.address` to a private container address the proxy can reach.
+Keep the separate metrics listener on a loopback or private address.
+
+{/* Evidence: crates/registry-evidencectl/install.sh, binaries;
+    release/scripts/release_roster.py, EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE and
+    evidence_oid4vci_image_in_release;
+    release/docker/Dockerfile.evidence-oid4vci;
+    crates/registry-evidence-oid4vci/src/secretfile.rs, read_owner_only;
+    crates/registry-evidence-oid4vci/src/config.rs, ListenerConfig and MetricsListenerConfig. */}
+
 ## Configure the deployment
 
 `evidence-oid4vci` reads one YAML document, validated as a whole with `deny_unknown_fields`: an

@@ -14,8 +14,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
 use registry_casework_core::{CaseworkProject, SourceAdapter, TaskTemplate};
+use registry_platform_activation::{
+    self as platform_activation, KnownTrigger, Layout, NewActivation, RoleObservation,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
@@ -34,33 +36,45 @@ pub const ACTIVATION_AUDIT_SCHEMA: &str = "casework-activation-audit/v1";
 
 /// What a single-role deployment can and cannot catch, stated wherever the
 /// role mode is reported.
-pub const SINGLE_ROLE_STATEMENT: &str =
-    "single-role mode: the ledger check catches a wrong package, but not someone holding this credential";
+pub use registry_platform_activation::{
+    Activation, DatabaseIdCheck, PlanKind, RoleMode, SINGLE_ROLE_STATEMENT,
+};
 
 /// The triggers the Casework migrations create, as table, trigger, and the
 /// function in the Casework schema it executes. Any other trigger on a
 /// Casework table is stray authority in a split-role deployment.
-const MIGRATION_TRIGGERS: [(&str, &str, &str); 2] = [
-    (
-        "casework_meta",
-        "casework_task_directory_changed",
-        "casework_task_directory_changed",
-    ),
-    (
-        "casework_items",
-        "casework_task_item_changed",
-        "casework_task_item_changed",
-    ),
+const MIGRATION_TRIGGERS: [KnownTrigger; 2] = [
+    KnownTrigger {
+        relation: "casework_meta",
+        trigger: "casework_task_directory_changed",
+        function: "casework_task_directory_changed",
+    },
+    KnownTrigger {
+        relation: "casework_items",
+        trigger: "casework_task_item_changed",
+        function: "casework_task_item_changed",
+    },
 ];
 
-/// [`MIGRATION_TRIGGERS`] as the three parallel arrays the role queries
-/// take as `$2`, `$3`, and `$4`.
-fn migration_trigger_columns() -> [Vec<&'static str>; 3] {
-    [
-        MIGRATION_TRIGGERS.iter().map(|known| known.0).collect(),
-        MIGRATION_TRIGGERS.iter().map(|known| known.1).collect(),
-        MIGRATION_TRIGGERS.iter().map(|known| known.2).collect(),
-    ]
+fn activation_layout() -> Layout {
+    Layout::new(
+        "casework",
+        "casework_activations",
+        "casework_schema_migrations",
+        &MIGRATION_TRIGGERS,
+        false,
+    )
+    .expect("the Casework activation layout uses static PostgreSQL identifiers")
+}
+
+fn platform_error(error: platform_activation::Error) -> StoreError {
+    match error {
+        platform_activation::Error::Database(error) => error.into(),
+        platform_activation::Error::UnsupportedPostgres => StoreError::UnsupportedPostgres,
+        platform_activation::Error::InvalidLayout | platform_activation::Error::Corrupt => {
+            StoreError::Corrupt
+        }
+    }
 }
 
 /// The longest `--operator-reference` accepted, in bytes.
@@ -92,76 +106,6 @@ const REFUSAL_PREFIX: &str = "casework.activation";
 
 const PLAN_THEN_APPLY: &str =
     "run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`";
-
-/// How the runtime and migration credentials relate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RoleMode {
-    /// One PostgreSQL role runs the service and applies packages.
-    Single,
-    /// The runtime role cannot write the activation ledger.
-    Split,
-}
-
-impl RoleMode {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Single => "single",
-            Self::Split => "split",
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self, StoreError> {
-        match value {
-            "single" => Ok(Self::Single),
-            "split" => Ok(Self::Split),
-            _ => Err(StoreError::Corrupt),
-        }
-    }
-}
-
-/// Whether an activation is the database's first or follows another.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PlanKind {
-    Initial,
-    Successor,
-}
-
-impl PlanKind {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Initial => "initial",
-            Self::Successor => "successor",
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self, StoreError> {
-        match value {
-            "initial" => Ok(Self::Initial),
-            "successor" => Ok(Self::Successor),
-            _ => Err(StoreError::Corrupt),
-        }
-    }
-}
-
-/// One row of the activation ledger.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Activation {
-    pub activation_id: Uuid,
-    pub apply_order: i64,
-    pub package_digest: String,
-    pub predecessor_package_digest: Option<String>,
-    pub database_id: String,
-    pub plan_kind: PlanKind,
-    pub applied_at: DateTime<Utc>,
-    pub operator_reference_hash: Option<String>,
-    pub backup_references: Vec<String>,
-    pub role_mode: RoleMode,
-}
 
 /// The verified package and runtime identity an activation is planned or
 /// applied for.
@@ -221,16 +165,6 @@ impl ApplyRequest {
         }
         Ok(())
     }
-}
-
-/// How the configured database id compares with the ledger's.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DatabaseIdCheck {
-    /// No activation is recorded, so the first apply records the id.
-    NotRecorded,
-    Matches,
-    Differs,
 }
 
 /// The pinned-work verdict an activation reaches.
@@ -433,17 +367,6 @@ fn describe_refusals(refusals: &[ActivationRefusal]) -> String {
         .map(|refusal| refusal.message.as_str())
         .collect::<Vec<_>>()
         .join("; ")
-}
-
-/// The runtime role's authority as an activation would record it.
-#[derive(Clone, Copy)]
-struct RoleObservation {
-    mode: RoleMode,
-    /// Whether the role already holds every grant a split-role apply issues.
-    grants_current: bool,
-    /// Whether the role can read every Casework table, so a plan run as it
-    /// can evaluate the effects.
-    readable: bool,
 }
 
 /// The read-only state an activation starts from.
@@ -662,13 +585,9 @@ impl PostgresStore {
     /// connection outside any transaction.
     async fn activation_recorded(&self, activation_id: Uuid) -> Result<bool, StoreError> {
         let client = self.client().await?;
-        Ok(client
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_activations WHERE activation_id=$1)",
-                &[&activation_id],
-            )
-            .await?
-            .get(0))
+        platform_activation::activation_recorded(&**client, &activation_layout(), activation_id)
+            .await
+            .map_err(platform_error)
     }
 
     /// The PostgreSQL role this store connects as.
@@ -799,11 +718,6 @@ async fn apply_in(
                 .map_err(|_| StoreError::Invalid)
         })
         .transpose()?;
-    let predecessor = before
-        .active
-        .as_ref()
-        .map(|active| active.package_digest.clone());
-    let plan_kind = plan_kind(before.active.as_ref());
     // The role mode is what the runtime role can do once the grants are
     // issued, never only whether the two credentials name different roles.
     let role_mode = if split {
@@ -814,36 +728,21 @@ async fn apply_in(
     } else {
         RoleMode::Single
     };
-    let row = transaction
-        .query_one(
-            "INSERT INTO casework_activations(activation_id,apply_order,package_digest,predecessor_package_digest,database_id,plan_kind,applied_at,operator_reference_hash,backup_references,role_mode)
-             SELECT $1,COALESCE(max(apply_order),0)+1,$2,$3,$4,$5,now(),$6,$7,$8 FROM casework_activations
-             RETURNING apply_order,applied_at",
-            &[
-                &activation_id,
-                &candidate.package_digest,
-                &predecessor,
-                &candidate.database_id,
-                &plan_kind.as_str(),
-                &operator_reference_hash,
-                &request.backup_references,
-                &role_mode.as_str(),
-            ],
-        )
-        .await
-        .map_err(StoreError::from)?;
-    let activation = Activation {
-        activation_id,
-        apply_order: row.get(0),
-        package_digest: candidate.package_digest.to_owned(),
-        predecessor_package_digest: predecessor,
-        database_id: candidate.database_id.to_owned(),
-        plan_kind,
-        applied_at: row.get(1),
-        operator_reference_hash,
-        backup_references: request.backup_references.clone(),
-        role_mode,
-    };
+    let activation = platform_activation::append_activation(
+        transaction,
+        &activation_layout(),
+        &NewActivation {
+            activation_id,
+            package_digest: candidate.package_digest,
+            database_id: candidate.database_id,
+            operator_reference_hash: operator_reference_hash.as_deref(),
+            backup_references: &request.backup_references,
+            role_mode,
+            runtime_role: None,
+        },
+    )
+    .await
+    .map_err(platform_error)?;
     audit.record(
         activation_id,
         json!({
@@ -934,11 +833,8 @@ async fn analyze(
         .filter(|version| !applied.contains(version))
         .collect();
     let active = latest_activation(transaction).await?;
-    let database_id_check = match &active {
-        None => DatabaseIdCheck::NotRecorded,
-        Some(active) if active.database_id == candidate.database_id => DatabaseIdCheck::Matches,
-        Some(_) => DatabaseIdCheck::Differs,
-    };
+    let database_id_check =
+        platform_activation::database_id_check(active.as_ref(), candidate.database_id);
     if database_id_check == DatabaseIdCheck::Differs {
         refusals.push(ActivationRefusal::database_id_mismatch());
     }
@@ -1164,18 +1060,11 @@ fn template_document(template: &TaskTemplate) -> Result<Value, ActivationRefusal
 }
 
 async fn applied_versions(transaction: &Transaction<'_>) -> Result<Vec<i64>, StoreError> {
-    if !relation_exists(transaction, "casework_schema_migrations").await? {
-        return Ok(Vec::new());
-    }
-    Ok(transaction
-        .query(
-            "SELECT version FROM casework_schema_migrations ORDER BY version",
-            &[],
-        )
-        .await?
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect())
+    let versions: Vec<i64> = MIGRATIONS.iter().map(|(version, _)| *version).collect();
+    platform_activation::schema_state(transaction, &activation_layout(), &versions)
+        .await
+        .map(|state| state.applied)
+        .map_err(platform_error)
 }
 
 async fn schema_version(transaction: &Transaction<'_>) -> Result<Option<i64>, StoreError> {
@@ -1183,61 +1072,23 @@ async fn schema_version(transaction: &Transaction<'_>) -> Result<Option<i64>, St
 }
 
 async fn relation_exists(transaction: &Transaction<'_>, name: &str) -> Result<bool, StoreError> {
-    Ok(transaction
-        .query_one("SELECT to_regclass($1) IS NOT NULL", &[&name])
-        .await?
-        .get(0))
-}
-
-const ACTIVATION_COLUMNS: &str = "activation_id,apply_order,package_digest,predecessor_package_digest,database_id,plan_kind,applied_at,operator_reference_hash,backup_references,role_mode";
-
-fn row_to_activation(row: &tokio_postgres::Row) -> Result<Activation, StoreError> {
-    Ok(Activation {
-        activation_id: row.try_get(0)?,
-        apply_order: row.try_get(1)?,
-        package_digest: row.try_get(2)?,
-        predecessor_package_digest: row.try_get(3)?,
-        database_id: row.try_get(4)?,
-        plan_kind: PlanKind::parse(row.try_get(5)?)?,
-        applied_at: row.try_get(6)?,
-        operator_reference_hash: row.try_get(7)?,
-        backup_references: row.try_get(8)?,
-        role_mode: RoleMode::parse(row.try_get(9)?)?,
-    })
+    platform_activation::relation_exists(transaction, name)
+        .await
+        .map_err(platform_error)
 }
 
 async fn latest_activation(
     transaction: &Transaction<'_>,
 ) -> Result<Option<Activation>, StoreError> {
-    if !relation_exists(transaction, "casework_activations").await? {
-        return Ok(None);
-    }
-    transaction
-        .query_opt(
-            &format!(
-                "SELECT {ACTIVATION_COLUMNS} FROM casework_activations ORDER BY apply_order DESC LIMIT 1"
-            ),
-            &[],
-        )
-        .await?
-        .as_ref()
-        .map(row_to_activation)
-        .transpose()
+    platform_activation::active_activation(transaction, &activation_layout())
+        .await
+        .map_err(platform_error)
 }
 
 async fn activation_history(transaction: &Transaction<'_>) -> Result<Vec<Activation>, StoreError> {
-    if !relation_exists(transaction, "casework_activations").await? {
-        return Ok(Vec::new());
-    }
-    transaction
-        .query(
-            &format!("SELECT {ACTIVATION_COLUMNS} FROM casework_activations ORDER BY apply_order"),
-            &[],
-        )
-        .await?
-        .iter()
-        .map(row_to_activation)
-        .collect()
+    platform_activation::activation_history(transaction, &activation_layout())
+        .await
+        .map_err(platform_error)
 }
 
 /// Take the row locks runtime transactions take first, in their order: the
@@ -1270,27 +1121,9 @@ async fn lock_runtime_order(transaction: &Transaction<'_>) -> Result<(), StoreEr
 /// `casework_schema_migrations`, as a rotated runtime role does before apply
 /// grants it. `pg_class` names the ledger whatever the role may use.
 async fn unreadable_ledger(transaction: &Transaction<'_>) -> Result<Option<String>, StoreError> {
-    let row = transaction
-        .query_opt(
-            "SELECT n.nspname::text,
-               has_schema_privilege(n.oid, 'USAGE')
-               AND has_table_privilege(a.oid, 'SELECT')
-               AND (m.oid IS NULL OR has_table_privilege(m.oid, 'SELECT'))
-             FROM unnest(string_to_array(current_setting('search_path'), ','))
-               WITH ORDINALITY AS p(entry, position)
-             JOIN pg_namespace n ON n.nspname = CASE btrim(btrim(p.entry), '\"')
-               WHEN '$user' THEN current_user::text ELSE btrim(btrim(p.entry), '\"') END
-             JOIN pg_class a ON a.relnamespace = n.oid AND a.relname = 'casework_activations'
-             LEFT JOIN pg_class m
-               ON m.relnamespace = n.oid AND m.relname = 'casework_schema_migrations'
-             ORDER BY p.position
-             LIMIT 1",
-            &[],
-        )
-        .await?;
-    Ok(row
-        .filter(|row| !row.get::<_, bool>(1))
-        .map(|row| row.get(0)))
+    platform_activation::unreadable_ledger(transaction, &activation_layout())
+        .await
+        .map_err(platform_error)
 }
 
 /// The authority of `role`, or of this connection's role when none is
@@ -1309,75 +1142,9 @@ async fn observe_role(
     transaction: &Transaction<'_>,
     role: Option<&str>,
 ) -> Result<Option<RoleObservation>, StoreError> {
-    let [tables, triggers, functions] = migration_trigger_columns();
-    let Some(row) = transaction
-        .query_opt(
-            "SELECT
-               r.rolsuper OR r.rolbypassrls
-               OR has_table_privilege(r.oid, c.oid, 'DELETE, TRUNCATE')
-               OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE')
-               OR pg_has_role(r.oid, c.relowner, 'MEMBER')
-               OR pg_has_role(r.oid, n.nspowner, 'MEMBER')
-               OR ($1::text IS NOT NULL AND pg_has_role(r.oid, current_user, 'MEMBER'))
-               OR COALESCE(has_table_privilege(r.oid, to_regclass('casework_schema_migrations')::oid, 'DELETE, TRUNCATE'), false)
-               OR COALESCE(has_any_column_privilege(r.oid, to_regclass('casework_schema_migrations')::oid, 'INSERT, UPDATE'), false)
-               OR has_schema_privilege(r.oid, n.oid, 'CREATE')
-               OR EXISTS(
-                 SELECT 1 FROM pg_class t
-                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND t.relkind IN ('r','p','v','m','S','f')
-                   AND (pg_has_role(r.oid, t.relowner, 'MEMBER')
-                     OR (t.relkind IN ('r','p','v') AND has_table_privilege(r.oid, t.oid, 'TRIGGER'))))
-               OR EXISTS(
-                 SELECT 1 FROM pg_proc p
-                 WHERE p.pronamespace=n.oid AND p.proname LIKE 'casework\\_%' AND pg_has_role(r.oid, p.proowner, 'MEMBER'))
-               OR EXISTS(
-                 SELECT 1 FROM pg_trigger g JOIN pg_class t ON t.oid=g.tgrelid
-                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND NOT g.tgisinternal
-                   AND NOT EXISTS(
-                     SELECT 1 FROM unnest($2::text[], $3::text[], $4::text[]) k(relname, tgname, proname)
-                       JOIN pg_proc f ON f.oid=g.tgfoid
-                     WHERE k.relname=t.relname AND k.tgname=g.tgname
-                       AND f.proname=k.proname AND f.pronamespace=n.oid)),
-               has_schema_privilege(r.oid, n.oid, 'USAGE')
-               AND NOT EXISTS(
-                 SELECT 1 FROM pg_class t
-                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND t.relkind IN ('r','p','v','S')
-                   AND NOT CASE
-                     WHEN t.relkind='S' THEN has_sequence_privilege(r.oid, t.oid, 'USAGE')
-                     WHEN t.relname IN ('casework_activations','casework_schema_migrations')
-                       THEN has_table_privilege(r.oid, t.oid, 'SELECT')
-                     ELSE has_table_privilege(r.oid, t.oid, 'SELECT')
-                       AND has_table_privilege(r.oid, t.oid, 'INSERT')
-                       AND has_table_privilege(r.oid, t.oid, 'UPDATE')
-                       AND has_table_privilege(r.oid, t.oid, 'DELETE')
-                   END)
-               AND NOT EXISTS(
-                 SELECT 1 FROM pg_proc p
-                 WHERE p.pronamespace=n.oid AND p.proname LIKE 'casework\\_%' AND p.prokind='f'
-                   AND NOT has_function_privilege(r.oid, p.oid, 'EXECUTE')),
-               has_schema_privilege(r.oid, n.oid, 'USAGE')
-               AND NOT EXISTS(
-                 SELECT 1 FROM pg_class t
-                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND t.relkind IN ('r','p','v')
-                   AND NOT has_table_privilege(r.oid, t.oid, 'SELECT'))
-             FROM pg_roles r, pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE r.rolname=COALESCE($1::text, current_user::text)
-               AND c.oid=to_regclass('casework_activations')",
-            &[&role, &tables, &triggers, &functions],
-        )
-        .await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(RoleObservation {
-        mode: if row.get(0) {
-            RoleMode::Single
-        } else {
-            RoleMode::Split
-        },
-        grants_current: row.get(1),
-        readable: row.get(2),
-    }))
+    platform_activation::observe_role(transaction, &activation_layout(), role, &[])
+        .await
+        .map_err(platform_error)
 }
 
 /// The SQL statements that take away `role`'s authority to reach the
@@ -1395,90 +1162,9 @@ async fn stray_authority(
     transaction: &Transaction<'_>,
     role: Option<&str>,
 ) -> Result<Vec<String>, StoreError> {
-    let [tables, triggers, functions] = migration_trigger_columns();
-    let Some(row) = transaction
-        .query_opt(
-            "WITH reference AS (
-               SELECT CASE WHEN $1::text IS NOT NULL
-                 THEN (SELECT oid FROM pg_roles WHERE rolname=current_user::text)
-                 ELSE (SELECT relowner FROM pg_class WHERE oid=to_regclass('casework_activations'))
-               END AS oid
-             )
-             SELECT
-               r.rolsuper OR reference.oid IS NULL
-               OR pg_has_role(r.oid, reference.oid, 'MEMBER')
-               OR pg_has_role(r.oid, n.nspowner, 'MEMBER'),
-               quote_ident(COALESCE((SELECT rolname FROM pg_roles WHERE oid=reference.oid), '')),
-               quote_ident(n.nspname),
-               ARRAY(
-                 SELECT DISTINCT quote_ident(o.rolname)
-                 FROM (
-                   SELECT c.relowner AS owner FROM pg_class c
-                   WHERE c.relnamespace=n.oid AND c.relname LIKE 'casework\\_%' AND c.relkind IN ('r','p','v','m','S','f')
-                   UNION
-                   SELECT p.proowner FROM pg_proc p
-                   WHERE p.pronamespace=n.oid AND p.proname LIKE 'casework\\_%'
-                 ) owned JOIN pg_roles o ON o.oid=owned.owner
-                 WHERE pg_has_role(r.oid, owned.owner, 'MEMBER')
-                 ORDER BY 1),
-               ARRAY(
-                 SELECT DISTINCT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END
-                 FROM aclexplode(n.nspacl) a LEFT JOIN pg_roles g ON g.oid=a.grantee
-                 WHERE a.privilege_type='CREATE' AND (a.grantee=0 OR pg_has_role(r.oid, a.grantee, 'MEMBER'))
-                 ORDER BY 1),
-               ARRAY(
-                 SELECT DISTINCT format('%s.%s FROM %s', quote_ident(n.nspname), quote_ident(t.relname),
-                   CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END)
-                 FROM pg_class t, aclexplode(t.relacl) a LEFT JOIN pg_roles g ON g.oid=a.grantee
-                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND t.relkind IN ('r','p','v')
-                   AND a.privilege_type='TRIGGER' AND (a.grantee=0 OR pg_has_role(r.oid, a.grantee, 'MEMBER'))
-                 ORDER BY 1),
-               ARRAY(
-                 SELECT format('%s ON %s.%s', quote_ident(g.tgname), quote_ident(n.nspname), quote_ident(t.relname))
-                 FROM pg_trigger g JOIN pg_class t ON t.oid=g.tgrelid
-                 WHERE t.relnamespace=n.oid AND t.relname LIKE 'casework\\_%' AND NOT g.tgisinternal
-                   AND NOT EXISTS(
-                     SELECT 1 FROM unnest($2::text[], $3::text[], $4::text[]) k(relname, tgname, proname)
-                       JOIN pg_proc f ON f.oid=g.tgfoid
-                     WHERE k.relname=t.relname AND k.tgname=g.tgname
-                       AND f.proname=k.proname AND f.pronamespace=n.oid)
-                 ORDER BY t.relname, g.tgname)
-             FROM pg_roles r, pg_namespace n, reference
-             WHERE r.rolname=COALESCE($1::text, current_user::text) AND n.nspname=current_schema()",
-            &[&role, &tables, &triggers, &functions],
-        )
-        .await?
-    else {
-        return Ok(Vec::new());
-    };
-    if row.get(0) {
-        return Ok(Vec::new());
-    }
-    let migration_role: String = row.get(1);
-    let schema: String = row.get(2);
-    let owners: Vec<String> = row.get(3);
-    let grantees: Vec<String> = row.get(4);
-    let trigger_grants: Vec<String> = row.get(5);
-    let stray_triggers: Vec<String> = row.get(6);
-    Ok(owners
-        .into_iter()
-        .map(|owner| format!("REASSIGN OWNED BY {owner} TO {migration_role}"))
-        .chain(
-            grantees
-                .into_iter()
-                .map(|grantee| format!("REVOKE CREATE ON SCHEMA {schema} FROM {grantee}")),
-        )
-        .chain(
-            trigger_grants
-                .into_iter()
-                .map(|grant| format!("REVOKE TRIGGER ON {grant}")),
-        )
-        .chain(
-            stray_triggers
-                .into_iter()
-                .map(|trigger| format!("DROP TRIGGER {trigger}")),
-        )
-        .collect())
+    platform_activation::stray_authority(transaction, &activation_layout(), role)
+        .await
+        .map_err(platform_error)
 }
 
 /// The `ALTER DEFAULT PRIVILEGES` statement that takes away a default
@@ -1491,28 +1177,10 @@ async fn default_trigger_grant(
     transaction: &Transaction<'_>,
     role: &str,
 ) -> Result<Option<String>, StoreError> {
-    Ok(transaction
-        .query_opt(
-            "SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %s%s REVOKE TRIGGER ON TABLES FROM %s',
-                 quote_ident(current_user::text),
-                 CASE WHEN d.defaclnamespace=0 THEN '' ELSE ' IN SCHEMA ' || quote_ident(n.nspname) END,
-                 CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END)
-             FROM pg_roles r
-             CROSS JOIN pg_default_acl d
-             CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-             LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
-             WHERE r.rolname=$1::text
-               AND d.defaclrole=(SELECT oid FROM pg_roles WHERE rolname=current_user::text)
-               AND d.defaclobjtype='r'
-               AND (d.defaclnamespace=0 OR n.nspname=current_schema())
-               AND a.privilege_type='TRIGGER'
-               AND (a.grantee=0 OR pg_has_role(r.oid, a.grantee, 'MEMBER'))
-             ORDER BY a.grantee=r.oid DESC, a.grantee=0 DESC, d.defaclnamespace DESC
-             LIMIT 1",
-            &[&role],
-        )
-        .await?
-        .map(|row| row.get(0)))
+    platform_activation::default_trigger_grant(transaction, role)
+        .await
+        .map(|grant| grant.map(|grant| grant.statement()))
+        .map_err(platform_error)
 }
 
 /// The next action for stray authority `statements` from
@@ -1549,60 +1217,9 @@ async fn grant_runtime_role(
     transaction: &Transaction<'_>,
     runtime_user: &str,
 ) -> Result<(), StoreError> {
-    let row = transaction
-        .query_one(
-            "SELECT quote_ident($1), quote_ident(current_schema())",
-            &[&runtime_user],
-        )
-        .await?;
-    let role: String = row.get(0);
-    let schema: String = row.get(1);
-    let mut statements = vec![format!("GRANT USAGE ON SCHEMA {schema} TO {role}")];
-    for row in transaction
-        .query(
-            "SELECT format('%I.%I', n.nspname, c.relname), c.relkind::text
-             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE n.nspname=current_schema() AND c.relname LIKE 'casework\\_%'
-               AND c.relkind IN ('r','p','v','S')
-             ORDER BY c.relname",
-            &[],
-        )
-        .await?
-    {
-        let name: String = row.get(0);
-        let kind: String = row.get(1);
-        if kind == "S" {
-            statements.push(format!("GRANT USAGE, SELECT ON SEQUENCE {name} TO {role}"));
-        } else {
-            statements.push(format!(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {name} TO {role}"
-            ));
-        }
-    }
-    for row in transaction
-        .query(
-            "SELECT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))
-             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-             WHERE n.nspname=current_schema() AND p.proname LIKE 'casework\\_%' AND p.prokind='f'
-             ORDER BY 1",
-            &[],
-        )
-        .await?
-    {
-        let name: String = row.get(0);
-        statements.push(format!("GRANT EXECUTE ON FUNCTION {name} TO {role}"));
-    }
-    for ledger in ["casework_activations", "casework_schema_migrations"] {
-        statements.push(format!(
-            "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE {schema}.{ledger} FROM {role}"
-        ));
-        statements.push(format!("REVOKE ALL ON TABLE {schema}.{ledger} FROM PUBLIC"));
-        statements.push(format!("GRANT SELECT ON TABLE {schema}.{ledger} TO {role}"));
-    }
-    for statement in statements {
-        transaction.batch_execute(&statement).await?;
-    }
-    Ok(())
+    platform_activation::grant_runtime_role(transaction, &activation_layout(), runtime_user, &[])
+        .await
+        .map_err(platform_error)
 }
 
 #[cfg(test)]
@@ -1652,11 +1269,11 @@ mod tests {
     fn the_known_triggers_are_exactly_the_ones_the_migrations_create() {
         let mut known: Vec<_> = MIGRATION_TRIGGERS
             .iter()
-            .map(|(table, trigger, function)| {
+            .map(|known| {
                 (
-                    (*table).to_owned(),
-                    (*trigger).to_owned(),
-                    (*function).to_owned(),
+                    known.relation.to_owned(),
+                    known.trigger.to_owned(),
+                    known.function.to_owned(),
                 )
             })
             .collect();

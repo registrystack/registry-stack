@@ -160,18 +160,27 @@ invariants:
     state: enforced
     threat: >-
       Recipient contacts, message bodies, template data, or credentials reach
-      the operational log, the audit journal, or the metrics.
+      the operational log, the audit journal, or the metrics; or the runtime
+      credential changes schema or activation history and serves an
+      unreviewed package or another deployment's database.
     enforcementPoint: >-
       Audit records carry operation, caller pseudonym, sender profile,
       template reference, correlation, outcome class, and a keyed recipient
       reference; log fields never carry payload values; metric labels are
       closed sets fixed in code. The audit writer opens before serving and its
       sticky health participates in readiness. Request records precede effects;
-      response records describe only established outcomes.
+      response records describe only established outcomes. Package activation
+      applies schema, grants, database identity, and the append-only ledger row
+      in one locked transaction. Split-role runtime grants allow product work
+      and ledger reads while withholding ledger writes, ownership, schema
+      creation, and migration-owned write paths. Startup verifies the exact
+      schema, database identity, package digest, and effective role boundary.
+      Activation and startup require PostgreSQL 17 or newer.
     refusal: >-
-      Nothing to refuse at the caller: the absence is the control, proven over
-      the journal, the logs, and the metrics of a full journey. Audit records
-      are minimized JSON envelopes, not a keyed hash chain.
+      Nothing to refuse at the caller for minimized telemetry. Refuse apply
+      before commit when identity or role authority is wrong, and refuse
+      startup before binding when schema, activation, or role grants differ.
+      Audit records are minimized JSON envelopes, not a keyed hash chain.
     negativeTest:
       path: crates/registry-messaging/tests/postgres_callbacks.rs
       name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics
