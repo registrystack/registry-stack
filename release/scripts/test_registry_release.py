@@ -2314,6 +2314,46 @@ class RegistryReleaseTest(TestCase):
             package_body,
         )
 
+    def test_release_image_version_check_expects_render_typst_pin(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        scan_body = assemble[
+            assemble.index("Verify and scan exact candidate images"):assemble.index(
+                "Assemble public payload and validate version-appropriate install inputs"
+            )
+        ]
+        self.assertNotIn(
+            'test "${observed}" = "${name} ${{ needs.validate.outputs.version }}"',
+            scan_body,
+        )
+        start = scan_body.index('expected_image_version="${name} ')
+        final = 'test "${observed}" = "${expected_image_version}"'
+        end = scan_body.index(final, start) + len(final)
+        snippet = "\n".join(
+            line.strip() for line in scan_body[start:end].splitlines()
+        ).replace("${{ needs.validate.outputs.version }}", "0.38.0")
+        lib = (ROOT / "crates/registry-render/src/lib.rs").read_text(encoding="utf-8")
+        pin = lib.split('pub const TYPST_PIN: &str = "', 1)[1].split('"', 1)[0]
+
+        def check(name: str, observed: str) -> int:
+            return subprocess.run(
+                ["bash", "-c", "set -euo pipefail\n" + snippet],
+                cwd=ROOT,
+                env={**os.environ, "name": name, "observed": observed},
+                capture_output=True,
+                check=False,
+            ).returncode
+
+        self.assertEqual(
+            0, check("registry-render", f"registry-render 0.38.0 (typst {pin})")
+        )
+        self.assertNotEqual(0, check("registry-render", "registry-render 0.38.0"))
+        for name in ("relay", "evidence-oid4vci", "breg-mcp", "messaging"):
+            self.assertEqual(0, check(name, f"{name} 0.38.0"))
+            self.assertNotEqual(0, check(name, f"{name} 0.38.0 (typst {pin})"))
+
     def test_candidate_workflow_uses_only_the_current_release_roster(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
