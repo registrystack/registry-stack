@@ -67,8 +67,8 @@ directory. Mount the runtime file, bundle, and secrets read-only, and mount the 
 read-write. The release manifest records the exact promoted digest. Deploy that digest instead of
 the mutable tag.
 
-Starting with v0.38.0, an eligible published release also carries the separate
-`ghcr.io/registrystack/evidence-oid4vci:<tag>` image. Its installation and runtime paths are in
+The wallet delivery service ships as a binary only; no release publishes a container image for it
+yet. Its installation is in
 [Configure Evidence OID4VCI delivery](../../configure/evidence-oid4vci/#install-the-adapter).
 
 The release ships no Helm chart or hosted offering. A Docker Compose file is a reasonable adapter
