@@ -1,5 +1,15 @@
 contract: registry.evidence.security-test-traceability/v1
 entries:
+  - id: sec-oid4vci-offer-request-contract
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: selector_values_outside_the_published_contract_create_no_exchange}
+  - id: sec-signed-evidence-source
+    tests:
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_composes_two_authorized_services_with_fresh_values}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_feeds_a_verifiable_holder_bound_credential}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_refuses_untrusted_protocol_results_without_release}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_schema_matches_runtime_constraints}
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_pins_revocations_and_refuses_invalid_preparation}
   - id: sec-provider-public-projection
     tests:
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_excludes_private_configuration_fields}

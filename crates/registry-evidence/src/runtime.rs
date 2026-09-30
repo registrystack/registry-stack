@@ -4050,6 +4050,7 @@ fn source_failure_category(error: &SourceError) -> &'static str {
         SourceError::WrongMediaType => "source-media-type",
         SourceError::ResponseTooLarge => "source-response-size",
         SourceError::InvalidJson
+        | SourceError::Verification
         | SourceError::ErrorEnvelope
         | SourceError::ProblemMismatch
         | SourceError::ProjectionViolation => "source-protocol",

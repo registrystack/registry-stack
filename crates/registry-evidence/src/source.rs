@@ -162,6 +162,8 @@ pub enum SourceError {
     ResponseTooLarge,
     #[error("the source returned invalid JSON")]
     InvalidJson,
+    #[error("the source signed response failed verification")]
+    Verification,
     #[error("the source returned a problem outside its declared unresolved tuple")]
     ProblemMismatch,
     #[error("the source returned an error envelope")]
@@ -210,6 +212,7 @@ impl SourceError {
             | Self::WrongMediaType
             | Self::ResponseTooLarge
             | Self::InvalidJson
+            | Self::Verification
             | Self::ProblemMismatch
             | Self::ErrorEnvelope
             | Self::ProjectionViolation
@@ -308,6 +311,8 @@ struct HttpTransport {
     operation_timeout: Duration,
     batch_projection: Option<ProjectionNode>,
     unresolved_problem: Option<DeclaredUnresolvedProblem>,
+    evidence: Option<Box<crate::source_evidence::EvidenceSourceConfig>>,
+    maximum_request_bytes: usize,
 }
 
 /// Process-local transport and credential state. Only an explicitly named
@@ -1147,11 +1152,20 @@ impl HttpTransport {
             batch,
             unresolved_problem,
             forward_access_attribution,
+            evidence,
             ..
         } = source
         else {
             return Err(SourceError::InvalidPlan);
         };
+        if let Some(evidence) = evidence {
+            evidence
+                .validate(configured_request)
+                .map_err(|_| SourceError::InvalidPlan)?;
+            if batch.is_some() || unresolved_problem.is_some() {
+                return Err(SourceError::InvalidPlan);
+            }
+        }
         if matches!(**configured_authentication, SourceAuthentication::None {})
             && (tls_trust_profile.is_some()
                 || validate_local_unauthenticated_source_origin(configured_base_url).is_err())
@@ -1203,6 +1217,11 @@ impl HttpTransport {
             operation_timeout: timeout,
             batch_projection,
             unresolved_problem: unresolved_problem.clone(),
+            evidence: evidence.clone(),
+            maximum_request_bytes: configured_request
+                .preparation_limits
+                .maximum_normalized_bytes
+                .unwrap_or(65_536) as usize,
         })
     }
 
@@ -1245,6 +1264,11 @@ impl HttpTransport {
         let MaterializedSourceRequest::Http { url, .. } = materialized else {
             return Err(SourceError::InvalidPlan);
         };
+        let signed_request = self
+            .evidence
+            .as_ref()
+            .map(|evidence| evidence.prepare(materialized.body(), self.maximum_request_bytes))
+            .transpose()?;
         let attribution_headers = match (self.request.forward_access_attribution, attribution) {
             (true, Some(attribution)) => Some(attribution.headers()?),
             (true, None) => return Err(SourceError::InvalidPlan),
@@ -1275,13 +1299,33 @@ impl HttpTransport {
                 .header(ACCESS_REQUESTER_HEADER, requester)
                 .header(ACCESS_PURPOSE_HEADER, purpose);
         }
-        if !self.request.fixed_headers.contains_key(ACCEPT) {
+        if signed_request.is_some() {
+            request = request.header(ACCEPT, crate::EVIDENCE_JWS_MEDIA_TYPE);
+        } else if !self.request.fixed_headers.contains_key(ACCEPT) {
             request = request.header(ACCEPT, HeaderValue::from_static(JSON_MEDIA_TYPE));
         }
-        if let Some(body) = materialized.body() {
+        if let Some((body, _)) = &signed_request {
+            request = request
+                .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+                .body(body.clone());
+        } else if let Some(body) = materialized.body() {
             request = request.json(body);
         }
         let response = request.send().await.map_err(map_transport_error)?;
+        if let (Some(evidence), Some((_, verification))) = (&self.evidence, signed_request) {
+            reject_response_status(&response)?;
+            if !has_exact_media_type(&response, crate::EVIDENCE_JWS_MEDIA_TYPE) {
+                return Err(SourceError::WrongMediaType);
+            }
+            let bytes = Zeroizing::new(
+                read_bounded(response, self.request.maximum_response_bytes)
+                    .await
+                    .map_err(map_bounded_read_error)?,
+            );
+            let value = evidence.verified_values(&verification, &bytes)?;
+            return project_bounded_response(&value, projection, &mut ProjectionDrift::default())
+                .map(SourceResponse::Data);
+        }
         parse_data_response(
             response,
             self.request.maximum_response_bytes,
@@ -1301,6 +1345,9 @@ impl HttpTransport {
     ) -> Result<MaterializedSourceRequest, SourceError> {
         if matches!(self.request.method, HttpMethod::GET) && request_parts.body.is_some() {
             return Err(SourceError::InvalidPlan);
+        }
+        if let Some(evidence) = &self.evidence {
+            evidence.validate_parts(request_parts)?;
         }
         let selectors = self.request.validate_selectors(selectors)?;
         let url = self
