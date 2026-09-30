@@ -178,6 +178,9 @@ pub struct ExchangeIssuer {
     pub token_attributes: BTreeMap<String, ExchangeAttributeKind>,
 }
 
+/// The most signed claims one first-party exchange connection may project.
+pub const MAX_FIRST_PARTY_TOKEN_ATTRIBUTES: usize = 16;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExchangeMapping {
     InstitutionalGrant,
@@ -480,7 +483,9 @@ impl IssuerDescription {
                     "exchange issuer IDs, names and issuer URLs must be distinct and bounded",
                 );
             }
-            if issuer.clients.len() > 32 || issuer.token_attributes.len() > 16 {
+            if issuer.clients.len() > 32
+                || issuer.token_attributes.len() > MAX_FIRST_PARTY_TOKEN_ATTRIBUTES
+            {
                 return refuse("first-party issuer clients and token attributes are bounded");
             }
             if issuer.mapping == ExchangeMapping::InstitutionalGrant
