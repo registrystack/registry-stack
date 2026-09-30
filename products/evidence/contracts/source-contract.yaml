@@ -46,6 +46,15 @@ evidence_data_request:
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
   response_media_types: [application/json, application/graphql-response+json]
+  signed_evidence_protocol:
+    declaration: An optional evidence block on http-json pins one complete reviewed audience-scoped definition, its provider and issuer, relying audience, exact configuration revision, public JWKS, revocations, maximum assertion lifetime, and clock skew. No request or response may replace these expectations.
+    request: The ordinary fixed HTTP source must use POST with a fixed path ending in /v1/evidence, no query, a required JSON body, and no Accept override. The preparation script returns only the closed subjects array. The declared requirement and purpose and a fresh independently generated 32-byte request nonce are supplied by Rust. Role, profile, selector origin, exact field set, type and bounds are checked before source credentials or I/O.
+    transport: The existing source authentication, named connection, TLS policy, concurrency, timeout and byte bounds apply unchanged. Rust selects application/jose+json. The final wrapped request also fits maximumNormalizedBytes. Source batching and unresolvedProblem cannot be combined with this protocol.
+    verification: The existing Evidence client and portable verifier enforce the pinned trust, signature, complete payload contract, nonce, purpose, audience, assurance, provider, issuer, requirement, revision, current validity and exact output contract. Subject bindings use the client's nonce-bound first-use acceptance for exactly the declared roles. An invalid signature, revoked key, stale or mismatched answer, unsigned format, or protocol failure is a dependency failure with no fallback.
+    extraction: Only a values object mapping declared concept handles to verified supported values reaches ordinary response projection, response-schema validation and Rhai extraction. Nonces, subject bindings, signed bytes and signatures never reach scripts or audit. Upstream assertions and values are not cached or persisted.
+    authority: The answering service independently authorizes the configured source client and the declared purpose, and audits that service identity. The outer caller's authority is never inherited by the source.
+    subject_resolution: The accepted upstream signer is trusted to resolve the supplied authorized selectors. First-use verification proves the declared role set and request nonce, not independent equality between a selector and an opaque upstream subject binding. The source retains no binding registry and grants no authority from those bindings.
+    topology: Each configured source executes one fixed request. This adds no source discovery, response-selected call, retry, or new acquisition shape.
   declared_unresolved_problem:
     configuration: >-
       Optional on one http-json source and source-neutral. The exact closed tuple is
@@ -275,7 +284,7 @@ source_batch_block:
   response_pipeline: The ordinary maximumResponseBytes applies before parse. Rust then applies batch.projection, batch.responseSchema, and the ordinary 65536-byte projected-input limit before extraction.
   fact_validation: Every match result is validated independently against the ordinary source factSchema; the batch block cannot declare an alternate fact contract.
 neutrality:
-  production_contract: Generic HTTP, generic authentication, bounded JSON, extended JSON Pointer projection, and Rhai preparation and extraction only.
+  production_contract: Generic HTTP with optional signed Evidence protocol validation, generic authentication, bounded JSON, extended JSON Pointer projection, and Rhai preparation and extraction only. Signed sources reuse the canonical client and verifier; no institutional source schema or domain vocabulary enters the runtime.
   named_compatibility_profiles: Test fixtures and reference documentation only.
 named_connections:
   optional: Existing inline HTTP sources, OpenAPI-derived sources and custom adapters retain their existing configuration and execution behavior.

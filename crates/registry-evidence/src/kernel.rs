@@ -703,7 +703,7 @@ impl OfflineKernel {
         let parameters =
             serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
         match source {
-            SourceConfig::HttpJson { .. } => {
+            SourceConfig::HttpJson { evidence, .. } => {
                 let script = self
                     .preparations
                     .get(source_id)
@@ -712,10 +712,16 @@ impl OfflineKernel {
                     .request_parts_limits
                     .get(source_id)
                     .ok_or(KernelError::Bundle)?;
-                self.runtime
+                let parts = self
+                    .runtime
                     .prepare_with_prior_facts(script, selectors, &parameters, prior_facts, limits)
-                    .map(PreparedSourceRequest::Http)
-                    .map_err(|_| KernelError::Preparation)
+                    .map_err(|_| KernelError::Preparation)?;
+                if let Some(evidence) = evidence {
+                    evidence
+                        .validate_parts(&parts)
+                        .map_err(|_| KernelError::Preparation)?;
+                }
+                Ok(PreparedSourceRequest::Http(parts))
             }
             // A statement source without a preparation script prepares nothing:
             // every parameter it binds comes from its declared bindings, and an

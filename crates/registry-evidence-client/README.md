@@ -12,6 +12,12 @@ judgement about a response is made by `registry-evidence-verifier`.
 
 - `EvidenceClient::prepare`: generates the request nonce and closes the
   verification policy before any byte leaves the process.
+- `PreparedEvidenceRequest::prepare` and
+  `RetainedEvidenceVerification::from_prepared`: the same offline preparation
+  and verification policy for an integrator that owns its HTTP transport and
+  independently accepted public keys. `claim_request_json` claims the single
+  send and returns its body; prepare a fresh request for another attempt.
+  `request_json` only inspects the body. These helpers perform no networking.
 - `EvidenceClient::send` and `EvidenceClient::verify`, or
   `EvidenceClient::request_and_verify` for both at once. `send` returns the exact
   response bytes so a relying party can retain what it verified.

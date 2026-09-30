@@ -2900,6 +2900,11 @@ pub enum SourceConfig {
         tls_trust_profile: Option<String>,
         authentication: Box<SourceAuthentication>,
         request: Box<FixedRequest>,
+        /// Optional signed Evidence protocol over this same fixed HTTP channel.
+        /// Its governed contract supplies requirement and purpose; Rust owns
+        /// the fresh nonce and verifies the answer before extraction.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Box<crate::source_evidence::EvidenceSourceConfig>>,
         /// Shape contract for the projected response, validated by Rust before
         /// extraction runs, so the script maps a response it can rely on.
         response_schema: ArtifactPath,
@@ -2943,6 +2948,7 @@ impl SourceConfig {
                 request,
                 batch,
                 unresolved_problem,
+                evidence,
                 ..
             } => {
                 validate_source_origin(base_url)?;
@@ -2983,6 +2989,12 @@ impl SourceConfig {
                 }
                 authentication.validate()?;
                 request.validate()?;
+                if let Some(evidence) = evidence {
+                    evidence.validate(request)?;
+                    if batch.is_some() || unresolved_problem.is_some() {
+                        return invalid("signed Evidence sources cannot declare source batching or unresolved Problem Details");
+                    }
+                }
                 if let Some(problem) = unresolved_problem {
                     problem.validate()?;
                     if batch.is_some() {
