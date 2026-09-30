@@ -593,6 +593,7 @@ version = "1.1.0"
         )
         for relative in (
             "products/breg/wasm-handler-sdk/Cargo.lock",
+            "products/evidence/fuzz/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",
         ):
@@ -818,6 +819,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-messaging-client-py/pyproject.toml",
             "crates/registry-relay-client-py/pyproject.toml",
             "products/breg/wasm-handler-sdk/Cargo.lock",
+            "products/evidence/fuzz/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",
             "editors/vscode/package.json",
