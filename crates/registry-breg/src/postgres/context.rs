@@ -2165,7 +2165,15 @@ fn snapshot_matches_boundaries(
                 .fields
                 .get(boundary.field())
                 .ok_or_else(invalid_context)?;
-            let value = row.get(boundary.field()).ok_or_else(invalid_context)?;
+            let Some(value) = row.get(boundary.field()) else {
+                if field.required {
+                    return Err(invalid_context());
+                }
+                return Ok(false);
+            };
+            if value.is_null() && !field.required {
+                return Ok(false);
+            }
             canonical_snapshot_field_value(value, &field.field_type)?
         };
         match boundary {
@@ -2661,6 +2669,55 @@ mod tests {
             boundaries.into_iter().rev().collect(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn optional_boundary_absence_is_a_refusal_while_malformed_snapshots_are_invalid() {
+        let registry = compiled_registry();
+        let entity = &registry.entities()["entry"];
+        let context = ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "operator",
+            Some("operations".to_owned()),
+            vec![
+                equals("tenant", "tenant-a"),
+                in_values("region", &["north"]),
+            ],
+        )
+        .expect("compiled boundary context is valid");
+        let record_id =
+            Uuid::parse_str("00000000-0000-0000-0000-000000000123").expect("record UUID parses");
+
+        let omitted = serde_json::Map::from_iter([("tenant".to_owned(), json!("tenant-a"))]);
+        assert!(!context
+            .authorizes_record_snapshot(entity, &omitted, record_id)
+            .expect("an omitted optional boundary is an ordinary mismatch"));
+
+        let nullable = serde_json::Map::from_iter([
+            ("tenant".to_owned(), json!("tenant-a")),
+            ("region".to_owned(), Value::Null),
+        ]);
+        assert!(!context
+            .authorizes_record_snapshot(entity, &nullable, record_id)
+            .expect("a null optional boundary is an ordinary mismatch"));
+
+        let malformed_optional = serde_json::Map::from_iter([
+            ("tenant".to_owned(), json!("tenant-a")),
+            ("region".to_owned(), json!(7)),
+        ]);
+        assert!(context
+            .authorizes_record_snapshot(entity, &malformed_optional, record_id)
+            .is_err());
+
+        let malformed_required = serde_json::Map::from_iter([
+            ("tenant".to_owned(), Value::Null),
+            ("region".to_owned(), json!("north")),
+        ]);
+        assert!(context
+            .authorizes_record_snapshot(entity, &malformed_required, record_id)
+            .is_err());
     }
 
     #[test]
@@ -3264,7 +3321,7 @@ mod tests {
                             min_length: 1,
                             max_length: 64,
                         },
-                        required: true,
+                        required: false,
                         classification: Classification::Internal,
                         valid_time_role: None,
                         encrypted: false,

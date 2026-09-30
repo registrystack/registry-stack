@@ -10,6 +10,15 @@ use crate::contract::{parse_project_json, Operation};
 use crate::model::{CompiledRegistry, HttpMethod};
 
 #[test]
+fn prospective_row_boundary_refusal_is_documented_only_where_it_can_apply() {
+    for operation in [Operation::Create, Operation::Batch] {
+        assert!(super::problem_responses(operation, true).contains_key("412"));
+        assert!(!super::problem_responses(operation, false).contains_key("412"));
+    }
+    assert!(super::problem_responses(Operation::Patch, false).contains_key("412"));
+}
+
+#[test]
 fn change_context_request_schema_rejects_present_empty_text() {
     let schema = JSONSchema::options()
         .with_draft(Draft::Draft202012)

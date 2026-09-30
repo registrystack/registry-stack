@@ -26,7 +26,6 @@ pub enum ProblemCode {
     ActionHandlerFailed,
     ActionRefused,
     AuthenticationRefused,
-    AuthorizationRefused,
     IdempotencyConflict,
     IngestionChunkMismatch,
     IngestionProfileMismatch,
@@ -57,7 +56,6 @@ impl ProblemCode {
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
-        Self::AuthorizationRefused,
         Self::IdempotencyConflict,
         Self::IngestionChunkMismatch,
         Self::IngestionProfileMismatch,
@@ -89,7 +87,6 @@ impl ProblemCode {
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
-        Self::AuthorizationRefused,
         Self::IdempotencyConflict,
         Self::IngestionChunkMismatch,
         Self::IngestionProfileMismatch,
@@ -119,7 +116,6 @@ impl ProblemCode {
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
-            Self::AuthorizationRefused => "authorization.refused",
             Self::IdempotencyConflict => "idempotency.conflict",
             Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
             Self::IngestionProfileMismatch => "ingestion.profile_mismatch",
@@ -153,7 +149,7 @@ impl ProblemCode {
             | Self::RequestInvalid
             | Self::RequestPlanRefused => 400,
             Self::AuthenticationRefused => 401,
-            Self::AuthorizationRefused | Self::IngestionProfileMismatch => 403,
+            Self::IngestionProfileMismatch => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
@@ -207,9 +203,6 @@ impl ProblemCode {
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
-            Self::AuthorizationRefused => {
-                "The mutation is outside the caller's authorized record boundary."
-            }
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::IngestionChunkMismatch => "The chunk does not match the expected next chunk.",
             Self::IngestionProfileMismatch => {

@@ -1311,12 +1311,12 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
             .to_vec(),
     )
     .await;
-    assert_eq!(refused_create.status(), StatusCode::FORBIDDEN);
+    assert_eq!(refused_create.status(), StatusCode::PRECONDITION_FAILED);
     let refused_create = body_json(refused_create).await;
-    assert_eq!(refused_create["code"], "authorization.refused");
+    assert_eq!(refused_create["code"], "precondition.failed");
     assert_eq!(
         refused_create["detail"],
-        "The mutation is outside the caller's authorized record boundary."
+        "The mutation precondition failed."
     );
     assert!(!refused_create.to_string().contains("zone-b"));
     assert_eq!(
@@ -1371,9 +1371,9 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
         br#"[{"op":"replace","path":"/data/jurisdiction","value":"zone-b"}]"#.to_vec(),
     )
     .await;
-    assert_eq!(refused_patch.status(), StatusCode::FORBIDDEN);
+    assert_eq!(refused_patch.status(), StatusCode::PRECONDITION_FAILED);
     let refused_patch = body_json(refused_patch).await;
-    assert_eq!(refused_patch["code"], "authorization.refused");
+    assert_eq!(refused_patch["code"], "precondition.failed");
     assert!(!refused_patch.to_string().contains("zone-b"));
     assert_eq!(
         durable_counts(&database, &table).await,

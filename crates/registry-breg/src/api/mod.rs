@@ -5644,12 +5644,9 @@ fn mutation_problem(error: MutationError) -> Response {
     match error {
         MutationError::InvalidRequest => invalid_request(),
         MutationError::InvalidRequestAt(location) => invalid_request_at(&location),
-        MutationError::AuthorizationRefused => fixed_problem(
-            StatusCode::FORBIDDEN,
-            crate::problem::ProblemCode::AuthorizationRefused.code(),
-            crate::problem::ProblemCode::AuthorizationRefused.description(),
-        ),
-        MutationError::PreconditionFailed => precondition_failed(),
+        MutationError::AuthorizationRefused | MutationError::PreconditionFailed => {
+            precondition_failed()
+        }
         MutationError::Conflict => fixed_problem(
             StatusCode::CONFLICT,
             "mutation.conflict",
