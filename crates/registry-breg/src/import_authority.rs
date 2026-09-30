@@ -710,6 +710,35 @@ pub struct ImportAuthorityOperatorService {
 }
 
 impl ImportAuthorityOperatorService {
+    #[cfg(any(
+        feature = "postgres-test",
+        all(feature = "runtime", feature = "tooling")
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_for_schema_test(
+        expected: ExpectedRegistryIdentity,
+        expected_catalog: ExpectedManagedCatalog,
+        lock_key: RegistryLockKey,
+        migration_connection: ConnectionConfig,
+        migration_role: SqlIdentifier,
+        runtime_role: SqlIdentifier,
+        audit: crate::audit::RegistryAudit,
+        registry: Arc<CompiledRegistry>,
+    ) -> Self {
+        Self {
+            expected,
+            expected_catalog,
+            lock_key,
+            migration_connection,
+            migration_role,
+            runtime_role,
+            lock_timeout: Duration::from_secs(5),
+            statement_timeout: Duration::from_secs(10),
+            audit,
+            registry,
+        }
+    }
+
     pub async fn from_runtime_config(path: &Path) -> Result<Self, ImportAuthorityError> {
         if !path.is_absolute() {
             return Err(ImportAuthorityError::InvalidInput);
@@ -772,18 +801,16 @@ impl ImportAuthorityOperatorService {
         audit: crate::audit::RegistryAudit,
         registry: Arc<CompiledRegistry>,
     ) -> Self {
-        Self {
+        Self::new_for_schema_test(
             expected,
             expected_catalog,
             lock_key,
             migration_connection,
             migration_role,
             runtime_role,
-            lock_timeout: Duration::from_secs(5),
-            statement_timeout: Duration::from_secs(10),
             audit,
             registry,
-        }
+        )
     }
 
     /// Open one authority for an `import` grant of the active package. Any
