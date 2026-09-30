@@ -365,6 +365,13 @@ pub async fn apply(
         }
     }
     let schema_versions_applied = migrate_in(&tx).await?;
+    // Observed before granting: a reapply that restores stale grants is a
+    // change, recorded as a new activation like any other.
+    let grants_were_current = !split
+        || platform::observe_role(&*tx, &layout(), Some(runtime_role), &[])
+            .await
+            .map_err(platform_error)?
+            .is_some_and(|role| role.grants_current);
     let (role_mode, grants_current, readable) = if split {
         platform::grant_runtime_role(&*tx, &layout(), runtime_role, &[])
             .await
@@ -389,6 +396,7 @@ pub async fn apply(
         return Err(ActivationError::Refused(refusals));
     }
     if schema_versions_applied.is_empty()
+        && grants_were_current
         && current_active.as_ref().is_some_and(|active| {
             active.package_digest == package_digest
                 && active.database_id == database_id

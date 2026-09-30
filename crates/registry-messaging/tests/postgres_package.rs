@@ -865,6 +865,94 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
     }
 }
 
+/// Every entry the operator process wrote to its audit destination.
+fn operator_audit_entries(config: &RuntimeConfig) -> Vec<Value> {
+    let path = match config
+        .audit
+        .destination()
+        .unwrap()
+        .for_process("messagingctl")
+        .unwrap()
+    {
+        AuditDestination::File(file) => file.path().to_owned(),
+        _ => panic!("the test configures a file audit destination"),
+    };
+    std::fs::read_to_string(path)
+        .expect("the operator audit destination")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn reapplying_the_active_package_over_stale_grants_records_the_repair() {
+    let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
+    let deployment = Deployment::new(&isolated);
+    let config = deployment.config();
+    let first = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("the initial split-role activation");
+    assert!(first.recorded);
+
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "REVOKE INSERT ON {schema}.messaging_messages FROM {runtime_role}",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("make runtime grants stale");
+    let preview = activation_plan(&config)
+        .await
+        .expect("a plan over stale grants");
+    assert_eq!(preview.change, ActivationChange::Activate);
+    assert_eq!(preview.grants_current, Some(false));
+
+    let repaired = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("a reapply restores the runtime grants");
+    assert!(
+        repaired.recorded,
+        "restoring stale grants is a change the ledger records"
+    );
+    assert_ne!(
+        repaired.activation.activation_id,
+        first.activation.activation_id
+    );
+    assert_eq!(
+        repaired.activation.predecessor_package_digest.as_deref(),
+        Some(deployment.loaded().digest())
+    );
+    let digest = deployment.loaded().digest().to_owned();
+    assert_eq!(isolated.ledger().await, [digest.clone(), digest.clone()]);
+
+    let entries = operator_audit_entries(&config);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries[2]["record"]["event"],
+        "messaging.package.activation.requested"
+    );
+    assert_eq!(
+        entries[3]["record"]["event"],
+        "messaging.package.activation.finished"
+    );
+    assert_eq!(entries[3]["record"]["outcome"], "applied");
+    assert_eq!(entries[3]["record"]["applied"], true);
+    assert_eq!(
+        entries[3]["record"]["activationId"],
+        entries[2]["record"]["activationId"]
+    );
+
+    let secrets = config.secret_resolver().expect("secrets");
+    let runtime =
+        PostgresStore::connect_runtime(&config.database, &secrets).expect("runtime store");
+    registry_messaging::activation::check_runtime(&runtime, config.database_id(), &digest)
+        .await
+        .expect("the repaired runtime boundary");
+    let settled = activation_plan(&config).await.expect("a settled plan");
+    assert_eq!(settled.change, ActivationChange::None);
+}
+
 #[tokio::test]
 async fn a_post_migration_role_refusal_rolls_back_the_whole_activation_and_is_audited() {
     let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
