@@ -734,6 +734,7 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
         "authenticated-grant",
         "forward-attribution",
         "non-canonical-revoked-key-id",
+        "unauthenticated",
     ] {
         let mut candidate = baseline.clone();
         let source = &mut candidate["sources"]["source-b"];
@@ -795,6 +796,7 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
             "non-canonical-revoked-key-id" => {
                 source["evidence"]["revokedKeyIds"] = json!([format!("{}B", "A".repeat(42))])
             }
+            "unauthenticated" => source["authentication"] = json!({"kind": "none"}),
             _ => unreachable!(),
         }
         assert!(!runtime_accepts(&candidate), "runtime accepted {mode}");
@@ -866,6 +868,36 @@ async fn signed_evidence_source_refuses_forwarded_access_attribution() {
          cannot set forwardAccessAttribution, because the upstream authorizes and audits this \
          service's own source credential"
     );
+    assert!(fixture.requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn signed_evidence_source_refuses_unauthenticated_access() {
+    let fixture = composed_runtime().await;
+    let mut candidate: Value = serde_norway::from_slice(
+        &fs::read(fixture.downstream.bundle_root.join("evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    candidate["sources"]["source-b"]["authentication"] = json!({"kind": "none"});
+    let Err(error) =
+        crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
+    else {
+        panic!("runtime accepted an unauthenticated signed Evidence source");
+    };
+    assert_eq!(
+        error.to_string(),
+        "configuration violates the Evidence Version 1 contract: a signed Evidence source \
+         requires source authentication, because the upstream authorizes and audits this \
+         service's own source credential"
+    );
+    // Without the signed protocol the same local loopback source is ordinary
+    // unauthenticated HTTP configuration the local profile permits.
+    candidate["sources"]["source-b"]
+        .as_object_mut()
+        .unwrap()
+        .remove("evidence");
+    crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
+        .expect("the local profile accepts an unauthenticated loopback HTTP source");
     assert!(fixture.requests.lock().await.is_empty());
 }
 

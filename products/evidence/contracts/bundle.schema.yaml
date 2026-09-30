@@ -1164,6 +1164,9 @@ $defs:
               - required: [unresolvedProblem]
           properties:
             forwardAccessAttribution: {const: false}
+            authentication:
+              properties:
+                kind: {not: {const: none}}
             request:
               required: [path]
               properties:

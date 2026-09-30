@@ -2998,6 +2998,9 @@ impl SourceConfig {
                     if *forward_access_attribution {
                         return invalid("a signed Evidence source cannot set forwardAccessAttribution, because the upstream authorizes and audits this service's own source credential");
                     }
+                    if matches!(**authentication, SourceAuthentication::None {}) {
+                        return invalid("a signed Evidence source requires source authentication, because the upstream authorizes and audits this service's own source credential");
+                    }
                 }
                 if let Some(problem) = unresolved_problem {
                     problem.validate()?;

@@ -515,7 +515,11 @@ an upstream refusal or unavailable assertion is a dependency failure. They also
 cannot set `forwardAccessAttribution: true`. The upstream Evidence service
 authorizes and audits this service's own source credential and does not read
 the reserved attribution headers, so forwarding would only send the downstream
-caller's requester and purpose to another deployment. The
+caller's requester and purpose to another deployment. For the same reason a
+signed Evidence source must authenticate: configuration validation refuses
+`authentication: {kind: none}` even under the local assurance profile, because
+the upstream Evidence service answers only an authenticated, authorized source
+credential. The
 downstream requirement can issue its own independently authorized wallet
 credential after acquiring these verified facts.
 
@@ -546,7 +550,7 @@ Beyond the shared keys, an `http-json` source declares:
 | `forwardAccessAttribution` | no | Defaults to `false`. When `true`, Rust sends the verified authorized requester and purpose as base64url UTF-8 in the reserved `Registry-Access-Requester` and `Registry-Access-Purpose` headers. The authenticated source must independently trust this Evidence service as an intermediary; the headers grant no source authority. A source that declares `evidence` cannot set it. |
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
-| `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
+| `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin, and a source that declares `evidence` cannot use it. |
 | `unresolvedProblem` | no | Exact source-neutral `{status: 404, type: absolute HTTPS URI, code: bounded problem id}` tuple. Only an exact six-member `application/problem+json` response becomes explicit unresolved; omission leaves every 404 a dependency failure. Incompatible with `batch`. |
 | `batch` | no | Reviewed one-call optimization for the multi-subject request-batch route. It is fixed-path-only and requires both bundle and runtime `source-batch` capability. |
 
