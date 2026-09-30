@@ -350,7 +350,9 @@ impl DataChunk {
         &self.digest
     }
 
-    #[allow(dead_code)]
+    /// The fixture runner replays chunks with their prefix binding; no other
+    /// in-crate caller needs it.
+    #[cfg(all(feature = "runtime", feature = "tooling"))]
     pub(crate) fn prefix_digest(&self) -> &str {
         &self.prefix_digest
     }
