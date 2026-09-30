@@ -57,12 +57,14 @@ It does not claim complete DCAT-AP or BRegDCAT-AP conformance.
 
 Registry Stack releases publish the `discovery-<tag>-linux-amd64` runtime asset. The first release
 eligible to publish a matching `discoveryctl-<tag>-linux-amd64` authoring asset is v0.38.0. For a
-published v0.38.0 or later release, authenticate both assets through the shared `SHA256SUMS`
+published v0.38.0 or later release, choose `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest) and authenticate
+both assets through the shared `SHA256SUMS`
 procedure at `https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, then
 install the exact pair:
 
 ```sh
-tag="${TAG:?set TAG to a published v0.38.0 or later tag}"
+tag="${TAG:?set TAG to the selected published tag}"
 mkdir -p ~/.local/bin
 for binary in discovery discoveryctl; do
   install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"

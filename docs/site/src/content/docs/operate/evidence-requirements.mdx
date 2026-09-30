@@ -55,6 +55,9 @@ can use either one as a source through the same fixed HTTP request it makes to a
 
 ## How it ships
 
+Choose a published `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest).
+
 Each release publishes reproducible binaries for the runtime, the `evidencectl` authoring tool,
 and the wallet delivery service, with an installer that verifies checksums before installing. It
 also publishes `ghcr.io/registrystack/evidence:<tag>`, built on Distroless `cc-debian13` with no
