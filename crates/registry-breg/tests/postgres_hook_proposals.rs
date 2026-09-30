@@ -41,7 +41,9 @@ use registry_breg::postgres::{
     RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
-use registry_breg::webhook::{WebhookDeliveryError, WebhookDeliveryService, WebhookWorkOutcome};
+use registry_breg::webhook::{
+    WebhookDeliveryError, WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorkOutcome,
+};
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Map, Value};
@@ -1298,7 +1300,9 @@ async fn real_postgres_a_retained_local_delivery_survives_restart_verification()
     assert_eq!(changed, 1);
     assert_eq!(
         setup.service.verify_retained_bindings().await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(WebhookRetainedBindingError::Mismatch {
+            retained_deliveries: 1,
+        }),
         "a retained local delivery whose digest no handler answers to still blocks startup"
     );
 
@@ -1389,6 +1393,28 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         record_count(&setup, "followup").await,
         1,
         "the first application stands; the drifted answer applied nothing"
+    );
+    let statuses = setup
+        .service
+        .list(100)
+        .await
+        .expect("operator status reads through the proposal receipt boundary");
+    let drifted_status = statuses
+        .iter()
+        .find(|status| {
+            status.event_id == event.event_id && status.compiled_delivery_id == delivery_id
+        })
+        .expect("the retained answer conflict remains visible");
+    assert!(drifted_status.payload_available);
+    assert!(drifted_status.binding_active);
+    assert!(
+        !drifted_status.discard_eligible,
+        "a stable proposal receipt makes discard ineligible"
+    );
+    assert_eq!(
+        setup.service.discard(event.event_id, &delivery_id, 1).await,
+        Err(WebhookDeliveryError::Unavailable),
+        "discard refuses rather than hiding a committed proposal receipt"
     );
 
     // Cross-kind drift follows the same receipt. A later empty/none answer

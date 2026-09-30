@@ -40,7 +40,7 @@ use crate::postgres::{
     RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
-use crate::webhook::{WebhookDeliveryService, WebhookWorker};
+use crate::webhook::{WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorker};
 
 /// Bounded startup refusal. Package paths, request identifiers, stored review
 /// values, and physical catalog details are intentionally unavailable through
@@ -127,6 +127,12 @@ pub enum StartupError {
     Authentication,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
+    #[error(
+        "{retained_deliveries} retained webhook deliveries require superseded bindings; inspect \
+         them with `bregctl webhook list` and either restore the exact bindings or explicitly \
+         discard each delivery"
+    )]
+    RetainedWebhookBindings { retained_deliveries: u64 },
     /// Pending or leased webhook deliveries were captured under an event
     /// source other than the one `identity.instanceId` derives. The worker
     /// would refuse each stored envelope and dead-letter it, so startup
@@ -471,6 +477,9 @@ impl StartupError {
                 "the Registry attachment storage or verification binding was refused"
             }
             Self::EventDestinations => "the Registry event destination bindings were refused",
+            Self::RetainedWebhookBindings { .. } => {
+                "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
+            }
             Self::InstanceIdChangedWithPendingDeliveries { .. } => {
                 "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
             }
@@ -1296,7 +1305,14 @@ async fn finish_prepared_server(
     webhook_delivery
         .verify_retained_bindings()
         .await
-        .map_err(|_| StartupError::EventDestinations)?;
+        .map_err(|error| match error {
+            WebhookRetainedBindingError::Mismatch {
+                retained_deliveries,
+            } => StartupError::RetainedWebhookBindings {
+                retained_deliveries,
+            },
+            WebhookRetainedBindingError::Unavailable => StartupError::EventDestinations,
+        })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
     let webhook_worker = Some(WebhookWorker::new(webhook_delivery));

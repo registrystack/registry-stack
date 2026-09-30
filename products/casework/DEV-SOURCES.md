@@ -167,3 +167,28 @@ audience and registered exchange scope. Scheduling then verifies its own exact
 service, location, action, client, resource, deadline, and assertion-issuer
 bounds; see [`../scheduling/TASK_GRANTS.md`](../scheduling/TASK_GRANTS.md) for
 the booking request.
+
+## Automatic source application
+
+An automatically applied BReg request keeps two source grants separate. Give
+staff and supervisor clients a human `get` profile on the request so Casework
+can display source context. Give the named executor its own service
+`apply_request` profile. `caseworkctl source add` does not add executor scopes
+or client admission to the human profiles. For manual application, the apply
+profile must still admit the human reviewers.
+
+For local development, `source add --apply` reuses an exact existing
+`reviewExecutors` entry. When the entry is absent and one authored service
+client is already bound to the automatic apply profile, it adds the executor
+binding without changing that client or its grants. With no such client it
+reports the authoring still needed; it does not invent a credential. More than
+one eligible service client, or more than one human source-context profile, is
+refused as ambiguous.
+
+`caseworkctl check` reports each request's `applicationMode` from its imported
+BReg description, and `caseworkctl test` checks the fixture against that mode.
+Before the description is imported, the mode is `null`; a local fixture never
+establishes that automatic application succeeded against a running source.
+The starter fixture checks its authored queue and target without assuming a
+source mode. Add `expect.applicationMode` to a fixture to check the imported
+mode explicitly.

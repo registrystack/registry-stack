@@ -102,7 +102,6 @@ source:
   reviewStage: review
 expect:
   queue: corrections
-  applicationMode: manual
   targetElapsed: PT48H
 "#;
 
@@ -372,13 +371,23 @@ fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Valu
 /// Every value here is read from the project. A request that declares no
 /// clock and no target reports `null` for both rather than a stand-in, because
 /// a reader takes this block for what the engine compiled.
-fn request_description(request: &SourceRequestPolicy) -> Value {
+fn request_description(request: &SourceRequestPolicy, description: Option<&Value>) -> Value {
+    let application_mode = description.and_then(|root| {
+        let requests = match root.get("requests").and_then(Value::as_array) {
+            Some(requests) => requests.iter().collect::<Vec<_>>(),
+            None => vec![&root["request"]],
+        };
+        requests
+            .into_iter()
+            .find(|described| described["requestEntity"] == request.entity)
+            .and_then(|described| described["onApproved"]["mode"].as_str())
+    });
     json!({
         "entity": request.entity,
         "queue": request.queue,
         "queueMode": if request.routing.is_empty() { "default" } else { "first_match" },
         "routingRules": request.routing.len(),
-        "applicationMode": "manual",
+        "applicationMode": application_mode,
         "clock": request.clock,
         "target": request.target.as_ref().map(|target| json!({
             "id": target.id,
@@ -425,18 +434,28 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
     let sources = policy
         .sources
         .iter()
-        .map(|source| {
-            json!({
+        .map(|source| -> Result<Value> {
+            // A missing imported description is an authoring finding. Its
+            // mode is unknown, never an invented manual application default.
+            let description = if project.join(&source.description).is_file() {
+                let path = project_input_path(project, &source.description)?;
+                Some(serde_json::from_slice::<Value>(&read_package_input(
+                    &path,
+                )?)?)
+            } else {
+                None
+            };
+            Ok(json!({
                 "sourceId": source.id,
                 "sourceAdapter": source.adapter,
                 "requests": source
                     .requests
                     .iter()
-                    .map(request_description)
+                    .map(|request| request_description(request, description.as_ref()))
                     .collect::<Vec<_>>(),
-            })
+            }))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let status = if findings.is_empty() {
         "complete"
     } else {
@@ -735,11 +754,6 @@ fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject
     let assertions = [
         (&fixture["expect"]["queue"], &request["queue"], "queue"),
         (
-            &fixture["expect"]["applicationMode"],
-            &request["applicationMode"],
-            "application mode",
-        ),
-        (
             &fixture["expect"]["targetElapsed"],
             &request["target"]["elapsed"],
             "target elapsed time",
@@ -749,6 +763,15 @@ fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject
         if actual != expected {
             bail!("{label} expectation does not match the effective project");
         }
+    }
+    // A starter has not imported its source description yet, so its offline
+    // fixture can check authored routing without guessing the source's mode.
+    // An explicitly authored expectation still needs exact source evidence.
+    if fixture["expect"]
+        .get("applicationMode")
+        .is_some_and(|expected| expected != &request["applicationMode"])
+    {
+        bail!("application mode expectation does not match the effective project");
     }
     Ok(())
 }
@@ -3722,6 +3745,74 @@ mod tests {
         assert_eq!(requests[0]["target"]["elapsed"], "PT48H");
         assert_eq!(requests[1]["target"]["id"], "response-window");
         assert_eq!(requests[1]["target"]["elapsed"], "PT72H");
+    }
+
+    #[test]
+    fn starter_fixtures_check_routing_without_inventing_a_source_application_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        init(&project, "professional-review").unwrap();
+        let checked = check(&project, false, false).unwrap();
+        assert!(checked["effective"]["sources"][0]["requests"][0]["applicationMode"].is_null());
+        test(&project).expect("offline routing fixture needs no imported source");
+
+        let fixture_path = project.join("fixtures/professional-review.yaml");
+        fs::write(
+            &fixture_path,
+            FIXTURE.replace(
+                "  queue: corrections",
+                "  queue: corrections\n  applicationMode: manual",
+            ),
+        )
+        .unwrap();
+        assert!(format!("{:#}", test(&project).unwrap_err()).contains("application mode"));
+        fs::write(
+            project.join("sources/professional-licences.json"),
+            BREG_SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+        test(&project).expect("the imported description proves the manual mode");
+    }
+
+    #[test]
+    fn check_and_fixtures_use_each_sources_authored_application_mode() {
+        let (_root, project) = write_two_source_project();
+        let path = project.join("sources/response-register.json");
+        let mut description: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        description["request"]["onApproved"] = json!({"mode":"automatic","executor":"applier"});
+        // Cover the plural description as well as the first source's singular one.
+        let request = description
+            .as_object_mut()
+            .unwrap()
+            .remove("request")
+            .unwrap();
+        description["requests"] = json!([request]);
+        description["apiVersion"] =
+            json!("registry.registrystack.org/casework-source-description/v1alpha2");
+        fs::write(path, serde_json::to_vec(&description).unwrap()).unwrap();
+        let checked = check(&project, false, false).unwrap();
+        assert_eq!(
+            checked["effective"]["sources"][0]["requests"][0]["applicationMode"],
+            "manual"
+        );
+        assert_eq!(
+            checked["effective"]["sources"][1]["requests"][0]["applicationMode"],
+            "automatic"
+        );
+        fs::create_dir_all(project.join("fixtures")).unwrap();
+        let fixture_path = project.join("fixtures/automatic.yaml");
+        let fixture = "apiVersion: registry.registrystack.org/casework-fixture/v1alpha1\nkind: CaseworkFixture\nname: automatic\nsource: {id: response-register, requestEntity: response-correction}\nexpect: {queue: corrections, applicationMode: automatic, targetElapsed: PT72H}\n";
+        fs::write(&fixture_path, fixture).unwrap();
+        test(&project).expect("automatic mode fixture");
+        fs::write(
+            fixture_path,
+            fixture.replace("applicationMode: automatic", "applicationMode: manual"),
+        )
+        .unwrap();
+        assert!(format!("{:#}", test(&project).unwrap_err()).contains("application mode"));
+        fs::remove_file(project.join("sources/response-register.json")).unwrap();
+        let checked = check(&project, false, false).unwrap();
+        assert!(checked["effective"]["sources"][1]["requests"][0]["applicationMode"].is_null());
     }
 
     #[test]

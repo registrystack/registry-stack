@@ -1853,17 +1853,79 @@ fn plan_breg_dev_clients(
         }
         eligible.push((client, role.to_owned(), principal_claim.to_owned()));
     }
-    // One Casework reviewer acts on every paired request entity, so its BReg
-    // client carries the authority of every review and apply grant together.
+    // Human source-context authority stays separate from an automatic
+    // executor's apply permission. Only manual application grants are carried
+    // into a Casework reviewer's local client.
+    let mut review_permissions = Vec::new();
+    let mut apply_permissions = Vec::new();
+    for request in requests {
+        review_permissions.extend(
+            request.metadata["reviewPermissions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        match request.application {
+            ApplicationPlan::Manual => apply_permissions.extend(
+                request.metadata["applyPermissions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            ),
+            ApplicationPlan::Automatic { .. } => {
+                let context_profiles = authored["accessProfiles"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|profile| profile["actorKind"] == "human")
+                    .filter(|profile| {
+                        profile["requesterClients"]
+                            .as_array()
+                            .is_some_and(|clients| {
+                                reviewer_clients.iter().all(|client| {
+                                    clients.iter().any(|candidate| {
+                                        candidate.as_str() == Some(client.as_str())
+                                    })
+                                })
+                            })
+                    })
+                    .filter(|profile| {
+                        profile["permissions"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|permission| {
+                                permission["entity"] == request.entity()
+                                    && permission["operations"].as_array().is_some_and(
+                                        |operations| {
+                                            operations.iter().any(|operation| operation == "get")
+                                        },
+                                    )
+                            })
+                    })
+                    .filter_map(|profile| profile["id"].as_str())
+                    .map(|profile| json!({"profile":profile}))
+                    .collect::<Vec<_>>();
+                if needs_authority && context_profiles.is_empty() {
+                    bail!("automatic BReg request {} requires an authored human get profile for Casework source context; its service executor does not grant reviewer access", request.entity());
+                }
+                if needs_authority && context_profiles.len() > 1 {
+                    let ids = context_profiles
+                        .iter()
+                        .filter_map(|profile| profile["profile"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    bail!("automatic BReg request {} has ambiguous human get profiles ({ids}); keep one profile that admits every Casework staff and supervisor client", request.entity());
+                }
+                review_permissions.extend(context_profiles);
+            }
+        }
+    }
     let paired = json!({
-        "reviewPermissions": requests
-            .iter()
-            .flat_map(|request| request.metadata["reviewPermissions"].as_array().into_iter().flatten())
-            .collect::<Vec<_>>(),
-        "applyPermissions": requests
-            .iter()
-            .flat_map(|request| request.metadata["applyPermissions"].as_array().into_iter().flatten())
-            .collect::<Vec<_>>(),
+        "reviewPermissions": review_permissions,
+        "applyPermissions": apply_permissions,
     });
     let authority = if needs_authority {
         Some(reviewer_authority(authored, &paired, &reviewer_clients)?)
@@ -1922,18 +1984,27 @@ fn plan_breg_dev_clients(
                     &mut changes,
                 )?;
             }
+            let (local_review_executors, executor_warnings) =
+                apply_local_review_executor_candidates(
+                    &mut authored_dev_clients,
+                    requests,
+                    &mut changes,
+                )?;
             let proposed = render_dev_clients_preserving_authored_text(
                 &original,
                 &clients,
                 &local_review_authorities,
+                &local_review_executors,
                 &authored_dev_clients,
             )?;
+            let mut warnings = authority
+                .map(|authority| authority.warnings)
+                .unwrap_or_default();
+            warnings.extend(executor_warnings);
             Ok(DevClientsPlan {
                 patch: Value::Array(clients),
                 changes,
-                warnings: authority
-                    .map(|authority| authority.warnings)
-                    .unwrap_or_default(),
+                warnings,
                 write: Some(DevClientsWrite {
                     path: dev_clients_path,
                     original,
@@ -1979,6 +2050,155 @@ fn apply_local_review_authority_candidate(
         .expect("dev-client changes are an array")
         .push(json!({"file":"dev-clients.yaml","path":format!("/reviewAuthorities/{authority_id}"),"operation":"ensure_exact"}));
     Ok(())
+}
+
+fn apply_local_review_executor_candidates(
+    root: &mut Value,
+    requests: &[SelectedRequest<'_>],
+    changes: &mut Value,
+) -> Result<(BTreeMap<String, Value>, Vec<String>)> {
+    let mut required = BTreeMap::<String, String>::new();
+    for request in requests {
+        let ApplicationPlan::Automatic {
+            executor,
+            access_profile,
+        } = &request.application
+        else {
+            continue;
+        };
+        match required.get(executor) {
+            Some(existing) if existing != access_profile => bail!(
+                "automatic BReg requests sharing executor {executor} disagree on its access profile; use distinct executor IDs or one exact profile"
+            ),
+            Some(_) => {}
+            None => {
+                required.insert(executor.clone(), access_profile.clone());
+            }
+        }
+    }
+    if required.is_empty() {
+        return Ok((BTreeMap::new(), Vec::new()));
+    }
+
+    let object = root
+        .as_object()
+        .context("BReg dev-clients.yaml must contain an object")?;
+    let clients = object
+        .get("clients")
+        .and_then(Value::as_array)
+        .context("BReg dev-clients.yaml clients must be an array")?;
+    let existing_executors = match object.get("reviewExecutors") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_object()
+                .context("BReg dev-clients.yaml reviewExecutors must be an object")?,
+        ),
+    };
+    let mut bindings = BTreeMap::new();
+    let mut additions = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for (executor, access_profile) in required {
+        if let Some(binding) = existing_executors.and_then(|values| values.get(&executor)) {
+            let binding_object = binding.as_object().with_context(|| {
+                format!("BReg local review executor {executor} must be an object")
+            })?;
+            let bound_profile = binding_object
+                .get("accessProfile")
+                .and_then(Value::as_str)
+                .with_context(|| {
+                    format!("BReg local review executor {executor} has no accessProfile")
+                })?;
+            let client_id = binding_object
+                .get("client")
+                .and_then(Value::as_str)
+                .with_context(|| {
+                    format!("BReg local review executor {executor} has no service client")
+                })?;
+            if binding_object.len() != 2 || bound_profile != access_profile {
+                bail!("BReg local review executor {executor} conflicts with automatic apply profile {access_profile}; keep exactly accessProfile and client with that profile");
+            }
+            let candidates = clients
+                .iter()
+                .filter(|client| client["id"] == client_id)
+                .collect::<Vec<_>>();
+            let [client] = candidates.as_slice() else {
+                bail!("BReg local review executor {executor} names missing or duplicate client {client_id}; keep one declared service client bound to {access_profile}");
+            };
+            if is_service_client_for_profile(client, &access_profile)?.is_none() {
+                bail!("BReg local review executor {executor} client {client_id} must be a service client explicitly bound to {access_profile}");
+            }
+            bindings.insert(executor, binding.clone());
+            continue;
+        }
+
+        let mut candidates = Vec::new();
+        for client in clients {
+            if is_service_client_for_profile(client, &access_profile)?.is_some() {
+                candidates.push(client);
+            }
+        }
+        match candidates.as_slice() {
+            [] => warnings.push(format!(
+                "automatic BReg executor {executor} has no local service client bound to {access_profile}; define that client and reviewExecutors.{executor} before bregctl dev start"
+            )),
+            [client] => {
+                let client_id = client["id"].as_str().with_context(|| {
+                    format!("the service client for {access_profile} has no string id")
+                })?;
+                let binding = json!({
+                    "accessProfile":access_profile,
+                    "client":client_id,
+                });
+                additions.insert(executor.clone(), binding.clone());
+                bindings.insert(executor.clone(), binding);
+                changes
+                    .as_array_mut()
+                    .expect("dev-client changes are an array")
+                    .push(json!({"file":"dev-clients.yaml","path":format!("/reviewExecutors/{executor}"),"operation":"ensure_exact"}));
+            }
+            candidates => {
+                let ids = candidates
+                    .iter()
+                    .filter_map(|client| client["id"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!("automatic BReg executor {executor} has multiple service clients bound to {access_profile} ({ids}); keep one client or author one exact reviewExecutors binding");
+            }
+        }
+    }
+    if !additions.is_empty() {
+        let executors = root
+            .as_object_mut()
+            .expect("validated BReg dev clients object")
+            .entry("reviewExecutors")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("validated BReg reviewExecutors object");
+        executors.extend(additions);
+    }
+    Ok((bindings, warnings))
+}
+
+fn is_service_client_for_profile(client: &Value, access_profile: &str) -> Result<Option<()>> {
+    let profiles = client["accessProfiles"]
+        .as_array()
+        .context("each BReg dev client must declare accessProfiles as an array")?;
+    if !profiles
+        .iter()
+        .any(|profile| profile.as_str() == Some(access_profile))
+    {
+        return Ok(None);
+    }
+    let claims = client["claims"]
+        .as_object()
+        .context("each BReg dev client must declare claims as an object")?;
+    match claims.get("registry_actor_kind") {
+        None => Ok(Some(())),
+        Some(Value::String(kind)) if kind == "service" => Ok(Some(())),
+        Some(Value::String(_)) => Ok(None),
+        Some(_) => bail!("BReg dev client registry_actor_kind must be a string"),
+    }
 }
 
 fn absent_dev_clients_plan() -> DevClientsPlan {
@@ -2038,6 +2258,7 @@ fn render_dev_clients_preserving_authored_text(
     original: &[u8],
     clients: &[Value],
     authorities: &BTreeMap<String, Value>,
+    executors: &BTreeMap<String, Value>,
     expected: &Value,
 ) -> Result<String> {
     let text = std::str::from_utf8(original).context("BReg dev-clients.yaml must be UTF-8")?;
@@ -2075,6 +2296,19 @@ fn render_dev_clients_preserving_authored_text(
                     authority_id,
                     authority,
                 )?);
+            }
+        }
+    }
+    for (executor_id, executor) in executors {
+        let parsed_so_far: Value = serde_norway::from_str(&rendered)?;
+        if parsed_so_far["reviewExecutors"].get(executor_id).is_none() {
+            if parsed_so_far.get("reviewExecutors").is_some() {
+                rendered = insert_local_review_executor(&rendered, executor_id, executor)?;
+            } else {
+                if !rendered.ends_with('\n') {
+                    rendered.push('\n');
+                }
+                rendered.push_str(&render_local_review_executor_yaml(executor_id, executor)?);
             }
         }
     }
@@ -2120,6 +2354,38 @@ fn insert_local_review_authority(
 ) -> Result<String> {
     let block = render_local_review_authority_entry_yaml(authority_id, authority)?;
     insert_yaml_collection_items(text, "reviewAuthorities", "{}", &block)
+}
+
+fn render_local_review_executor_yaml(executor_id: &str, executor: &Value) -> Result<String> {
+    Ok(format!(
+        "reviewExecutors:\n{}",
+        render_local_review_executor_entry_yaml(executor_id, executor)?
+    ))
+}
+
+fn render_local_review_executor_entry_yaml(executor_id: &str, executor: &Value) -> Result<String> {
+    let object = executor
+        .as_object()
+        .context("planned local review executor must be an object")?;
+    Ok(format!(
+        "  {}:\n    accessProfile: {}\n    client: {}\n",
+        yaml_string(executor_id),
+        yaml_string(
+            object["accessProfile"]
+                .as_str()
+                .context("executor accessProfile is missing")?
+        ),
+        yaml_string(
+            object["client"]
+                .as_str()
+                .context("executor client is missing")?
+        ),
+    ))
+}
+
+fn insert_local_review_executor(text: &str, executor_id: &str, executor: &Value) -> Result<String> {
+    let block = render_local_review_executor_entry_yaml(executor_id, executor)?;
+    insert_yaml_collection_items(text, "reviewExecutors", "{}", &block)
 }
 
 fn insert_dev_clients(text: &str, clients: &[&Value]) -> Result<String> {
@@ -4274,6 +4540,148 @@ mod tests {
         assert_eq!(plan.patch, json!("absent"));
         assert_eq!(plan.changes, json!([]));
         assert!(plan.write.is_none());
+    }
+
+    #[test]
+    fn automatic_executor_authority_never_becomes_human_reviewer_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            b"version: 1\nclients:\n  - id: executor\n    accessProfiles: [automatic-applier]\n    scopes: [requests:apply]\n    claims:\n      registry_actor_kind: service\n",
+        )
+        .unwrap();
+        let (mut authored, mut metadata) = reviewer_fixture();
+        authored["accessProfiles"][0]["permissions"] =
+            json!([{"entity":"requests","operations":["get"]}]);
+        authored["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"automatic-applier", "actorKind":"service", "principalClaim":"sub",
+                "requesterClients":["executor"], "requiredScopes":["requests:apply"],
+                "permissions":[{"entity":"requests","operations":["get","apply_request"]}]
+            }));
+        authored["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"citizen-reader", "actorKind":"human", "principalClaim":"sub",
+                "requesterClients":["citizen"], "requiredScopes":["citizen:read"],
+                "permissions":[{"entity":"requests","operations":["get"]}]
+            }));
+        metadata["requestEntity"] = json!("requests");
+        metadata["reviewPermissions"] = json!([]);
+        metadata["applyPermissions"] = json!([{"profile":"automatic-applier"}]);
+        let mut request = selected_request(&metadata);
+        request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let before = authored.clone();
+        let plan = plan_breg_dev_clients(registry.path(), &project, &authored, &[request]).unwrap();
+        assert_eq!(authored, before, "source grants are not broadened");
+        for client in plan
+            .patch
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|client| client["id"] == "staff" || client["id"] == "supervisor")
+        {
+            assert!(client["scopes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("starter:reviewer")));
+            assert!(!client["scopes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("requests:apply")));
+            assert!(!client["accessProfiles"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("automatic-applier")));
+        }
+        let write = plan.write.as_ref().unwrap();
+        let written: Value = serde_norway::from_str(&write.proposed).unwrap();
+        assert_eq!(
+            written["reviewExecutors"]["applier"],
+            json!({"accessProfile":"automatic-applier", "client":"executor"})
+        );
+        write_atomic(&write.path, write.proposed.as_bytes()).unwrap();
+        let mut repeated_request = selected_request(&metadata);
+        repeated_request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let repeated =
+            plan_breg_dev_clients(registry.path(), &project, &authored, &[repeated_request])
+                .unwrap();
+        assert_eq!(repeated.write.unwrap().proposed, write.proposed);
+
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            b"version: 1\nclients: []\n",
+        )
+        .unwrap();
+        let mut missing_client_request = selected_request(&metadata);
+        missing_client_request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let missing_client = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[missing_client_request],
+        )
+        .unwrap();
+        assert!(missing_client
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no local service client")));
+        let proposed: Value =
+            serde_norway::from_str(&missing_client.write.unwrap().proposed).unwrap();
+        assert!(proposed.get("reviewExecutors").is_none());
+
+        let mut ambiguous = authored.clone();
+        ambiguous["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"other-reviewer", "actorKind":"human", "principalClaim":"registry_principal",
+                "requesterClients":["staff", "supervisor"], "requiredScopes":["other:review"],
+                "permissions":[{"entity":"requests","operations":["get"]}]
+            }));
+        let mut ambiguous_request = selected_request(&metadata);
+        ambiguous_request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let error =
+            plan_breg_dev_clients(registry.path(), &project, &ambiguous, &[ambiguous_request])
+                .unwrap_err();
+        assert!(error.to_string().contains("ambiguous human get profiles"));
+
+        let mut request = selected_request(&metadata);
+        request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        authored["accessProfiles"][0]["permissions"] = json!([]);
+        let error =
+            plan_breg_dev_clients(registry.path(), &project, &authored, &[request]).unwrap_err();
+        assert!(error.to_string().contains("human get profile"));
+        // A manual apply profile still has to admit the actual human reviewers.
+        let error = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &before,
+            &[selected_request(&metadata)],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("principal") || error.to_string().contains("human"));
     }
 
     #[test]

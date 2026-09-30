@@ -105,7 +105,8 @@ use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRec
 use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use test_lifecycle::{remove_exact_file, TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
-    WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
+    WebhookDiscardOutcome, WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome,
+    WebhookSampleOutcome,
 };
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
@@ -195,7 +196,7 @@ enum Command {
     Webhook(WebhookArgs),
     /// Inspect and erase eligible change-request retention detail.
     RequestRetention(RequestRetentionArgs),
-    /// Resubmit or close a change-request review its authority will not answer.
+    /// Recover a lost review or an automatic application blocked by executor authorization.
     ReviewRecovery(ReviewRecoveryArgs),
     /// Erase expired protected action Evidence using configured migration authority.
     EvidenceRetention(EvidenceRetentionArgs),
@@ -735,10 +736,12 @@ struct RequestRetentionArgs {
 enum WebhookCommand {
     /// Render one deterministic exact CloudEvents request with synthetic values.
     Sample(WebhookSampleArgs),
-    /// List bounded value-free pending, dead-lettered, and expired delivery metadata.
+    /// List bounded value-free delivery metadata, including superseded bindings.
     List(WebhookListArgs),
     /// Replay one eligible retained dead-letter using optimistic generation binding.
     Replay(WebhookReplayArgs),
+    /// Permanently discard one retained delivery using optimistic generation binding.
+    Discard(WebhookDiscardArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -810,6 +813,8 @@ enum ReviewRecoveryCommand {
     Resubmit(ReviewRecoveryExactArgs),
     /// Close an accepted review without a result so it stops waiting on its authority.
     Close(ReviewRecoveryExactArgs),
+    /// Requeue an automatic application blocked by executor authorization after correcting its credentials or grants.
+    RetryApplication(ReviewRecoveryExactArgs),
 }
 
 #[derive(Debug, Args)]
@@ -826,7 +831,7 @@ struct ReviewRecoveryExactArgs {
     #[arg(long, value_name = "UUID")]
     request_id: String,
 
-    /// Exact proposal version whose review submission to recover.
+    /// Exact proposal version whose review or application to recover.
     #[arg(long, value_name = "VERSION")]
     proposal_version: i64,
 }
@@ -981,6 +986,25 @@ struct WebhookListArgs {
 
 #[derive(Debug, Args)]
 struct WebhookReplayArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Stable event UUID shown by `webhook list`.
+    #[arg(long, value_name = "UUID")]
+    event_id: String,
+
+    /// Compiled delivery identifier shown by `webhook list`.
+    #[arg(long, value_name = "ID")]
+    delivery_id: String,
+
+    /// Current generation shown by `webhook list`.
+    #[arg(long, value_name = "NUMBER")]
+    expected_generation: i64,
+}
+
+#[derive(Debug, Args)]
+struct WebhookDiscardArgs {
     /// Absolute Base Registry Engine runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -1826,6 +1850,15 @@ struct WebhookReplaySuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebhookDiscardSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: WebhookDiscardOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RequestRetentionListSuccessReport {
     ok: bool,
     command: &'static str,
@@ -2335,6 +2368,10 @@ where
                     Ok(report) => write_webhook_replay_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
+                WebhookCommand::Discard(args) => match webhook_discard(&args) {
+                    Ok(report) => write_webhook_discard_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
             };
         }
         Command::EvidenceRetention(args) => {
@@ -2376,6 +2413,11 @@ where
                 ReviewRecoveryCommand::Close(args) => (
                     "review-recovery close",
                     ReviewRecoveryOperation::Close,
+                    args,
+                ),
+                ReviewRecoveryCommand::RetryApplication(args) => (
+                    "review-recovery retry-application",
+                    ReviewRecoveryOperation::RetryApplication,
                     args,
                 ),
             };
@@ -2671,7 +2713,7 @@ fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError)
         ),
         ReviewRecoveryCliError::NotFound => (
             "review_recovery.submission.not_found",
-            "no review submission exists for this exact request proposal version".to_owned(),
+            "no retained review submission or application job exists for this exact request proposal version".to_owned(),
         ),
         ReviewRecoveryCliError::Ineligible {
             reason,
@@ -2680,7 +2722,7 @@ fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError)
         } => (
             "review_recovery.submission.ineligible",
             format!(
-                "the review submission does not accept this operation: reason {reason}, state {state}, code {}",
+                "the retained review or application does not accept this operation: reason {reason}, state {state}, code {}",
                 code.as_deref().unwrap_or("none")
             ),
         ),
@@ -3745,6 +3787,23 @@ fn webhook_replay(args: &WebhookReplayArgs) -> Result<WebhookReplaySuccessReport
     Ok(WebhookReplaySuccessReport {
         ok: true,
         command: "webhook replay",
+        outcome,
+    })
+}
+
+fn webhook_discard(
+    args: &WebhookDiscardArgs,
+) -> Result<WebhookDiscardSuccessReport, FailureReport> {
+    let outcome = webhook_lifecycle::discard(
+        &args.runtime_config,
+        &args.event_id,
+        &args.delivery_id,
+        args.expected_generation,
+    )
+    .map_err(|error| webhook_lifecycle_failure("webhook discard", error))?;
+    Ok(WebhookDiscardSuccessReport {
+        ok: true,
+        command: "webhook discard",
         outcome,
     })
 }
@@ -12846,6 +12905,30 @@ fn write_webhook_replay_success(
     write_result(result, stderr)
 }
 
+fn write_webhook_discard_success(
+    report: &WebhookDiscardSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            "Discarded the delivery. It cannot be replayed.",
+            &[
+                ("event id", report.outcome.event_id.clone()),
+                ("delivery id", report.outcome.delivery_id.clone()),
+                ("generation", report.outcome.generation.to_string()),
+            ],
+            stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_request_retention_list_success(
     report: &RequestRetentionListSuccessReport,
     format: OutputFormat,
@@ -13006,10 +13089,10 @@ fn write_review_recovery_success(
     } else {
         let recovery = &report.outcome.recovery;
         render_report(
-            if recovery.state == "pending" {
-                "Queued the review for resubmission."
-            } else {
-                "Closed the review."
+            match recovery.state {
+                "pending" => "Queued the review for resubmission.",
+                "queued" => "Queued the approved application for retry.",
+                _ => "Closed the review.",
             },
             &[
                 ("request entity", recovery.request_entity_id.clone()),

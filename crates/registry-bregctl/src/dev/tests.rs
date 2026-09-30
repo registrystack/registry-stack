@@ -3278,6 +3278,199 @@ fn local_review_authorities_are_closed_and_bounded() {
 }
 
 #[test]
+fn local_review_executors_require_one_declared_service_client_and_profile() {
+    let (_temp, _state, mut clients, _files) = fixture();
+    clients.review_executors.insert(
+        "automatic-applier".into(),
+        config::LocalReviewExecutor {
+            access_profile: "operator".into(),
+            client: "operator".into(),
+        },
+    );
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+
+    let mut invalid = clients.clone();
+    invalid
+        .review_executors
+        .get_mut("automatic-applier")
+        .unwrap()
+        .client = "undeclared".into();
+    assert!(config::clients(&serde_norway::to_string(&invalid).unwrap().into_bytes()).is_err());
+
+    let mut invalid = clients.clone();
+    invalid
+        .review_executors
+        .get_mut("automatic-applier")
+        .unwrap()
+        .access_profile = "other-profile".into();
+    assert!(config::clients(&serde_norway::to_string(&invalid).unwrap().into_bytes()).is_err());
+
+    let mut invalid = clients.clone();
+    invalid
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "operator")
+        .unwrap()
+        .claims
+        .insert("registry_actor_kind".into(), json!("agent"));
+    assert!(config::clients(&serde_norway::to_string(&invalid).unwrap().into_bytes()).is_err());
+
+    let binding = clients.review_executors["automatic-applier"].clone();
+    for index in 0..9 {
+        clients
+            .review_executors
+            .insert(format!("automatic-applier-{index}"), binding.clone());
+    }
+    assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+}
+
+#[test]
+fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
+    let (_project_temp, project) = write_init_project();
+    let project_file = project.join("registry.yaml");
+    let mut definition: Value =
+        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
+    definition["entities"].as_array_mut().unwrap().push(json!({
+        "id": "automatic-record",
+        "primaryDataset": "generic-registry",
+        "route": "automatic-records",
+        "mutationMode": "mutable",
+        "classification": "internal",
+        "changeControl": {"requiredFor":["create"]},
+        "fields": [
+            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+        ]
+    }));
+    definition["entities"].as_array_mut().unwrap().push(json!({
+        "id": "record-change",
+        "primaryDataset": "generic-registry",
+        "route": "record-changes",
+        "mutationMode": "mutable",
+        "classification": "internal",
+        "fields": [
+            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+        ],
+        "changeRequest": {
+            "effects": [{
+                "id": "created-record",
+                "target": {"entity":"automatic-record"},
+                "operation": "create",
+                "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
+            }],
+            "review": {"authority":"casework", "policyId":"record-approval"},
+            "onApproved": {"mode":"automatic", "executor":"automatic-applier"},
+            "retention": {"mode":"operator_erase"}
+        }
+    }));
+    let operator = definition["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "operator")
+        .unwrap();
+    operator["permissions"].as_array_mut().unwrap().push(json!({
+        "entity":"record-change",
+        "operations":["create", "get", "patch", "submit_request"],
+        "readableFields":["code", "label"],
+        "writableFields":["code", "label"],
+        "requestVisibility":"owner",
+        "rowBoundaries":[]
+    }));
+    definition["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"automatic-applier",
+            "actorKind":"service",
+            "requesterClients":["automatic-applier"],
+            "principalClaim":"sub",
+            "requiredScopes":["registry:generic:apply"],
+            "requiredPurposes":["registry-application"],
+            "permissions":[{
+                "entity":"record-change",
+                "operations":["get", "apply_request"],
+                "readableFields":["code", "label"],
+                "rowBoundaries":[],
+            "applyTargets":[{"entity":"automatic-record", "rowBoundaries":[]}],
+                "readableRequestFields":["review_state"]
+            }]
+        }));
+    fs::write(&project_file, serde_norway::to_string(&definition).unwrap()).unwrap();
+
+    let clients_file = project.join("dev-clients.yaml");
+    let mut client_source: Value =
+        serde_norway::from_slice(&fs::read(&clients_file).unwrap()).unwrap();
+    client_source["clients"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"automatic-applier",
+            "accessProfiles":["automatic-applier"],
+            "scopes":["registry:generic:apply", "registry:unused"],
+            "claims":{
+                "registry_purpose":"registry-application"
+            }
+        }));
+    client_source["reviewExecutors"] = json!({
+        "automatic-applier": {
+            "accessProfile":"automatic-applier",
+            "client":"automatic-applier"
+        }
+    });
+    let client_bytes = serde_norway::to_string(&client_source)
+        .unwrap()
+        .into_bytes();
+    fs::write(&clients_file, &client_bytes).unwrap();
+    let clients = config::clients(&client_bytes).unwrap();
+    let captured = capture(&project, &client_bytes).unwrap();
+    let (_state_temp, mut state, _, _) = fixture();
+    state.instance_id = captured.instance_id;
+    initialize(&state.root(), &state, &clients, &captured.files).unwrap();
+
+    let root = state.root();
+    let runtime_bytes = fs::read(root.join("runtime-test.yaml")).unwrap();
+    let runtime: Value = serde_norway::from_slice(&runtime_bytes).unwrap();
+    let executor = &runtime["reviewExecutors"]["automatic-applier"];
+    assert_eq!(executor["endpoint"], state.breg_origin());
+    assert_eq!(executor["registryId"], "generic-registry");
+    assert_eq!(executor["accessProfile"], "automatic-applier");
+    assert!(executor.get("tokenRef").is_none());
+    let oauth = &executor["privateKeyJwt"];
+    assert_eq!(oauth["tokenEndpoint"], "http://127.0.0.1:8095/oauth2/token");
+    assert_eq!(oauth["assertionAudience"], "http://127.0.0.1:8095");
+    assert_eq!(oauth["resource"], state.audience());
+    assert_eq!(oauth["scopes"], json!(["registry:generic:apply"]));
+    assert_eq!(
+        oauth["clientIdRef"],
+        "secret:file/review-executor-automatic-applier-client-id"
+    );
+    assert_eq!(
+        oauth["clientAssertionKeyRef"],
+        "secret:file/review-executor-automatic-applier-client-assertion-key"
+    );
+    assert_eq!(
+        fs::read(root.join("secrets/review-executor-automatic-applier-client-id")).unwrap(),
+        fs::read(root.join("credentials/automatic-applier/client-id")).unwrap()
+    );
+    assert_eq!(
+        fs::read(root.join("secrets/review-executor-automatic-applier-client-assertion-key"))
+            .unwrap(),
+        fs::read(root.join("credentials/automatic-applier/assertion-key.jwk")).unwrap()
+    );
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+    registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml"))
+        .unwrap()
+        .activate_review_executors(&compiled)
+        .expect("the authored automatic executor activates");
+    assert!(!String::from_utf8(runtime_bytes)
+        .unwrap()
+        .contains("PRIVATE KEY"));
+}
+
+#[test]
 fn local_evidence_provider_ids_follow_the_governed_evidence_grammar() {
     // The map key names a provider the registry project declares, and the
     // governed Evidence identifier grammar admits an underscore. A key this

@@ -130,6 +130,28 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  delivered_at timestamptz,
                  dead_lettered_at timestamptz,
                  expired_at timestamptz,
+                 dead_letter_reason text
+                     CONSTRAINT registry_webhook_delivery_state_dead_letter_reason_values CHECK (
+                         dead_letter_reason IS NULL OR dead_letter_reason IN (
+                             'http_non_success', 'destination_timeout',
+                             'invalid_remaining_timeout', 'invalid_frozen_policy',
+                             'invalid_frozen_request', 'resolution_failed',
+                             'resolution_capacity_unavailable', 'too_many_resolver_answers',
+                             'no_resolver_answers', 'resolver_port_mismatch',
+                             'resolver_address_family_mismatch', 'literal_origin_mismatch',
+                             'cloud_metadata_denied', 'always_denied_address',
+                             'private_address_not_allowed', 'non_global_address_denied',
+                             'development_address_denied', 'tls_material_unavailable',
+                             'client_build_failed', 'transport_failed',
+                             'transport_failed_after_connect', 'deadline_exceeded',
+                             'deadline_exceeded_after_connect', 'too_many_response_headers',
+                             'response_header_bytes_exceeded', 'destination_policy_refused',
+                             'destination_binding_refused', 'handler_binding_refused',
+                             'handler_deadline', 'handler_resource', 'handler_execution',
+                             'handler_source', 'handler_unavailable', 'payload_refused',
+                             'worker_interrupted', 'proposal_dead_lettered'
+                         )
+                     ),
                  handler_message bytea,
                  handler_message_digest bytea,
                  proposal_disposition text
@@ -390,6 +412,8 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  ADD COLUMN IF NOT EXISTS handler_message bytea;",
     "             ALTER TABLE {schema}.registry_webhook_delivery_state
                  ADD COLUMN IF NOT EXISTS handler_message_digest bytea;",
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS dead_letter_reason text;",
     "             DO $registry_webhook_state_upgrade$
              BEGIN
                  IF EXISTS (
@@ -506,6 +530,40 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  END IF;
              END
              $registry_webhook_state_upgrade$;",
+    "             DO $registry_webhook_state_recovery_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_dead_letter_reason_values'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_dead_letter_reason_values
+                         CHECK (
+                             dead_letter_reason IS NULL OR dead_letter_reason IN (
+                                 'http_non_success', 'destination_timeout',
+                                 'invalid_remaining_timeout', 'invalid_frozen_policy',
+                                 'invalid_frozen_request', 'resolution_failed',
+                                 'resolution_capacity_unavailable', 'too_many_resolver_answers',
+                                 'no_resolver_answers', 'resolver_port_mismatch',
+                                 'resolver_address_family_mismatch', 'literal_origin_mismatch',
+                                 'cloud_metadata_denied', 'always_denied_address',
+                                 'private_address_not_allowed', 'non_global_address_denied',
+                                 'development_address_denied', 'tls_material_unavailable',
+                                 'client_build_failed', 'transport_failed',
+                                 'transport_failed_after_connect', 'deadline_exceeded',
+                                 'deadline_exceeded_after_connect', 'too_many_response_headers',
+                                 'response_header_bytes_exceeded', 'destination_policy_refused',
+                                 'destination_binding_refused', 'handler_binding_refused',
+                                 'handler_deadline', 'handler_resource', 'handler_execution',
+                                 'handler_source', 'handler_unavailable', 'payload_refused',
+                                 'worker_interrupted', 'proposal_dead_lettered'
+                             )
+                         );
+                 END IF;
+             END
+             $registry_webhook_state_recovery_upgrade$;",
     // Proposal bookkeeping: what became of the proposal an accepted answer
     // carried, readable from the row without reconstructing it from logs. A
     // delivered row records 'none', 'applied', or 'refused'; a row the
@@ -877,7 +935,7 @@ mod tests {
     #[test]
     fn every_statement_is_qualified_by_the_schema() {
         let statements = rendered(KERNEL_SCHEMA);
-        assert_eq!(statements.len(), 25);
+        assert_eq!(statements.len(), 27);
         for statement in &statements {
             assert!(
                 statement.contains(KERNEL_SCHEMA),

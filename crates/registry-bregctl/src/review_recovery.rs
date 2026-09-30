@@ -30,6 +30,7 @@ pub(crate) enum ReviewRecoveryCliError {
 pub(crate) enum ReviewRecoveryOperation {
     Resubmit,
     Close,
+    RetryApplication,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -66,6 +67,7 @@ pub(crate) fn recover(
         match operation {
             ReviewRecoveryOperation::Resubmit => service.resubmit(scope).await,
             ReviewRecoveryOperation::Close => service.close(scope).await,
+            ReviewRecoveryOperation::RetryApplication => service.retry_application(scope).await,
         }
         .map_err(map_error)
     })?;

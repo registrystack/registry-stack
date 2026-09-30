@@ -578,6 +578,227 @@ async fn an_operator_resubmits_or_closes_a_review_its_authority_lost() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn denied_automatic_application_recovers_only_its_current_approved_proposal() {
+    use registry_breg::review_recovery::{
+        ReviewRecoveryError, ReviewRecoveryOperatorService, ReviewRecoveryRefusal,
+        ReviewRecoveryScope,
+    };
+    let (endpoint, authority_state, authority_server) = serve_review_result_authority().await;
+    let mut database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    source["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    source["entities"][2]["changeRequest"]["onApproved"] =
+        json!({"mode":"automatic","executor":"registry-automatic"});
+    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
+        json!(["reason", "review_state"]);
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install_registry(&database, &registry, "application-recovery", false).await;
+    let (service, _) = change_request_service_with_evidence_options(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "application-recovery",
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        None,
+        Some(review_authority_registry(endpoint)),
+    );
+    let app = router(service);
+    let (request, _) = submit_two_stage_correction(&app).await;
+    let request_id = Uuid::parse_str(&request.id).unwrap();
+    let result = reconcile_cached_external_result(
+        &database,
+        &request.id,
+        "approved",
+        true,
+        LIVE_UNTIL,
+        LIVE_UNTIL,
+    )
+    .await;
+    *authority_state.result.lock().unwrap() = result;
+    authority_state.mode.store(2, Ordering::SeqCst);
+    let server = serve_change_request_client_http(app).await;
+    let executor = |token: &str| {
+        ReviewExecutorClient::new(
+            "registry-automatic".to_owned(),
+            format!("{}/", server.base_url()).parse().unwrap(),
+            Arc::new(registry_platform_httputil::StaticToken::new(token).unwrap()),
+            "two-stage-change-request".to_owned(),
+            "applier".to_owned(),
+            BTreeMap::from([(
+                "correction-request".to_owned(),
+                "correction-requests".to_owned(),
+            )]),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+    };
+    assert!(run_review_application_once_for_test(
+        &mut database.admin,
+        &executor("expired-executor-token")
+    )
+    .await
+    .unwrap());
+    let before = database.admin.query_one("SELECT job_id,state,last_error_code FROM registry_internal.registry_request_application_jobs WHERE request_id=$1", &[&request_id]).await.unwrap();
+    let job_id: Uuid = before.get(0);
+    assert_eq!(before.get::<_, String>(1), "blocked");
+    assert_eq!(before.get::<_, String>(2), "executor-denied");
+    let recovery = ReviewRecoveryOperatorService::over_retention_service_for_test(
+        registry_breg::request_retention::RequestRetentionOperatorService::new_for_test(
+            registry.as_ref().clone(),
+            identity,
+            registry_breg::postgres::ExpectedManagedCatalog::compiled(&registry),
+            RegistryLockKey::derive("application-recovery").unwrap(),
+            database.migration_config.clone(),
+            database.migration_role.clone(),
+            database.runtime_role.clone(),
+            database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x9c; 32].into()).unwrap()),
+        ),
+    );
+    let scope = || ReviewRecoveryScope {
+        request_entity_id: "correction-request",
+        request_id,
+        proposal_version: 1,
+    };
+    // The operator cannot resurrect an expired approval or replace a proposal.
+    database.admin.execute("UPDATE registry_internal.registry_request_review_results SET available_until=transaction_timestamp()-interval '1 second' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    assert!(matches!(
+        recovery.retry_application(scope()).await,
+        Err(ReviewRecoveryError::Ineligible {
+            reason: ReviewRecoveryRefusal::ApprovalUnavailable,
+            ..
+        })
+    ));
+    database.admin.execute("UPDATE registry_internal.registry_request_review_results SET available_until=$2::text::timestamptz WHERE request_id=$1", &[&request_id,&LIVE_UNTIL]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_request_review_submissions SET withdrawn=true WHERE request_id=$1", &[&request_id]).await.unwrap();
+    assert!(matches!(
+        recovery.retry_application(scope()).await,
+        Err(ReviewRecoveryError::Ineligible {
+            reason: ReviewRecoveryRefusal::Withdrawn,
+            ..
+        })
+    ));
+    database.admin.execute("UPDATE registry_internal.registry_request_review_submissions SET withdrawn=false WHERE request_id=$1", &[&request_id]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_request_application_jobs SET last_error_code='source-action-unavailable' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    assert!(matches!(
+        recovery.retry_application(scope()).await,
+        Err(ReviewRecoveryError::Ineligible {
+            reason: ReviewRecoveryRefusal::ApplicationState,
+            ..
+        })
+    ));
+    database.admin.execute("UPDATE registry_internal.registry_request_application_jobs SET last_error_code='executor-denied' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    // Each row is individually well formed, but recovery must refuse a
+    // replaced proposal or an application no longer bound to its approval.
+    for (name, alter, restore, expected) in [
+        (
+            "replaced proposal",
+            "UPDATE registry_internal.registry_request_state SET proposal_version=2 WHERE request_id=$1",
+            "UPDATE registry_internal.registry_request_state SET proposal_version=1 WHERE request_id=$1",
+            ReviewRecoveryRefusal::ProposalNotSubmitted,
+        ),
+        (
+            "different approval",
+            "UPDATE registry_internal.registry_request_application_jobs SET result_id='00000000-0000-4000-8000-000000000001' WHERE request_id=$1",
+            "UPDATE registry_internal.registry_request_application_jobs j SET result_id=r.result_id FROM registry_internal.registry_request_review_results r WHERE j.request_id=$1 AND r.request_id=j.request_id AND r.request_entity_id=j.request_entity_id AND r.proposal_version=j.proposal_version",
+            ReviewRecoveryRefusal::ApprovalUnavailable,
+        ),
+        (
+            "different proposal digest",
+            "UPDATE registry_internal.registry_request_application_jobs SET proposal_digest='sha256:' || repeat('b',64) WHERE request_id=$1",
+            "UPDATE registry_internal.registry_request_application_jobs j SET proposal_digest=s.proposal_digest FROM registry_internal.registry_request_review_submissions s WHERE j.request_id=$1 AND s.request_id=j.request_id AND s.request_entity_id=j.request_entity_id AND s.proposal_version=j.proposal_version",
+            ReviewRecoveryRefusal::ApprovalUnavailable,
+        ),
+        (
+            "different executor",
+            "UPDATE registry_internal.registry_request_application_jobs SET executor='other-executor' WHERE request_id=$1",
+            "UPDATE registry_internal.registry_request_application_jobs j SET executor=s.executor FROM registry_internal.registry_request_review_submissions s WHERE j.request_id=$1 AND s.request_id=j.request_id AND s.request_entity_id=j.request_entity_id AND s.proposal_version=j.proposal_version",
+            ReviewRecoveryRefusal::ApprovalUnavailable,
+        ),
+    ] {
+        database.admin.execute(alter, &[&request_id]).await.unwrap();
+        assert!(
+            matches!(
+                recovery.retry_application(scope()).await,
+                Err(ReviewRecoveryError::Ineligible { reason, .. }) if reason == expected
+            ),
+            "{name} cannot be requeued under the retained approval"
+        );
+        database.admin.execute(restore, &[&request_id]).await.unwrap();
+    }
+    assert_eq!(
+        recovery.retry_application(scope()).await.unwrap().state,
+        "queued"
+    );
+    assert!(
+        matches!(
+            recovery.retry_application(scope()).await,
+            Err(ReviewRecoveryError::Ineligible {
+                reason: ReviewRecoveryRefusal::ApplicationState,
+                ..
+            })
+        ),
+        "recovery is not a way to reset a live job"
+    );
+    let after = database.admin.query_one("SELECT job_id,attempt_count,action_href IS NULL,claim_token IS NULL FROM registry_internal.registry_request_application_jobs WHERE request_id=$1", &[&request_id]).await.unwrap();
+    assert_eq!(
+        after.get::<_, Uuid>(0),
+        job_id,
+        "same job retains its idempotency key"
+    );
+    assert_eq!(after.get::<_, i32>(1), 0);
+    assert!(after.get::<_, bool>(2) && after.get::<_, bool>(3));
+    assert!(
+        run_review_application_once_for_test(&mut database.admin, &executor("applier-token"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        application_result_count(&database).await,
+        1,
+        "fresh credentials apply exactly once through the real router"
+    );
+    assert!(
+        !run_review_application_once_for_test(&mut database.admin, &executor("applier-token"))
+            .await
+            .unwrap()
+    );
+    database.assert_every_audit_request_answered_once();
+    let recovery_entries = database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["record"]["operation"] == "retry-application")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recovery_entries
+            .iter()
+            .filter(
+                |entry| entry["phase"] == "response" && entry["record"]["outcome"] == "committed"
+            )
+            .count(),
+        1
+    );
+    assert!(recovery_entries
+        .iter()
+        .all(|entry| !entry.to_string().contains(&request.id)));
+    drop(server);
+    authority_server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_recovery() {
     let (endpoint, authority_state, authority_server) = serve_review_result_authority().await;
     let reviews = review_authority_registry(endpoint);
@@ -630,7 +851,7 @@ async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_r
     let executor = ReviewExecutorClient::new(
         "registry-automatic".to_owned(),
         format!("{}/", server.base_url()).parse().unwrap(),
-        registry_review_client::BearerToken::new("applier-token").unwrap(),
+        Arc::new(registry_platform_httputil::StaticToken::new("applier-token").unwrap()),
         "two-stage-change-request".to_owned(),
         "applier".to_owned(),
         BTreeMap::from([(

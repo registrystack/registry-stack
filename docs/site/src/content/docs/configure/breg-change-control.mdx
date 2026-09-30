@@ -136,6 +136,36 @@ For `onApproved.mode: automatic`, it also writes a candidate
 endpoints and secret references before merging the fragment into the launcher-owned runtime file.
 The command never activates a package or provisions a credential.
 
+For automatic application, give Casework staff and supervisors a separate human
+`get` profile on the request for source context. The service executor's apply
+profile is not added to human clients. Its deployment credential can renew
+through `privateKeyJwt`, using the same token endpoint and client assertion
+fields as a review-authority binding. Choose exactly one `privateKeyJwt` or
+`tokenRef`; the latter remains a static credential that you rotate and restart.
+
+```yaml
+reviewExecutors:
+  registry-automatic:
+    endpoint: https://registry.example.test/
+    registryId: asset-registry
+    accessProfile: automatic-applier
+    privateKeyJwt:
+      tokenEndpoint: https://identity.example.test/oauth2/token
+      clientIdRef: secret:file/executor-client-id
+      clientAssertionKeyRef: secret:file/executor-private-jwk
+      assertionAudience: https://identity.example.test
+      resource: urn:example:registry
+      scopes: [requests:apply]
+```
+
+Use the scopes, resource and profile from your own authored executor grant.
+Token acquisition failures are retried without discarding the approved job.
+For local sessions, author `reviewExecutors` in `dev-clients.yaml` with the
+executor's `accessProfile` and service `client`; `bregctl dev` supplies the
+local endpoint, registry id and renewing client credential.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs; crates/registry-breg/src/review_store.rs; crates/registry-bregctl/src/dev/config.rs; crates/registry-caseworkctl/src/source_add.rs */}
+
 Result polling is the default. A Casework producer `completion` block explicitly enables
 completion delivery and causes the candidate authority binding to include `completionTokenRef`
 and `completionRecipient`. The BReg completion receiver acknowledges only an empty HTTP `204 No

@@ -803,14 +803,23 @@ impl DeliverySeams for SchedulingDeliverySeams {
             "{}/{}/{}/{}",
             record.event_id, record.compiled_delivery_id, record.generation, record.attempt
         );
+        let correlation = if record.phase == DeliveryAuditPhase::Discard {
+            format!("{correlation}.discard")
+        } else {
+            correlation
+        };
         let entry = match (record.phase, record.outcome) {
             (DeliveryAuditPhase::Attempt, _)
-            | (DeliveryAuditPhase::Replay, DeliveryAuditOutcome::ReplayRequested) => {
+            | (DeliveryAuditPhase::Replay, DeliveryAuditOutcome::ReplayRequested)
+            | (DeliveryAuditPhase::Discard, DeliveryAuditOutcome::DiscardRequested) => {
                 AuditEntry::request(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
             }
-            (DeliveryAuditPhase::Terminal | DeliveryAuditPhase::Replay, _) => {
-                AuditEntry::response(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
-            }
+            (
+                DeliveryAuditPhase::Terminal
+                | DeliveryAuditPhase::Replay
+                | DeliveryAuditPhase::Discard,
+                _,
+            ) => AuditEntry::response(SCHEDULING_AUDIT_SCHEMA, correlation, audit),
         };
         self.audit
             .append(entry)
@@ -887,7 +896,10 @@ impl HookDeliveryService {
     }
 
     pub async fn verify_retained_bindings(&self) -> Result<(), DeliveryError> {
-        self.inner.verify_retained_bindings().await
+        self.inner
+            .verify_retained_bindings()
+            .await
+            .map_err(|_| DeliveryError::Unavailable)
     }
 
     #[must_use]
@@ -1076,6 +1088,7 @@ fn audit_phase(value: DeliveryAuditPhase) -> &'static str {
         DeliveryAuditPhase::Attempt => "attempt",
         DeliveryAuditPhase::Terminal => "terminal",
         DeliveryAuditPhase::Replay => "replay",
+        DeliveryAuditPhase::Discard => "discard",
     }
 }
 
@@ -1104,6 +1117,10 @@ fn audit_outcome(value: DeliveryAuditOutcome) -> &'static str {
         DeliveryAuditOutcome::ReplayCommitted => "replay_committed",
         DeliveryAuditOutcome::ReplayRefused => "replay_refused",
         DeliveryAuditOutcome::ReplayUnfinished => "replay_unfinished",
+        DeliveryAuditOutcome::DiscardRequested => "discard_requested",
+        DeliveryAuditOutcome::DiscardCommitted => "discard_committed",
+        DeliveryAuditOutcome::DiscardRefused => "discard_refused",
+        DeliveryAuditOutcome::DiscardUnfinished => "discard_unfinished",
     }
 }
 
@@ -1115,6 +1132,8 @@ fn audit_disposition(value: DeliveryAuditDisposition) -> &'static str {
         DeliveryAuditDisposition::DeadLettered => "dead_lettered",
         DeliveryAuditDisposition::Expired => "expired",
         DeliveryAuditDisposition::ReplayPending => "replay_pending",
+        DeliveryAuditDisposition::DiscardPending => "discard_pending",
+        DeliveryAuditDisposition::Discarded => "discarded",
         DeliveryAuditDisposition::Unknown => "unknown",
     }
 }

@@ -132,7 +132,7 @@ pub struct ReviewExecutorClient {
     executor: String,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
-    token: BearerToken,
+    token_provider: Arc<dyn TokenProvider>,
     registry_id: String,
     access_profile: String,
     request_routes: BTreeMap<String, String>,
@@ -144,7 +144,7 @@ impl ReviewExecutorClient {
     pub fn new(
         executor: String,
         endpoint: reqwest::Url,
-        token: BearerToken,
+        token_provider: Arc<dyn TokenProvider>,
         registry_id: String,
         access_profile: String,
         request_routes: BTreeMap<String, String>,
@@ -179,12 +179,14 @@ impl ReviewExecutorClient {
             trusted_root_certificates: None,
         })
         .map_err(|_| ReviewConfigurationError)?;
-        let lease_seconds = outbound_lease_seconds(request_timeout);
+        // Discovery and application each acquire a token before their HTTP
+        // exchange. A renewal must not let another worker reclaim this job.
+        let lease_seconds = outbound_lease_seconds(request_timeout.saturating_mul(4));
         Ok(Self {
             executor,
             http,
             base_url,
-            token,
+            token_provider,
             registry_id,
             access_profile,
             request_routes,
@@ -2470,7 +2472,7 @@ async fn run_one_application(
                         SET state=CASE WHEN attempt_count >= $3 THEN 'blocked' ELSE 'queued' END,
                             action_href=NULL,action_if_match=NULL,
                             claim_token=NULL,
-                            next_attempt_at=transaction_timestamp(),
+                            next_attempt_at=transaction_timestamp()+($5::bigint * interval '1 second'),
                             last_error_code=CASE WHEN attempt_count >= $3 THEN $4
                                 ELSE 'source-precondition-changed' END,
                             updated_at=transaction_timestamp()
@@ -2480,6 +2482,7 @@ async fn run_one_application(
                         &job.claim_token,
                         &MAX_APPLICATION_ATTEMPTS,
                         &APPLICATION_ATTEMPTS_EXHAUSTED,
+                        &application_retry_seconds(job.attempt_count),
                     ],
                 )
                 .await
@@ -2493,6 +2496,15 @@ async fn run_one_application(
         }
     }
     Ok(true)
+}
+
+// A 412 can mean a stale revision, a business precondition, or a row
+// boundary refusal. Rediscover after a bounded delay instead of guessing
+// which invariant failed from the deliberately value-free problem response.
+fn application_retry_seconds(attempt: i32) -> i64 {
+    5_i64
+        .saturating_mul(1_i64 << attempt.saturating_sub(1).clamp(0, 6))
+        .min(300)
 }
 
 async fn exhaust_application_job_if_limit(
@@ -2549,10 +2561,15 @@ async fn discover_application(
         .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
     url.query_pairs_mut()
         .append_pair("accessProfile", &executor.access_profile);
+    let token = executor
+        .token_provider
+        .bearer_token()
+        .await
+        .map_err(|_| ApplicationExchangeError::Transient)?;
     let response = executor
         .http
         .get(url)
-        .header(AUTHORIZATION, executor.token.authorization_header_value())
+        .header(AUTHORIZATION, token.authorization_header_value())
         .header(ACCEPT, "application/json")
         .send()
         .await
@@ -2725,10 +2742,15 @@ async fn send_application(
         .join(path)
         .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
     url.set_query(Some(query));
+    let token = executor
+        .token_provider
+        .bearer_token()
+        .await
+        .map_err(|_| ApplicationExchangeError::Transient)?;
     let response = executor
         .http
         .post(url)
-        .header(AUTHORIZATION, executor.token.authorization_header_value())
+        .header(AUTHORIZATION, token.authorization_header_value())
         .header(ACCEPT, "application/json")
         .header(CONTENT_TYPE, "application/json")
         .header(
@@ -3146,7 +3168,10 @@ mod tests {
             "http://127.0.0.1:8080/registry-prefix/"
                 .parse()
                 .expect("URL"),
-            BearerToken::new("ordinary-executor-token").expect("token"),
+            Arc::new(
+                registry_platform_httputil::StaticToken::new("ordinary-executor-token")
+                    .expect("token"),
+            ),
             "registry-a".to_owned(),
             "automatic-applier".to_owned(),
             BTreeMap::from([("requests".to_owned(), "requests".to_owned())]),
@@ -3454,6 +3479,98 @@ mod tests {
                     | Err(ApplicationExchangeError::UnavailableAction)
             ));
         }
+    }
+
+    #[test]
+    fn application_precondition_backoff_is_positive_increasing_and_bounded() {
+        assert_eq!(
+            (1..=8).map(application_retry_seconds).collect::<Vec<_>>(),
+            [5, 10, 20, 40, 80, 160, 300, 300]
+        );
+        assert_eq!(application_retry_seconds(i32::MAX), 300);
+    }
+
+    #[tokio::test]
+    async fn automatic_executor_renews_credentials_between_discovery_and_application() {
+        use axum::{
+            extract::State,
+            http::HeaderMap,
+            routing::{get, post},
+            Json, Router,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        async fn issue(State(issued): State<Arc<AtomicUsize>>) -> Json<Value> {
+            let number = issued.fetch_add(1, Ordering::SeqCst) + 1;
+            Json(
+                json!({"access_token":format!("rotating-token-{number}"),"token_type":"Bearer","expires_in":1,"scope":"requests:apply"}),
+            )
+        }
+        async fn discover(headers: HeaderMap) -> Json<Value> {
+            assert_eq!(headers["authorization"], "Bearer rotating-token-1");
+            let job = application_job();
+            Json(
+                json!({"meta":{"registryIdentifier":"registry-a","datasetIdentifier":"requests","entityTypeIdentifier":"requests"},"data":{
+                    "recordIdentifier":job.request_id,"revisionIdentifier":"3","domainData":{},
+                    "request":{"bregState":"submitted","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,"actions":[{
+                        "operation":"apply_request","method":"POST","href":format!("/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",job.request_id),
+                        "ifMatch":"\"current\"","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest
+                    }]}
+                }}),
+            )
+        }
+        async fn apply(headers: HeaderMap) -> Json<Value> {
+            assert_eq!(
+                headers["authorization"], "Bearer rotating-token-2",
+                "the first credential must not be retained across requests"
+            );
+            let job = application_job();
+            Json(
+                json!({"id":job.request_id,"revision":4,"snapshot":"snapshot","actorReference":"executor",
+                "request":{"bregState":"applied","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,
+                "application":{"applicationId":Uuid::from_u128(55),"proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,"appliedAt":"2026-09-30T00:00:00Z"}}}),
+            )
+        }
+        let issued = Arc::new(AtomicUsize::new(0));
+        let router = Router::new()
+            .route("/token", post(issue))
+            .route("/v1/records/requests/{id}", get(discover))
+            .route("/v1/records/requests/{id}/actions/apply", post(apply))
+            .with_state(issued.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint: reqwest::Url = format!("http://{}/", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let key = registry_platform_crypto::generate_private_jwk(
+            registry_platform_crypto::GeneratedKeyAlgorithm::Es256,
+        )
+        .unwrap();
+        let provider = registry_platform_httputil::PrivateKeyJwt::new(
+            registry_platform_httputil::PrivateKeyJwtConfig::new(
+                endpoint.join("token").unwrap(),
+                "executor",
+                key,
+            )
+            .with_scopes(vec!["requests:apply".to_owned()]),
+        )
+        .unwrap();
+        let mut executor = executor();
+        executor.base_url = ServiceBaseUrl::new(endpoint).unwrap();
+        executor.token_provider = Arc::new(provider);
+        let mut job = application_job();
+        let ApplicationDiscovery::Action { href, if_match } =
+            discover_application(&executor, &job).await.unwrap()
+        else {
+            panic!("apply action")
+        };
+        job.action_href = Some(href);
+        job.action_if_match = Some(if_match);
+        assert_eq!(
+            send_application(&executor, &job).await.unwrap(),
+            Uuid::from_u128(55)
+        );
+        assert_eq!(issued.load(Ordering::SeqCst), 2);
+        server.abort();
     }
 
     #[tokio::test]

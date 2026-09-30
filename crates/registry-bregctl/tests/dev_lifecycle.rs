@@ -158,6 +158,114 @@ fn write(path: &Path, bytes: &[u8]) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+fn author_automatic_review_executor(project: &Path, authority_port: u16) {
+    let project_file = project.join("registry.yaml");
+    let mut definition: Value =
+        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
+    definition["entities"].as_array_mut().unwrap().push(json!({
+        "id": "automatic-record",
+        "primaryDataset": "generic-registry",
+        "route": "automatic-records",
+        "mutationMode": "mutable",
+        "classification": "internal",
+        "changeControl": {"requiredFor":["create"]},
+        "fields": [
+            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+        ]
+    }));
+    definition["entities"].as_array_mut().unwrap().push(json!({
+        "id": "record-change",
+        "primaryDataset": "generic-registry",
+        "route": "record-changes",
+        "mutationMode": "mutable",
+        "classification": "internal",
+        "fields": [
+            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+        ],
+        "changeRequest": {
+            "effects": [{
+                "id": "created-record",
+                "target": {"entity":"automatic-record"},
+                "operation": "create",
+                "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
+            }],
+            "review": {"authority":"casework", "policyId":"record-approval"},
+            "onApproved": {"mode":"automatic", "executor":"automatic-applier"},
+            "retention": {"mode":"operator_erase"}
+        }
+    }));
+    let operator = definition["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "operator")
+        .unwrap();
+    operator["permissions"].as_array_mut().unwrap().push(json!({
+        "entity":"record-change",
+        "operations":["create", "get", "patch", "submit_request"],
+        "readableFields":["code", "label"],
+        "writableFields":["code", "label"],
+        "requestVisibility":"owner",
+        "rowBoundaries":[]
+    }));
+    definition["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"automatic-applier",
+            "actorKind":"service",
+            "requesterClients":["automatic-applier"],
+            "principalClaim":"registry_principal",
+            "requiredScopes":["registry:generic:apply"],
+            "requiredPurposes":["registry-application"],
+            "permissions":[{
+                "entity":"record-change",
+                "operations":["get", "apply_request"],
+                "readableFields":["code", "label"],
+                "rowBoundaries":[],
+                "applyTargets":[{"entity":"automatic-record", "rowBoundaries":[]}],
+                "readableRequestFields":["review_state"]
+            }]
+        }));
+    write(
+        &project_file,
+        serde_norway::to_string(&definition).unwrap().as_bytes(),
+    );
+
+    let clients_file = project.join("dev-clients.yaml");
+    let mut clients: Value = serde_norway::from_slice(&fs::read(&clients_file).unwrap()).unwrap();
+    clients["clients"].as_array_mut().unwrap().push(json!({
+        "id":"automatic-applier",
+        "accessProfiles":["automatic-applier"],
+        "scopes":["registry:generic:apply"],
+        "claims":{
+            "registry_principal":"automatic-applier",
+            "registry_purpose":"registry-application"
+        }
+    }));
+    clients["reviewAuthorities"] = json!({
+        "casework": {
+            "endpoint":format!("http://127.0.0.1:{authority_port}"),
+            "profile":"operator",
+            "producerId":"generic-registry",
+            "recoveryDays":7,
+            "client":"operator"
+        }
+    });
+    clients["reviewExecutors"] = json!({
+        "automatic-applier": {
+            "accessProfile":"automatic-applier",
+            "client":"automatic-applier"
+        }
+    });
+    write(
+        &clients_file,
+        serde_norway::to_string(&clients).unwrap().as_bytes(),
+    );
+}
+
 fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) -> Value {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
@@ -171,6 +279,101 @@ fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) 
         );
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+}
+
+#[test]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
+fn installed_dev_starts_an_automatic_review_executor_without_lending_its_authority() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::Builder::new()
+        .prefix("breg-native-review-executor-test-")
+        .tempdir_in(binary.parent().unwrap())
+        .unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::canonicalize(temporary.keep()).unwrap();
+    let project = parent.join("registry");
+    let session = Session {
+        project: project.clone(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
+    };
+    session.success(&["init", project.to_str().unwrap()]);
+    let authority_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let authority_port = authority_listener.local_addr().unwrap().port();
+    author_automatic_review_executor(&project, authority_port);
+
+    let [database_port, breg_port, issuer_port] = free_ports();
+    drop(authority_listener);
+    let started = session.report(session.dev(&[
+        "start",
+        "--database-port",
+        &database_port.to_string(),
+        "--breg-port",
+        &breg_port.to_string(),
+        "--issuer-port",
+        &issuer_port.to_string(),
+    ]));
+    assert_eq!(started["status"], "ready");
+    let runtime: Value =
+        serde_norway::from_slice(&fs::read(project.join(".breg/dev/runtime.yaml")).unwrap())
+            .unwrap();
+    let executor = &runtime["reviewExecutors"]["automatic-applier"];
+    assert_eq!(
+        executor["endpoint"],
+        format!("http://127.0.0.1:{breg_port}")
+    );
+    assert_eq!(executor["registryId"], "generic-registry");
+    assert_eq!(executor["accessProfile"], "automatic-applier");
+    assert_eq!(
+        executor["privateKeyJwt"]["scopes"],
+        json!(["registry:generic:apply"])
+    );
+
+    let origin = format!("http://127.0.0.1:{breg_port}");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let operator =
+            fs::read_to_string(project.join(".breg/dev/secrets/operator-token")).unwrap();
+        let applier =
+            fs::read_to_string(project.join(".breg/dev/secrets/automatic-applier-token")).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let created = client
+            .post(format!(
+                "{origin}/v1/records/record-changes?accessProfile=operator"
+            ))
+            .bearer_auth(&operator)
+            .header("Idempotency-Key", "native-automatic-request-create")
+            .json(&json!({"data":{"code":"automatic", "label":"Automatic review"}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status().as_u16(), 201);
+        let created: Value = created.json().await.unwrap();
+        let request_id = created["data"]["recordIdentifier"].as_str().unwrap();
+        let endpoint = format!(
+            "{origin}/v1/records/record-changes/{request_id}?accessProfile=automatic-applier"
+        );
+
+        let refused = client
+            .get(&endpoint)
+            .bearer_auth(&operator)
+            .send()
+            .await
+            .unwrap();
+        // Record reads conceal rows from a caller that cannot select the
+        // service-only profile, instead of disclosing that the draft exists.
+        assert_eq!(refused.status().as_u16(), 404);
+        let admitted = client
+            .get(&endpoint)
+            .bearer_auth(&applier)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(admitted.status().as_u16(), 200);
+    });
 }
 
 #[test]

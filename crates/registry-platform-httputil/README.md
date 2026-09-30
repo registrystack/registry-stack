@@ -104,6 +104,10 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 ## URL Policy
 
+- Data destinations using `productionHttps` or `privateServiceHttp` refuse
+  `localhost` and every `*.localhost` name when the binding is constructed,
+  including trailing-dot absolute names and regardless of allowed private
+  CIDRs. Local receivers require `loopbackDevelopmentHttp`.
 - `FetchUrlPolicy::strict` allows HTTPS only and denies localhost, private
   ranges, link-local ranges, and cloud metadata endpoints.
 - Known metadata endpoints include link-local metadata services and public-IP

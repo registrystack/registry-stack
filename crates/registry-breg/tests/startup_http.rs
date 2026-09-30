@@ -498,7 +498,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 25] {
+fn startup_errors() -> [StartupError; 26] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -523,6 +523,9 @@ fn startup_errors() -> [StartupError; 25] {
         StartupError::Oidc,
         StartupError::Authentication,
         StartupError::EventDestinations,
+        StartupError::RetainedWebhookBindings {
+            retained_deliveries: 2,
+        },
         StartupError::InstanceIdChangedWithPendingDeliveries {
             stored_source: "instance-source-private-canary".to_owned(),
             configured_instance_id: "instance-id-private-canary".to_owned(),
@@ -706,6 +709,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
+        StartupError::RetainedWebhookBindings { .. } => {
+            "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
+        }
         StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
             "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
         }

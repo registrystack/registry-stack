@@ -210,8 +210,9 @@ an unaccounted delivery. A commit that fails after an accepted entry leaves an
 entry for a transition that did not happen, and the delivery keeps its earlier
 state.
 
-The payload and the raw handler answer bytes are erased immediately after
-successful delivery. The delivered row retains the answer's digest, its
+The payload is erased after every sibling delivery no longer needs it. Raw
+handler answer bytes are erased immediately after successful delivery. The
+delivered row retains the answer's digest, its
 proposal disposition, and the bounded value-free summary, never the answer
 itself. Pending and dead-letter payloads have a deployment-selectable
 retention period capped at 30 days. After expiry, replay is impossible.
@@ -251,9 +252,14 @@ The first complete journey must be possible without reading Rust code:
   [native development lifecycle](DEV.md#observe-local-events) for retention
   and runtime queue inspection.
 - `bregctl webhook list` shows value-free pending and dead-letter
-  status.
+  status, including whether the captured binding is still active, whether an
+  explicit discard is eligible, and a closed dead-letter reason.
 - `bregctl webhook replay` replays one eligible dead letter using
   its event id, delivery id, and expected generation.
+- `bregctl webhook discard` closes one retained pending delivery, dead letter,
+  or expired lease using the same optimistic identity. Discard prevents future
+  attempts and never reinterprets the work under a replacement binding. It
+  does not undo a request the receiver may already have accepted.
 - `products/breg/demo/run.sh --webhook` starts ThunderID, PostgreSQL,
   Base Registry Engine, and a local HMAC-verifying receiver. Its smoke journey
   demonstrates automatic retry, dead-letter inspection, operator replay, and

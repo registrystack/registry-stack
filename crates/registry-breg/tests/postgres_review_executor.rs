@@ -1060,7 +1060,9 @@ fn executor_with_timeout(endpoint: reqwest::Url, timeout: Duration) -> ReviewExe
     ReviewExecutorClient::new(
         "registry-automatic".to_owned(),
         endpoint,
-        BearerToken::new("ordinary-executor-token").expect("token"),
+        Arc::new(
+            registry_platform_httputil::StaticToken::new("ordinary-executor-token").expect("token"),
+        ),
         "registry-a".to_owned(),
         "automatic-applier".to_owned(),
         BTreeMap::from([("requests".to_owned(), "requests".to_owned())]),
@@ -1558,6 +1560,69 @@ async fn real_postgres_automatic_application_claim_fences_stale_owner() {
 
     first_connection_task.abort();
     second_connection_task.abort();
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn real_postgres_application_preconditions_back_off_without_hot_retries() {
+    let mut database = TestDatabase::create(2).await;
+    database.admin.batch_execute("CREATE TABLE registry_internal.registry_request_proposals (request_entity_id text NOT NULL,request_id uuid NOT NULL,proposal_version bigint NOT NULL,PRIMARY KEY (request_entity_id,request_id,proposal_version));").await.unwrap();
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .unwrap();
+    let request_id = Uuid::new_v4();
+    let job_id = Uuid::new_v4();
+    seed_application_job(&database.admin, request_id, Uuid::new_v4(), job_id).await;
+    let source = Arc::new(ExhaustedApplicationState {
+        request_id,
+        discovery_status: StatusCode::OK,
+        gets: AtomicUsize::new(0),
+        posts: AtomicUsize::new(0),
+    });
+    let app = Router::new()
+        .route(
+            "/v1/records/requests/{request_id}",
+            get(read_exhausted_application),
+        )
+        .route(
+            "/v1/records/requests/{request_id}/actions/apply",
+            post(reject_exhausted_application),
+        )
+        .with_state(source.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let executor = executor(endpoint);
+    for (attempt, delay) in [(1, 5.0), (2, 10.0)] {
+        assert!(
+            run_review_application_once_for_test(&mut database.admin, &executor)
+                .await
+                .unwrap()
+        );
+        let row = database.admin.query_one("SELECT state,attempt_count,last_error_code,action_href IS NULL,extract(epoch from next_attempt_at-transaction_timestamp())::float8 FROM registry_internal.registry_request_application_jobs WHERE job_id=$1", &[&job_id]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "queued");
+        assert_eq!(row.get::<_, i32>(1), attempt);
+        assert_eq!(row.get::<_, String>(2), "source-precondition-changed");
+        assert!(row.get::<_, bool>(3));
+        assert!(row.get::<_, f64>(4) > delay - 1.0);
+        for _ in 0..20 {
+            assert!(
+                !run_review_application_once_for_test(&mut database.admin, &executor)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert_eq!(source.posts.load(Ordering::SeqCst), attempt as usize);
+        database.admin.execute("UPDATE registry_internal.registry_request_application_jobs SET next_attempt_at=transaction_timestamp() WHERE job_id=$1", &[&job_id]).await.unwrap();
+    }
+    assert_eq!(
+        source.gets.load(Ordering::SeqCst),
+        2,
+        "each delayed retry rediscovers current source authority"
+    );
     server.abort();
     database.cleanup().await;
 }

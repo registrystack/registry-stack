@@ -110,6 +110,23 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
+    if let StartupError::RetainedWebhookBindings {
+        retained_deliveries,
+    } = error
+    {
+        let noun = if retained_deliveries == 1 {
+            "delivery requires"
+        } else {
+            "deliveries require"
+        };
+        return diagnostic(
+            "startup.webhook.retained_bindings",
+            "eventDestinations",
+            &format!(
+                "{retained_deliveries} retained webhook {noun} a superseded destination or local-handler binding; run `bregctl webhook list` to identify rows where bindingActive is false, then either restore each exact binding until its work drains or explicitly discard each delivery with its current generation; stop the runtime before discarding pending work, and retry an active lease only after it expires"
+            ),
+        );
+    }
     // The runtime configuration carries its own closed-vocabulary cause; name
     // it the way `bregctl verify` already names it instead of collapsing every
     // configuration mistake into one generic refusal.
@@ -226,6 +243,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "startup.event_destinations.refused",
             "eventDestinations",
             "the event destination bindings were refused",
+        ),
+        StartupError::RetainedWebhookBindings { .. } => unreachable!(
+            "retained webhook binding diagnostics return before the generic mapping"
         ),
         StartupError::ReviewBindings => (
             "startup.review_bindings.refused",
@@ -408,6 +428,30 @@ mod tests {
             "source request and review-authority workflows",
             "rerun doctor",
             "do not time out",
+        ] {
+            assert!(
+                diagnostic.message.contains(detail),
+                "missing diagnostic detail {detail}: {}",
+                diagnostic.message
+            );
+        }
+    }
+
+    #[test]
+    fn retained_webhooks_name_the_bounded_recovery_path() {
+        let diagnostic = startup_diagnostic(StartupError::RetainedWebhookBindings {
+            retained_deliveries: 2,
+        });
+        assert_eq!(diagnostic.code, "startup.webhook.retained_bindings");
+        assert_eq!(diagnostic.path, "eventDestinations");
+        for detail in [
+            "2 retained webhook deliveries require",
+            "bregctl webhook list",
+            "bindingActive is false",
+            "restore each exact binding",
+            "explicitly discard",
+            "stop the runtime",
+            "active lease",
         ] {
             assert!(
                 diagnostic.message.contains(detail),

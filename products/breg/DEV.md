@@ -157,6 +157,33 @@ composition where Casework and BReg deliberately share that resource audience.
 If `issuer.clientResources` maps the client, the generated credential uses that
 declared resource instead.
 
+For a request that selects `onApproved: {mode: automatic, executor:
+automatic-applier}`, bind that exact executor to one service-only BReg profile
+and an existing local issuer client:
+
+```yaml
+clients:
+  - id: automatic-applier
+    accessProfiles: [automatic-applier]
+    scopes: [registry:generic:apply]
+    claims:
+      registry_principal: automatic-applier
+      registry_purpose: registry-application
+reviewExecutors:
+  automatic-applier:
+    accessProfile: automatic-applier
+    client: automatic-applier
+```
+
+The profile must grant `apply_request` for every request entity that selects
+the executor, declare `actorKind: service`, and admit the client's exact ID,
+scopes, purpose, and principal claim. Dev derives the endpoint and registry ID
+from this BReg session. It copies the selected client's retained ID and
+assertion key into owner-only runtime secrets and emits a renewable
+`privateKeyJwt` executor credential for the local BReg audience. The executor
+map is required authoring: dev does not infer an executor from a profile and
+does not create a review-authority binding for it.
+
 Polling needs no callback credential. To test authenticated completion delivery,
 add both optional fields; declaring only one is refused:
 
