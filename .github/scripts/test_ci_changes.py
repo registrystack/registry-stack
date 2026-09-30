@@ -2637,6 +2637,7 @@ on:
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         gate_outputs = {
             "docs",
+            "evidence_assurance",
             "platform",
             "release_source_proof",
             "release_tool",

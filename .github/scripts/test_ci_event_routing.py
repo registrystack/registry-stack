@@ -166,6 +166,29 @@ class EventRoutingTest(unittest.TestCase):
                     outputs["evidence_assurance"], event_name != "pull_request"
                 )
 
+    def test_nightly_security_edit_selects_evidence_fuzz_in_the_assurance_tier(
+        self,
+    ) -> None:
+        # The nightly sweep runs the Evidence fuzz roster, so an edit to it
+        # proves the Evidence fuzz smoke in the merge queue like platform fuzz.
+        path = ".github/workflows/nightly-security.yml"
+        head = self.commit(path)
+        events = {
+            "pull_request": {"pull_request": {"base": {"sha": self.base}, "head": {"sha": head}}},
+            "merge_group": {"merge_group": {"base_sha": self.base, "head_sha": head}},
+            "push": {"before": self.base},
+        }
+        for event_name, event in events.items():
+            with self.subTest(event=event_name):
+                selection = select_event(self.repo, event_name, event, head)
+                outputs = selection_outputs(self.workspace, selection)
+                self.assertEqual(
+                    outputs["platform_assurance"], event_name != "pull_request"
+                )
+                self.assertEqual(
+                    outputs["evidence_assurance"], event_name != "pull_request"
+                )
+
     def test_ci_full_label_opts_a_pull_request_into_the_heavy_tier(self) -> None:
         head = self.commit("crates/registry-casework/src/lib.rs")
         for labels, expected in (
