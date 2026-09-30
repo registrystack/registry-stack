@@ -6,7 +6,7 @@ traceability:
   - {id: BREG-SEC-03, state: enforced, negativeId: BREG-NEG-03, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
   - {id: BREG-SEC-04, state: enforced, negativeId: BREG-NEG-04, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
   - {id: BREG-SEC-05, state: enforced, negativeId: BREG-NEG-05, negativeTest: {path: crates/registry-breg/tests/http_read_only.rs, name: profile_and_resource_concealment_complete_before_record_io}}
-  - {id: BREG-SEC-06, state: enforced, negativeId: BREG-NEG-06, negativeTest: {path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic}}
+  - {id: BREG-SEC-06, state: enforced, negativeId: BREG-NEG-06, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: missing_malformed_or_fallback_only_principal_is_refused_before_record_io}}
   - {id: BREG-SEC-07, state: enforced, negativeId: BREG-NEG-07, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
   - {id: BREG-SEC-08, state: enforced, negativeId: BREG-NEG-08, negativeTest: {path: crates/registry-breg/tests/compiler_contract.rs, name: public_profile_cannot_process_an_internal_field}}
   - {id: BREG-SEC-09, state: enforced, negativeId: BREG-NEG-09, negativeTest: {path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}}
@@ -138,3 +138,4 @@ traceability:
   - {id: BREG-SEC-135, state: enforced, negativeId: BREG-NEG-135, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: access_log_exemptions_are_delayed_audited_and_expire_without_runtime_delete_authority}}
   - {id: BREG-SEC-136, state: enforced, negativeId: BREG-NEG-136, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: a_failed_subject_access_log_insert_prevents_record_release}}
   - {id: BREG-SEC-137, state: enforced, negativeId: BREG-NEG-137, negativeTest: {path: crates/registry-breg/tests/postgres_access_log.rs, name: relationship_exemptions_bind_the_source_entity_without_profile_name_collisions}}
+  - {id: BREG-SEC-138, state: enforced, negativeId: BREG-NEG-138, negativeTest: {path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic}}
