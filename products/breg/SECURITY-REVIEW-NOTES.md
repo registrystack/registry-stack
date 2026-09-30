@@ -871,7 +871,12 @@ rule depends on the mapping:
 - The first-party connection still signs only the claims it declares, at most
   16 attributes and 32 clients, and a client may be listed on one first-party
   signer only. `bregctl dev` refuses a multi-purpose clients file that would
-  exceed those bounds before rendering.
+  exceed those bounds before rendering. It also refuses a multi-purpose client
+  listed on any authored exchange connection, whatever its mapping: the
+  generated purpose connection already makes that client first-party, and the
+  issuer then projects only that connection's claims into its exchanged
+  tokens, so an exchange through an authored `institutional_grant` connection
+  would omit the `registry_grant_*` claims BReg requires.
 
 ### Why this is tooling scope
 
@@ -916,5 +921,5 @@ first-party client with an extra authored scope and refuses one whose
 permissions lack the assertion scope.
 `crates/registry-bregctl/src/dev/tests.rs`:
 `multi_purpose_claim_union_is_refused_above_the_issuer_attribute_limit` and
-`multi_purpose_client_is_refused_on_an_authored_first_party_connection` pin
+`multi_purpose_client_is_refused_on_any_authored_exchange_connection` pin
 the dev-side refusals.

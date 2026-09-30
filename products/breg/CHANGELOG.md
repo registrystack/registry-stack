@@ -36,8 +36,8 @@
   or purpose is refused before `schema test`. When the clients file is read,
   dev refuses multi-purpose clients whose distinct token claims together,
   counting `registry_actor_kind`, `registry_purpose`, and `scope`, exceed
-  16, and a multi-purpose client also listed on an authored `first_party`
-  exchange connection (#1772).
+  16, and a multi-purpose client also listed on any authored exchange
+  connection, `first_party` or `institutional_grant` (#1772).
 - `bregctl dev` seeds and `schema test` journeys can load rows through an
   Import route with `operation: import`. Dev opens an exact one-item import
   authority bound to the item's digest, drives the production ingestion run,

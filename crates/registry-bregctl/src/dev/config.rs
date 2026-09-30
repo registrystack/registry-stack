@@ -687,23 +687,27 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         {
             bail!("local exchange connections require distinct bounded IDs and declared exchange clients");
         }
-        if matches!(connection.mapping, IssuerConnectionMapping::FirstParty) {
-            for id in &connection.clients {
-                let multi_purpose = clients
-                    .clients
-                    .iter()
-                    .find(|client| &client.id == id)
-                    .map(client_purposes)
-                    .transpose()?
-                    .is_some_and(|purposes| purposes.len() > 1);
-                if multi_purpose {
-                    bail!(
-                        "client {id} declares more than one registry_purpose, so its purposes are \
-                         signed by the generated purpose connection; it cannot also be listed on \
-                         the first-party connection {}",
-                        connection.id
-                    );
-                }
+        // The generated purpose connection makes every multi-purpose client a
+        // first-party client, and the issuer projects one first-party
+        // connection's claims into that client's exchanged tokens. Listed on an
+        // authored institutional grant connection, its tokens would lack the
+        // registry_grant_* claims the registry requires; listed on an authored
+        // first-party connection, they would lack that connection's claims.
+        for id in &connection.clients {
+            let multi_purpose = clients
+                .clients
+                .iter()
+                .find(|client| &client.id == id)
+                .map(client_purposes)
+                .transpose()?
+                .is_some_and(|purposes| purposes.len() > 1);
+            if multi_purpose {
+                bail!(
+                    "client {id} declares more than one registry_purpose, so its purposes are \
+                     signed by the generated purpose connection; it cannot also be listed on \
+                     the exchange connection {}",
+                    connection.id
+                );
             }
         }
     }
