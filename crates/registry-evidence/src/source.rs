@@ -1162,7 +1162,7 @@ impl HttpTransport {
             evidence
                 .validate(configured_request)
                 .map_err(|_| SourceError::InvalidPlan)?;
-            if batch.is_some() || unresolved_problem.is_some() {
+            if batch.is_some() || unresolved_problem.is_some() || *forward_access_attribution {
                 return Err(SourceError::InvalidPlan);
             }
         }
