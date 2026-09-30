@@ -747,6 +747,19 @@ on the publisher's schedule and by the publisher's decision; Evidence only
 reads it, and section 9.2 states plainly what that arrangement moves and what
 it does not.
 
+An HTTP source may instead request one predefined assertion from another
+Evidence deployment through its signed Evidence protocol. The governed source
+pins the complete requester-scoped definition and independently accepted public
+keys. Rust generates a fresh request nonce, uses the ordinary source credential,
+and verifies the signed answer before exposing only its declared values to
+projection and extraction. The upstream authorizes and audits the asking service
+independently. The asking service trusts that signer to resolve the supplied
+selectors, accepts opaque subject bindings on first use, and retains neither
+bindings nor assertions. A changed upstream value is acquired again on the next
+request; verification failure is a dependency failure without an unsigned
+fallback. This adds no acquisition shape or wallet-delivery service. See the
+[HTTP source configuration](reference/request-adapter/deployment-projects/CONFIG.md#http-source).
+
 The initial generic source-authentication profiles are HTTP Basic, a static
 Authorization header, a static API-key header, and OAuth 2.0 client
 credentials. All values come from secret references. The static Authorization
@@ -1056,6 +1069,9 @@ verifies:
 
 - exact Rust-owned method, URL, selector, projection, headers, body, timeout,
   redirect, and response-size behavior for an HTTP source;
+- fresh runtime nonces, independently authenticated acquisition, complete signed
+  response verification, and values-only extraction for an Evidence source,
+  including changed source values and downstream holder-bound issuance;
 - exact Rust-owned statement text, authorizer verdict, parameter binding, row
   and step bounds, and result-to-JSON mapping for an extract source, including
   bundle-load refusal of a denied action, startup refusal of a file without

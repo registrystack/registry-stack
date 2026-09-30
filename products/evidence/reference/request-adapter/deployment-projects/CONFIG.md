@@ -443,6 +443,76 @@ fields, and which values must agree with the closed adapter parameters.
 
 ### HTTP source
 
+An HTTP source can consume another Evidence service by declaring `evidence`.
+The upstream service independently authorizes the source credential for its
+requirement, purpose, subjects, and audience. Use the ordinary OAuth client
+credentials configuration and a fixed `POST /v1/evidence` path, optionally
+under the upstream deployment's path prefix. Declare `query: forbidden` and
+`jsonBody: required`; omit an `Accept` header. The executor requests signed
+JWS and creates a fresh 32-byte request nonce for every acquisition.
+
+The `evidence` object contains:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. |
+| `trustedJwks` | yes | A JWKS object with 1 through 33 explicitly accepted public signing keys. Private key material and unusable keys are refused. |
+| `revokedKeyIds` | no | Up to 33 distinct thumbprint key identifiers that must be refused, including keys still present in `trustedJwks`. Omission means none. |
+| `maximumAssertionLifetimeSeconds` | yes | Maximum accepted upstream assertion lifetime, from 1 through 31536000 seconds. Choose the shortest lifetime the integration needs. |
+| `clockSkewSeconds` | no | Accepted clock skew from 0 through 300 seconds. Defaults to zero. |
+
+Obtain the definition using the source client's authenticated discovery view,
+retain the single request shape this source needs, and review it together with
+the upstream public keys before packaging. Discovery does not establish key
+trust. A running source never refreshes its definition or keys from a response.
+When the upstream requirement revision or accepted signing keys change, review
+and deploy an updated downstream package. A mismatched or revoked key, expired
+assertion, wrong nonce, or any other verification failure produces a dependency
+failure and releases no downstream evidence.
+
+The upstream signer remains responsible for resolving the authorized selector.
+The client checks the response nonce and declared subject roles; it accepts the
+upstream's opaque subject bindings on first use because it cannot derive them.
+This source keeps no subject-binding store. Review the upstream's selector
+resolution and authorization as part of accepting that source.
+
+Your preparation script returns only the declared subjects in its JSON body:
+
+```rhai
+fn prepare(selectors, context) {
+    #{query: [], body: #{subjects: [#{
+        role: "subject",
+        selector: #{
+            profile: "record-reference-v1",
+            values: #{reference: selectors.subject.values.reference}
+        }
+    }]}}
+}
+```
+
+Use the roles, profiles, and value origins in your pinned definition. Omit
+`values` for an authenticated-context or authenticated-grant selector. Scripts
+cannot override the requirement, purpose, nonce, trust policy, or format.
+The request size limit includes the runtime's complete Evidence envelope.
+
+After verification, the source exposes only
+`{"values": {"<concept-handle>": <verified-value>}}`. Point `projection` at
+the required `/values/<concept-handle>` members and describe that projected
+shape in `responseSchema`. Your extract script maps those values into its
+declared facts. An optional absent concept is absent from `values`. Signed
+bytes, subject bindings, nonces, and assertion metadata never reach Rhai.
+Source response fixtures use this verified-values shape; they test extraction,
+while live source execution always performs signature verification first.
+
+Signed Evidence sources use the existing fixed acquisition stages and HTTP
+limits, TLS, credential handling, named connections, and audit. They do not
+cache assertions and cannot declare optimized `batch` or `unresolvedProblem`:
+an upstream refusal or unavailable assertion is a dependency failure. The
+downstream requirement can issue its own independently authorized wallet
+credential after acquiring these verified facts.
+
+### Ordinary HTTP source example
+
 ```yaml
 sources:
   source-a:
@@ -1820,6 +1890,62 @@ sources.*.batch.projection[]
 sources.*.batch.responseSchema
 sources.*.behaviorRevision
 sources.*.connection
+sources.*.evidence
+sources.*.evidence.clockSkewSeconds
+sources.*.evidence.contract
+sources.*.evidence.contract.assuranceProfile
+sources.*.evidence.contract.audience
+sources.*.evidence.contract.definitions
+sources.*.evidence.contract.definitions[]
+sources.*.evidence.contract.definitions[].concepts
+sources.*.evidence.contract.definitions[].concepts[]
+sources.*.evidence.contract.definitions[].concepts[].concept
+sources.*.evidence.contract.definitions[].concepts[].form
+sources.*.evidence.contract.definitions[].concepts[].form.list
+sources.*.evidence.contract.definitions[].concepts[].form.list.items
+sources.*.evidence.contract.definitions[].concepts[].form.list.maximumItems
+sources.*.evidence.contract.definitions[].concepts[].form.list.minimumItems
+sources.*.evidence.contract.definitions[].concepts[].form.list.unique
+sources.*.evidence.contract.definitions[].concepts[].handle
+sources.*.evidence.contract.definitions[].concepts[].required
+sources.*.evidence.contract.definitions[].configurationRevision
+sources.*.evidence.contract.definitions[].evidenceType
+sources.*.evidence.contract.definitions[].handle
+sources.*.evidence.contract.definitions[].kind
+sources.*.evidence.contract.definitions[].purpose
+sources.*.evidence.contract.definitions[].referenceFrameworks
+sources.*.evidence.contract.definitions[].referenceFrameworks[]
+sources.*.evidence.contract.definitions[].requirement
+sources.*.evidence.contract.definitions[].responseFormats
+sources.*.evidence.contract.definitions[].responseFormats[]
+sources.*.evidence.contract.definitions[].subjectBindingMode
+sources.*.evidence.contract.definitions[].subjects
+sources.*.evidence.contract.definitions[].subjects[]
+sources.*.evidence.contract.definitions[].subjects[].cardinality
+sources.*.evidence.contract.definitions[].subjects[].role
+sources.*.evidence.contract.definitions[].subjects[].selector
+sources.*.evidence.contract.definitions[].subjects[].selector.fields
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[]
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].maximum
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].maximumBytes
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].minimum
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].minimumBytes
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].name
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].scheme
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].type
+sources.*.evidence.contract.definitions[].subjects[].selector.fields[].version
+sources.*.evidence.contract.definitions[].subjects[].selector.profile
+sources.*.evidence.contract.definitions[].subjects[].selector.valueOrigin
+sources.*.evidence.contract.holderBoundBatchMaxSize
+sources.*.evidence.contract.issuedBy
+sources.*.evidence.contract.providedBy
+sources.*.evidence.contract.schema
+sources.*.evidence.maximumAssertionLifetimeSeconds
+sources.*.evidence.revokedKeyIds
+sources.*.evidence.revokedKeyIds[]
+sources.*.evidence.trustedJwks
+sources.*.evidence.trustedJwks.keys
+sources.*.evidence.trustedJwks.keys[]
 sources.*.extractProfile
 sources.*.extractScript
 sources.*.factSchema
