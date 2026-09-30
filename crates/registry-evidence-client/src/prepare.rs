@@ -482,6 +482,14 @@ impl PreparedHolderBoundRequest {
         self.response_format
     }
 
+    /// How many holder keys this request asked a credential for. A batch
+    /// envelope answers one credential per key, so this is the member count a
+    /// conforming answer carries.
+    #[must_use]
+    pub fn holder_key_count(&self) -> usize {
+        self.body.holder_keys.as_ref().map_or(0, Vec::len)
+    }
+
     /// The subject expectations the caller stated, returned unchanged.
     #[must_use]
     pub fn subject_expectations(&self) -> &SubjectExpectations {

@@ -841,20 +841,26 @@ fn parse_oid4vci_did_jwk(kid: &str) -> Result<PublicJwk, SdJwtError> {
         return Err(SdJwtError::Oid4vciProofInvalid);
     }
     let value = parse_json_strict(&decoded).map_err(|_| SdJwtError::Oid4vciProofInvalid)?;
-    let members = value.as_object().ok_or(SdJwtError::Oid4vciProofInvalid)?;
-    const ALLOWED_MEMBERS: [&str; 7] = ["kty", "crv", "x", "y", "alg", "kid", "use"];
-    if members
-        .keys()
-        .any(|name| !ALLOWED_MEMBERS.contains(&name.as_str()))
-        || members
-            .get("use")
-            .is_some_and(|value| value.as_str() != Some("sig"))
-    {
-        return Err(SdJwtError::Oid4vciProofInvalid);
-    }
     let mut jwk = parse_oid4vci_proof_jwk(&value)?;
     jwk.kid = Some(kid.to_owned());
     Ok(jwk)
+}
+
+/// The closed member set a presented proof key may carry, with `use` permitted
+/// only as `sig`. An inline `jwk` header and a `did:jwk` document are read
+/// under this one rule, so neither nomination form accepts a member the other
+/// refuses: `registry_platform_crypto` parses only the members it models and
+/// silently drops anything else, so the member set is closed here where both
+/// forms can see it.
+const OID4VCI_PROOF_JWK_ALLOWED_MEMBERS: [&str; 7] = ["kty", "crv", "x", "y", "alg", "kid", "use"];
+
+fn oid4vci_proof_jwk_members_are_reviewed(members: &Map<String, Value>) -> bool {
+    !members
+        .keys()
+        .any(|name| !OID4VCI_PROOF_JWK_ALLOWED_MEMBERS.contains(&name.as_str()))
+        && members
+            .get("use")
+            .is_none_or(|value| value.as_str() == Some("sig"))
 }
 
 /// Parse a nominated proof key through `registry_platform_crypto::PublicJwk`.
@@ -863,6 +869,8 @@ fn parse_oid4vci_did_jwk(kid: &str) -> Result<PublicJwk, SdJwtError> {
 /// it rejects private members, rejects duplicate JSON members, and checks the
 /// P-256 point. Both validators here and `PublicJwk::jkt` therefore agree on
 /// which keys exist at all, rather than each carrying its own point check.
+/// The member set is closed before it runs, for the reason
+/// [`OID4VCI_PROOF_JWK_ALLOWED_MEMBERS`] states.
 ///
 /// RFC 7517 makes `alg` optional and wallets routinely omit it, while
 /// `PublicJwk` requires it for an EC key. The header has already pinned ES256
@@ -874,10 +882,11 @@ fn parse_oid4vci_did_jwk(kid: &str) -> Result<PublicJwk, SdJwtError> {
 /// error: its `Json` variant can quote the offending input, and the input here
 /// may be key material.
 fn parse_oid4vci_proof_jwk(jwk: &Value) -> Result<PublicJwk, SdJwtError> {
-    let mut members = jwk
-        .as_object()
-        .ok_or(SdJwtError::Oid4vciProofInvalid)?
-        .clone();
+    let members = jwk.as_object().ok_or(SdJwtError::Oid4vciProofInvalid)?;
+    if !oid4vci_proof_jwk_members_are_reviewed(members) {
+        return Err(SdJwtError::Oid4vciProofInvalid);
+    }
+    let mut members = members.clone();
     if members.get("kty").and_then(Value::as_str) == Some("EC") && !members.contains_key("alg") {
         members.insert(
             "alg".to_string(),
@@ -2446,6 +2455,30 @@ mod tests {
         assert!(matches!(err, SdJwtError::Oid4vciProofInvalid));
     }
 
+    /// The pinned header algorithm and the nominated key must agree, not
+    /// merely be individually acceptable. This proof is genuinely signed by
+    /// the key its header presents, so only that agreement refusal can
+    /// reject it.
+    #[test]
+    fn oid4vci_proof_jwt_rejects_a_key_that_disagrees_with_the_header_algorithm() {
+        let ed25519_holder = PrivateJwk::parse(HOLDER_JWK).expect("ed25519 holder");
+        let now = 1_700_000_000;
+        let proof = sign_compact(
+            &ed25519_holder,
+            json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": ed25519_holder.public(),
+            }),
+            &oid4vci_proof_payload(now),
+        );
+
+        let err = validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect_err("an ES256 header cannot present an Ed25519 key");
+
+        assert!(matches!(err, SdJwtError::Oid4vciProofInvalid));
+    }
+
     #[test]
     fn oid4vci_proof_jwt_completes_an_absent_jwk_alg_from_the_pinned_header() {
         let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
@@ -2477,6 +2510,46 @@ mod tests {
 
         assert!(matches!(err, SdJwtError::Oid4vciProofInvalid));
         assert!(!rendered.contains("MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4"));
+    }
+
+    /// An inline `jwk` is read under the same closed member set as a
+    /// `did:jwk` document. `registry_platform_crypto` silently drops members
+    /// it does not model, so the closure is checked before the parse rather
+    /// than left to it.
+    #[test]
+    fn oid4vci_proof_jwt_closes_the_inline_jwk_member_set() {
+        let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
+        let now = 1_700_000_000;
+
+        for member in ["key_ops", "x5c", "x5t", "jku"] {
+            let mut header = oid4vci_proof_header(&holder);
+            header["jwk"][member] = json!("attacker-controlled");
+            let proof = sign_compact(&holder, header, &oid4vci_proof_payload(now));
+
+            let err = validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+                .expect_err("an inline proof key carries no member outside the closed set");
+
+            assert!(
+                matches!(err, SdJwtError::Oid4vciProofInvalid),
+                "inline jwk member {member} must be rejected"
+            );
+        }
+
+        // `use` is inside the set, and inside it states `sig` and nothing else.
+        let mut header = oid4vci_proof_header(&holder);
+        header["jwk"]["use"] = json!("enc");
+        let proof = sign_compact(&holder, header, &oid4vci_proof_payload(now));
+        let err = validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect_err("a proof key uses its key for signing");
+        assert!(matches!(err, SdJwtError::Oid4vciProofInvalid));
+
+        let mut header = oid4vci_proof_header(&holder);
+        header["jwk"]["use"] = json!("sig");
+        let proof = sign_compact(&holder, header, &oid4vci_proof_payload(now));
+        assert!(
+            validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now).is_ok(),
+            "the one `use` value a did:jwk document may state is stated inline too"
+        );
     }
 
     #[test]
@@ -2515,6 +2588,16 @@ mod tests {
         let proof = sign_compact(&holder, oid4vci_proof_header(&holder), &wrong_aud);
         validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
             .expect_err("audience mismatch rejects");
+
+        // RFC 7519 also permits an array `aud`. These profiles address exactly
+        // one issuer, so the array form is not a single-valued audience even
+        // when it names only the right issuer.
+        let mut array_aud = oid4vci_proof_payload(now);
+        array_aud["aud"] = json!(["https://issuer.example/credentials"]);
+        let proof = sign_compact(&holder, oid4vci_proof_header(&holder), &array_aud);
+        let err = validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect_err("an array audience is not single-valued");
+        assert!(matches!(err, SdJwtError::Oid4vciProofInvalid));
 
         let stale = sign_compact(
             &holder,

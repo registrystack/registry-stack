@@ -179,6 +179,8 @@ entries:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: payload_and_protected_header_mutation_fail}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: duplicate_jws_members_and_unknown_kid_are_rejected}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: signed_payload_must_satisfy_the_complete_evidence_schema}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: non_canonical_key_identifiers_are_refused_on_every_path}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: verifier_refuses_serializations_past_the_byte_ceilings}
   - id: sec-signing-failure-no-release
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: signing_failure_is_transient_audited_and_never_releases_unsigned_evidence}]
   - id: sec-private-key-canary-unreachable
@@ -357,6 +359,8 @@ entries:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_removed_digest_rejected}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_payload_modification_rejected}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_protected_header_modification_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_duplicate_signed_digests_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_refuses_disclosures_outside_the_salt_window_and_over_the_byte_ceiling}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_unknown_kid_rejected}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_rejected_by_flattened_jws_verifier}
       - {file: crates/registry-evidence/tests/cli.rs, name: verify_accepts_an_authentic_and_current_stored_sd_jwt_vc}
@@ -486,6 +490,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_failure_on_a_later_batch_member_releases_nothing}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: the_holder_bound_acceptance_bundle_batches_every_definition_under_its_ceiling}
       - {file: crates/registry-evidence/src/config.rs, name: a_holder_bound_batch_ceiling_outside_the_permitted_range_is_refused}
+      - {file: crates/registry-evidence-client/src/client.rs, name: a_batch_answer_must_carry_one_credential_per_holder_key}
   - id: sec-holder-bound-entity-reference-prohibited
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: a_holder_bound_requirement_may_not_disclose_an_entity_reference_value_form}
@@ -559,6 +564,9 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_noncanonical_nonce_expiry_is_refused_even_with_the_valid_tag}
       - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: a_recognized_token_is_claimed_before_every_later_validation_failure}
       - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: one_stateless_nonce_is_reusable_across_separate_authorizations}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_whose_inline_key_carries_an_unreviewed_member_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_whose_key_disagrees_with_the_pinned_algorithm_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_naming_an_array_audience_is_refused}
   - id: sec-oid4vci-no-audience-scoped-laundering
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_audience_scoped_requirement_cannot_be_offered_to_a_wallet}

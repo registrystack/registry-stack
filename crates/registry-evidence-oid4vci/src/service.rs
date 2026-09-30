@@ -1212,8 +1212,8 @@ mod tests {
         authorizer::AuthorizedOffer,
         metadata::CredentialCatalog,
         testing::{
-            private_jwk, proof_jwt, proof_jwt_over_payload_text, proof_jwt_with,
-            proof_jwt_with_header, public_jwk, unsigned_proof_jwt,
+            ed25519_private_jwk, private_jwk, proof_jwt, proof_jwt_over_payload_text,
+            proof_jwt_with, proof_jwt_with_header, public_jwk, unsigned_proof_jwt,
         },
     };
 
@@ -2425,6 +2425,70 @@ mod tests {
         .await;
 
         assert_proof_refused_before_any_evidence_call("an x5c nomination", refusal);
+    }
+
+    /// The JWK an inline nomination presents is read under the same closed
+    /// member set as a `did:jwk` document. A member this profile never
+    /// reviewed is refused rather than silently dropped from the accepted
+    /// key, so nothing unreviewed rides along inside a key the service
+    /// otherwise accepted.
+    #[tokio::test]
+    async fn a_proof_whose_inline_key_carries_an_unreviewed_member_is_refused() {
+        let unreviewed_members = [
+            ("key_ops", json!(["sign"])),
+            ("x5t", json!("a-certificate-thumbprint")),
+            ("jku", json!("https://unreviewed.example/keys")),
+        ];
+
+        for (member, value) in unreviewed_members {
+            let refusal = credential_request_with_proof(|key, nonce| {
+                let mut header = proof_header(key);
+                header["jwk"][member] = value.clone();
+                proof_jwt_with_header(key, header, proof_payload(nonce))
+            })
+            .await;
+
+            assert_proof_refused_before_any_evidence_call(member, refusal);
+        }
+    }
+
+    /// The pinned header algorithm and the presented key must agree, not
+    /// merely be individually acceptable. This proof is genuinely signed by
+    /// the Ed25519 key its header presents while the header still pins
+    /// ES256, so only that agreement refusal can reject it.
+    #[tokio::test]
+    async fn a_proof_whose_key_disagrees_with_the_pinned_algorithm_is_refused() {
+        const SYNTHETIC_ED25519_SEED: [u8; 32] = [9; 32];
+        let ed25519_holder = ed25519_private_jwk(&SYNTHETIC_ED25519_SEED);
+        let refusal = credential_request_with_proof(|_p256_key, nonce| {
+            proof_jwt_with_header(
+                &ed25519_holder,
+                proof_header(&ed25519_holder),
+                proof_payload(nonce),
+            )
+        })
+        .await;
+
+        assert_proof_refused_before_any_evidence_call(
+            "an Ed25519 key under an ES256 header",
+            refusal,
+        );
+    }
+
+    /// `aud` is the credential issuer identifier, one string. RFC 7519 also
+    /// permits the array form, and a reader that took the first member would
+    /// accept an audience the proof did not unambiguously name, so the closed
+    /// payload rule refuses the array rather than reading into it.
+    #[tokio::test]
+    async fn a_proof_naming_an_array_audience_is_refused() {
+        let refusal = credential_request_with_proof(|key, nonce| {
+            let mut payload = proof_payload(nonce);
+            payload["aud"] = json!(["https://wallet.example.org"]);
+            proof_jwt_with_header(key, proof_header(key), payload)
+        })
+        .await;
+
+        assert_proof_refused_before_any_evidence_call("an array aud", refusal);
     }
 
     /// A proof is what makes a credential holder-bound, so a proof that

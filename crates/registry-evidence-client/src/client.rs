@@ -38,7 +38,7 @@ use crate::problem::TRACEPARENT_HEADER;
 use reqwest::header::RETRY_AFTER;
 
 use crate::{
-    batch::{SdJwtVcBatchResponse, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES},
+    batch::{refusal as batch_refusal, SdJwtVcBatchResponse, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES},
     config::EvidenceClientConfig,
     definitions::{EvidenceDefinitionsDocument, EVIDENCE_DEFINITIONS_SCHEMA_V1},
     error::EvidenceClientError,
@@ -1002,7 +1002,11 @@ impl EvidenceClient {
     ///
     /// The batch rule is the holder-bound response format's: a request that did
     /// not ask for a batch is refused here rather than sent, because the
-    /// `Accept` header was decided when the request was prepared.
+    /// `Accept` header was decided when the request was prepared. The envelope
+    /// must then answer one credential per holder key the request presented, so
+    /// a body that parses but carries any other member count is the same
+    /// protocol refusal as one that does not parse: the deployment answered a
+    /// different exchange than the one that was sent.
     pub async fn send_holder_bound_batch(
         &self,
         prepared: &PreparedHolderBoundRequest,
@@ -1013,7 +1017,11 @@ impl EvidenceClient {
             ));
         }
         let response = self.send_holder_bound(prepared).await?;
-        SdJwtVcBatchResponse::parse(response.body())
+        let parsed = SdJwtVcBatchResponse::parse(response.body())?;
+        if parsed.count() != prepared.holder_key_count() {
+            return Err(batch_refusal());
+        }
+        Ok(parsed)
     }
 
     /// POST one already-serialized request body and read the response under the
@@ -2604,6 +2612,59 @@ mod tests {
             batch.credential_for_holder_key(1),
             Some("second-credential~")
         );
+    }
+
+    /// The envelope answers one credential per holder key. A body that parses
+    /// but carries any other member count answered a different exchange than
+    /// the one that was sent, and is refused rather than handed back for a
+    /// caller to match positionally against keys it knows are missing or
+    /// supernumerary.
+    #[tokio::test]
+    async fn a_batch_answer_must_carry_one_credential_per_holder_key() {
+        let fixture = signed_evidence();
+
+        for credentials in [
+            vec!["first-credential~"],
+            vec![
+                "first-credential~",
+                "second-credential~",
+                "third-credential~",
+            ],
+        ] {
+            let server = MockServer::start().await;
+            let client = client_for(&server.uri(), &fixture);
+            let mut request_spec = holder_bound_spec(EvidenceResponseFormat::SdJwtVcBatch);
+            request_spec.holder_keys = vec![holder_key(), holder_key()];
+            let prepared = client
+                .prepare_holder_bound(request_spec)
+                .expect("the two-key batch request is prepared");
+
+            let envelope = serde_json::json!({
+                "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
+                "type": "SdJwtVcBatchEnvelope",
+                "credentials": credentials,
+            })
+            .to_string();
+            Mock::given(method("POST"))
+                .and(path("/v1/evidence"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                        .set_body_raw(envelope, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let failure = client
+                .send_holder_bound_batch(&prepared)
+                .await
+                .expect_err("the envelope must answer one credential per holder key");
+            assert!(
+                matches!(failure, EvidenceClientError::Protocol { status: 200, .. }),
+                "{failure:?}"
+            );
+        }
     }
 
     /// Asking the client to verify a batch as one response is a category error,

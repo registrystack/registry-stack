@@ -170,7 +170,7 @@ endpoints:
       endpoint list is the complete set of routes the service answers.
 proof_rules:
   - The header type is the bare openid4vci-proof+jwt. The registered media type carries an application prefix; the header value does not, and a value carrying the prefix is rejected.
-  - Exactly one of kid, jwk or x5c may be present. An inline public JWK is accepted directly. A kid is accepted only as a self-contained did:jwk URL with the #0 verification-method fragment, decoded locally to a public P-256 key; any other kid and every x5c are rejected rather than resolved through ambient network or trust state.
+  - Exactly one of kid, jwk or x5c may be present. An inline public JWK and a locally decoded did:jwk key are read under one closed member set: only kty, crv, x, y, alg, kid and use, with use, when present, reading sig. A member outside that set is rejected rather than silently dropped from the accepted key. A kid is accepted only as a self-contained did:jwk URL with the #0 verification-method fragment, decoded locally to a public P-256 key; any other kid and every x5c are rejected rather than resolved through ambient network or trust state.
   - iss must be absent. Final requires its omission when the token came from the pre-authorized code flow, so its presence is a rejection rather than something ignored.
   - aud is the credential issuer identifier, and iat and nonce are required. exp is the only optional claim; when present it must be a future integer NumericDate and never widens the short iat freshness window.
   - The signature is verified before the payload is parsed, the header allowlist is closed, the payload is closed to the required claims plus optional exp, and a duplicate JSON member is rejected rather than last-wins.
