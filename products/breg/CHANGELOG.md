@@ -6,6 +6,44 @@
   release before subject access-log storage activated, without an apply. The
   next successor apply installs the storage.
 
+- BREAKING: a direct create, patch, or batch item whose resulting row falls
+  outside the caller's row boundary answers `412 precondition.failed` before
+  any write, where it answered `503 service.unavailable` (#1771). The body is
+  the same value-free problem a stale `If-Match` answers, retrying the
+  unchanged request cannot succeed, and the refusal is audited as a refusal.
+  A batch carrying one such item commits none of them, and an import item is
+  refused as an item. A genuine PostgreSQL privilege failure still answers
+  `503`. Handle a `412` on a create as a boundary refusal, not a retryable
+  outage.
+- BREAKING: the generated OpenAPI document lists `412 precondition.failed`
+  on every create and batch operation reachable through a profile with
+  `rowBoundaries`. The document is a packaged, byte-bound artifact that feeds
+  `registryRevision`, so such a project compiles to a new `registryRevision`
+  and a package an earlier release built for it no longer loads. Rebuild it
+  unchanged with this `bregctl package --baseline-package <deployed package>`
+  and apply it. A Registry Casework BReg source pins the old
+  `registryRevision` and Casework startup refuses it: repin with `caseworkctl
+  source add BREG_PROJECT --project PROJECT --source-id ID --apply`, then
+  package, plan, and apply the Casework project once.
+- `bregctl dev` clients may declare `registry_purpose` as a list of the
+  purposes that one client may use; the first stays the purpose of its
+  ordinary dev token. Each authenticated journey step names an exact scope
+  subset and, for a multi-purpose client, one declared `purpose`, and gets
+  its own short-lived token under the same OAuth client. An undeclared scope
+  or purpose is refused before `schema test`. When the clients file is read,
+  dev refuses multi-purpose clients whose distinct token claims together,
+  counting `registry_actor_kind`, `registry_purpose`, and `scope`, exceed
+  16, and a multi-purpose client also listed on an authored `first_party`
+  exchange connection (#1772).
+- `bregctl dev` seeds and `schema test` journeys can load rows through an
+  Import route with `operation: import`. Dev opens an exact one-item import
+  authority bound to the item's digest, drives the production ingestion run,
+  and closes the authority. An interrupted start resumes the same run, and
+  one interrupted before it journaled the authority it opened recovers that
+  exact one-item, zero-progress authority; any other open authority on the
+  entity is refused by name and left to `bregctl import-authority close`
+  (#1772).
+
 ## v0.37.0 - 2026-09-29
 
 - BREAKING: a record or query `400` names the member or parameter at fault

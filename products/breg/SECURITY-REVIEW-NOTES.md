@@ -764,3 +764,145 @@ client's closed forms.
   Both are already in the caller's filtered contract.
 - Ingestion chunk items still answer an unlocated `request.invalid`.
 
+
+## Row-boundary write refusals
+
+The change refuses a direct create, patch, or batch item whose resulting row
+falls outside the caller's row boundary with `412 precondition.failed`,
+checked in Rust before any write (`authorize_record_snapshot` in
+`crates/registry-breg/src/mutation.rs`, over
+`ClaimContext::authorizes_record_snapshot` in
+`crates/registry-breg/src/postgres/context.rs`; mapped by `mutation_problem`
+in `crates/registry-breg/src/api/mod.rs`). Before it, the generated RLS
+`WITH CHECK` policy refused the write inside PostgreSQL and the caller saw
+`503 service.unavailable`, indistinguishable from an outage (#1771). It
+changes authorization and what a refusal tells the caller.
+
+### Threat
+
+A write outside the boundary lands, or its refusal becomes a probe: it echoes
+the prospective value, answers differently for a row that exists but is
+hidden than for one that does not, or answers a unique-value conflict with a
+row the caller cannot see. A second threat is the opposite mistake: turning a
+real privilege failure into a `412`, so an operator misreads a broken role
+grant as caller error.
+
+### Enforcement and defaults
+
+- The prospective row is checked against the compiled row boundaries with the
+  same typed canonical values the generated row policies compare. A create
+  checks its body before `admit_submitter_targets` and the insert; a patch
+  checks the current row merged with the patch; an attachment write, which
+  changes no field, checks the current row before the object store or the
+  attachment table is written. A batch runs each item through the same path
+  in one transaction, so one refused item commits none.
+- The refusal is the fixed `precondition.failed` problem a stale `If-Match`
+  answers, with no field name, value, or boundary claim in the body or the
+  audit record. It is audited as a refusal and caches no idempotency result.
+- RLS stays the storage backstop. A row the Rust check admits still meets the
+  generated `WITH CHECK` policy, and a PostgreSQL failure of it, or of a
+  table privilege, stays `503`: only `MutationError::AuthorizationRefused`,
+  raised by the Rust check, maps to `412`. A malformed compiled claim context
+  is an internal error and also stays `503`.
+- A row the boundary hides stays invisible. A read of it answers
+  `404 resource.not_found`, byte-identical to an absent id. A patch of it
+  answers the `412` a patch of an absent id answers, because the guarded
+  write finds no row to compare its `If-Match` with; this is the absence
+  outcome mutations already used, not a new one.
+- The boundary check runs before any unique constraint is consulted, so an
+  out-of-boundary create that collides with a hidden row's unique value
+  answers the same `412` as one that collides with nothing.
+- Ingestion maps the refusal to a refused item, like a failed precondition.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_mutation.rs`:
+`real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic`
+(BREG-SEC-138) pins the value-free `412` for a create and a patch, the
+unchanged durable counts apart from the refusal audit, and a revoked table
+privilege still answering `503`.
+`real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_write_nothing`
+pins a batch with one out-of-boundary item committing nothing, a patch and a
+read of a hidden row byte-identical to an absent id, and an out-of-boundary
+create colliding with a hidden unique value byte-identical to a
+non-colliding one, with an in-boundary control proving the constraint fires.
+`crates/registry-breg/src/postgres/context.rs`:
+`optional_boundary_absence_is_a_refusal_while_malformed_snapshots_are_invalid`
+pins an omitted or null boundary field as a refusal and a malformed snapshot
+as an internal error.
+
+### Accepted residuals
+
+- The Rust check restates the generated row policy. If they diverge, a row
+  RLS would admit is refused with `412`, or a row RLS refuses reaches
+  PostgreSQL and answers `503`; neither writes outside the boundary.
+- A unique constraint spans every boundary. An in-boundary create that
+  collides with a hidden row's unique value still answers the value-free
+  `409 mutation.conflict` (BREG-SEC-09), which tells the caller that value is
+  taken somewhere. That is a property of a global unique constraint, not of
+  this change.
+- The attachment-write ordering is pinned by review only: the check can
+  refuse there only when RLS shows a row the Rust boundary refuses, and the
+  only effect it prevents is an unreferenced object left in an S3 store, which
+  the Postgres suites cannot observe without a real S3 endpoint.
+
+## First-party exchange clients in the local issuer
+
+`bregctl dev` gives a multi-purpose client one generated first-party purpose
+connection on the local ThunderID, and the client keeps its ordinary
+authored scopes. That needed a change to the shared issuer description check
+in `crates/registry-thunderid-tooling/src/description.rs`
+(`IssuerDescription::validate`, the `token_exchange` branch).
+
+### What changed
+
+Before, every client with `token_exchange` had to hold exactly one permission
+set: the assertion resource server with only the assertion scope, so its
+client-credentials token could do nothing but bootstrap an exchange. Now the
+rule depends on the mapping:
+
+- A client listed on an `institutional_grant` connection, or on none, keeps
+  the exact rule unchanged. The new `exact_bootstrap` condition is the
+  logical negation of the old refusal.
+- A client listed on a `first_party` connection passes when any of its role
+  permissions on the assertion resource server contains the assertion scope,
+  so its other authored permissions stay on its ordinary token. It is still
+  refused when it holds no such permission.
+- The first-party connection still signs only the claims it declares, at most
+  16 attributes and 32 clients, and a client may be listed on one first-party
+  signer only. `bregctl dev` refuses a multi-purpose clients file that would
+  exceed those bounds before rendering.
+
+### Why this is tooling scope
+
+The crate renders a development session's ThunderID declarative resources and
+ships in no runtime: `registry-bregctl`, `registry-caseworkctl`, and
+`registry-evidencectl` depend on it, and `registry-casework`,
+`registry-relay-v2`, `registry-evidence-client`, and
+`registry-evidence-oid4vci` only as a dev-dependency. A production issuer is
+operated separately, and each runtime still enforces its own issuer,
+audience, scope, and boundary checks on every token, so a wider local client
+token grants nothing a runtime profile does not.
+
+### Effect on the other adopter CLIs
+
+- `caseworkctl dev` builds only `institutional_grant` exchange connections
+  (`crates/registry-caseworkctl/src/dev/integrations.rs`), so its clients meet
+  the unchanged exact rule.
+- `evidencectl dev` renders through `typed_local_description`, which sets no
+  `token_exchange` and no exchange issuers, so the branch never runs for it.
+- An exchange client on a first-party connection can now hold scopes beyond
+  the assertion scope. Evidence already refuses to admit a client the owner
+  also registered as a token-exchange client (`products/evidence/README.md`),
+  so a borrowed BReg issuer session does not widen Evidence admission.
+
+### Tests
+
+`crates/registry-thunderid-tooling/src/description.rs`:
+`first_party_exchange_preserves_authored_client_permissions` accepts a
+first-party client with an extra authored scope and refuses one whose
+permissions lack the assertion scope.
+`crates/registry-bregctl/src/dev/tests.rs`:
+`multi_purpose_claim_union_is_refused_above_the_issuer_attribute_limit` and
+`multi_purpose_client_is_refused_on_an_authored_first_party_connection` pin
+the dev-side refusals.
