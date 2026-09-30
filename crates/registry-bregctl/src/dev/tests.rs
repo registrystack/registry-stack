@@ -54,6 +54,7 @@ seed: []
         activated: false,
         seeded: BTreeSet::new(),
         seed_import_authorities: BTreeMap::new(),
+        seed_import_intents: BTreeMap::new(),
         outputs: vec![],
         binaries: BTreeMap::new(),
         failure: None,
@@ -1170,32 +1171,43 @@ fn seed_operation_defaults_to_create_and_accepts_explicit_import() {
     assert_eq!(imported.operation, config::SeedOperation::Import);
 }
 
-#[test]
-fn only_the_exact_unjournaled_seed_authority_is_recovered() {
+fn seed_authority_fixture(
+    digest: &str,
+    opened_at: chrono::DateTime<chrono::Utc>,
+) -> registry_breg::import_authority::ImportAuthority {
     use registry_breg::import_authority::{ImportAuthority, ImportAuthorityStatus};
 
-    let digest = "a".repeat(64);
-    let orphan_id = uuid::Uuid::new_v4();
-    let orphan = ImportAuthority {
-        authority_id: orphan_id,
+    ImportAuthority {
+        authority_id: uuid::Uuid::new_v4(),
         entity_id: "reference".into(),
         profile_id: "loader".into(),
         operation: "create".into(),
         max_items: 1,
         committed_items: 0,
-        input_digests: vec![digest.clone()],
+        input_digests: vec![digest.to_owned()],
         activation_id: uuid::Uuid::new_v4(),
-        opened_at: chrono::Utc::now(),
-        expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+        opened_at,
+        expires_at: opened_at + chrono::Duration::minutes(10),
         status: ImportAuthorityStatus::Open,
         closed_at: None,
-    };
+    }
+}
+
+#[test]
+fn only_the_exact_unjournaled_seed_authority_is_recovered() {
+    use registry_breg::import_authority::{ImportAuthority, ImportAuthorityStatus};
+
+    let digest = "a".repeat(64);
+    let intent = seed_import_intent_now();
+    let orphan = seed_authority_fixture(&digest, intent);
+    let orphan_id = orphan.authority_id;
     assert_eq!(
         unjournaled_seed_authority(
             std::slice::from_ref(&orphan),
             "reference",
             "loader",
-            &digest
+            &digest,
+            Some(intent),
         ),
         Some(orphan_id)
     );
@@ -1215,15 +1227,95 @@ fn only_the_exact_unjournaled_seed_authority_is_recovered() {
         let mut other = orphan.clone();
         change(&mut other);
         assert_eq!(
-            unjournaled_seed_authority(&[other], "reference", "loader", &digest),
+            unjournaled_seed_authority(&[other], "reference", "loader", &digest, Some(intent)),
             None,
             "variant {index}"
         );
     }
     assert_eq!(
-        unjournaled_seed_authority(&[], "reference", "loader", &digest),
+        unjournaled_seed_authority(&[], "reference", "loader", &digest, Some(intent)),
         None
     );
+}
+
+#[test]
+fn an_unjournaled_seed_authority_is_recovered_only_after_this_seeds_intent() {
+    // The exact request tuple cannot tell this seed's authority from an
+    // identical one an operator opened. Only an authority opened no earlier
+    // than the intent this seed journaled before opening is its own.
+    let digest = "a".repeat(64);
+    let intent = seed_import_intent_now();
+
+    let after = seed_authority_fixture(&digest, intent + chrono::Duration::milliseconds(40));
+    assert_eq!(
+        unjournaled_seed_authority(
+            std::slice::from_ref(&after),
+            "reference",
+            "loader",
+            &digest,
+            Some(intent),
+        ),
+        Some(after.authority_id),
+        "an authority opened after the intent is this seed's"
+    );
+    let same_instant = seed_authority_fixture(&digest, intent);
+    assert_eq!(
+        unjournaled_seed_authority(
+            std::slice::from_ref(&same_instant),
+            "reference",
+            "loader",
+            &digest,
+            Some(intent),
+        ),
+        Some(same_instant.authority_id),
+        "an authority opened in the intent's own microsecond is this seed's"
+    );
+
+    assert_eq!(
+        unjournaled_seed_authority(
+            std::slice::from_ref(&after),
+            "reference",
+            "loader",
+            &digest,
+            None,
+        ),
+        None,
+        "without an intent no open authority is this seed's"
+    );
+
+    let before = seed_authority_fixture(&digest, intent - chrono::Duration::microseconds(1));
+    assert_eq!(
+        unjournaled_seed_authority(
+            std::slice::from_ref(&before),
+            "reference",
+            "loader",
+            &digest,
+            Some(intent),
+        ),
+        None,
+        "an authority opened before the intent is an operator's"
+    );
+}
+
+#[test]
+fn a_seed_import_intent_has_the_database_timestamp_resolution() {
+    // PostgreSQL keeps `opened_at` to the microsecond. A finer intent could
+    // fall after an authority opened in the same microsecond on the same clock.
+    let intent = seed_import_intent_now();
+    assert_eq!(intent.timestamp_subsec_nanos() % 1_000, 0);
+}
+
+#[test]
+fn retained_state_without_seed_import_intents_still_loads() {
+    let (_temp, state, _clients, _files) = fixture();
+    let mut document = serde_json::to_value(&state).unwrap();
+    assert!(document
+        .as_object_mut()
+        .unwrap()
+        .remove("seedImportIntents")
+        .is_some());
+    let loaded: State = serde_json::from_value(document).unwrap();
+    assert!(loaded.seed_import_intents.is_empty());
 }
 
 #[test]
@@ -2150,6 +2242,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         activated: false,
         seeded: BTreeSet::new(),
         seed_import_authorities: BTreeMap::new(),
+        seed_import_intents: BTreeMap::new(),
         outputs: vec![],
         binaries: BTreeMap::new(),
         failure: None,

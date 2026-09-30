@@ -28,6 +28,7 @@ anstyle.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 clap.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
@@ -64,7 +65,6 @@ registry-platform-crypto.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 registry-breg.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 rustls.workspace = true

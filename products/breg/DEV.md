@@ -316,11 +316,14 @@ checkpoint exists: a sidecar may already name a zero-progress run, but the
 missing checkpoint proves no chunk was submitted or committed. It can also
 replace an incomplete run whose authority closed or expired before its sole
 atomic chunk committed. Dev settles that terminal authority, retains its
-checkpoint, and opens a fresh authority. An interruption after the authority
-opened but before the session recorded it leaves an open authority no local
-state names; the next start recognizes the exact one-item, zero-progress
-authority this seed would have opened, closes it, and opens a fresh one. Any
-other open authority on the entity is refused by name and left to the operator.
+checkpoint, and opens a fresh authority. Before asking to open an authority,
+dev records in its state that the seed is about to open one, and when. An
+interruption after the authority opened but before the session recorded it
+leaves an open authority no local state names; the next start recognizes the
+exact one-item, zero-progress authority this seed would have opened, opened no
+earlier than that recorded intent, closes it, and opens a fresh one. Any other
+open authority on the entity, including an identical one opened before the
+intent or with no intent recorded, is refused by name and left to the operator.
 A completed run is recorded first, and every other blocked or uncertain result
 retains its linkage and fails closed.
 
