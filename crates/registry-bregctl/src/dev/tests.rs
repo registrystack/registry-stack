@@ -2189,6 +2189,12 @@ fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     state.activated = true;
     state.package_digest = Some("revision-1".into());
     state.seeded.insert("first-record".into());
+    state
+        .seed_import_authorities
+        .insert("imported-record".into(), uuid::Uuid::nil().to_string());
+    state
+        .seed_import_intents
+        .insert("imported-record".into(), chrono::Utc::now());
     state.status = Status::Ready;
     let owner = state.owner.clone();
     let clients_file = state.clients_file.clone();
@@ -2198,6 +2204,10 @@ fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     assert!(!state.database_ready);
     assert!(!state.activated);
     assert!(state.seeded.is_empty());
+    // An authority or intent names a row of the removed database, never one
+    // the recreated database holds.
+    assert!(state.seed_import_authorities.is_empty());
+    assert!(state.seed_import_intents.is_empty());
     assert!(matches!(state.status, Status::Stopped));
     // The next start recreates an empty database with the same identities,
     // ports, credentials and already built package.
