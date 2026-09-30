@@ -260,6 +260,14 @@ struct State {
     /// retries the seed.
     #[serde(default)]
     seed_import_authorities: BTreeMap<String, String>,
+    /// When each seed with an unresolved open attempt was about to open its
+    /// import authority, saved before the open is requested. Only an
+    /// authority opened no earlier than this may be recovered as the seed's
+    /// own when the open commits but its identifier never reaches
+    /// `seed_import_authorities`. A state document written by an earlier
+    /// session records none.
+    #[serde(default)]
+    seed_import_intents: BTreeMap<String, chrono::DateTime<chrono::Utc>>,
     outputs: Vec<CredentialOutput>,
     /// Installed prerequisites this session resolved, keyed by command name.
     /// A state document written by an earlier session records none.
@@ -1052,6 +1060,7 @@ fn start(args: StartArgs) -> Result<Value> {
             activated: false,
             seeded: BTreeSet::new(),
             seed_import_authorities: BTreeMap::new(),
+            seed_import_intents: BTreeMap::new(),
             outputs: vec![],
             binaries: BTreeMap::new(),
             failure: None,
@@ -1387,6 +1396,8 @@ fn reclaimed(state: &mut State) {
     state.database_ready = false;
     state.activated = false;
     state.seeded.clear();
+    // No authority in a reclaimed database can be a seed's own.
+    state.seed_import_intents.clear();
     state.status = Status::Stopped;
 }
 
@@ -3051,6 +3062,16 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             state.save()?;
         }
     }
+    // Journal the intent before the open is requested, so an authority the
+    // open commits is attributable to this seed even when its identifier is
+    // never journaled. A retry keeps the intent of the attempt that may have
+    // committed: replacing it would date that authority before its own intent.
+    if !state.seed_import_intents.contains_key(&seed.id) {
+        state
+            .seed_import_intents
+            .insert(seed.id.clone(), seed_import_intent_now());
+        state.save()?;
+    }
     let open_arguments = crate::import_authority_lifecycle::OpenArguments {
         runtime_config: &runtime_config,
         entity: &seed.entity,
@@ -3064,28 +3085,36 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     let authority = match crate::import_authority_lifecycle::open(&open_arguments) {
         Err(ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen)) => {
             // An interruption between the open commit and the journal save
-            // above leaves an open authority no local state names, and the
+            // below leaves an open authority no local state names, and the
             // one-open-per-entity index then refuses every replacement until
             // it expires. The row keeps only a keyed hash of the operator
-            // reference, so the orphan is recognized by what this exact seed
-            // would have opened. Without a journal entry no checkpoint was
-            // written and no chunk was submitted, so closing it is safe.
+            // reference, and `close` does not check it, so the exact request
+            // tuple alone cannot tell this seed's authority from an identical
+            // one an operator opened. The seed's own is the one matching that
+            // tuple and opened no earlier than the intent journaled above,
+            // before this seed asked to open anything. Without a journaled
+            // authority no checkpoint was written and no chunk was submitted,
+            // so closing it is safe.
             let listed = crate::import_authority_lifecycle::list(&runtime_config).map_err(
                 |error| anyhow::anyhow!("cannot list import authorities: {error:?}"),
             )?;
-            let orphan = unjournaled_seed_authority(
+            let Some(orphan) = unjournaled_seed_authority(
                 &listed,
                 &seed.entity,
                 &seed.access_profile,
                 &input_digest,
-            )
-            .with_context(|| {
-                format!(
+                state.seed_import_intents.get(&seed.id).copied(),
+            ) else {
+                // No authority this seed opened is open, so the intent is
+                // settled and must not later claim an operator's authority.
+                state.seed_import_intents.remove(&seed.id);
+                state.save()?;
+                bail!(
                     "an import authority this seed did not open is already open for entity {}; \
                      close it with `bregctl import-authority close` or let it expire, then start again",
                     seed.entity
-                )
-            })?;
+                );
+            };
             crate::import_authority_lifecycle::close(
                 &crate::import_authority_lifecycle::CloseArguments {
                     runtime_config: &runtime_config,
@@ -3106,6 +3135,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     state
         .seed_import_authorities
         .insert(seed.id.clone(), authority_id.clone());
+    state.seed_import_intents.remove(&seed.id);
     state.save()?;
 
     let checkpoint = seed_root.join(format!("{authority_id}.checkpoint.json"));
@@ -3143,21 +3173,41 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     Ok(())
 }
 
+/// The instant a seed journals before it asks to open an import authority.
+///
+/// It is truncated to the microsecond, the resolution PostgreSQL keeps for
+/// `opened_at`, and compared with no further tolerance. The database runs on
+/// this host: a Linux container reads the same kernel clock, and a macOS
+/// container VM keeps its guest clock synchronized with the host's. The open
+/// is only requested after the intent is saved and a fresh database
+/// connection is made, which is far longer than any residual drift. Should
+/// drift still date the seed's own authority before its intent, recovery
+/// refuses rather than closing an authority it cannot attribute.
+fn seed_import_intent_now() -> chrono::DateTime<chrono::Utc> {
+    let now = chrono::Utc::now();
+    now - chrono::Duration::nanoseconds(i64::from(now.timestamp_subsec_nanos() % 1_000))
+}
+
 /// The open authority an interrupted seed opened but never journaled: the
 /// exact entity, profile, one-item bound, and input digest `import_seed`
-/// requests, with nothing committed under it.
+/// requests, with nothing committed under it, opened no earlier than the
+/// intent the seed journaled before asking. Without an intent no open
+/// authority is attributable to the seed.
 fn unjournaled_seed_authority(
     authorities: &[registry_breg::import_authority::ImportAuthority],
     entity: &str,
     profile: &str,
     input_digest: &str,
+    intent: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Option<uuid::Uuid> {
     use registry_breg::import_authority::ImportAuthorityStatus;
 
+    let intent = intent?;
     authorities
         .iter()
         .find(|authority| {
             authority.status == ImportAuthorityStatus::Open
+                && authority.opened_at >= intent
                 && authority.entity_id == entity
                 && authority.profile_id == profile
                 && authority.operation == "create"
