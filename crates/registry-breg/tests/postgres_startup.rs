@@ -316,7 +316,9 @@ async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
         prepare_with_connection_config_for_test(&restored_path, database.runtime_config.clone())
             .await
             .err(),
-        Some(StartupError::EventDestinations)
+        Some(StartupError::RetainedWebhookBindings {
+            retained_deliveries: 2
+        })
     );
 
     database.cleanup().await;

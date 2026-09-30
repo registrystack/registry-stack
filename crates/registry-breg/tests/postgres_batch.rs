@@ -492,7 +492,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         }}]}),
     )
     .await;
-    assert_eq!(wrong_boundary.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(wrong_boundary.status(), StatusCode::PRECONDITION_FAILED);
     let extra_query = send_json(
         &app,
         "/v1/records/widgets:batch?pageSize=1",
