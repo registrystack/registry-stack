@@ -179,6 +179,82 @@ async fn ingestion_run_journey_commits_resumes_and_replays_without_duplicates() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn event_inventory_faults_are_unavailable_for_direct_and_ingestion_writes() {
+    let registry = Arc::new(compiled_registry_with_created_webhook());
+    let harness = IngestionHarness::from_registry(registry.clone()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("inventory-fault", 1), 1);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    // Build a process surface over the valid installed package identity but
+    // with one changed serialized delivery member. Normal package activation
+    // admits only the compiler output; this injected surface proves a runtime
+    // inconsistency remains a service fault on direct and ingestion writes.
+    let mut altered = serde_json::to_value(&*registry).expect("compiled registry serializes");
+    altered["eventDeliveryInventory"]["deliveries"][0]["classificationCeiling"] = json!("internal");
+    let altered =
+        Arc::new(serde_json::from_value(altered).expect("changed delivery inventory deserializes"));
+    let faulted = harness
+        .build_surface(altered, harness.identity.clone(), None, None)
+        .await;
+
+    let direct = send(
+        &faulted.app,
+        Method::POST,
+        "/v1/records/widgets",
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "inventory-fault-direct-create"),
+        ],
+        serde_json::to_vec(&json!({"data": {
+            "jurisdiction": "zone-a",
+            "label": "inventory-fault-direct",
+            "quantity": 1
+        }}))
+        .expect("direct body serializes"),
+    )
+    .await;
+    assert_eq!(direct.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body_json(direct).await["code"], "service.unavailable");
+
+    let chunk = faulted
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(chunk.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body_json(chunk).await["code"], "service.unavailable");
+
+    assert_eq!(durable_widget_count(&harness).await, 0);
+    let durable = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM registry_internal.registry_revisions
+                   WHERE entity_id = 'widget'),
+                 (SELECT count(*) FROM registry_internal.registry_outbox),
+                 (SELECT count(*) FROM registry_internal.registry_ingestion_run_chunks
+                   WHERE run_id = $1),
+                 (SELECT committed_items FROM registry_internal.registry_ingestion_runs
+                   WHERE run_id = $1),
+                 (SELECT next_chunk_index FROM registry_internal.registry_ingestion_runs
+                   WHERE run_id = $1)",
+            &[&Uuid::parse_str(&run_id).expect("run id parses")],
+        )
+        .await
+        .expect("durable mutation state is inspectable");
+    assert_eq!(durable.get::<_, i64>(0), 0, "no revision was written");
+    assert_eq!(durable.get::<_, i64>(1), 0, "no event was captured");
+    assert_eq!(durable.get::<_, i64>(2), 0, "no chunk receipt was written");
+    assert_eq!(durable.get::<_, i64>(3), 0, "no item was committed");
+    assert_eq!(durable.get::<_, i64>(4), 0, "the checkpoint did not move");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lost_chunk_response_replays_original_receipt_without_duplicate_mutation() {
     let harness = IngestionHarness::create().await;
     let claims = operator_claims(PRINCIPAL, "zone-a");
@@ -4271,6 +4347,17 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         .expect("ingestion fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("ingestion fixture compiles to trusted inventories")
+}
+
+fn compiled_registry_with_created_webhook() -> registry_breg::CompiledRegistry {
+    let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}").replacen(
+        r#"{"phase":"after","id":"widget-created","trigger":"created","projection":["label"]}"#,
+        r#"{"phase":"after","id":"widget-created","trigger":"created","projection":["label"],"handler":{"kind":"url","destinationId":"widget-events"}}"#,
+        1,
+    );
+    let project = parse_project_json(fixture.as_bytes()).expect("webhook fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("webhook fixture compiles to trusted inventories")
 }
 
 /// A widget registry carrying one restricted, encrypted field, so chunk

@@ -303,7 +303,73 @@ fn application_reason_webhooks_require_internal_delivery_unless_conditions_exclu
             .find(|delivery| delivery.event_id == "request-lifecycle")
             .expect("delivery");
         assert_eq!(delivery.classification_ceiling, expected, "{condition:?}");
+        #[cfg(feature = "runtime")]
+        assert_request_mutation_plans(&compiled);
     }
+}
+
+#[cfg(feature = "runtime")]
+fn assert_request_mutation_plans(compiled: &registry_breg::CompiledRegistry) {
+    for operation in ["create", "patch"] {
+        assert!(
+            registry_breg::mutation::MutationPlan::from_compiled(
+                compiled,
+                &format!("records.placement-correction-request.{operation}"),
+            )
+            .is_ok(),
+            "the runtime must accept the compiler's lifecycle delivery for {operation}"
+        );
+    }
+}
+
+#[test]
+fn request_lifecycle_delivery_keeps_the_entity_classification_above_its_projection() {
+    let mut source = change_request_event_project();
+    source["entities"][2]["classification"] = json!("restricted");
+    source["entities"][2]["hooks"][0]["projection"] = json!(["proposed-site"]);
+    let compiled = compile(&source).expect("restricted request event compiles");
+    assert_eq!(
+        compiled.event_deliveries().deliveries[0].classification_ceiling,
+        Classification::Restricted
+    );
+    #[cfg(feature = "runtime")]
+    assert_request_mutation_plans(&compiled);
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn altered_event_delivery_inventory_is_a_service_fault_before_mutation_io() {
+    use registry_breg::mutation::{MutationError, MutationPlan};
+
+    let mut source = change_request_event_project();
+    source["entities"][2]["hooks"][0]["projection"] = json!(["proposed-site"]);
+    let compiled = compile(&source).expect("source compiles");
+    assert_request_mutation_plans(&compiled);
+    for (member, replacement) in [
+        ("classificationCeiling", json!("public")),
+        ("classificationCeiling", json!("restricted")),
+        ("projectionFields", json!(["label"])),
+        ("destinationId", json!("substituted-destination")),
+        ("eventId", json!("unknown-event")),
+    ] {
+        let mut altered = serde_json::to_value(&compiled).unwrap();
+        altered["eventDeliveryInventory"]["deliveries"][0][member] = replacement;
+        let altered = serde_json::from_value(altered).unwrap();
+        assert_eq!(
+            MutationPlan::from_compiled(&altered, "records.placement-correction-request.create")
+                .err(),
+            Some(MutationError::Unavailable),
+            "a changed {member} is a package fault, not invalid caller input"
+        );
+    }
+    let mut missing = serde_json::to_value(&compiled).unwrap();
+    missing["eventDeliveryInventory"]["deliveries"] = json!([]);
+    let missing = serde_json::from_value(missing).unwrap();
+    assert_eq!(
+        MutationPlan::from_compiled(&missing, "records.placement-correction-request.create").err(),
+        Some(MutationError::Unavailable),
+        "a missing delivery must not suppress a governed event"
+    );
 }
 
 #[test]

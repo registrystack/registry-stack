@@ -68,8 +68,8 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         serde_json::from_value(mismatched_value).expect("strict mismatch deserializes");
     assert_eq!(
         MutationPlan::from_compiled(&mismatched, "records.case.create").err(),
-        Some(MutationError::InvalidRequest),
-        "a source/inventory mismatch is refused before mutation I/O"
+        Some(MutationError::Unavailable),
+        "a source/inventory mismatch is a service fault before mutation I/O"
     );
 
     install_compiled_schema(&migration, &compiled, &database.runtime_role)

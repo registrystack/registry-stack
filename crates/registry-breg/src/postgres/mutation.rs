@@ -1982,8 +1982,10 @@ impl PostgresRecordMutationService {
         .map_err(|_| IngestionServiceError::RequestInvalid)?;
         let route = crate::data::ingestion_route(&self.registry, &run.entity_id, &run.profile_id)
             .ok_or(IngestionServiceError::Unavailable)?;
+        // Both inputs are compiled package state. A plan failure cannot be
+        // repaired by changing the caller's chunk body.
         let plan = MutationPlan::from_compiled(&self.registry, &route.id)
-            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         let response_fields = plan_readable_fields(&self.registry, &run.entity_id, &run.profile_id)
             .ok_or(IngestionServiceError::RequestInvalid)?;
         let chunk_binding = IngestionChunkBinding {
