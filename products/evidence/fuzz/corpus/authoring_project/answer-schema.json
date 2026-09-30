@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["is_adult"],
+  "properties": {
+    "is_adult": { "type": "boolean" }
+  }
+}

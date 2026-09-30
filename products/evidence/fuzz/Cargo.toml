@@ -1,0 +1,48 @@
+[package]
+name = "registry-evidence-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+libfuzzer-sys = "0.4"
+registry-evidence-authoring = { path = "../../../crates/registry-evidence-authoring" }
+registry-evidence-verifier = { path = "../../../crates/registry-evidence-verifier", features = ["fixtures"] }
+registry-platform-crypto = { path = "../../../crates/registry-platform-crypto" }
+serde_json = "1"
+serde_norway = "0.9"
+tokio = { version = "1", features = ["rt"] }
+
+[[bin]]
+name = "authoring_openapi"
+path = "fuzz_targets/authoring_openapi.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "authoring_project"
+path = "fuzz_targets/authoring_project.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verifier_flattened_jws"
+path = "fuzz_targets/verifier_flattened_jws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verifier_sd_jwt_vc"
+path = "fuzz_targets/verifier_sd_jwt_vc.rs"
+test = false
+doc = false
+bench = false

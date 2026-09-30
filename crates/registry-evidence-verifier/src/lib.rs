@@ -17,8 +17,11 @@ pub mod model;
 pub mod sdjwt_vc;
 pub mod verifier;
 
-#[cfg(test)]
-mod fixtures;
+// Test tooling outside this crate (the Evidence fuzz harnesses) builds
+// authentic signed inputs from the same fixtures the in-crate tests use, so
+// there is one mirrored issuer shape rather than one per caller.
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixtures;
 
 use serde::{Deserialize, Serialize};
 
