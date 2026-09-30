@@ -532,6 +532,14 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
     assert!(validator.is_valid(&prefixed));
     assert!(runtime_accepts(&prefixed));
 
+    // A canonical RFC 7638 SHA-256 thumbprint: 43 base64url characters whose
+    // final character leaves the unused low bits zero.
+    let mut revoked = baseline.clone();
+    revoked["sources"]["source-b"]["evidence"]["revokedKeyIds"] =
+        json!([format!("{}A", "A".repeat(42))]);
+    assert!(validator.is_valid(&revoked));
+    assert!(runtime_accepts(&revoked));
+
     for mode in [
         "get",
         "path",
@@ -547,6 +555,7 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
         "authenticated-context",
         "authenticated-grant",
         "forward-attribution",
+        "non-canonical-revoked-key-id",
     ] {
         let mut candidate = baseline.clone();
         let source = &mut candidate["sources"]["source-b"];
@@ -603,6 +612,11 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
                     ["valueOrigin"] = json!(mode)
             }
             "forward-attribution" => source["forwardAccessAttribution"] = json!(true),
+            // Forty-three base64url characters that do not decode and re-encode
+            // to themselves, because the final character sets unused bits.
+            "non-canonical-revoked-key-id" => {
+                source["evidence"]["revokedKeyIds"] = json!([format!("{}B", "A".repeat(42))])
+            }
             _ => unreachable!(),
         }
         assert!(!runtime_accepts(&candidate), "runtime accepted {mode}");

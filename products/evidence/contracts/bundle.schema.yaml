@@ -1220,7 +1220,7 @@ $defs:
         type: array
         uniqueItems: true
         maxItems: 33
-        items: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+        items: {$ref: '#/$defs/service-key-id'}
       maximumAssertionLifetimeSeconds: {type: integer, minimum: 1, maximum: 31536000}
       clockSkewSeconds: {type: integer, minimum: 0, maximum: 300, default: 0}
   # The signed source uses the public definitions grammar, narrowed to the
