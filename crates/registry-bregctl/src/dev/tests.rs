@@ -389,18 +389,8 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
     operator
         .claims
         .insert("registry_record_status".into(), json!("active"));
-    clients
-        .issuer
-        .exchange_issuers
-        .push(config::IssuerConnection {
-            id: "external-operator-authority".into(),
-            issuer: "https://operator.example.test".into(),
-            jwks_endpoint: "https://operator.example.test/jwks".into(),
-            mapping: config::IssuerConnectionMapping::InstitutionalGrant,
-            clients: vec!["operator".into()],
-            token_attributes: BTreeMap::new(),
-        });
-    clients.issuer.exchange_clients.push("operator".into());
+    let clients =
+        config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
     initialize(&state.root(), &state, &clients, &files).unwrap();
 
     let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
@@ -449,7 +439,7 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
     );
     assert_eq!(
         runtime["authentication"]["oidc"]["assertionIssuers"]["operator"],
-        json!(["https://operator.example.test", "http://127.0.0.1:18092"])
+        json!(["http://127.0.0.1:18092"])
     );
 }
 
@@ -492,15 +482,21 @@ fn multi_purpose_claim_union_is_refused_above_the_issuer_attribute_limit() {
 }
 
 #[test]
-fn multi_purpose_client_is_refused_on_an_authored_first_party_connection() {
+fn multi_purpose_client_is_refused_on_any_authored_exchange_connection() {
     // A multi-purpose client is always paired with the generated purpose
     // connection, and the issuer lets a first-party client select one signer.
+    // That pairing makes the client a first-party client, so its exchanged
+    // tokens carry only the purpose connection's claims: through an
+    // institutional grant connection they would lack the registry_grant_*
+    // claims the registry requires, and through another first-party
+    // connection they would lack that connection's claims.
     let (_temp, _state, base, _files) = fixture();
     for mapping in [
         config::IssuerConnectionMapping::InstitutionalGrant,
         config::IssuerConnectionMapping::FirstParty,
     ] {
         let mut clients = pair_exchange_client(base.clone(), mapping);
+        config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
         clients
             .clients
             .iter_mut()
@@ -511,20 +507,18 @@ fn multi_purpose_client_is_refused_on_an_authored_first_party_connection() {
                 "registry_purpose".into(),
                 json!(["evidence-source-read", "evidence-source-audit"]),
             );
-        let parsed = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes());
-        match mapping {
-            config::IssuerConnectionMapping::InstitutionalGrant => {
-                parsed.unwrap();
-            }
-            config::IssuerConnectionMapping::FirstParty => {
-                let refusal = parsed.unwrap_err().to_string();
-                assert!(refusal.contains("first-party connection"), "{refusal}");
-                assert!(
-                    refusal.contains("more than one registry_purpose"),
-                    "{refusal}"
-                );
-            }
-        }
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("client source"), "{refusal}");
+        assert!(
+            refusal.contains("exchange connection casework"),
+            "{refusal}"
+        );
+        assert!(
+            refusal.contains("more than one registry_purpose"),
+            "{refusal}"
+        );
     }
 }
 
