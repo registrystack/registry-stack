@@ -514,6 +514,12 @@ impl VerifiedStartup {
         &self.expected_catalog
     }
 
+    /// Whether the database holds the subject access-log storage. A database
+    /// an earlier release activated gains it at its next apply.
+    pub fn subject_access_log_installed(&self) -> bool {
+        self.expected_catalog.includes_subject_access_log()
+    }
+
     pub fn lock_key(&self) -> RegistryLockKey {
         self.lock_key
     }
@@ -1133,7 +1139,9 @@ async fn finish_prepared_server(
     // Captured before `pool` moves into the mutation service, so the metrics
     // listener can sample live pool gauges at scrape time.
     let telemetry_pool = pool.clone();
-    let access_log_retention_pool = Some(pool.clone());
+    // Retention runs only where the storage exists; a Registry that collects
+    // a subject access log is never verified without it.
+    let access_log_retention_pool = startup.subject_access_log_installed().then(|| pool.clone());
     let event_destinations = Arc::new(
         config
             .activate_event_destinations(&registry)
@@ -1893,6 +1901,11 @@ async fn verify_opened_startup(
         crate::postgres::RegistryStateShape::Ledger => {}
     }
     verify_configured_runtime_role(&transaction, migration_role, runtime_role).await?;
+    let expected_catalog =
+        crate::postgres::installed_managed_catalog(&transaction, &expected_catalog)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?
+            .into_owned();
     // A separate runtime role missing its grants may not even read the state
     // the checks below read, so the grants are checked first.
     verify_runtime_grants(

@@ -42,8 +42,8 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
-    RehearsalOutcome, SuccessorMigrationRehearsal,
+    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    MigrationRehearsalError, PostgresFailure, RehearsalOutcome, SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -78,39 +78,8 @@ journeys:
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn subject_access_log_upgrades_an_existing_catalog_and_survives_disabled_collection() {
     let database = TestDatabase::create(1).await;
-    database
-        .admin
-        .batch_execute("CREATE EXTENSION btree_gist")
-        .await
-        .unwrap();
-    let prior = compile_variant(Variant::SubjectWithoutLog);
-    let fingerprint = initial_fingerprint(&database, &prior).await;
-    let initial =
-        prepare_and_load_initial_variant(Variant::SubjectWithoutLog, &prior, &fingerprint);
-    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
-        .await
-        .unwrap();
-
-    // Reproduce the exact pre-feature catalog and recorded package binding.
-    // This fixture surgery represents an already deployed older binary; every
-    // upgrade and subsequent policy change below uses the maintained apply API.
-    let (migration, task) = database.connect_migration().await;
-    migration.batch_execute("DROP FUNCTION registry_internal.expire_subject_access_log(); DROP TABLE registry_internal.registry_subject_access_log;").await.unwrap();
-    let old_fingerprint = managed_schema_fingerprint(
-        &migration,
-        &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&prior).without_subject_access_log_for_test(),
-    )
-    .await
-    .unwrap();
-    let old_package =
-        prepare_and_load_initial_variant(Variant::SubjectWithoutLog, &prior, &old_fingerprint);
-    active.schema_fingerprint = old_fingerprint;
-    active.package_digest = old_package.package_digest().to_owned();
-    migration.execute("UPDATE registry_internal.registry_state SET active_package_digest=$1, schema_fingerprint=$2 WHERE singleton", &[&active.package_digest,&active.schema_fingerprint]).await.unwrap();
-    migration.execute("UPDATE registry_internal.registry_migrations SET package_digest=$1 WHERE activation_id=$2::text::uuid", &[&active.package_digest,&active.activation_id]).await.unwrap();
-    drop(migration);
-    task.abort();
+    let (prior, fingerprint, active, _old_package) =
+        activate_before_subject_access_log(&database).await;
 
     let enabled = compile_variant(Variant::SubjectWithLog);
     // The log policy changes the package contract, not its entity DDL; the
@@ -195,6 +164,112 @@ async fn subject_access_log_upgrades_an_existing_catalog_and_survives_disabled_c
     drop(runtime);
     drop(pool);
     database.cleanup().await;
+}
+
+/// A database an earlier release activated holds no subject access-log
+/// storage until its next apply installs it. Until then the upgraded runtime
+/// and operator tooling verify its active package as it stands, and applying
+/// that package again is refused as already active rather than activated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_catalog_from_before_the_subject_access_log_keeps_its_active_package_until_the_next_apply(
+) {
+    let database = TestDatabase::create(1).await;
+    let (prior, _fingerprint, active, old_package) =
+        activate_before_subject_access_log(&database).await;
+
+    let pool = database.runtime_config.build_pool().unwrap();
+    let runtime = pool.get_for_test().await.unwrap();
+    verify_catalog_identity_for_catalog(
+        &**runtime,
+        &active,
+        &ExpectedManagedCatalog::compiled(&prior),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("the upgraded catalog check accepts the storage-free catalog it inherits");
+    // A registry that collects the log is never served without its storage.
+    verify_catalog_identity_for_catalog(
+        &**runtime,
+        &active,
+        &ExpectedManagedCatalog::compiled(&compile_variant(Variant::SubjectWithLog)),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect_err("a collecting registry requires the access-log storage");
+    drop(runtime);
+    drop(pool);
+
+    assert_value_free(
+        apply(
+            &database,
+            &old_package,
+            ApplyPrecondition::RoleChange { current: &active },
+        )
+        .await
+        .err(),
+        MigrationError::AlreadyActive,
+    );
+    assert_ready_target(&database, &active).await;
+    let installed: bool = database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.to_regclass('registry_internal.registry_subject_access_log') IS NOT NULL",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!installed, "only a new activation installs the storage");
+    database.cleanup().await;
+}
+
+/// Activate the storage-free variant, then reproduce the exact catalog and
+/// recorded package binding a release before subject access-log storage
+/// left behind. This fixture surgery stands in for the older binary; every
+/// later step uses the maintained APIs. Returns the compiled registry, the
+/// fingerprint of a fresh catalog, the active identity, and the active
+/// package.
+async fn activate_before_subject_access_log(
+    database: &TestDatabase,
+) -> (
+    CompiledRegistry,
+    String,
+    ExpectedRegistryIdentity,
+    VerifiedPackage,
+) {
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .unwrap();
+    let prior = compile_variant(Variant::SubjectWithoutLog);
+    let fingerprint = initial_fingerprint(database, &prior).await;
+    let initial =
+        prepare_and_load_initial_variant(Variant::SubjectWithoutLog, &prior, &fingerprint);
+    let mut active = apply(database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .unwrap();
+
+    let (migration, task) = database.connect_migration().await;
+    migration.batch_execute("DROP FUNCTION registry_internal.expire_subject_access_log(); DROP TABLE registry_internal.registry_subject_access_log;").await.unwrap();
+    let old_fingerprint = managed_schema_fingerprint(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&prior).without_subject_access_log_for_test(),
+    )
+    .await
+    .unwrap();
+    let old_package =
+        prepare_and_load_initial_variant(Variant::SubjectWithoutLog, &prior, &old_fingerprint);
+    active.schema_fingerprint = old_fingerprint;
+    active.package_digest = old_package.package_digest().to_owned();
+    migration.execute("UPDATE registry_internal.registry_state SET active_package_digest=$1, schema_fingerprint=$2 WHERE singleton", &[&active.package_digest,&active.schema_fingerprint]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_migrations SET package_digest=$1 WHERE activation_id=$2::text::uuid", &[&active.package_digest,&active.activation_id]).await.unwrap();
+    drop(migration);
+    task.abort();
+    (prior, fingerprint, active, old_package)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

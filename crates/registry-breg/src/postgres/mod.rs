@@ -33,7 +33,9 @@ pub use catalog::{
     verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
-pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
+pub(crate) use catalog::{
+    installed_managed_catalog, registry_state_shape, runtime_grants_missing, RegistryStateShape,
+};
 pub(crate) use config::MAX_POOL_TIMEOUT;
 pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::{

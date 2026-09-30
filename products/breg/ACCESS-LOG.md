@@ -11,6 +11,11 @@ create a global subject pseudonym, share a subject key with another registry, or
 make the log searchable across registries. There is no backfill for reads that
 happened before a package enabling the log became active.
 
+The log's storage is installed by an apply. A database activated by a release
+without it keeps serving its active package after an upgrade, as long as that
+package declares no `accessLog`; the next successor apply installs the storage,
+and a package that declares `accessLog` is never served without it.
+
 ## Author the policy
 
 Add `accessLog` to each entity whose reads must be visible to its subjects:
