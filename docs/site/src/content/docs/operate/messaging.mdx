@@ -399,9 +399,15 @@ messagingctl apply --runtime-config /etc/registry-messaging/runtime.yaml
 `apply` is the only command that changes the activation ledger. Under one PostgreSQL advisory lock,
 it applies pending schema versions, binds an unclaimed database to `identity.databaseId`, activates
 the verified package, grants the runtime role its required access, and records the activation as
-one transaction. A second `apply` waits for the lock instead of racing it. An already active
-package with no pending work is a refusal, so deployment automation should apply only when `plan`
-reports changes.
+one transaction. A second `apply` waits for the lock instead of racing it. Applying an already
+active package with no pending schema versions and current runtime grants succeeds without a
+change: `apply` exits 0, reports `change: "none"` and `applied: false`, and records no activation.
+When the runtime role's grants have gone stale, `apply` restores them and records a new
+activation.
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, apply();
+    crates/registry-messagingctl/tests/postgres_messages_cli.rs, plan_apply_and_status_are_one_operator_journey;
+    crates/registry-messaging/tests/postgres_package.rs, reapplying_the_active_package_over_stale_grants_records_the_repair. */}
 
 Read the active state and activation history with the runtime credential:
 
