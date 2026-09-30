@@ -33,13 +33,11 @@ const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const EXPLICIT_MARKER: &str = ".registry-stack-editor/project.json";
 
 fn spec(product: ProductKind) -> ProductSpec {
-    {
-        let specification = catalog::spec(product)
-            .or_else(|| catalog_extra::spec(product))
-            .expect("every product has an authoring specification");
-        debug_assert_eq!(specification.product, product);
-        specification
-    }
+    let specification = catalog::spec(product)
+        .or_else(|| catalog_extra::spec(product))
+        .expect("every product has an authoring specification");
+    debug_assert_eq!(specification.product, product);
+    specification
 }
 
 fn read_text(root: &Path, path: &Path) -> Option<String> {

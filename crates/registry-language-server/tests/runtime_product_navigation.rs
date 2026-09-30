@@ -593,6 +593,21 @@ async fn unreadable_module_removes_stale_symbols_and_recovers_open_text() {
         .await;
     fs::set_permissions(&module, original).unwrap();
     assert!(symbols.as_array().unwrap().is_empty(), "{symbols}");
+    // The author is told why the read failed, not only that it did.
+    let diagnostics = session
+        .published_diagnostics(&project.path("registry.yaml"))
+        .expect("the entry document carries the read failure");
+    let read_failure = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg/document-read")
+        .expect("a document-read diagnostic");
+    assert!(
+        read_failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("Permission denied"),
+        "{read_failure}"
+    );
     session
         .notify(
             "workspace/didChangeWatchedFiles",
