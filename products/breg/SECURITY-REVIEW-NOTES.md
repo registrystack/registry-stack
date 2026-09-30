@@ -896,6 +896,18 @@ token grants nothing a runtime profile does not.
   also registered as a token-exchange client (`products/evidence/README.md`),
   so a borrowed BReg issuer session does not widen Evidence admission.
 
+### Purpose JWKS listener
+
+The local issuer fetches the dev purpose signer's JWKS from
+`host.docker.internal` while `bregctl dev` acquires the alternate-purpose
+tokens (`exchange_tokens` in `crates/registry-bregctl/src/dev/purpose.rs`).
+On macOS the listener binds loopback. Linux Engine maps that name to the
+bridge gateway, which a loopback listener never sees, so on Linux it binds
+every interface, and anything on the host's networks can read the JWKS for
+that window. It serves one public key and no other route, and it is stopped
+once the tokens are acquired. The private key never leaves the owner-only
+dev state directory.
+
 ### Tests
 
 `crates/registry-thunderid-tooling/src/description.rs`:
