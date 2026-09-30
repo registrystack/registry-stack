@@ -287,6 +287,46 @@ class ClientRegistryTest(unittest.TestCase):
         ):
             self.module.validate_wheels(self.directory, self.version, "stack")
 
+    def test_rejects_a_root_package_that_exposes_messaging(self) -> None:
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+            facade_namespaces=("casework", "messaging"),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly exposes the messaging facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+
+    def test_rejects_a_unified_wheel_with_messaging(self) -> None:
+        self._write_distribution("stack")
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        write_wheel(
+            wheel,
+            project="registry-stack-client",
+            namespaces=(
+                *self.module.stack_python_namespaces(self.version),
+                "messaging",
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly contains the messaging namespace",
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
+
     def test_public_linux_wheels_use_manylinux_tags(self) -> None:
         names = {
             path.name
