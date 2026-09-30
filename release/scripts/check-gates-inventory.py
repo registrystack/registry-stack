@@ -688,7 +688,7 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/nightly-security.yml": frozenset(
-        {"platform", "release_tool"}
+        {"evidence_assurance", "platform", "release_tool"}
     ),
     ".github/workflows/nightly-rust-coverage.yml": frozenset(
         {"platform", "release_tool"}
