@@ -735,6 +735,8 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
         "forward-attribution",
         "non-canonical-revoked-key-id",
         "unauthenticated",
+        "empty-trusted-jwk",
+        "private-trusted-jwk",
     ] {
         let mut candidate = baseline.clone();
         let source = &mut candidate["sources"]["source-b"];
@@ -797,6 +799,10 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
                 source["evidence"]["revokedKeyIds"] = json!([format!("{}B", "A".repeat(42))])
             }
             "unauthenticated" => source["authentication"] = json!({"kind": "none"}),
+            "empty-trusted-jwk" => source["evidence"]["trustedJwks"]["keys"] = json!([{}]),
+            "private-trusted-jwk" => {
+                source["evidence"]["trustedJwks"]["keys"][0]["d"] = json!("A".repeat(43))
+            }
             _ => unreachable!(),
         }
         assert!(!runtime_accepts(&candidate), "runtime accepted {mode}");
