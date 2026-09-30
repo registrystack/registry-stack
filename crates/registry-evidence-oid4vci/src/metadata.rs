@@ -192,7 +192,6 @@ pub fn authorization_server_metadata(config: &DeliveryConfig) -> Value {
         "issuer": issuer,
         "token_endpoint": format!("{issuer}{}", crate::service::TOKEN_PATH),
         "grant_types_supported": [crate::PRE_AUTHORIZED_CODE_GRANT_TYPE],
-        "response_types_supported": [],
         "token_endpoint_auth_methods_supported": ["none"],
         // A pre-authorized code is redeemed by whoever holds it, with no client
         // registration and no client authentication. Stating so is what tells a
@@ -526,7 +525,6 @@ pub(crate) mod tests {
                 "grant_types_supported",
                 "issuer",
                 "pre-authorized_grant_anonymous_access_supported",
-                "response_types_supported",
                 "token_endpoint",
                 "token_endpoint_auth_methods_supported",
             ]
@@ -557,6 +555,8 @@ pub(crate) mod tests {
             metadata["grant_types_supported"],
             json!(["urn:ietf:params:oauth:grant-type:pre-authorized_code"])
         );
+        assert!(metadata.get("response_types_supported").is_none());
+        assert!(metadata.get("authorization_endpoint").is_none());
     }
 
     /// A wallet with no client registration must be told it may redeem a

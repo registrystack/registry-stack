@@ -97,9 +97,13 @@ endpoints:
     rule: >-
       The RFC 8414 document for the authorization server this service is, for
       the pre-authorized code grant alone. It publishes issuer, token_endpoint,
-      the one supported grant type, an empty response_types_supported, and
-      token_endpoint_auth_methods_supported of none, because a pre-authorized
-      flow authenticates the code rather than the client. It also publishes
+      the one supported grant type, and token_endpoint_auth_methods_supported
+      of none, because a pre-authorized flow authenticates the code rather than
+      the client. OpenID4VCI 1.0 Final permits a server that supports only this
+      grant to omit response_types_supported despite RFC 8414 requiring it, so
+      the metadata omits the member rather than publishing an empty array or
+      advertising an authorization response the service does not support. It
+      also publishes
       pre-authorized_grant_anonymous_access_supported as true, spelled with the
       hyphen inside pre-authorized that OpenID4VCI gives it, which is what tells
       a wallet holding no client registration that it may redeem a code anyway.

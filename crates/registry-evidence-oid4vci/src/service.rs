@@ -1625,6 +1625,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pre_authorized_only_metadata_omits_authorization_response_types() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, _) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        let response = server.get(AUTHORIZATION_SERVER_METADATA_PATH).await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let metadata: Value = response.json();
+        assert_eq!(
+            metadata["grant_types_supported"],
+            json!([crate::PRE_AUTHORIZED_CODE_GRANT_TYPE])
+        );
+        assert!(metadata.get("response_types_supported").is_none());
+        assert!(metadata.get("authorization_endpoint").is_none());
+    }
+
+    #[tokio::test]
     async fn an_offer_without_authorization_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
         let (service, issuer) = wired_service(directory.path());
