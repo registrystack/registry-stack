@@ -1279,9 +1279,10 @@ mod tests {
     impl RecordingIssuer {
         fn new() -> Self {
             Self {
-                catalog: Arc::new(CredentialCatalog::derive(
-                    &crate::metadata::tests::document(),
-                )),
+                catalog: Arc::new(
+                    CredentialCatalog::derive(&crate::metadata::tests::document())
+                        .expect("the catalog is valid"),
+                ),
                 requests: Mutex::new(Vec::new()),
             }
         }
@@ -1885,6 +1886,43 @@ mod tests {
         assert_eq!(
             response.json::<Value>()["error_description"],
             json!("the credential configuration is not offered by this deployment")
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_values_outside_the_published_contract_create_no_exchange() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, issuer) = wired_service(directory.path());
+        let server = TestServer::new(build_app(Arc::clone(&service)));
+
+        for (label, value) in [
+            ("wrong scalar type", json!(7)),
+            ("empty string", json!("")),
+            ("oversized string", json!("x".repeat(65))),
+        ] {
+            let mut body = offer_body(false);
+            body["subjects"][0]["selectorValues"]["identifier"] = value;
+            let response = server
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&body)
+                .await;
+            assert_eq!(response.status_code(), StatusCode::BAD_REQUEST, "{label}");
+            assert_eq!(
+                response.json::<Value>()["error"],
+                json!("invalid_request"),
+                "{label}"
+            );
+        }
+
+        assert_eq!(
+            service.store.len(),
+            0,
+            "no offer secret or state was created"
+        );
+        assert!(
+            issuer.requests().is_empty(),
+            "no invalid offer reached Evidence issuance"
         );
     }
 
