@@ -4848,7 +4848,7 @@ pub struct SubjectRole {
 
 impl SubjectRole {
     fn validate(&self) -> Result<(), ConfigError> {
-        if !valid_local_id(&self.role) {
+        if self.role.len() > 64 || !valid_local_id(&self.role) {
             return invalid("subject role identifier is invalid");
         }
         validate_unique_strings(
@@ -8300,6 +8300,17 @@ mod tests {
                 "{to}"
             );
         }
+    }
+
+    #[test]
+    fn subject_roles_fit_the_evidence_request_contract() {
+        let role = |length: usize| SubjectRole {
+            role: format!("a{}", "b".repeat(length - 1)),
+            cardinality: SubjectCardinality::One,
+            selector_profiles: vec!["person-demographics-v1".to_owned()],
+        };
+        assert!(role(64).validate().is_ok());
+        assert!(role(65).validate().is_err());
     }
 
     #[test]

@@ -460,7 +460,7 @@ impl EvidenceClient {
         let state = self.progressive_state()?;
         let service = self.progressive_service_snapshot(state).await?;
         let definitions = self.discover_published_definitions(&service).await?;
-        definitions.validate_for_progressive_request()?;
+        definitions.validate_for_request()?;
         validate_profile_expectations(&state.profile, &definitions)?;
         Ok(definitions.into())
     }
@@ -533,7 +533,7 @@ impl EvidenceClient {
             ContractsProfile::Reviewed { file } => state.profile.load_reviewed_contracts(file)?,
             ContractsProfile::Published => self.discover_published_definitions(&service).await?,
         };
-        definitions.validate_for_progressive_request()?;
+        definitions.validate_for_request()?;
         validate_profile_expectations(&state.profile, &definitions)?;
         Ok(ProgressiveSnapshot {
             definitions,

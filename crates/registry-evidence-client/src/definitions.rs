@@ -17,7 +17,7 @@ use registry_evidence_verifier::{
     },
     AssuranceProfile,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
@@ -81,9 +81,9 @@ impl EvidenceDefinitionsDocument {
     /// Strict deserialization closes the document vocabulary. This method
     /// closes the relationships JSON types cannot express: handle and role
     /// uniqueness, ordered bounds, effective format compatibility, and the
-    /// list uniqueness invariant. Published and reviewed catalogs both reach
-    /// this same check through progressive definition selection.
-    pub(crate) fn validate_for_progressive_request(&self) -> Result<(), EvidenceClientError> {
+    /// list uniqueness invariant. Progressive selection and protocol adapters
+    /// use this same check before turning catalog entries into requests.
+    pub fn validate_for_request(&self) -> Result<(), EvidenceClientError> {
         if self.schema != EVIDENCE_DEFINITIONS_SCHEMA_V1
             || !bounded_uri(&self.audience)
             || !bounded_uri(&self.issued_by)
@@ -295,6 +295,32 @@ impl SelectorField {
             }
             _ => false,
         }
+    }
+}
+
+impl DefinitionSelector {
+    /// Whether a caller-supplied value map exactly satisfies this published
+    /// request-origin selector declaration.
+    ///
+    /// This is the definitions contract's single field-set, scalar-type, and
+    /// value-bound check. Protocol adapters can use it before creating
+    /// single-use state without restating Evidence selector semantics.
+    #[must_use]
+    pub fn accepts_request_values(&self, values: &BTreeMap<String, SelectorValue>) -> bool {
+        if self.value_origin != SelectorValueOrigin::Request {
+            return false;
+        }
+        let fields = self
+            .fields
+            .iter()
+            .map(SelectorField::name)
+            .collect::<BTreeSet<_>>();
+        fields == values.keys().map(String::as_str).collect::<BTreeSet<_>>()
+            && self.fields.iter().all(|field| {
+                values
+                    .get(field.name())
+                    .is_some_and(|value| field.accepts(value))
+            })
     }
 }
 
@@ -667,6 +693,87 @@ mod tests {
             .is_none());
     }
 
+    fn valid_selector_values() -> BTreeMap<String, SelectorValue> {
+        BTreeMap::from([
+            (
+                "record_reference".to_owned(),
+                SelectorValue::String("record-1".to_owned()),
+            ),
+            (
+                "recorded_on".to_owned(),
+                SelectorValue::String("2026-09-30".to_owned()),
+            ),
+            ("sequence".to_owned(), SelectorValue::Integer(4)),
+            ("confirmed".to_owned(), SelectorValue::Boolean(true)),
+            (
+                "office".to_owned(),
+                SelectorValue::String("central".to_owned()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn request_selector_values_must_match_the_published_types_and_bounds() {
+        let selector = &document().definitions[0].subjects[0].selector;
+        assert!(selector.accepts_request_values(&valid_selector_values()));
+
+        let mut cases = Vec::new();
+        let mut wrong_type = valid_selector_values();
+        wrong_type.insert("record_reference".to_owned(), SelectorValue::Integer(1));
+        cases.push(("wrong scalar type", wrong_type));
+
+        let mut short_string = valid_selector_values();
+        short_string.insert(
+            "record_reference".to_owned(),
+            SelectorValue::String(String::new()),
+        );
+        cases.push(("string below minimumBytes", short_string));
+
+        let mut long_string = valid_selector_values();
+        long_string.insert(
+            "record_reference".to_owned(),
+            SelectorValue::String("x".repeat(201)),
+        );
+        cases.push(("string above maximumBytes", long_string));
+
+        let mut invalid_date = valid_selector_values();
+        invalid_date.insert(
+            "recorded_on".to_owned(),
+            SelectorValue::String("2026-02-30".to_owned()),
+        );
+        cases.push(("invalid date", invalid_date));
+
+        let mut integer_outside_range = valid_selector_values();
+        integer_outside_range.insert("sequence".to_owned(), SelectorValue::Integer(11));
+        cases.push(("integer outside range", integer_outside_range));
+
+        let mut empty_code = valid_selector_values();
+        empty_code.insert("office".to_owned(), SelectorValue::String(String::new()));
+        cases.push(("empty controlled code", empty_code));
+
+        let mut long_code = valid_selector_values();
+        long_code.insert("office".to_owned(), SelectorValue::String("x".repeat(33)));
+        cases.push(("controlled code above maximumBytes", long_code));
+
+        let mut missing_field = valid_selector_values();
+        missing_field.remove("office");
+        cases.push(("missing field", missing_field));
+
+        for (label, values) in cases {
+            assert!(
+                !selector.accepts_request_values(&values),
+                "{label} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn non_request_selector_origins_do_not_accept_caller_values() {
+        let mut selector = document().definitions[0].subjects[0].selector.clone();
+        selector.value_origin = SelectorValueOrigin::AuthenticatedContext;
+        assert!(!selector.accepts_request_values(&valid_selector_values()));
+    }
+
     #[test]
     fn a_missing_holder_bound_batch_maximum_defaults_to_one() {
         let earlier = DOCUMENT.replace(r#""holderBoundBatchMaxSize": 4,"#, "");
@@ -817,6 +924,36 @@ mod tests {
                 "invalid definition handle",
                 DOCUMENT.replace(r#""handle": "status-holds""#, r#""handle": "Uppercase""#),
             ),
+            (
+                "invalid purpose",
+                DOCUMENT.replace(
+                    r#""purpose": "example-decision""#,
+                    r#""purpose": "https://purpose.example.org""#,
+                ),
+            ),
+            (
+                "invalid role",
+                DOCUMENT.replace(r#""role": "subject""#, r#""role": "Subject""#),
+            ),
+            (
+                "invalid selector profile",
+                DOCUMENT.replace(
+                    r#""profile": "record-lookup-v1""#,
+                    r#""profile": "urn:example:selector""#,
+                ),
+            ),
+            (
+                "invalid selector field name",
+                DOCUMENT.replace(
+                    r#""name": "record_reference""#,
+                    r#""name": "RecordReference""#,
+                ),
+            ),
+            ("invalid output handle", {
+                let mut document = document();
+                document.definitions[0].concepts[0].handle = "StatusHolds".to_owned();
+                serde_json::to_string(&document).expect("document serializes")
+            }),
             ("duplicate definition handle", {
                 let mut document = document();
                 let mut duplicate = document.definitions[0].clone();
@@ -856,7 +993,7 @@ mod tests {
             let document: EvidenceDefinitionsDocument =
                 serde_json::from_str(&serialized).expect("shape remains strict JSON");
             assert!(
-                document.validate_for_progressive_request().is_err(),
+                document.validate_for_request().is_err(),
                 "{label} was accepted"
             );
         }
@@ -883,7 +1020,7 @@ mod tests {
             list_document(1, 65, true),
             list_document(1, 2, false),
         ] {
-            assert!(document.validate_for_progressive_request().is_err());
+            assert!(document.validate_for_request().is_err());
         }
 
         let mut string_bounds = document();
@@ -892,7 +1029,7 @@ mod tests {
             minimum_bytes: 5,
             maximum_bytes: 4,
         };
-        assert!(string_bounds.validate_for_progressive_request().is_err());
+        assert!(string_bounds.validate_for_request().is_err());
 
         let mut integer_bounds = document();
         integer_bounds.definitions[0].subjects[0].selector.fields[2] = SelectorField::Integer {
@@ -900,14 +1037,14 @@ mod tests {
             minimum: 11,
             maximum: 10,
         };
-        assert!(integer_bounds.validate_for_progressive_request().is_err());
+        assert!(integer_bounds.validate_for_request().is_err());
     }
 
     #[test]
     fn progressive_catalog_validation_closes_schema_selector_and_binding_mode_drift() {
         let mut wrong_schema = document();
         wrong_schema.schema = "registry.evidence-client-contracts/v1".to_owned();
-        assert!(wrong_schema.validate_for_progressive_request().is_err());
+        assert!(wrong_schema.validate_for_request().is_err());
 
         let mut duplicate_selector = document();
         let duplicate = duplicate_selector.definitions[0].subjects[0]
@@ -918,19 +1055,17 @@ mod tests {
             .selector
             .fields
             .push(duplicate);
-        assert!(duplicate_selector
-            .validate_for_progressive_request()
-            .is_err());
+        assert!(duplicate_selector.validate_for_request().is_err());
 
         let mut audience_batch = document();
         audience_batch.definitions[0]
             .response_formats
             .push(DefinitionResponseFormat::SdJwtVcBatch);
-        assert!(audience_batch.validate_for_progressive_request().is_err());
+        assert!(audience_batch.validate_for_request().is_err());
 
         let mut holder_signed = document();
         holder_signed.definitions[0].subject_binding_mode = Some(SubjectBindingMode::HolderBound);
-        assert!(holder_signed.validate_for_progressive_request().is_err());
+        assert!(holder_signed.validate_for_request().is_err());
     }
 
     #[test]

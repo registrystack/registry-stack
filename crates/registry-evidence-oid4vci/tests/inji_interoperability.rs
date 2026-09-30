@@ -96,7 +96,7 @@ const DEFINITIONS: &str = r#"{
     "evidenceType": "urn:example:evidence-type:holder-bound",
     "purpose": "urn:example:purpose:demonstration",
     "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
-    "referenceFrameworks": [],
+    "referenceFrameworks": ["urn:example:framework:synthetic"],
     "subjects": [{
       "role": "primary",
       "cardinality": "one",
@@ -199,7 +199,7 @@ impl FixtureIssuer {
         let mut signing_key = signing_public.clone();
         signing_key["d"] = json!(URL_SAFE_NO_PAD.encode(generated.to_bytes()));
         Self {
-            catalog: Arc::new(CredentialCatalog::derive(&document)),
+            catalog: Arc::new(CredentialCatalog::derive(&document).expect("the catalog is valid")),
             signing_key: signing_key.to_string(),
             signing_public,
             calls: AtomicUsize::new(0),
