@@ -360,7 +360,7 @@ impl RootState {
             );
         }
         if matches!(self.family, ProjectFamily::Product(_)) {
-            let _ = self.reload_product_with_open_documents();
+            self.reload_product_with_open_documents();
             return;
         }
         if self.family == ProjectFamily::RelayV2 {
@@ -489,7 +489,8 @@ impl RootState {
     /// hold.
     fn reload_watched_batch(&mut self, paths: &[PathBuf]) -> Result<()> {
         if matches!(self.family, ProjectFamily::Product(_)) {
-            return self.reload_product_with_open_documents();
+            self.reload_product_with_open_documents();
+            return Ok(());
         }
         if self.family == ProjectFamily::RelayV2 {
             // The recursive watcher is only a notification mechanism. Its path is not authority
@@ -556,7 +557,7 @@ impl RootState {
 
     fn reload_from_disk(&mut self, path: &Path) {
         if matches!(self.family, ProjectFamily::Product(_)) {
-            let _ = self.reload_product_with_open_documents();
+            self.reload_product_with_open_documents();
             return;
         }
         if self.family == ProjectFamily::RelayV2 {
@@ -571,12 +572,13 @@ impl RootState {
         self.rebuild();
     }
 
-    /// Retries a project that crossed its aggregate indexing budget.
+    /// Reloads a product project from disk with the text of every open buffer laid over it.
     ///
-    /// Disk state is loaded through the same bounded first-scan path. Text still owned by the
-    /// client is then overlaid where it remains available, and the aggregate ceiling is weighed
-    /// again before anything is parsed.
-    fn reload_product_with_open_documents(&mut self) -> Result<()> {
+    /// The product loader is the one path that reads a product project, so every change reloads it
+    /// whole. A read that fails is not returned: it becomes a `document-read` diagnostic on the
+    /// entry document that names the failure, the project holds no documents until the author
+    /// retries, and every open buffer is held aside so the retry can take it up again.
+    fn reload_product_with_open_documents(&mut self) {
         let ProjectFamily::Product(product) = self.family else {
             unreachable!()
         };
@@ -592,17 +594,22 @@ impl RootState {
             .collect();
         let loaded = match crate::products::load_documents(&self.root, product, &overrides) {
             Ok(loaded) => loaded,
-            Err(_) => {
+            Err(error) => {
                 self.absent_buffers.extend(overrides);
                 self.documents.clear();
                 self.indexing_ceiling_path = None;
+                let entry = crate::products::entry_path(&self.root, product)
+                    .unwrap_or_else(|| self.root.clone());
                 self.disk_diagnostics = vec![document_rule_diagnostic(
-                    &crate::products::entry_path(&self.root,product).unwrap_or_else(||self.root.clone()),
-                    Some(format!("{}/document-read",product.name())),
-                    "Cannot read the complete authoring project; restore file permissions and save or refresh to retry",
+                    &entry,
+                    Some(format!("{}/document-read", product.name())),
+                    &format!(
+                        "Cannot read the complete authoring project ({error:#}); restore file \
+                         permissions and save or refresh to retry"
+                    ),
                 )];
                 self.rebuild();
-                return Ok(());
+                return;
             }
         };
         for (path, text) in &overrides {
@@ -623,12 +630,17 @@ impl RootState {
             self.documents.remove(path);
         }
         self.rebuild();
-        Ok(())
     }
 
+    /// Retries a project that crossed its aggregate indexing budget.
+    ///
+    /// Disk state is loaded through the same bounded first-scan path. Text still owned by the
+    /// client is then overlaid where it remains available, and the aggregate ceiling is weighed
+    /// again before anything is parsed.
     fn reload_project_from_disk(&mut self) -> Result<()> {
         if matches!(self.family, ProjectFamily::Product(_)) {
-            return self.reload_product_with_open_documents();
+            self.reload_product_with_open_documents();
+            return Ok(());
         }
         if self.family == ProjectFamily::RelayV2 {
             return self.reload_relay_v2_with_open_documents();
