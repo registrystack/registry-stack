@@ -7,26 +7,38 @@ and authoring crates. These live outside the main workspace (see the root
 
 ## Targets
 
-- `verifier_flattened_jws` — flattened-JWS response verification: strict
-  parse, protected-header contract, ES256 signature, payload contract, and
-  policy comparison (`registry-evidence-verifier`).
-- `verifier_sd_jwt_vc` — SD-JWT VC response verification: compact split,
-  issuer-signed credential check, complete disclosure resolution, and the
-  rebuilt payload contract (`registry-evidence-verifier`).
-- `authoring_openapi` — OpenAPI description parsing, operation resolution,
+- `verifier_flattened_jws`: flattened-JWS response verification. Each input
+  runs as an untrusted serialized response (strict parse, protected-header
+  contract, ES256 signature), as the raw payload of an authentically signed
+  response (strict payload parse and payload contract), and, when it parses as
+  Evidence, as a re-serialized signed assertion (policy comparison)
+  (`registry-evidence-verifier`).
+- `verifier_sd_jwt_vc`: SD-JWT VC response verification. Inputs that parse as
+  Evidence are issued as a signed credential (holder-bound ones with a
+  confirmed test holder key) and verified through the issuer-signed
+  credential check, disclosure resolution, the rebuilt payload contract, and
+  the policy comparison; every other input exercises the compact split and
+  the stages before the signature check (`registry-evidence-verifier`).
+- `authoring_openapi`: OpenAPI description parsing, operation resolution,
   and schema flattening into candidate leaves
   (`registry-evidence-authoring`).
-- `authoring_project` — project marker, question, answer, and access-policy
+- `authoring_project`: project marker, question, answer, and access-policy
   documents, their validation findings, and authored derivation source
   (`registry-evidence-authoring`).
 
-The verifier targets sign structurally valid inputs with the test key the
-verifier crate's own tests use, through the crate's `fixtures` feature, so
-verification reaches the parsing and policy stages behind the signature
-check instead of stopping at it. Each target's fixture signs and verifies a
-canonical assertion at startup and fails loudly if that round trip breaks,
-because a silently invalid fixture would hollow out the target while it kept
-reporting clean runs.
+The verifier targets sign inputs with the test key the verifier crate's own
+tests use, through the crate's `fixtures` feature, so verification reaches
+the parsing and policy stages behind the signature check instead of stopping
+at it. Each target's fixture signs and verifies a canonical assertion at
+startup and fails loudly if that round trip breaks, because a silently
+invalid fixture would hollow out the target while it kept reporting clean
+runs.
+
+Not yet covered: the SD-JWT VC targets never mutate the disclosure tail
+behind a valid issuer signature (the disclosures they verify are the ones the
+fixture issuer produced), and no target reaches holder presentation or
+key-binding JWT verification. The Evidence runtime's request parsing is not
+fuzzed here either.
 
 ## Running locally
 

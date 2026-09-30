@@ -1,9 +1,8 @@
 //! Shared fixture setup for the two verifier fuzz targets.
 //!
-//! The harness signs every structurally valid input with the same ES256 test
-//! key the verifier's own tests use, so verification reaches the payload
-//! contract and policy stages behind the signature check instead of stopping
-//! at it. The startup round-trip check fails loudly the day this canonical
+//! The targets sign inputs with the same ES256 test key the verifier's own
+//! tests use, so verification reaches the payload contract and policy stages
+//! behind the signature check instead of stopping at it. The startup round-trip check fails loudly the day this canonical
 //! assertion no longer verifies, because silent drift would hollow out both
 //! targets while they kept reporting clean runs.
 
@@ -54,7 +53,10 @@ pub fn fixture() -> &'static VerifierFixture {
         let jwks = jwks_document(signer.public_jwk(), []).expect("fixture JWKS builds");
         let policy = EvidenceVerificationPolicy::from_accepted_transaction(
             &canonical,
-            canonical.request_nonce.as_deref().expect("canonical evidence carries a nonce"),
+            canonical
+                .request_nonce
+                .as_deref()
+                .expect("canonical evidence carries a nonce"),
             48 * 60 * 60,
             now,
             30,
@@ -71,7 +73,11 @@ pub fn fixture() -> &'static VerifierFixture {
         verify_flattened_jws(&serialized, &jwks, &policy)
             .expect("canonical assertion still verifies; the fuzz fixture drifted");
 
-        VerifierFixture { signer, jwks, policy }
+        VerifierFixture {
+            signer,
+            jwks,
+            policy,
+        }
     })
 }
 
