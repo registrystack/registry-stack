@@ -17,6 +17,17 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+# breg-mcp and breg-review, Messaging, Registry Render, and the Evidence OID4VCI
+# image have no first release: each release_roster constant below is None.
+# Fixtures patch a hypothetical first release of v0.38.0 so their shard paths
+# stay covered without any production knob. The real v0.38.0 roster is
+# asserted with these patches lifted.
+HYPOTHETICAL_FIRST_RELEASES = {
+    "BREG_SERVICES_FIRST_RELEASE": (0, 38, 0),
+    "MESSAGING_FIRST_RELEASE": (0, 38, 0),
+    "RENDER_FIRST_RELEASE": (0, 38, 0),
+    "EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE": (0, 38, 0),
+}
 VERSION = "0.38.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
@@ -76,6 +87,14 @@ def digest(data: bytes) -> str:
 
 class MergeReleaseBinaryShardsTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.roster_patches = []
+        for constant, first_release in HYPOTHETICAL_FIRST_RELEASES.items():
+            roster_patch = mock.patch.object(
+                MODULE.release_roster, constant, first_release
+            )
+            roster_patch.start()
+            self.addCleanup(roster_patch.stop)
+            self.roster_patches.append(roster_patch)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -286,6 +305,45 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 "registry-render",
             ],
             [name for name, _ in images_038],
+        )
+
+    def test_v0_38_ships_no_held_surface(self) -> None:
+        for roster_patch in self.roster_patches:
+            roster_patch.stop()
+        for constant in HYPOTHETICAL_FIRST_RELEASES:
+            self.assertIsNone(getattr(MODULE.release_roster, constant), constant)
+        rosters, images = MODULE.rosters("0.38.0")
+        self.assertEqual(
+            [
+                "discovery-v0.38.0-linux-amd64",
+                "discoveryctl-v0.38.0-linux-amd64",
+                "evidence-v0.38.0-linux-amd64",
+                "evidencectl-v0.38.0-linux-amd64",
+                "evidence-oid4vci-v0.38.0-linux-amd64",
+                "registry-manifest-v0.38.0-linux-amd64",
+                "relay-v0.38.0-linux-amd64",
+                "relayctl-v0.38.0-linux-amd64",
+            ],
+            rosters["core"],
+        )
+        self.assertEqual(
+            ["breg-v0.38.0-linux-amd64", "bregctl-v0.38.0-linux-amd64"],
+            rosters["breg"],
+        )
+        self.assertEqual([], rosters["messaging"])
+        self.assertEqual(
+            [
+                "discovery",
+                "breg",
+                "bregctl",
+                "casework",
+                "caseworkctl",
+                "scheduling",
+                "schedulingctl",
+                "evidence",
+                "relay",
+            ],
+            [name for name, _ in images],
         )
 
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(

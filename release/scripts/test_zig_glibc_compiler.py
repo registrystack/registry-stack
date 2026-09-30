@@ -235,6 +235,19 @@ class ZigGlibcCompilerTest(unittest.TestCase):
                 self.assertIn(message, result.stderr)
 
 
+# breg-mcp and breg-review, Messaging, Registry Render, and the Evidence OID4VCI
+# image have no first release: each release_roster constant below is None. The
+# payload fixtures rewrite their copy of the roster to a hypothetical first
+# release of v0.38.0 so the build paths stay covered without any production
+# knob. The real v0.38.0 roster is exercised against an unmodified copy.
+HYPOTHETICAL_FIRST_RELEASES = {
+    "BREG_SERVICES_FIRST_RELEASE": (0, 38, 0),
+    "MESSAGING_FIRST_RELEASE": (0, 38, 0),
+    "RENDER_FIRST_RELEASE": (0, 38, 0),
+    "EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE": (0, 38, 0),
+}
+
+
 class CanonicalCompilerIdentityTest(unittest.TestCase):
     """Exercise the recipe's real setup and build calls without compiling Rust."""
 
@@ -371,6 +384,20 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         }
         for relative in ("dist/bin", "dist/image-bin"):
             (self.root / relative).mkdir(parents=True)
+        for constant, first_release in HYPOTHETICAL_FIRST_RELEASES.items():
+            self.set_first_release(constant, first_release)
+
+    def set_first_release(
+        self, constant: str, first_release: tuple[int, int, int] | None
+    ) -> None:
+        """Name a first release for one roster constant in the fixture's copy."""
+        roster = self.scripts / "release_roster.py"
+        prefix = f"{constant}: tuple[int, int, int] | None = "
+        lines = roster.read_text(encoding="utf-8").splitlines(keepends=True)
+        matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+        self.assertEqual(1, len(matches), constant)
+        lines[matches[0]] = f"{prefix}{first_release!r}\n"
+        roster.write_text("".join(lines), encoding="utf-8")
 
     def run_payload(
         self,
@@ -534,6 +561,40 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertIn("discoveryctl-v0.38.0-linux-amd64", current_bin)
         self.assertIn("registry-render", current_images)
         self.assertIn("evidence-oid4vci", current_images)
+
+    def test_v0_38_payload_builds_no_held_surface(self) -> None:
+        shutil.copy2(
+            ROOT / "release/scripts/release_roster.py",
+            self.scripts / "release_roster.py",
+        )
+        result, calls = self.run_payload(version="0.38.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        packages = [
+            call["args"][call["args"].index("-p") + 1:] for call in calls
+        ]
+        for held in (
+            "registry-render",
+            "registry-messaging",
+            "registry-messagingctl",
+            "registry-breg-mcp",
+            "registry-breg-review",
+        ):
+            self.assertFalse(
+                any(held in arguments for arguments in packages), held
+            )
+        staged_bin, staged_images = self.staged()
+        self.assertIn("discoveryctl-v0.38.0-linux-amd64", staged_bin)
+        self.assertIn("scheduling-v0.38.0-linux-amd64", staged_bin)
+        self.assertIn("evidence-oid4vci-v0.38.0-linux-amd64", staged_bin)
+        self.assertFalse(
+            any(
+                name.startswith(
+                    ("registry-render", "messaging", "breg-mcp", "breg-review")
+                )
+                for name in staged_bin + staged_images
+            )
+        )
+        self.assertNotIn("evidence-oid4vci", staged_images)
 
     def test_casework_group_builds_both_exact_binary_targets_from_v0_30(self) -> None:
         result, calls = self.run_payload(version="0.30.0", group="casework")

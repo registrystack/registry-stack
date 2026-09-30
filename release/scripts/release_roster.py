@@ -1,26 +1,38 @@
 #!/usr/bin/env python3
 """Release roster decisions shared by the release scripts and workflows.
 
-``RENDER_FIRST_RELEASE`` and ``EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`` name the
-first release that ships the Registry Render binary and image and the
-Evidence OID4VCI adapter image, respectively. The adapter binary predates its
-image and remains in every historical payload that already shipped it.
+Each ``*_FIRST_RELEASE`` constant is the single place that decides which
+release first ships a surface. Every release script and workflow follows from
+it; none carries its own version literal for these surfaces. A constant that
+is ``None`` selects its surface in no release.
 
 ``DISCOVERYCTL_FIRST_RELEASE`` names the first release that publishes the
 Discovery packaging CLI beside the existing Discovery runtime binary.
 ``SCHEDULING_BINARY_FIRST_RELEASE`` adds the Scheduling runtime binary beside
 its existing image and operator CLI. Both additions start in v0.38.0.
 
-``BREG_SERVICES_FIRST_RELEASE`` is the single place that decides which release
-first ships the two Base Registry Engine supporting services, the citizen MCP
-gateway ``breg-mcp`` and the citizen review page ``breg-review``. Both join
-the binary, image, and security-evidence rosters in v0.38.0.
+``BREG_SERVICES_FIRST_RELEASE`` decides the first release of the two Base
+Registry Engine supporting services, the citizen MCP gateway ``breg-mcp`` and
+the citizen review page ``breg-review``: their binaries, images, and security
+evidence.
 
-``MESSAGING_FIRST_RELEASE`` is the single place that decides which release
-first ships the Registry Messaging binaries, image, rehearsal leg, and
-security evidence. The unified Node and Python client facades add Messaging in
-the same release. Those packaging surfaces join in v0.38.0, together with
-Messaging's shared package activation contract.
+``MESSAGING_FIRST_RELEASE`` decides the first release of Registry Messaging:
+its binaries, image, rehearsal leg, and security evidence. The unified Node
+and Python client facades carry no Messaging namespace until then; the change
+that names Messaging's first release also adds the namespace back to the
+facades and their assembly tooling.
+
+``RENDER_FIRST_RELEASE`` decides the first release of the Registry Render
+binary and image, and ``EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`` the first
+release of the Evidence OID4VCI adapter image. The adapter binary predates its
+image and remains in every payload that ships it.
+
+``BREG_SERVICES_FIRST_RELEASE``, ``MESSAGING_FIRST_RELEASE``,
+``RENDER_FIRST_RELEASE``, and ``EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`` are
+``None``: these surfaces have no first release yet. Each needs its GHCR image
+package onboarded and a reviewed advisory baseline before a release can
+publish it, and the change that admits a surface sets its constant to that
+first release version.
 """
 
 from __future__ import annotations
@@ -30,17 +42,17 @@ import re
 import sys
 
 
-BREG_SERVICES_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+BREG_SERVICES_FIRST_RELEASE: tuple[int, int, int] | None = None
 
-MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 DISCOVERYCTL_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 SCHEDULING_BINARY_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
-RENDER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+RENDER_FIRST_RELEASE: tuple[int, int, int] | None = None
 
-EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 VERSION_PATTERN = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
