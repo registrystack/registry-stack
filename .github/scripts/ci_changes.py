@@ -1106,6 +1106,11 @@ def classify(
         or path in {"clippy.toml", "deny.toml", "rustfmt.toml"}
         for path in paths
     )
+    # Evidence fuzz smoke follows the platform fuzz policy: broad assurance
+    # for the merge queue and the nightly sweep, deferred out of review.
+    evidence_assurance = bool(affected & EVIDENCE_PACKAGES) and (
+        full_sweep or not pull_request
+    )
     config_conformance = (
         complete
         or any(matches(path, *CONFIG_CONFORMANCE_INPUTS) for path in paths)
@@ -1323,6 +1328,7 @@ def classify(
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "breg_contracts": breg_contracts,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
+        "evidence_assurance": evidence_assurance,
         "scheduling_contracts": bool(affected & SCHEDULING_PACKAGES),
         # The Casework task approval journey drives the stock issuer through
         # Evidence, BReg, and the Scheduling authorization probe, so it runs on

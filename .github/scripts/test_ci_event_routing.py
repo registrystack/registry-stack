@@ -148,6 +148,24 @@ class EventRoutingTest(unittest.TestCase):
                 )
                 self.assertEqual(outputs["platform_coverage"], event_name == "push")
 
+    def test_evidence_fuzz_follows_the_platform_assurance_tier(self) -> None:
+        path = "crates/registry-evidence-verifier/src/lib.rs"
+        head = self.commit(path)
+        events = {
+            "pull_request": {"pull_request": {"base": {"sha": self.base}, "head": {"sha": head}}},
+            "merge_group": {"merge_group": {"base_sha": self.base, "head_sha": head}},
+            "push": {"before": self.base},
+        }
+        for event_name, event in events.items():
+            with self.subTest(event=event_name):
+                selection = select_event(self.repo, event_name, event, head)
+                outputs = selection_outputs(self.workspace, selection)
+                self.assertTrue(outputs["evidence_contracts"])
+                # Evidence fuzz waits for the merge queue, like platform fuzz.
+                self.assertEqual(
+                    outputs["evidence_assurance"], event_name != "pull_request"
+                )
+
     def test_ci_full_label_opts_a_pull_request_into_the_heavy_tier(self) -> None:
         head = self.commit("crates/registry-casework/src/lib.rs")
         for labels, expected in (
