@@ -2593,6 +2593,8 @@ pub enum MutationError {
     /// fixed envelope member or one admitted field of the write body.
     #[error("mutation request is invalid")]
     InvalidRequestAt(crate::problem_location::RequestLocation),
+    #[error("mutation is outside the caller's authorized record boundary")]
+    AuthorizationRefused,
     #[error("mutation precondition failed")]
     PreconditionFailed,
     #[error("mutation conflicts with current state")]
@@ -2816,10 +2818,12 @@ async fn apply_current_row(
     match request.plan.route.operation {
         Operation::Create => {
             let authored_fields = request.body.submitted_fields()?;
-            let record_id = Uuid::new_v4().to_string();
+            let record_uuid = Uuid::new_v4();
+            let record_id = record_uuid.to_string();
             let MutationBody::Create(data) = &request.body else {
                 return Err(MutationError::InvalidRequest);
             };
+            authorize_record_snapshot(request, data, record_uuid)?;
             request::admit_submitter_targets(
                 transaction,
                 &request.plan.entity,
@@ -2958,6 +2962,7 @@ async fn apply_current_row(
             };
             let mut admitted_intake = current.data.clone();
             admitted_intake.extend(data.clone());
+            authorize_record_snapshot(request, &admitted_intake, current.record_uuid)?;
             request::admit_submitter_targets(
                 transaction,
                 &request.plan.entity,
@@ -3033,6 +3038,21 @@ async fn apply_current_row(
             apply_tombstone_row(transaction, request, current).await
         }
         _ => Err(MutationError::InvalidRequest),
+    }
+}
+
+fn authorize_record_snapshot(
+    request: &MutationRequest<'_>,
+    data: &Map<String, Value>,
+    record_id: Uuid,
+) -> Result<(), MutationError> {
+    match request
+        .claims
+        .authorizes_record_snapshot(&request.plan.entity, data, record_id)
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(MutationError::AuthorizationRefused),
+        Err(_) => Err(MutationError::Unavailable),
     }
 }
 

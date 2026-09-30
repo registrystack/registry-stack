@@ -1259,6 +1259,202 @@ async fn two_runtimes_audit_concurrent_mutations_through_their_own_writers() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic() {
+    let database = TestDatabase::create(8).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-row-boundary-refusal",
+        },
+    )
+    .await
+    .expect("migration initializes state");
+    migration_task.abort();
+
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x45; 32].into())
+            .expect("test owns keyed audit"),
+    );
+    let app = mutation_router(
+        pool.clone(),
+        compiled.clone(),
+        identity,
+        RegistryLockKey::derive("boundary-refusal-registry").expect("lock id is bounded"),
+        profile,
+        None,
+    );
+    let table = compiled.entities()["widget"].physical_table.clone();
+    let claims = api_claims("case-management", Some("zone-a"));
+
+    let before_create = durable_counts(&database, &table).await;
+    let before_create_refusals = refusal_audit_count(&database).await;
+    let refused_create = send(
+        &app,
+        Method::POST,
+        "/v1/records/widgets",
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "boundary-create-refusal"),
+        ],
+        br#"{"data":{"jurisdiction":"zone-b","label":"concealed-create-value","quantity":1}}"#
+            .to_vec(),
+    )
+    .await;
+    assert_eq!(refused_create.status(), StatusCode::FORBIDDEN);
+    let refused_create = body_json(refused_create).await;
+    assert_eq!(refused_create["code"], "authorization.refused");
+    assert_eq!(
+        refused_create["detail"],
+        "The mutation is outside the caller's authorized record boundary."
+    );
+    assert!(!refused_create.to_string().contains("zone-b"));
+    assert_eq!(
+        durable_counts(&database, &table).await,
+        DurableCounts {
+            audit: before_create.audit + 2,
+            ..before_create
+        }
+    );
+    assert_eq!(
+        refusal_audit_count(&database).await,
+        before_create_refusals + 1
+    );
+    assert!(!database
+        .audit_records()
+        .iter()
+        .any(|record| record.to_string().contains("concealed-create-value")));
+
+    let created = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets",
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "boundary-valid-seed"),
+            ],
+            br#"{"data":{"jurisdiction":"zone-a","label":"boundary-seed","quantity":1}}"#.to_vec(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let record_id = created.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("created record id")
+        .to_owned();
+
+    let before_patch = durable_counts(&database, &table).await;
+    let before_patch_refusals = refusal_audit_count(&database).await;
+    let refused_patch = send(
+        &app,
+        Method::PATCH,
+        &format!("/v1/records/widgets/{record_id}"),
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "boundary-patch-refusal"),
+            ("if-match", &created.etag),
+        ],
+        br#"[{"op":"replace","path":"/data/jurisdiction","value":"zone-b"}]"#.to_vec(),
+    )
+    .await;
+    assert_eq!(refused_patch.status(), StatusCode::FORBIDDEN);
+    let refused_patch = body_json(refused_patch).await;
+    assert_eq!(refused_patch["code"], "authorization.refused");
+    assert!(!refused_patch.to_string().contains("zone-b"));
+    assert_eq!(
+        durable_counts(&database, &table).await,
+        DurableCounts {
+            audit: before_patch.audit + 2,
+            ..before_patch
+        }
+    );
+    assert_eq!(
+        refusal_audit_count(&database).await,
+        before_patch_refusals + 1
+    );
+    assert!(!database
+        .audit_records()
+        .iter()
+        .any(|record| record.to_string().contains("zone-b")));
+    let preserved = response_parts(
+        send(
+            &app,
+            Method::GET,
+            &format!("/v1/records/widgets/{record_id}"),
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(preserved.status, StatusCode::OK);
+    assert_eq!(preserved.etag, created.etag);
+    assert_eq!(preserved.body["data"]["revisionIdentifier"], "1");
+    assert_eq!(
+        preserved.body["data"]["domainData"]["jurisdiction"],
+        "zone-a"
+    );
+    assert_eq!(
+        preserved.body["data"]["domainData"]["label"],
+        "boundary-seed"
+    );
+
+    database
+        .admin
+        .batch_execute(&format!(
+            "REVOKE UPDATE ON TABLE registry_data.\"{table}\" FROM \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("isolated runtime role loses only this table privilege");
+    let before_privilege_failure = durable_counts(&database, &table).await;
+    let privilege_failure = send(
+        &app,
+        Method::PATCH,
+        &format!("/v1/records/widgets/{record_id}"),
+        Some(claims),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "ordinary-privilege-failure"),
+            ("if-match", &created.etag),
+        ],
+        br#"[{"op":"replace","path":"/data/label","value":"still-authorized"}]"#.to_vec(),
+    )
+    .await;
+    assert_eq!(privilege_failure.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body_json(privilege_failure).await["code"],
+        "service.unavailable"
+    );
+    assert_eq!(
+        durable_counts(&database, &table).await,
+        DurableCounts {
+            audit: before_privilege_failure.audit + 2,
+            ..before_privilege_failure
+        }
+    );
+
+    drop(app);
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     let database = TestDatabase::create(12).await;
     let (migration, migration_task) = database.connect_migration().await;

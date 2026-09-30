@@ -4251,6 +4251,18 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
         operation,
         Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
     ) {
+        if matches!(
+            operation,
+            Operation::Create | Operation::Patch | Operation::Batch
+        ) {
+            responses.insert(
+                "403",
+                vec![ProblemExample {
+                    code: "authorization.refused",
+                    detail: "The mutation is outside the caller's authorized record boundary.",
+                }],
+            );
+        }
         responses.insert(
             "503",
             vec![ProblemExample {
@@ -4408,6 +4420,7 @@ fn problem_example(status: &str, code: &str, detail: &str) -> Value {
         "title": match status {
             "400" => "Bad Request",
             "401" => "Unauthorized",
+            "403" => "Forbidden",
             "404" => "Not Found",
             "409" => "Conflict",
             "412" => "Precondition Failed",
