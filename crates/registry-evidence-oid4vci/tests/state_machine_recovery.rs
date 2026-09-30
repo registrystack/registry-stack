@@ -83,7 +83,7 @@ const DEFINITIONS: &str = r#"{
     "evidenceType": "urn:example:evidence-type:holder-bound",
     "purpose": "urn:example:purpose:demonstration",
     "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
-    "referenceFrameworks": [],
+    "referenceFrameworks": ["urn:example:framework:synthetic"],
     "subjects": [{
       "role": "primary",
       "cardinality": "one",
@@ -137,7 +137,7 @@ fn credential_catalog_with_batch_maximum(maximum: u16) -> Arc<CredentialCatalog>
         document.definitions[0].subject_binding_mode,
         Some(SubjectBindingMode::HolderBound)
     );
-    Arc::new(CredentialCatalog::derive(&document))
+    Arc::new(CredentialCatalog::derive(&document).expect("the catalog is valid"))
 }
 
 impl RecordingIssuer {

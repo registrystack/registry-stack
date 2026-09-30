@@ -297,7 +297,7 @@ pub(crate) fn select_definition<'a>(
     // Published and reviewed modes both normalize to this document before
     // selection. Validate the complete catalog, not merely the selected entry,
     // so an ambiguous or malformed sibling cannot be hidden by a valid handle.
-    definitions.validate_for_progressive_request()?;
+    definitions.validate_for_request()?;
     if !matches!(
         request.response_format,
         EvidenceResponseFormat::SignedJws | EvidenceResponseFormat::SdJwtVc
@@ -366,18 +366,7 @@ fn exact_fields(
     subject: &crate::DefinitionSubject,
     values: &BTreeMap<String, SelectorValue>,
 ) -> bool {
-    let fields = subject
-        .selector
-        .fields
-        .iter()
-        .map(|field| field.name())
-        .collect::<BTreeSet<_>>();
-    fields == values.keys().map(String::as_str).collect::<BTreeSet<_>>()
-        && subject.selector.fields.iter().all(|field| {
-            values
-                .get(field.name())
-                .is_some_and(|value| field.accepts(value))
-        })
+    subject.selector.accepts_request_values(values)
 }
 
 pub(crate) fn spec_from_definition(
@@ -387,7 +376,7 @@ pub(crate) fn spec_from_definition(
     maximum_assertion_lifetime_seconds: u64,
     clock_skew_seconds: u64,
 ) -> Result<EvidenceRequestSpec, EvidenceClientError> {
-    document.validate_for_progressive_request()?;
+    document.validate_for_request()?;
     let subjects = definition
         .subjects
         .iter()

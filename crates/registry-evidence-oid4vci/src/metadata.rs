@@ -22,8 +22,8 @@
 use std::collections::BTreeMap;
 
 use registry_evidence_client::{
-    AssuranceProfile, DefinitionResponseFormat, DefinitionSubject, EvidenceDefinition,
-    EvidenceDefinitionsDocument, ExpectedOutputDocument, SubjectBindingMode,
+    AssuranceProfile, DefinitionResponseFormat, DefinitionSubject, EvidenceClientError,
+    EvidenceDefinition, EvidenceDefinitionsDocument, ExpectedOutputDocument, SubjectBindingMode,
     MAXIMUM_EXPECTED_OUTPUTS, MAXIMUM_HOLDER_KEYS,
 };
 use serde_json::{json, Map, Value};
@@ -68,8 +68,12 @@ pub struct CredentialCatalog {
 
 impl CredentialCatalog {
     /// Derive the catalog from what Evidence published.
-    #[must_use]
-    pub fn derive(document: &EvidenceDefinitionsDocument) -> Self {
+    pub fn derive(document: &EvidenceDefinitionsDocument) -> Result<Self, EvidenceClientError> {
+        // Discovery is authenticated authoring input, but its values still have
+        // to form a request accepted by the public Evidence contract. Refuse the
+        // complete catalog rather than advertise a partial deployment whose
+        // malformed sibling would fail only after a wallet spent its token.
+        document.validate_for_request()?;
         let mut entries: BTreeMap<String, CredentialConfiguration> = BTreeMap::new();
         let mut ambiguous: Vec<String> = Vec::new();
         for definition in &document.definitions {
@@ -97,13 +101,13 @@ impl CredentialCatalog {
         if maximum_holder_keys == 0 {
             entries.clear();
         }
-        Self {
+        Ok(Self {
             issued_by: document.issued_by.clone(),
             provided_by: document.provided_by.clone(),
             assurance_profile: document.assurance_profile,
             maximum_holder_keys,
             entries,
-        }
+        })
     }
 
     /// The configuration a wallet named, when this service publishes one.
@@ -252,19 +256,19 @@ pub(crate) mod tests {
         {
           "handle": "holder-bound",
           "requirement": "urn:example:requirement:holder-bound",
-          "configurationRevision": "rev-1",
+          "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
           "kind": "criterion",
           "subjectBindingMode": "holder-bound",
           "evidenceType": "urn:example:evidence-type:holder-bound",
           "purpose": "urn:example:purpose:demonstration",
           "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
-          "referenceFrameworks": [],
+          "referenceFrameworks": ["urn:example:framework:holder-bound"],
           "subjects": [
             {
               "role": "primary",
               "cardinality": "one",
               "selector": {
-                "profile": "urn:example:selector:identifier",
+                "profile": "identifier-v1",
                 "valueOrigin": "request",
                 "fields": [
                   {"type": "string", "name": "identifier", "minimumBytes": 1, "maximumBytes": 64}
@@ -277,18 +281,18 @@ pub(crate) mod tests {
         {
           "handle": "audience-scoped",
           "requirement": "urn:example:requirement:audience-scoped",
-          "configurationRevision": "rev-1",
+          "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
           "kind": "criterion",
           "evidenceType": "urn:example:evidence-type:audience-scoped",
           "purpose": "urn:example:purpose:demonstration",
           "responseFormats": ["signed-jws"],
-          "referenceFrameworks": [],
+          "referenceFrameworks": ["urn:example:framework:audience-scoped"],
           "subjects": [
             {
               "role": "primary",
               "cardinality": "one",
               "selector": {
-                "profile": "urn:example:selector:identifier",
+                "profile": "identifier-v1",
                 "valueOrigin": "request",
                 "fields": [
                   {"type": "string", "name": "identifier", "minimumBytes": 1, "maximumBytes": 64}
@@ -306,7 +310,7 @@ pub(crate) mod tests {
     }
 
     fn catalog() -> CredentialCatalog {
-        CredentialCatalog::derive(&document())
+        CredentialCatalog::derive(&document()).expect("the catalog is valid")
     }
 
     #[test]
@@ -319,7 +323,10 @@ pub(crate) mod tests {
             .expect("the holder-bound requirement is published");
         assert_eq!(entry.vct, "urn:example:evidence-type:holder-bound");
         assert_eq!(entry.purpose, "urn:example:purpose:demonstration");
-        assert_eq!(entry.configuration_revision, "rev-1");
+        assert_eq!(
+            entry.configuration_revision,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
         assert_eq!(entry.expected_outputs.len(), 1);
         assert_eq!(catalog.issued_by, "https://registry.example.org");
         assert_eq!(catalog.provided_by, "https://provider.example.org");
@@ -336,17 +343,20 @@ pub(crate) mod tests {
     fn a_holder_bound_requirement_without_batch_issuance_is_never_published() {
         let mut document = document();
         document.definitions[0].response_formats = vec![DefinitionResponseFormat::SdJwtVc];
-        assert!(CredentialCatalog::derive(&document).is_empty());
+        assert!(CredentialCatalog::derive(&document)
+            .expect("the catalog remains valid")
+            .is_empty());
     }
 
     #[test]
     fn a_requirement_carried_by_two_definitions_is_dropped_rather_than_chosen_between() {
         let mut document = document();
         let mut second = document.definitions[0].clone();
+        second.handle = "holder-bound-other-purpose".to_owned();
         second.purpose = "urn:example:purpose:other".to_owned();
         document.definitions.push(second);
 
-        let catalog = CredentialCatalog::derive(&document);
+        let catalog = CredentialCatalog::derive(&document).expect("the catalog remains valid");
         assert!(
             catalog.is_empty(),
             "an ambiguous requirement must be dropped"
@@ -354,10 +364,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_definition_with_no_concept_is_declined_rather_than_described() {
+    fn a_malformed_definition_is_refused_rather_than_described() {
         let mut document = document();
         document.definitions[0].concepts.clear();
-        assert!(CredentialCatalog::derive(&document).is_empty());
+        assert!(CredentialCatalog::derive(&document).is_err());
+    }
+
+    #[test]
+    fn request_names_that_cannot_form_an_evidence_request_are_refused() {
+        let mut cases = Vec::new();
+
+        let mut purpose = document();
+        purpose.definitions[0].purpose = "https://purpose.example.org".to_owned();
+        cases.push(("purpose", purpose));
+
+        let mut role = document();
+        role.definitions[0].subjects[0].role = "Primary".to_owned();
+        cases.push(("role", role));
+
+        let mut profile = document();
+        profile.definitions[0].subjects[0].selector.profile =
+            "urn:example:selector:identifier".to_owned();
+        cases.push(("selector profile", profile));
+
+        let mut field = document();
+        match &mut field.definitions[0].subjects[0].selector.fields[0] {
+            registry_evidence_client::SelectorField::String { name, .. } => {
+                *name = "Identifier".to_owned();
+            }
+            _ => panic!("the fixture selector field is a string"),
+        }
+        cases.push(("selector field", field));
+
+        let mut output = document();
+        output.definitions[0].concepts[0].handle = "Outcome".to_owned();
+        cases.push(("output handle", output));
+
+        for (label, document) in cases {
+            assert!(
+                CredentialCatalog::derive(&document).is_err(),
+                "an invalid {label} was advertised"
+            );
+        }
     }
 
     #[test]
@@ -412,19 +460,24 @@ pub(crate) mod tests {
         let mut narrow = document();
         narrow.holder_bound_batch_max_size = 2;
         assert_eq!(
-            CredentialCatalog::derive(&narrow).issuer_metadata(&config)
-                ["batch_credential_issuance"]["batch_size"],
+            CredentialCatalog::derive(&narrow)
+                .expect("the catalog is valid")
+                .issuer_metadata(&config)["batch_credential_issuance"]["batch_size"],
             json!(2)
         );
 
         let mut singular = document();
         singular.holder_bound_batch_max_size = 1;
-        let singular = CredentialCatalog::derive(&singular).issuer_metadata(&config);
+        let singular = CredentialCatalog::derive(&singular)
+            .expect("the catalog is valid")
+            .issuer_metadata(&config);
         assert!(singular.get("batch_credential_issuance").is_none());
 
         let mut invalid_zero = document();
         invalid_zero.holder_bound_batch_max_size = 0;
-        let invalid_zero = CredentialCatalog::derive(&invalid_zero).issuer_metadata(&config);
+        let invalid_zero = CredentialCatalog::derive(&invalid_zero)
+            .expect("the zero ceiling is handled conservatively")
+            .issuer_metadata(&config);
         assert!(invalid_zero.get("batch_credential_issuance").is_none());
         assert_eq!(
             invalid_zero["credential_configurations_supported"],
@@ -434,8 +487,9 @@ pub(crate) mod tests {
         let mut wider = document();
         wider.holder_bound_batch_max_size = u16::MAX;
         assert_eq!(
-            CredentialCatalog::derive(&wider).issuer_metadata(&config)["batch_credential_issuance"]
-                ["batch_size"],
+            CredentialCatalog::derive(&wider)
+                .expect("the wide ceiling is bounded conservatively")
+                .issuer_metadata(&config)["batch_credential_issuance"]["batch_size"],
             json!(MAXIMUM_HOLDER_KEYS)
         );
     }

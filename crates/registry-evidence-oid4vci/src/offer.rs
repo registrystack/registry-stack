@@ -199,13 +199,11 @@ pub fn offered_request(
                 let values = offered
                     .selector_values
                     .ok_or(OfferError::SelectorMismatch)?;
-                if values.len() != declared.selector.fields.len()
-                    || !declared
-                        .selector
-                        .fields
-                        .iter()
-                        .all(|field| values.contains_key(field.name()))
-                {
+                let validation_values = values
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone().into()))
+                    .collect();
+                if !declared.selector.accepts_request_values(&validation_values) {
                     return Err(OfferError::SelectorMismatch);
                 }
                 Some(values)
@@ -321,7 +319,8 @@ mod tests {
     use crate::metadata::CredentialCatalog;
 
     fn configuration() -> (CredentialCatalog, CredentialConfiguration) {
-        let catalog = CredentialCatalog::derive(&crate::metadata::tests::document());
+        let catalog = CredentialCatalog::derive(&crate::metadata::tests::document())
+            .expect("the catalog is valid");
         let configuration = catalog
             .get("urn:example:requirement:holder-bound")
             .expect("the holder-bound requirement is published")
@@ -377,7 +376,10 @@ mod tests {
             "urn:example:evidence-type:holder-bound"
         );
         assert_eq!(offered.purpose, "urn:example:purpose:demonstration");
-        assert_eq!(offered.configuration_revision, "rev-1");
+        assert_eq!(
+            offered.configuration_revision,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
         assert_eq!(offered.issued_by, "https://registry.example.org");
         assert_eq!(offered.expected_outputs.len(), 1);
     }
@@ -463,6 +465,35 @@ mod tests {
                 ),
                 Err(OfferError::SelectorMismatch)
             ));
+        }
+    }
+
+    #[test]
+    fn selector_values_outside_the_published_type_and_bounds_are_refused() {
+        let (catalog, configuration) = configuration();
+        for (label, value) in [
+            ("wrong scalar type", OfferedSelectorValue::Integer(7)),
+            ("empty string", OfferedSelectorValue::String(String::new())),
+            (
+                "oversized string",
+                OfferedSelectorValue::String("x".repeat(65)),
+            ),
+        ] {
+            let mut wrong = subject();
+            wrong.selector_values = Some(BTreeMap::from([("identifier".to_owned(), value)]));
+            assert!(
+                matches!(
+                    offered_request(
+                        &configuration,
+                        &catalog.issued_by,
+                        &catalog.provided_by,
+                        catalog.assurance_profile,
+                        vec![wrong],
+                    ),
+                    Err(OfferError::SelectorMismatch)
+                ),
+                "{label} was accepted"
+            );
         }
     }
 

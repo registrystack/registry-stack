@@ -78,7 +78,11 @@ endpoints:
       wallet at. Every credential_configurations_supported entry is derived
       from the Evidence bundle's authenticated discovery rather than
       hand-written, so it describes that discovered generation rather than an
-      adapter-authored capability. The batch_credential_issuance batch_size is
+      adapter-authored capability. The complete discovered document must pass
+      the Evidence request contract's lexical, cardinality, uniqueness, and
+      response-format rules before any entry is published; a malformed sibling
+      is a catalog failure rather than a partially advertised deployment. The
+      batch_credential_issuance batch_size is
       the backing deployment's effective holder-bound batch
       ceiling from authenticated Evidence discovery, bounded again by the
       Evidence client's compile-time request ceiling. Discovery is cached and
@@ -111,7 +115,10 @@ endpoints:
       code itself, once and only in that response. This is the authorization
       boundary of the whole service: it accepts selector values and will cause a
       credential to be issued for whoever those values identify, so it is
-      protected at least as strongly as calling Evidence directly.
+      protected at least as strongly as calling Evidence directly. Every
+      request-origin selector must carry exactly the catalog's field set, with
+      each value matching its published scalar type and bounds. A mismatch is
+      refused before generating an offer secret or writing exchange state.
   - path: POST /token
     authorization: pre-authorized code, and the transaction code when the offer declared one
     rule: >-
@@ -222,6 +229,7 @@ prohibitions:
 # above cannot outlive the test that enforces it.
 negative_tests:
   - sec-oid4vci-offer-requires-authorization
+  - sec-oid4vci-offer-request-contract
   - sec-oid4vci-code-single-use
   - sec-oid4vci-tx-code-bounded
   - sec-oid4vci-proof-closed

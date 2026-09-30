@@ -393,9 +393,7 @@ impl ReviewedContracts {
         if self.schema != crate::EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1 {
             return Err(profile_error());
         }
-        self.clone()
-            .into_definitions()
-            .validate_for_progressive_request()
+        self.clone().into_definitions().validate_for_request()
     }
 
     fn into_definitions(self) -> crate::EvidenceDefinitionsDocument {

@@ -148,7 +148,7 @@ impl CredentialIssuer for EvidenceIssuer {
             }
         }
         let document = self.client.discover().await?;
-        let catalog = Arc::new(CredentialCatalog::derive(&document));
+        let catalog = Arc::new(CredentialCatalog::derive(&document)?);
         *cached = Some((Arc::clone(&catalog), Instant::now()));
         Ok(catalog)
     }
