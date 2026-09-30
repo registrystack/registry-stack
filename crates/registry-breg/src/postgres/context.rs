@@ -7,6 +7,7 @@ use std::time::Duration;
 use deadpool_postgres::{Client, Transaction};
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio_postgres::types::Type;
 use uuid::Uuid;
 
@@ -2158,8 +2159,8 @@ fn snapshot_matches_boundaries(
     boundaries: &[RowBoundaryContext],
 ) -> Result<bool> {
     for boundary in boundaries {
-        let actual = if boundary.field() == entity.canonical_id.id {
-            record_id.to_string()
+        let (actual, field_type) = if boundary.field() == entity.canonical_id.id {
+            (record_id.to_string(), &entity.canonical_id.field_type)
         } else {
             let field = entity
                 .fields
@@ -2174,11 +2175,15 @@ fn snapshot_matches_boundaries(
             if value.is_null() && !field.required {
                 return Ok(false);
             }
-            canonical_snapshot_field_value(value, &field.field_type)?
+            (
+                canonical_snapshot_field_value(value, &field.field_type)?,
+                &field.field_type,
+            )
         };
+        let matches = |expected: &str| boundary_value_matches(&actual, expected, field_type);
         match boundary {
-            RowBoundaryContext::Equals { value, .. } if &actual == value => {}
-            RowBoundaryContext::In { values, .. } if values.contains(&actual) => {}
+            RowBoundaryContext::Equals { value, .. } if matches(value) => {}
+            RowBoundaryContext::In { values, .. } if values.iter().any(|value| matches(value)) => {}
             RowBoundaryContext::Equals { .. } | RowBoundaryContext::In { .. } => {
                 return Ok(false);
             }
@@ -2213,6 +2218,58 @@ fn canonical_snapshot_field_value(
             .map(str::to_owned)
             .ok_or_else(invalid_context),
     }
+}
+
+/// Compare one snapshot value with one row-boundary value as the generated
+/// RLS policy does, which casts both sides to the field's SQL type.
+///
+/// Claim values and snapshot values are both validated against the boundary
+/// field's own type before they reach this comparison. That admits exactly
+/// one spelling per boolean, int64, decimal (the field's exact scale, no
+/// leading zero, no negative zero), date, and lowercase UUID value, so an
+/// exact comparison is the typed one for those types, and text types compare
+/// exactly under PostgreSQL too. RFC 3339 admits many spellings of one
+/// timestamp, so timestamps compare by instant.
+fn boundary_value_matches(
+    actual: &str,
+    expected: &str,
+    field_type: &crate::contract::FieldTypeSource,
+) -> bool {
+    match field_type {
+        crate::contract::FieldTypeSource::Timestamp => {
+            match (
+                postgres_timestamp_micros(actual),
+                postgres_timestamp_micros(expected),
+            ) {
+                (Some(actual), Some(expected)) => actual == expected,
+                _ => false,
+            }
+        }
+        _ => actual == expected,
+    }
+}
+
+/// The instant PostgreSQL's `timestamptz` input assigns to an RFC 3339 value,
+/// in microseconds since the Unix epoch. PostgreSQL keeps microseconds and
+/// rounds a longer fraction as `rint(strtod(fraction) * 1e6)`, which is
+/// mirrored here. It reads second 60 as the start of the next minute, where
+/// `time` reads it as the last nanosecond of second 59.
+fn postgres_timestamp_micros(value: &str) -> Option<i128> {
+    let parsed = OffsetDateTime::parse(value, &Rfc3339).ok()?;
+    // RFC 3339 fixes the date and time digits, so the seconds are bytes 17
+    // and 18 and any fraction starts at byte 19.
+    let leap_second = value.get(17..19) == Some("60");
+    let micros = match value.get(19..)?.strip_prefix('.') {
+        Some(rest) => {
+            let digits = rest
+                .find(|character: char| !character.is_ascii_digit())
+                .map_or(rest, |end| &rest[..end]);
+            let fraction = format!("0.{digits}").parse::<f64>().ok()?;
+            (fraction * 1_000_000.0).round_ties_even() as i128
+        }
+        None => 0,
+    };
+    Some((i128::from(parsed.unix_timestamp()) + i128::from(leap_second)) * 1_000_000 + micros)
 }
 
 fn validate_boundary(boundary: &RowBoundaryContext) -> Result<()> {
@@ -2800,6 +2857,218 @@ mod tests {
             vec![equals("id", "not-a-uuid")],
         )
         .is_err());
+    }
+
+    fn observed_at_matches(boundary: RowBoundaryContext, observed_at: &str) -> bool {
+        let registry = compiled_typed_registry();
+        let entity = &registry.entities()["typed-entry"];
+        let row = serde_json::Map::from_iter([("observed-at".to_owned(), json!(observed_at))]);
+        snapshot_matches_boundaries(entity, &row, Uuid::nil(), &[boundary])
+            .expect("a valid timestamp snapshot is compared, not refused")
+    }
+
+    #[test]
+    fn timestamp_boundaries_compare_the_instant_postgres_casts_both_sides_to() {
+        let same_instant = [
+            ("2026-01-01T00:00:00Z", "2025-12-31T19:00:00-05:00"),
+            ("2026-01-01T05:30:00+05:30", "2026-01-01T00:00:00Z"),
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00+00:00"),
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00-00:00"),
+            ("2026-01-01T00:00:00z", "2026-01-01T00:00:00Z"),
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000000Z"),
+            (
+                "2026-01-01T00:00:00.5Z",
+                "2026-01-01T00:00:00.500000000+00:00",
+            ),
+            // PostgreSQL keeps microseconds, rounding a longer fraction as
+            // `rint(fraction * 1e6)`; each pair below was read back from
+            // PostgreSQL 17.
+            ("2026-01-01T00:00:00.0000004Z", "2026-01-01T00:00:00Z"),
+            ("2026-01-01T00:00:00.0000005Z", "2026-01-01T00:00:00Z"),
+            (
+                "2026-01-01T00:00:00.0000006Z",
+                "2026-01-01T00:00:00.000001Z",
+            ),
+            (
+                "2026-01-01T00:00:00.0000015Z",
+                "2026-01-01T00:00:00.000002Z",
+            ),
+            (
+                "2026-01-01T00:00:00.0000025Z",
+                "2026-01-01T00:00:00.000002Z",
+            ),
+            (
+                "2026-01-01T00:00:00.1234565Z",
+                "2026-01-01T00:00:00.123456Z",
+            ),
+            (
+                "2026-01-01T00:00:00.1234575Z",
+                "2026-01-01T00:00:00.123458Z",
+            ),
+            ("2026-01-01T00:00:00.9999995Z", "2026-01-01T00:00:01Z"),
+            (
+                "2026-01-01T00:00:00.00000050000001Z",
+                "2026-01-01T00:00:00.000001Z",
+            ),
+            // PostgreSQL reads second 60 as the start of the next minute.
+            ("2016-12-31T23:59:60Z", "2017-01-01T00:00:00Z"),
+        ];
+        for (claim, row) in same_instant {
+            assert!(
+                observed_at_matches(equals("observed-at", claim), row),
+                "{claim} equals {row}"
+            );
+            assert!(
+                observed_at_matches(equals("observed-at", row), claim),
+                "{row} equals {claim}"
+            );
+            assert!(
+                observed_at_matches(
+                    in_values("observed-at", &["2020-01-01T00:00:00Z", claim]),
+                    row
+                ),
+                "{row} is in a set holding {claim}"
+            );
+        }
+
+        let different_instants = [
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00-05:00"),
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000001Z"),
+            (
+                "2026-01-01T00:00:00.0000015Z",
+                "2026-01-01T00:00:00.000001Z",
+            ),
+            ("2016-12-31T23:59:60Z", "2016-12-31T23:59:59.999999Z"),
+        ];
+        for (claim, row) in different_instants {
+            assert!(
+                !observed_at_matches(equals("observed-at", claim), row),
+                "{claim} differs from {row}"
+            );
+            assert!(
+                !observed_at_matches(in_values("observed-at", &[claim]), row),
+                "{row} is not in a set holding only {claim}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_boundary_value_that_is_not_the_field_type_never_matches() {
+        let registry = compiled_typed_registry();
+        let entity = &registry.entities()["typed-entry"];
+        let row = serde_json::Map::from_iter([
+            ("observed-at".to_owned(), json!("2026-01-01T00:00:00Z")),
+            ("amount".to_owned(), json!("1.20")),
+            (
+                "identifier".to_owned(),
+                json!("123e4567-e89b-12d3-a456-426614174000"),
+            ),
+        ]);
+        for boundary in [
+            equals("observed-at", "not-a-timestamp"),
+            in_values("observed-at", &["2026-01-01", "2026-01-01 00:00:00"]),
+            equals("amount", "one"),
+            in_values("identifier", &["not-a-uuid"]),
+        ] {
+            assert!(
+                !snapshot_matches_boundaries(entity, &row, Uuid::nil(), &[boundary])
+                    .expect("an unparseable boundary value is an ordinary mismatch")
+            );
+        }
+    }
+
+    #[test]
+    fn decimal_and_uuid_boundaries_compare_their_one_canonical_spelling() {
+        // Claim values and row values are both validated against the
+        // boundary field's own type, which admits exactly one spelling per
+        // decimal and UUID value, so an exact comparison is the typed one.
+        let registry = compiled_typed_registry();
+        let entity = &registry.entities()["typed-entry"];
+        let row = serde_json::Map::from_iter([
+            ("amount".to_owned(), json!("1.20")),
+            (
+                "identifier".to_owned(),
+                json!("123e4567-e89b-12d3-a456-426614174000"),
+            ),
+        ]);
+        assert!(snapshot_matches_boundaries(
+            entity,
+            &row,
+            Uuid::nil(),
+            &[
+                equals("amount", "1.20"),
+                equals("identifier", "123e4567-e89b-12d3-a456-426614174000"),
+            ],
+        )
+        .expect("canonical values compare"));
+        assert!(!snapshot_matches_boundaries(
+            entity,
+            &row,
+            Uuid::nil(),
+            &[in_values("amount", &["1.21", "0.20"])],
+        )
+        .expect("a different decimal is an ordinary mismatch"));
+
+        for (field, spelling) in [
+            ("amount", "1.2"),
+            ("amount", "01.20"),
+            ("identifier", "123E4567-E89B-12D3-A456-426614174000"),
+        ] {
+            let other = serde_json::Map::from_iter([(field.to_owned(), json!(spelling))]);
+            assert!(
+                snapshot_matches_boundaries(
+                    entity,
+                    &other,
+                    Uuid::nil(),
+                    &[equals(field, spelling)],
+                )
+                .is_err(),
+                "a row spelling {spelling} is refused before any comparison"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prospective_row_in_another_offset_is_authorized() {
+        let registry = compiled_typed_registry();
+        let entity = &registry.entities()["typed-entry"];
+        let context = ClaimContext::for_compiled(
+            &registry,
+            "typed-entry",
+            Some("principal".to_owned()),
+            "typed",
+            None,
+            typed_boundaries(),
+        )
+        .expect("canonical typed boundaries are accepted");
+        let row = serde_json::Map::from_iter([
+            ("enabled".to_owned(), json!(true)),
+            ("count".to_owned(), json!(2)),
+            ("amount".to_owned(), json!("1.20")),
+            ("effective-on".to_owned(), json!("2024-02-29")),
+            (
+                "observed-at".to_owned(),
+                json!("2024-01-01T22:04:05.000-05:00"),
+            ),
+            (
+                "identifier".to_owned(),
+                json!("123e4567-e89b-12d3-a456-426614174000"),
+            ),
+            (
+                "parent".to_owned(),
+                json!("123e4567-e89b-12d3-a456-426614174001"),
+            ),
+            ("short-name".to_owned(), json!("abcd")),
+            ("notes".to_owned(), json!("abcdef")),
+            ("color".to_owned(), json!("red")),
+        ]);
+        assert!(context
+            .authorizes_record_snapshot(entity, &row, Uuid::nil())
+            .expect("the typed snapshot is compared"));
+        assert!(
+            validate_snapshot_boundaries(entity, &row, Uuid::nil(), context.row_boundaries())
+                .is_ok()
+        );
     }
 
     #[test]
