@@ -348,7 +348,7 @@ fn schemas() -> Value {
         "AuthorizationServerMetadata": {
             "type": "object", "additionalProperties": false,
             "required": [
-                "issuer", "token_endpoint", "grant_types_supported", "response_types_supported",
+                "issuer", "token_endpoint", "grant_types_supported",
                 "token_endpoint_auth_methods_supported", "pre-authorized_grant_anonymous_access_supported"
             ],
             "properties": {
@@ -358,7 +358,6 @@ fn schemas() -> Value {
                     "type": "array", "prefixItems": [{"const": PRE_AUTHORIZED_CODE_GRANT_TYPE}],
                     "minItems": 1, "maxItems": 1
                 },
-                "response_types_supported": {"type": "array", "maxItems": 0},
                 "token_endpoint_auth_methods_supported": {
                     "type": "array", "prefixItems": [{"const": "none"}], "minItems": 1, "maxItems": 1
                 },
