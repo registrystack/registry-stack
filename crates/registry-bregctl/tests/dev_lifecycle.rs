@@ -175,6 +175,356 @@ fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) 
 
 #[test]
 #[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
+fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::Builder::new()
+        .prefix("breg-native-request-events-test-")
+        .tempdir_in(binary.parent().unwrap())
+        .unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::canonicalize(temporary.keep()).unwrap();
+    let project = parent.join("registry");
+    let session = Session {
+        project: project.clone(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
+    };
+    session.success(&["init", project.to_str().unwrap()]);
+
+    // These two ordinary authored request types pin both lifecycle-only
+    // classification floors. The first projects an internal field from a
+    // restricted request. The second is otherwise wholly public, but its
+    // unfiltered lifecycle hook can carry an internal application reason.
+    let project_file = project.join("registry.yaml");
+    let mut definition: Value =
+        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
+    for entity in definition["entities"].as_array_mut().unwrap() {
+        if matches!(entity["id"].as_str(), Some("record" | "record-group")) {
+            entity["changeControl"] = json!({"requiredFor":["create"]});
+        }
+    }
+    definition["entities"].as_array_mut().unwrap().extend([
+        json!({
+            "id": "restricted-change",
+            "primaryDataset": "generic-registry",
+            "route": "restricted-changes",
+            "mutationMode": "mutable",
+            "classification": "restricted",
+            "fields": [
+                {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
+                {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"},
+                {"id":"note", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+            ],
+            "hooks": [{
+                "phase": "after",
+                "id": "restricted-change-submitted",
+                "trigger": "request_lifecycle",
+                "projection": ["note"],
+                "when": {"kind":"request_lifecycle", "transitions":["submit"], "toStates":["submitted"]},
+                "handler": {"kind":"url", "destinationId":"lifecycle-events"}
+            }],
+            "changeRequest": {
+                "effects": [{
+                    "id": "created-record",
+                    "target": {"entity":"record"},
+                    "operation": "create",
+                    "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
+                }],
+                "review": {"mode":"none"},
+                "onApproved": {"mode":"manual"},
+                "retention": {"mode":"operator_erase"}
+            }
+        }),
+        json!({
+            "id": "public-change",
+            "primaryDataset": "generic-registry",
+            "route": "public-changes",
+            "mutationMode": "mutable",
+            "classification": "public",
+            "fields": [
+                {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"public"},
+                {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"public"}
+            ],
+            "hooks": [{
+                "phase": "after",
+                "id": "public-change-lifecycle",
+                "trigger": "request_lifecycle",
+                "projection": ["label"],
+                "handler": {"kind":"url", "destinationId":"lifecycle-events"}
+            }],
+            "changeRequest": {
+                "effects": [{
+                    "id": "created-group",
+                    "target": {"entity":"record-group"},
+                    "operation": "create",
+                    "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
+                }],
+                "review": {"mode":"none"},
+                "onApproved": {"mode":"manual"},
+                "retention": {"mode":"operator_erase"}
+            }
+        }),
+    ]);
+    let operator = definition["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "operator")
+        .unwrap();
+    for permission in operator["permissions"].as_array_mut().unwrap() {
+        if matches!(
+            permission["entity"].as_str(),
+            Some("record" | "record-group")
+        ) {
+            permission["operations"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|operation| operation.as_str() != Some("create"));
+        }
+    }
+    operator["permissions"].as_array_mut().unwrap().extend([
+        json!({
+            "entity": "restricted-change",
+            "rowBoundaries": [],
+            "operations": ["create", "get", "patch", "submit_request", "apply_request"],
+            "readableFields": ["code", "label", "note"],
+            "writableFields": ["code", "label", "note"],
+            "applyTargets": [{"entity":"record", "rowBoundaries":[]}]
+        }),
+        json!({
+            "entity": "public-change",
+            "rowBoundaries": [],
+            "operations": ["create", "get", "patch", "submit_request", "apply_request"],
+            "readableFields": ["code", "label"],
+            "writableFields": ["code", "label"],
+            "applyTargets": [{"entity":"record-group", "rowBoundaries":[]}]
+        }),
+    ]);
+    write(
+        &project_file,
+        serde_norway::to_string(&definition).unwrap().as_bytes(),
+    );
+    write(
+        &project.join("tests/journeys.yaml"),
+        br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: request-lifecycle-delivery-ceilings
+    steps:
+      - id: create-restricted-request
+        entity: restricted-change
+        accessProfile: operator
+        claims: &operator
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request:
+          operation: create
+          data: {code: restricted-result, label: Restricted result, note: Internal projected note}
+        expect: {outcome: success, status: 201}
+        capture: restricted-request
+      - id: patch-restricted-draft
+        entity: restricted-change
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: patch
+          recordRef: restricted-request
+          etagRef: restricted-request
+          changes: [{field: note, value: Updated internal projected note}]
+        expect: {outcome: success, status: 200}
+        capture: restricted-edited
+      - id: stale-restricted-draft-etag-is-refused
+        entity: restricted-change
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: patch
+          recordRef: restricted-request
+          etagRef: restricted-request
+          changes: [{field: note, value: Must not be stored}]
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: get-restricted-before-submit
+        entity: restricted-change
+        accessProfile: operator
+        claims: *operator
+        request: {operation: get, recordRef: restricted-edited}
+        expect: {outcome: success, status: 200}
+        capture: restricted-before-submit
+      - id: submit-restricted-request
+        entity: restricted-change
+        accessProfile: operator
+        claims: *operator
+        request: {operation: submit_request, recordRef: restricted-before-submit, etagRef: restricted-before-submit}
+        expect: {outcome: success, status: 200}
+      - id: get-restricted-before-apply
+        entity: restricted-change
+        accessProfile: operator
+        claims: *operator
+        request: {operation: get, recordRef: restricted-request}
+        expect: {outcome: success, status: 200}
+        capture: restricted-before-apply
+      - id: apply-restricted-request
+        entity: restricted-change
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: apply_request
+          recordRef: restricted-before-apply
+          etagRef: restricted-before-apply
+          proposalVersionRef: restricted-before-apply
+          effectDigestRef: restricted-before-apply
+        expect: {outcome: success, status: 200}
+      - id: create-public-request
+        entity: public-change
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: create
+          data: {code: public-result, label: Public result}
+        expect: {outcome: success, status: 201}
+        capture: public-request
+      - id: patch-public-draft
+        entity: public-change
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: patch
+          recordRef: public-request
+          etagRef: public-request
+          changes: [{field: label, value: Updated public result}]
+        expect: {outcome: success, status: 200}
+        capture: public-edited
+      - id: get-public-before-submit
+        entity: public-change
+        accessProfile: operator
+        claims: *operator
+        request: {operation: get, recordRef: public-edited}
+        expect: {outcome: success, status: 200}
+        capture: public-before-submit
+      - id: submit-public-request
+        entity: public-change
+        accessProfile: operator
+        claims: *operator
+        request: {operation: submit_request, recordRef: public-before-submit, etagRef: public-before-submit}
+        expect: {outcome: success, status: 200}
+      - id: get-public-before-apply
+        entity: public-change
+        accessProfile: operator
+        claims: *operator
+        request: {operation: get, recordRef: public-request}
+        expect: {outcome: success, status: 200}
+        capture: public-before-apply
+      - id: apply-public-request
+        entity: public-change
+        accessProfile: operator
+        claims: *operator
+        request:
+          operation: apply_request
+          recordRef: public-before-apply
+          etagRef: public-before-apply
+          proposalVersionRef: public-before-apply
+          effectDigestRef: public-before-apply
+        expect: {outcome: success, status: 200}
+"#,
+    );
+
+    let checked = session.success(&["check", project.to_str().unwrap(), "--production"]);
+    assert_eq!(checked["profile"], "production");
+    let [database_port, breg_port, issuer_port] = free_ports();
+    let started = session.report(session.dev(&[
+        "start",
+        "--database-port",
+        &database_port.to_string(),
+        "--breg-port",
+        &breg_port.to_string(),
+        "--issuer-port",
+        &issuer_port.to_string(),
+    ]));
+    assert_eq!(started["status"], "ready");
+    assert!(project.join(".breg/dev/schema-test-receipt.json").is_file());
+
+    // Drive one served transition too, so the proof observes the public
+    // hook's real lifecycle delivery rather than stopping at package startup.
+    let origin = format!("http://127.0.0.1:{breg_port}");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let token = fs::read_to_string(project.join(".breg/dev/secrets/operator-token")).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let created = client
+            .post(format!(
+                "{origin}/v1/records/public-changes?accessProfile=operator"
+            ))
+            .bearer_auth(&token)
+            .header("Idempotency-Key", "native-public-request-create")
+            .json(&json!({"data":{"code":"served-public-result", "label":"Served public result"}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status().as_u16(), 201);
+        let created: Value = created.json().await.unwrap();
+        let request_id = created["data"]["recordIdentifier"].as_str().unwrap();
+        let read: Value = client
+            .get(format!(
+                "{origin}/v1/records/public-changes/{request_id}?accessProfile=operator"
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let submit = read["data"]["request"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["operation"] == "submit_request")
+            .expect("draft exposes its governed submit action");
+        let submitted = client
+            .post(format!("{origin}{}", submit["href"].as_str().unwrap()))
+            .bearer_auth(&token)
+            .header("If-Match", submit["ifMatch"].as_str().unwrap())
+            .header("Idempotency-Key", "native-public-request-submit")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(submitted.status().as_u16(), 200);
+    });
+
+    let events = || session.success(&["dev", "events", project.to_str().unwrap()]);
+    let received = poll_report(events, |report| {
+        report["deliveries"].as_array().unwrap().len() == 1
+    });
+    let receipts = received["deliveries"].as_array().unwrap();
+    for receipt in receipts {
+        uuid::Uuid::parse_str(receipt["eventId"].as_str().unwrap()).unwrap();
+        assert_eq!(receipt["eventType"], "public-change-lifecycle");
+        assert_eq!(receipt["entity"], "public-change");
+        assert_eq!(receipt["trigger"], "request_lifecycle");
+        assert_eq!(
+            receipt["deliveryId"],
+            "events.public-change.public-change-lifecycle.webhook"
+        );
+        assert_eq!(receipt["destinationId"], "lifecycle-events");
+        assert_eq!(receipt["status"], "received");
+    }
+    let payloads = session.success(&[
+        "dev",
+        "events",
+        project.to_str().unwrap(),
+        "--include-payload",
+    ]);
+    for receipt in payloads["deliveries"].as_array().unwrap() {
+        assert_eq!(receipt["payload"], json!({"label":"Served public result"}));
+    }
+}
+
+#[test]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
 fn installed_dev_receives_retries_replays_and_retains_authored_events() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     // The issuer bind-mounts this workspace into Docker. Keep the synthetic
