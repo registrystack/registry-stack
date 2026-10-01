@@ -2648,8 +2648,8 @@ class RegistryReleaseTest(TestCase):
                 "--mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\",
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
                 + "target=/workspace/THIRD_PARTY_NOTICES,readonly \\",
-                "--mount=type=bind,source=release/scripts/install-runtime-libc6.sh,"
-                + "target=/workspace/install-runtime-libc6.sh,readonly \\",
+                "--mount=type=bind,source=release/scripts/install-runtime-packages.sh,"
+                + "target=/workspace/install-runtime-packages.sh,readonly \\",
             ],
             bind_mounts,
         )
@@ -2663,6 +2663,14 @@ class RegistryReleaseTest(TestCase):
                 + "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
                 + "pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb "
                 + "/workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb",
+                "ADD --checksum=sha256:ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 "
+                + "https://snapshot.debian.org/archive/debian-security/20260930T060347Z/"
+                + "pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb "
+                + "/workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_amd64.deb",
+                "ADD --checksum=sha256:d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97 "
+                + "https://snapshot.debian.org/archive/debian-security/20260930T060347Z/"
+                + "pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_arm64.deb "
+                + "/workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_arm64.deb",
                 "COPY --from=runtime-root /workspace/runtime-root/ /",
             ],
             copy_instructions,

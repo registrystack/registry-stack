@@ -180,23 +180,131 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
-    def test_runtime_libc6_overlay_is_fully_pinned(self) -> None:
-        mutations = (
+    def test_runtime_package_overlay_fixes_libc6_and_libssl3t64(self) -> None:
+        self.assertEqual(
+            Path("release/scripts/install-runtime-packages.sh"),
+            POLICY.RUNTIME_PACKAGE_INSTALLER,
+        )
+        self.assertEqual(
+            {
+                "libc6": (
+                    "2.41-12+deb13u4",
+                    {
+                        "amd64": "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9",
+                        "arm64": "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc",
+                    },
+                ),
+                "libssl3t64": (
+                    "3.5.7-1~deb13u3",
+                    {
+                        "amd64": "ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074",
+                        "arm64": "d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97",
+                    },
+                ),
+            },
+            {
+                name: (package["version"], package["sha256"])
+                for name, package in POLICY.RUNTIME_PACKAGES.items()
+            },
+        )
+        self.assertIn(
+            "ADD --checksum=sha256:"
+            "ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 "
+            "https://snapshot.debian.org/archive/debian-security/20260930T060347Z/"
+            "pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb "
+            "/workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_amd64.deb",
+            POLICY.RUNTIME_PACKAGE_ADDS,
+        )
+        self.assertEqual([], POLICY.check_repository())
+
+    def test_runtime_package_overlay_is_fully_pinned(self) -> None:
+        mutations = [
             (
-                POLICY.RUNTIME_LIBC6_VERSION,
-                "2.41-12+deb13u3",
+                "install_package libc6 2.41-12+deb13u4",
+                "install_package libc6 2.41-12+deb13u3",
                 "exact fixed runtime libc6 version",
             ),
             (
-                POLICY.RUNTIME_LIBC6_SHA256["amd64"],
-                "0" * 64,
-                "amd64 runtime libc6 checksum",
+                "install_package libssl3t64 3.5.7-1~deb13u3",
+                "install_package libssl3t64 3.5.7-1~deb13u2",
+                "exact fixed runtime libssl3t64 version",
+            ),
+        ]
+        for name, package in POLICY.RUNTIME_PACKAGES.items():
+            for architecture in ("amd64", "arm64"):
+                mutations.append(
+                    (
+                        package["sha256"][architecture],
+                        "0" * 64,
+                        f"{architecture} runtime {name} checksum",
+                    )
+                )
+        for original, replacement, expected in mutations:
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                installer = root / POLICY.RUNTIME_PACKAGE_INSTALLER
+                text = installer.read_text(encoding="utf-8")
+                self.assertIn(original, text)
+                installer.write_text(
+                    text.replace(original, replacement, 1),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(expected in failure for failure in failures), failures
+                )
+
+    def test_runtime_package_installer_requires_the_libssl3t64_checksum(self) -> None:
+        for checksum in (
+            "ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074",
+            "d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97",
+        ):
+            with (
+                self.subTest(checksum=checksum),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                installer = root / "release/scripts/install-runtime-packages.sh"
+                text = installer.read_text(encoding="utf-8")
+                self.assertIn(checksum, text)
+                installer.write_text(text.replace(checksum, ""), encoding="utf-8")
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(
+                        "install-runtime-packages.sh" in failure
+                        and "runtime libssl3t64 checksum" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
+    def test_runtime_package_overlay_requires_complete_package_metadata(self) -> None:
+        mutations = (
+            ("sha256sum --check --strict", "sha256sum", "strict runtime package checksum check"),
+            ("dpkg-deb --extract", "tar --extract", "runtime package extraction"),
+            ("dpkg-deb --control", "true", "runtime package control extraction"),
+            (
+                'status.d/${package}.md5sums"',
+                'status.d/${package}.stale-md5sums"',
+                "runtime package file metadata",
             ),
             (
-                POLICY.RUNTIME_LIBC6_SHA256["arm64"],
-                "0" * 64,
-                "arm64 runtime libc6 checksum",
+                'dpkg-deb --field "$archive" >"$runtime_root/var/lib/dpkg/status.d/${package}"',
+                'dpkg-deb --field "$archive" >/dev/null',
+                "runtime package metadata",
             ),
+            ('dpkg-deb --field "$archive" Package', "printf libc6", "runtime package identity"),
+            ('dpkg-deb --field "$archive" Version', "printf 0", "runtime package version identity"),
+            ('dpkg-deb --field "$archive" Architecture', "printf amd64", "runtime package architecture identity"),
         )
         for original, replacement, expected in mutations:
             with (
@@ -205,11 +313,11 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             ):
                 root = Path(temporary)
                 self.repository_copy(root)
-                installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
+                installer = root / POLICY.RUNTIME_PACKAGE_INSTALLER
+                text = installer.read_text(encoding="utf-8")
+                self.assertIn(original, text)
                 installer.write_text(
-                    installer.read_text(encoding="utf-8").replace(
-                        original, replacement, 1
-                    ),
+                    text.replace(original, replacement, 1),
                     encoding="utf-8",
                 )
 
@@ -219,42 +327,11 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                     any(expected in failure for failure in failures), failures
                 )
 
-    def test_runtime_libc6_overlay_requires_complete_package_metadata(self) -> None:
-        mutations = (
-            ("sha256sum --check --strict", "sha256sum", "strict runtime libc6 checksum check"),
-            ("dpkg-deb --extract", "tar --extract", "runtime libc6 package extraction"),
-            ("dpkg-deb --control", "true", "runtime libc6 control extraction"),
-            ("libc6.md5sums", "libc6.stale-md5sums", "runtime libc6 package file metadata"),
-            ('dpkg-deb --field "$archive" Package', "printf libc6", "runtime libc6 package identity"),
-            ('dpkg-deb --field "$archive" Version', "printf 0", "runtime libc6 version identity"),
-            ('dpkg-deb --field "$archive" Architecture', "printf amd64", "runtime libc6 architecture identity"),
-        )
-        for original, replacement, expected in mutations:
-            with (
-                self.subTest(expected=expected),
-                tempfile.TemporaryDirectory() as temporary,
-            ):
-                root = Path(temporary)
-                self.repository_copy(root)
-                installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
-                installer.write_text(
-                    installer.read_text(encoding="utf-8").replace(
-                        original, replacement, 1
-                    ),
-                    encoding="utf-8",
-                )
-
-                failures = POLICY.check_repository(root)
-
-                self.assertTrue(
-                    any(expected in failure for failure in failures), failures
-                )
-
-    def test_runtime_libc6_installer_rejects_remote_package_sources(self) -> None:
+    def test_runtime_package_installer_rejects_remote_package_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.repository_copy(root)
-            installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
+            installer = root / POLICY.RUNTIME_PACKAGE_INSTALLER
             installer.write_text(
                 installer.read_text(encoding="utf-8")
                 + "\ncurl https://packages.example.invalid/libc6.deb\n",
@@ -271,39 +348,78 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 failures,
             )
 
-    def test_release_images_pin_dated_libc6_package_inputs(self) -> None:
+    def test_release_images_pin_dated_runtime_package_inputs(self) -> None:
         relative = Path("release/docker/Dockerfile.relay")
-        for runtime_libc6_add in POLICY.RUNTIME_LIBC6_ADDS:
-            with (
-                self.subTest(runtime_libc6_add=runtime_libc6_add),
-                tempfile.TemporaryDirectory() as temporary,
-            ):
-                root = Path(temporary)
-                self.repository_copy(root)
-                dockerfile = root / relative
-                dockerfile.write_text(
-                    dockerfile.read_text(encoding="utf-8").replace(
-                        runtime_libc6_add,
-                        runtime_libc6_add.replace(
-                            POLICY.RUNTIME_LIBC6_SNAPSHOT, "latest"
+        for name, package in POLICY.RUNTIME_PACKAGES.items():
+            for runtime_package_add in POLICY.RUNTIME_PACKAGE_ADDS:
+                if f"/{name}_" not in runtime_package_add:
+                    continue
+                with (
+                    self.subTest(runtime_package_add=runtime_package_add),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    root = Path(temporary)
+                    self.repository_copy(root)
+                    dockerfile = root / relative
+                    dockerfile.write_text(
+                        dockerfile.read_text(encoding="utf-8").replace(
+                            runtime_package_add,
+                            runtime_package_add.replace(
+                                package["snapshot"], "latest"
+                            ),
+                            1,
                         ),
-                        1,
-                    ),
-                    encoding="utf-8",
-                )
+                        encoding="utf-8",
+                    )
 
-                failures = POLICY.check_repository(root)
+                    failures = POLICY.check_repository(root)
 
-                self.assertTrue(
-                    any(
-                        str(relative) in failure
-                        and "fixed libc6 package input" in failure
-                        for failure in failures
-                    ),
-                    failures,
-                )
+                    self.assertTrue(
+                        any(
+                            str(relative) in failure
+                            and "fixed runtime package input" in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
 
-    def test_release_images_require_the_fixed_libc6_overlay(self) -> None:
+    def test_images_refuse_a_missing_libssl3t64_package_input(self) -> None:
+        libssl_adds = [
+            line
+            for line in (POLICY.ROOT / "release/docker/Dockerfile.discovery")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.startswith("ADD ") and "/libssl3t64_3.5.7-1~deb13u3_" in line
+        ]
+        self.assertEqual(2, len(libssl_adds))
+        for relative in POLICY.DOCKERFILES + POLICY.ADOPTER_DOCKERFILES:
+            for libssl_add in libssl_adds:
+                with (
+                    self.subTest(relative=relative, libssl_add=libssl_add),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    root = Path(temporary)
+                    self.repository_copy(root)
+                    dockerfile = root / relative
+                    text = dockerfile.read_text(encoding="utf-8")
+                    self.assertIn(f"{libssl_add}\n", text)
+                    dockerfile.write_text(
+                        text.replace(f"{libssl_add}\n", "", 1),
+                        encoding="utf-8",
+                    )
+
+                    failures = POLICY.check_repository(root)
+
+                    self.assertTrue(
+                        any(
+                            str(relative) in failure
+                            and "fixed runtime package input" in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
+
+    def test_release_images_require_the_fixed_runtime_package_overlay(self) -> None:
         for relative in POLICY.DOCKERFILES:
             with (
                 self.subTest(relative=relative),
@@ -314,7 +430,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 dockerfile = root / relative
                 dockerfile.write_text(
                     dockerfile.read_text(encoding="utf-8").replace(
-                        POLICY.RUNTIME_LIBC6_COMMAND,
+                        POLICY.RUNTIME_PACKAGE_COMMAND,
                         "/bin/true",
                         1,
                     ),
@@ -326,7 +442,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 self.assertTrue(
                     any(
                         str(relative) in failure
-                        and "fixed libc6 runtime overlay" in failure
+                        and "fixed runtime package overlay" in failure
                         for failure in failures
                     ),
                     failures,
@@ -343,7 +459,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             (
                 POLICY.RUNTIME_ROOT_NORMALIZATION,
                 "/bin/true",
-                "each adopter runtime must normalize fixed libc6 metadata",
+                "each adopter runtime must normalize fixed runtime package metadata",
             ),
         )
         for original, replacement, expected in mutations:

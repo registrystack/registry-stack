@@ -27,31 +27,55 @@ RUST_BUILDER_PIP = "python3-pip=25.1.1+dfsg-1"
 # Debian packages above are pinned by version.
 RUST_BUILDER_ZIG_REQUIREMENTS = "release/requirements/ziglang-0.12.1.txt"
 RUST_BUILDER_HASHED_INSTALL = "--require-hashes"
-RUNTIME_LIBC6_INSTALLER = Path("release/scripts/install-runtime-libc6.sh")
-RUNTIME_LIBC6_SNAPSHOT = "20260913T000000Z"
-RUNTIME_LIBC6_VERSION = "2.41-12+deb13u4"
-RUNTIME_LIBC6_SHA256 = {
-    "amd64": "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9",
-    "arm64": "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc",
+RUNTIME_PACKAGE_INSTALLER = Path("release/scripts/install-runtime-packages.sh")
+# The Debian packages every runtime image overlays on the Distroless base, each
+# fixed by version and per-architecture checksum and fetched from a dated
+# snapshot.debian.org archive. The installer carries the same list.
+RUNTIME_PACKAGES = {
+    "libc6": {
+        "archive": "debian",
+        "snapshot": "20260913T000000Z",
+        "pool": "pool/main/g/glibc",
+        "version": "2.41-12+deb13u4",
+        "sha256": {
+            "amd64": "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9",
+            "arm64": "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc",
+        },
+    },
+    "libssl3t64": {
+        "archive": "debian-security",
+        "snapshot": "20260930T060347Z",
+        "pool": "pool/updates/main/o/openssl",
+        "version": "3.5.7-1~deb13u3",
+        "sha256": {
+            "amd64": "ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074",
+            "arm64": "d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97",
+        },
+    },
 }
-RUNTIME_LIBC6_ADDS = tuple(
+RUNTIME_PACKAGE_ADDS = tuple(
     "ADD --checksum=sha256:{checksum} "
-    "https://snapshot.debian.org/archive/debian/{snapshot}/pool/main/g/glibc/"
-    "libc6_{version}_{architecture}.deb "
-    "/workspace/runtime-packages/libc6_{version}_{architecture}.deb".format(
-        checksum=RUNTIME_LIBC6_SHA256[architecture],
-        snapshot=RUNTIME_LIBC6_SNAPSHOT,
-        version=RUNTIME_LIBC6_VERSION,
+    "https://snapshot.debian.org/archive/{archive}/{snapshot}/{pool}/"
+    "{name}_{version}_{architecture}.deb "
+    "/workspace/runtime-packages/{name}_{version}_{architecture}.deb".format(
+        checksum=package["sha256"][architecture],
+        archive=package["archive"],
+        snapshot=package["snapshot"],
+        pool=package["pool"],
+        name=name,
+        version=package["version"],
         architecture=architecture,
     )
+    for name, package in RUNTIME_PACKAGES.items()
     for architecture in ("amd64", "arm64")
 )
-RUNTIME_LIBC6_MOUNT = (
-    "--mount=type=bind,source=release/scripts/install-runtime-libc6.sh,"
-    "target=/workspace/install-runtime-libc6.sh,readonly"
+RUNTIME_PACKAGE_ADD_INSTRUCTIONS = "\n".join(RUNTIME_PACKAGE_ADDS)
+RUNTIME_PACKAGE_MOUNT = (
+    "--mount=type=bind,source=release/scripts/install-runtime-packages.sh,"
+    "target=/workspace/install-runtime-packages.sh,readonly"
 )
-RUNTIME_LIBC6_COMMAND = (
-    "/workspace/install-runtime-libc6.sh "
+RUNTIME_PACKAGE_COMMAND = (
+    "/workspace/install-runtime-packages.sh "
     "/workspace/runtime-root /workspace/runtime-packages"
 )
 RUNTIME_ROOT_NORMALIZATION = (
@@ -64,6 +88,9 @@ DEBIAN_PREPARATION = (
 )
 # This index carries libssl3t64 3.5.7-1~deb13u2 on both supported Linux
 # architectures. Earlier bytes fail the release policy on fixable OpenSSL CVEs.
+# The runtime package overlay above replaces that libssl3t64 with the fixed
+# release; once an index carries the fixed release itself, libssl3t64 can
+# leave the overlay.
 DISTROLESS_RUNTIME = (
     "gcr.io/distroless/cc-debian13:nonroot@sha256:"
     "54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97"
@@ -112,7 +139,7 @@ MAINTAINED_TEXT_PATHS = (
         Path(".github/workflows/release-candidate.yml"),
         Path(".github/workflows/release.yml"),
         Path("release/scripts/build-release-binaries.sh"),
-        RUNTIME_LIBC6_INSTALLER,
+        RUNTIME_PACKAGE_INSTALLER,
     )
 )
 
@@ -121,13 +148,12 @@ RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 RELAY_RUNTIME_ROOT_STAGE = f"""\
 FROM {DEBIAN_PREPARATION} AS runtime-root
 ARG SOURCE_DATE_EPOCH
-{RUNTIME_LIBC6_ADDS[0]}
-{RUNTIME_LIBC6_ADDS[1]}
+{RUNTIME_PACKAGE_ADD_INSTRUCTIONS}
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\
     --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \\
-    {RUNTIME_LIBC6_MOUNT} \\
-    {RUNTIME_LIBC6_COMMAND} \\
+    {RUNTIME_PACKAGE_MOUNT} \\
+    {RUNTIME_PACKAGE_COMMAND} \\
     && mkdir -p \\
         /workspace/runtime-root/licenses/relay \\
         /workspace/runtime-root/usr/local/bin \\
@@ -358,25 +384,37 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: retired Debian image generation marker remains"
             )
 
-    installer = texts[RUNTIME_LIBC6_INSTALLER]
-    installer_requirements = (
-        (RUNTIME_LIBC6_VERSION, "exact fixed runtime libc6 version"),
-        (RUNTIME_LIBC6_SHA256["amd64"], "amd64 runtime libc6 checksum"),
-        (RUNTIME_LIBC6_SHA256["arm64"], "arm64 runtime libc6 checksum"),
-        ("sha256sum --check --strict", "strict runtime libc6 checksum check"),
-        ('dpkg-deb --field "$archive" Package', "runtime libc6 package identity"),
-        ('dpkg-deb --field "$archive" Version', "runtime libc6 version identity"),
-        ('dpkg-deb --field "$archive" Architecture', "runtime libc6 architecture identity"),
-        ("dpkg-deb --control", "runtime libc6 control extraction"),
-        ("dpkg-deb --extract", "runtime libc6 package extraction"),
-        ("dpkg-deb --field", "runtime libc6 package metadata"),
-        ("libc6.md5sums", "runtime libc6 package file metadata"),
-    )
+    installer = texts[RUNTIME_PACKAGE_INSTALLER]
+    installer_requirements = [
+        ("sha256sum --check --strict", "strict runtime package checksum check"),
+        ('dpkg-deb --field "$archive" Package', "runtime package identity"),
+        ('dpkg-deb --field "$archive" Version', "runtime package version identity"),
+        ('dpkg-deb --field "$archive" Architecture', "runtime package architecture identity"),
+        ("dpkg-deb --control", "runtime package control extraction"),
+        ("dpkg-deb --extract", "runtime package extraction"),
+        (
+            'dpkg-deb --field "$archive" >"$runtime_root/var/lib/dpkg/status.d/${package}"',
+            "runtime package metadata",
+        ),
+        (
+            '"$runtime_root/var/lib/dpkg/status.d/${package}.md5sums"',
+            "runtime package file metadata",
+        ),
+    ]
+    for name, package in RUNTIME_PACKAGES.items():
+        installer_requirements += [
+            (
+                f"install_package {name} {package['version']} \\\n",
+                f"exact fixed runtime {name} version",
+            ),
+            (package["sha256"]["amd64"], f"amd64 runtime {name} checksum"),
+            (package["sha256"]["arm64"], f"arm64 runtime {name} checksum"),
+        ]
     for needle, detail in installer_requirements:
-        require(installer, needle, RUNTIME_LIBC6_INSTALLER, detail, failures)
+        require(installer, needle, RUNTIME_PACKAGE_INSTALLER, detail, failures)
     if REMOTE_PACKAGE_SOURCE_RE.search(installer):
         failures.append(
-            f"{RUNTIME_LIBC6_INSTALLER}: runtime package installer must not "
+            f"{RUNTIME_PACKAGE_INSTALLER}: runtime package installer must not "
             "fetch remote sources"
         )
 
@@ -401,23 +439,23 @@ def check_repository(root: Path = ROOT) -> list[str]:
         )
         require(
             text,
-            RUNTIME_LIBC6_MOUNT,
+            RUNTIME_PACKAGE_MOUNT,
             relative,
-            "read-only fixed libc6 installer mount",
+            "read-only fixed runtime package installer mount",
             failures,
         )
         require(
             text,
-            RUNTIME_LIBC6_COMMAND,
+            RUNTIME_PACKAGE_COMMAND,
             relative,
-            "fixed libc6 runtime overlay",
+            "fixed runtime package overlay",
             failures,
         )
-        for runtime_libc6_add in RUNTIME_LIBC6_ADDS:
-            if text.count(runtime_libc6_add) != 1:
+        for runtime_package_add in RUNTIME_PACKAGE_ADDS:
+            if text.count(runtime_package_add) != 1:
                 failures.append(
-                    f"{relative}: fixed libc6 package input must appear exactly once: "
-                    f"{runtime_libc6_add!r}"
+                    f"{relative}: fixed runtime package input must appear exactly once: "
+                    f"{runtime_package_add!r}"
                 )
         runtime = runtime_stage(text)
         for forbidden in ("\nRUN ", "apt-get", "/bin/sh", "curl ", "wget "):
@@ -547,13 +585,14 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures,
         )
         if (
-            RUNTIME_LIBC6_COMMAND in text
+            RUNTIME_PACKAGE_COMMAND in text
             and RUNTIME_ROOT_NORMALIZATION in text
-            and text.index(RUNTIME_LIBC6_COMMAND)
+            and text.index(RUNTIME_PACKAGE_COMMAND)
             > text.index(RUNTIME_ROOT_NORMALIZATION)
         ):
             failures.append(
-                f"{relative}: fixed libc6 overlay must precede timestamp normalization"
+                f"{relative}: fixed runtime package overlay must precede timestamp "
+                "normalization"
             )
 
     for relative in ADOPTER_DOCKERFILES:
@@ -595,20 +634,24 @@ def check_repository(root: Path = ROOT) -> list[str]:
             )
         if text.count(RUNTIME_ROOT_NORMALIZATION) != 2:
             failures.append(
-                f"{relative}: each adopter runtime must normalize fixed libc6 metadata"
+                f"{relative}: each adopter runtime must normalize fixed runtime "
+                "package metadata"
             )
-        if text.count(RUNTIME_LIBC6_MOUNT) != 2:
+        if text.count(RUNTIME_PACKAGE_MOUNT) != 2:
             failures.append(
-                f"{relative}: each adopter runtime must mount the fixed libc6 installer"
+                f"{relative}: each adopter runtime must mount the fixed runtime "
+                "package installer"
             )
-        if text.count(RUNTIME_LIBC6_COMMAND) != 2:
+        if text.count(RUNTIME_PACKAGE_COMMAND) != 2:
             failures.append(
-                f"{relative}: each adopter runtime must install the fixed libc6 overlay"
+                f"{relative}: each adopter runtime must install the fixed runtime "
+                "package overlay"
             )
-        for runtime_libc6_add in RUNTIME_LIBC6_ADDS:
-            if text.count(runtime_libc6_add) != 2:
+        for runtime_package_add in RUNTIME_PACKAGE_ADDS:
+            if text.count(runtime_package_add) != 2:
                 failures.append(
-                    f"{relative}: each adopter runtime must use the fixed libc6 package input"
+                    f"{relative}: each adopter runtime must use the fixed runtime "
+                    f"package input: {runtime_package_add!r}"
                 )
         stages = distroless_stages(text)
         if not stages:

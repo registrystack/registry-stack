@@ -458,7 +458,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
                 )
             if mismatched_installer:
                 context = Path(temporary) / "context"
-                installer = context / "release/scripts/install-runtime-libc6.sh"
+                installer = context / "release/scripts/install-runtime-packages.sh"
                 installer.parent.mkdir(parents=True)
                 installer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 environment["RELEASE_IMAGE_CONTEXT"] = str(context)
@@ -543,7 +543,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("must have exactly one standard BuildKit container", result.stderr)
 
-    def test_external_context_rejects_substituted_libc6_installer(self) -> None:
+    def test_external_context_rejects_substituted_runtime_package_installer(self) -> None:
         result = self.run_wrapper(
             builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
@@ -553,7 +553,8 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "fixed libc6 installer does not match the release source", result.stderr
+            "fixed runtime package installer does not match the release source",
+            result.stderr,
         )
 
 
