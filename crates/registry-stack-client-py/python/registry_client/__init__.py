@@ -8,4 +8,4 @@ import registry_client.relay as relay
 import registry_client.messaging as messaging
 
 __all__ = ["breg", "casework", "discovery", "evidence", "messaging", "relay"]
-__version__ = "0.38.0"
+__version__ = "0.39.0"
