@@ -589,6 +589,28 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotIn("/dist/image-bin", assemble_runs)
 
+    def test_assembled_messaging_smoke_marks_binaries_executable(self) -> None:
+        # Downloaded artifacts lose their execute bit, so each Messaging
+        # binary is marked executable before the smoke runs it.
+        _, document = workflow("release-candidate.yml")
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
+        )
+        start = assemble.index('messaging_in_release="$(')
+        messaging = assemble[start : assemble.index("evidencectl_installer=", start)]
+        binary = (
+            '"candidate/bundle-root/${messaging_binary}-'
+            '${{ needs.validate.outputs.tag }}-linux-amd64"'
+        )
+        loop = messaging.index("for messaging_binary in messaging messagingctl; do")
+        chmod = re.compile(r"chmod 0755 \\\s+" + re.escape(binary)).search(
+            messaging, loop
+        )
+        self.assertIsNotNone(chmod)
+        self.assertLess(chmod.start(), messaging.index(f"{binary} --version", loop))
+
     def test_current_candidate_builds_and_seals_registry_docs(self) -> None:
         text, _ = workflow("release-candidate.yml")
         self.assertIn("registry-docs-", text)
