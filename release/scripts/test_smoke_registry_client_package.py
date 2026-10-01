@@ -27,6 +27,7 @@ NAMESPACES = {
     "discovery": ("DiscoveryClient", "DiscoveryClientError"),
     "evidence": ("EvidenceClient", "EvidenceClientError"),
     "relay": ("RelayClient", "RelayClientError"),
+    "messaging": ("MessagingClient", "MessagingClientError"),
 }
 
 
@@ -85,6 +86,18 @@ class SmokeRegistryClientPackageTest(unittest.TestCase):
 
     def test_a_complete_wheel_passes(self) -> None:
         self.assertIn("smoke passed", self.run_smoke())
+
+    def test_a_historical_wheel_without_messaging_passes(self) -> None:
+        delattr(self.package, "messaging")
+        self.assertIn("smoke passed", self.run_smoke())
+
+    def test_a_messaging_extension_that_cannot_load_is_refused(self) -> None:
+        def refuse(self: object, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("the messaging extension module failed to load")
+
+        self.package.messaging.MessagingClient.__init__ = refuse
+        with self.assertRaises(RuntimeError):
+            self.run_smoke()
 
     def test_every_published_namespace_is_exercised(self) -> None:
         # A wheel missing any one of these names must fail the smoke, whether

@@ -1,7 +1,7 @@
 # @registrystack/client
 
 One versioned Node.js package for the Discovery, Evidence, Relay, Base Registry
-Engine, and Casework client APIs in Registry Stack.
+Engine, Casework, and Messaging client APIs in Registry Stack.
 
 ## Install
 
@@ -11,19 +11,22 @@ npm install "@registrystack/client@<version>"
 
 Requires Node.js 22.12 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
-one platform-specific optional dependency containing all five native
+one platform-specific optional dependency containing all six native
 bindings.
 
 ## Usage
 
 ```js
-const { discovery, evidence, relay, breg, casework } = require('@registrystack/client');
+const { discovery, evidence, relay, breg, casework, messaging } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
 });
 const work = new casework.CaseworkClient({
   baseUrl: 'https://casework.example.invalid/',
+});
+const messages = new messaging.MessagingClient({
+  baseUrl: 'https://messaging.example.invalid/',
 });
 ```
 
@@ -38,6 +41,8 @@ const work = new casework.CaseworkClient({
   applied-request result navigation.
 - `casework`: Registry Casework, staff inbox, claims, drafts, decisions,
   recovery, history, holdings, and directory bootstrap.
+- `messaging`: Registry Messaging, submit, inspect, cancel, and preview
+  institution-owned messages.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.
@@ -98,6 +103,9 @@ is active.
 
 The `casework` namespace is part of the unified package beginning with
 Registry Stack v0.30.0.
+
+The `messaging` namespace is part of the unified package beginning with
+Registry Stack v0.38.0.
 
 ## Casework notes
 

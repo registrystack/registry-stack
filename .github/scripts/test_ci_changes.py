@@ -1336,12 +1336,12 @@ class CiChangesTest(unittest.TestCase):
             step["env"]["ACTIVATION_TEST_DATABASE_URL"],
         )
 
-    def test_source_client_tutorial_assembles_the_released_client_shape(self) -> None:
+    def test_source_client_tutorial_includes_messaging_before_release_admission(self) -> None:
         script = next(
             step["run"] for step in self.workflow_jobs["evidence-tutorials"]["steps"]
             if step.get("name") == "Assemble the client package the application tutorial imports"
         )
-        self.assertNotIn("--include-messaging", script)
+        self.assertIn("--include-messaging", script)
         self.assertIn("--python-profile ci", script)
 
     def test_shared_activation_selects_every_database_consumer_on_pull_requests(self) -> None:
