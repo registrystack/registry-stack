@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - Automatic review executors can renew credentials with `privateKeyJwt`.
   `bregctl review-recovery retry-application` requeues an `executor-denied`
   job after credentials or grants are corrected, while retaining its exact
@@ -17,6 +19,21 @@
   audited, generation-bound `webhook discard` command to close eligible work
   without replaying it under the replacement binding.
 
+- An entity may declare `accessLog` to keep a subject-facing log of reads of
+  its records, stored apart from the operational audit. The record subject
+  reads it at `GET /v1/records/{route}/{id}/access-log` under a profile that
+  currently grants `get` for the record and whose verified principal equals
+  the stored `subjectField`. `retentionDays` defaults to 90 and accepts 1
+  through 3650. `trustedIntermediaries`, at most 64 verified client IDs, may
+  forward the original requester and purpose in the
+  `Registry-Access-Requester` and `Registry-Access-Purpose` headers, and
+  `exemptions` delay a documented entry for a named profile without omitting
+  it. A failed log insert refuses the read, and an access-logged entity
+  cannot grant an anonymous profile any read. `bregctl generate
+  evidence-source` writes protocol `breg-evidence-lookup-v2`, which changes
+  the `behaviorRevision` of a regenerated source, and enables forwarded
+  attribution for an access-logged entity. See
+  [subject-facing access logs](ACCESS-LOG.md).
 - An upgraded runtime and `bregctl` keep verifying and serving a database a
   release before subject access-log storage activated, without an apply. The
   next successor apply installs the storage.
@@ -38,8 +55,12 @@
   `rowBoundaries`. The document is a packaged, byte-bound artifact that feeds
   `registryRevision`, so such a project compiles to a new `registryRevision`
   and a package an earlier release built for it no longer loads. Rebuild it
-  unchanged with this `bregctl package --baseline-package <deployed package>`
-  and apply it. A Registry Casework BReg source pins the old
+  unchanged with this `bregctl`: run `bregctl test PROJECT --baseline-package
+  DEPLOYED --runtime-config FILE --credentials FILE --output RECEIPT`, then
+  `bregctl package PROJECT --baseline-package DEPLOYED --test-receipt RECEIPT
+  --output BUILD`, where `DEPLOYED` is the absolute directory of the deployed
+  package, and apply `BUILD/package` with `bregctl plan` and `bregctl apply`.
+  A Registry Casework BReg source pins the old
   `registryRevision` and Casework startup refuses it: repin with `caseworkctl
   source add BREG_PROJECT --project PROJECT --source-id ID --apply`, then
   package, plan, and apply the Casework project once.
