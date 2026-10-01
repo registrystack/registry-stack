@@ -1580,45 +1580,25 @@ jobs:
           if [[ -z "${request_id}" ]]; then
             request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           fi
-          title="Publish Registry Stack identifiers ${{ needs.verify.outputs.tag }} (${request_id})"
-          previous_run_id="$(
-            gh run list \
-              --repo registrystack/registrystack-id \
-              --workflow deploy-cloudflare-workers.yml \
-              --event workflow_dispatch \
-              --limit 100 \
-              --json databaseId,displayTitle \
-              --jq "[.[] | select(.displayTitle == \"${title}\") | .databaseId] | max // 0"
+          # The dispatch response names the run it created. A rerun dispatches
+          # under the same request ID, so a title search can find an earlier run.
+          target_run_id="$(
+            gh api \
+              --method POST \
+              repos/registrystack/registrystack-id/actions/workflows/deploy-cloudflare-workers.yml/dispatches \
+              -f ref=main \
+              -f "inputs[released_tag]=${{ needs.verify.outputs.tag }}" \
+              -f "inputs[source_sha]=${{ needs.verify.outputs.source_sha }}" \
+              -f "inputs[catalog_sha256]=${{ needs.verify.outputs.identifier_catalog_sha256 }}" \
+              -f "inputs[request_id]=${request_id}" \
+              -F return_run_details=true \
+              --jq .workflow_run_id
           )"
-          gh workflow run deploy-cloudflare-workers.yml \
-            --repo registrystack/registrystack-id \
-            --ref main \
-            -f "released_tag=${{ needs.verify.outputs.tag }}" \
-            -f "source_sha=${{ needs.verify.outputs.source_sha }}" \
-            -f "catalog_sha256=${{ needs.verify.outputs.identifier_catalog_sha256 }}" \
-            -f "request_id=${request_id}"
-
-          deadline=$((SECONDS + 120))
-          target_run_id=
-          while [[ -z "${target_run_id}" ]]; do
-            target_run_id="$(
-              gh run list \
-                --repo registrystack/registrystack-id \
-                --workflow deploy-cloudflare-workers.yml \
-                --event workflow_dispatch \
-                --limit 100 \
-                --json databaseId,displayTitle \
-                --jq "[.[] | select(.displayTitle == \"${title}\" and .databaseId > ${previous_run_id}) | .databaseId] | max // empty"
-            )"
-            if [[ -n "${target_run_id}" ]]; then
-              break
-            fi
-            if (( SECONDS >= deadline )); then
-              echo "Timed out correlating the identifier publication run" >&2
-              exit 1
-            fi
-            sleep 2
-          done
+          if [[ ! "${target_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The identifier publication dispatch returned no run ID" >&2
+            exit 1
+          fi
+          echo "Identifier publication run: https://github.com/registrystack/registrystack-id/actions/runs/${target_run_id}"
           gh run watch "${target_run_id}" \
             --repo registrystack/registrystack-id \
             --exit-status
