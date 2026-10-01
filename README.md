@@ -115,10 +115,15 @@ installer: download `discovery-<tag>-linux-amd64` or
 `registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
 check it against the release checksum chain. Registry Scheduling publishes a
-container image only; it has no released binary or installer yet. Registry
-Messaging has not joined a release, so no release carries a Messaging binary,
-image, or installer. Container images for `breg`, `casework`, `scheduling`,
-`relay`, `evidence`, and `discovery` are published as `ghcr.io/registrystack/<name>:<tag>`. Which
+`scheduling-<tag>-linux-amd64` runtime binary and `schedulingctl` binaries
+beside its container image, and no installer. Registry Messaging publishes
+`messaging` and `messagingctl` Linux amd64 binaries, Registry Render a
+`registry-render` Linux amd64 binary, and the BReg citizen services
+`breg-mcp` and `breg-review` binaries, each beside its container image and
+with no installer. Container images for `breg`, `breg-mcp`, `breg-review`,
+`casework`, `scheduling`, `messaging`, `registry-render`, `relay`,
+`evidence`, `evidence-oid4vci`, and `discovery` are published as
+`ghcr.io/registrystack/<name>:<tag>`. Which
 platforms each artifact supports, and what is not supported, is recorded in
 [known limitations](https://docs.registrystack.org/dev/explanation/known-limitations/#platform-support).
 

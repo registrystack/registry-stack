@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - Automatic review executors can renew credentials with `privateKeyJwt`.
   `bregctl review-recovery retry-application` requeues an `executor-denied`
   job after credentials or grants are corrected, while retaining its exact
@@ -17,6 +19,21 @@
   audited, generation-bound `webhook discard` command to close eligible work
   without replaying it under the replacement binding.
 
+- An entity may declare `accessLog` to keep a subject-facing log of reads of
+  its records, stored apart from the operational audit. The record subject
+  reads it at `GET /v1/records/{route}/{id}/access-log` under a profile that
+  currently grants `get` for the record and whose verified principal equals
+  the stored `subjectField`. `retentionDays` defaults to 90 and accepts 1
+  through 3650. `trustedIntermediaries`, at most 64 verified client IDs, may
+  forward the original requester and purpose in the
+  `Registry-Access-Requester` and `Registry-Access-Purpose` headers, and
+  `exemptions` delay a documented entry for a named profile without omitting
+  it. A failed log insert refuses the read, and an access-logged entity
+  cannot grant an anonymous profile any read. `bregctl generate
+  evidence-source` writes protocol `breg-evidence-lookup-v2`, which changes
+  the `behaviorRevision` of a regenerated source, and enables forwarded
+  attribution for an access-logged entity. See
+  [subject-facing access logs](ACCESS-LOG.md).
 - An upgraded runtime and `bregctl` keep verifying and serving a database a
   release before subject access-log storage activated, without an apply. The
   next successor apply installs the storage.
