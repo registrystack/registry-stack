@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - An http provider whose `baseUrl` names `localhost` or a `*.localhost` host
   in a production profile is refused at activation, where it was previously
   activated and then refused on every send. Use a loopback IP literal over

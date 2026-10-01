@@ -2,10 +2,22 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - Add `registry-platform-activation`, the shared PostgreSQL activation ledger,
   database identity, and runtime privilege checks used by Casework, Scheduling,
   and Messaging. Products keep ownership of transactions, migrations, audit,
   and package-specific activation hooks (#1731).
+- `registry-platform-httputil` refuses `localhost` and every `*.localhost`
+  name for a `productionHttps` or `privateServiceHttp` data destination when
+  the binding is constructed, whatever private ranges are allowed. Local
+  receivers require `loopbackDevelopmentHttp`.
+- `registry-platform-hooks` records a closed, value-free dead-letter reason
+  when the installed schema has the column, lists work captured under a
+  superseded binding, and can discard pending work, a dead letter, or an
+  expired lease under its exact generation without rebinding or sending it.
+- `registry-platform-sdjwt` closes the inline proof key member set to `kty`,
+  `crv`, `x`, `y`, `alg`, `kid`, and `use`, with `use` only as `sig`.
 
 ## v0.37.0 - 2026-09-29
 

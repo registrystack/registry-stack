@@ -18,6 +18,148 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.38.0 beta-50
+
+- BREAKING: a Base Registry Engine (BReg) direct create, patch, or batch item whose resulting row
+  falls outside the caller's row boundary answers `412 precondition.failed` before any write,
+  where it answered `503 service.unavailable`. Retrying the unchanged request cannot succeed, a
+  batch carrying one such item commits none of them, and a genuine PostgreSQL privilege failure
+  still answers `503`. Handle a `412` on a create as a boundary refusal, not a retryable outage.
+
+{/* Evidence: crates/registry-breg/tests/postgres_mutation.rs,
+    real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_write_nothing;
+    products/breg/CHANGELOG.md. */}
+
+- BREAKING: the generated BReg OpenAPI document lists `412 precondition.failed` on every create
+  and batch operation reachable through a profile with `rowBoundaries`, so such a project compiles
+  to a new `registryRevision` and a package an earlier release built for it no longer loads.
+  Rebuild it unchanged with the v0.38.0 `bregctl test` and `bregctl package`, each naming the
+  deployed package with `--baseline-package`, as
+  [test and package the successor](../operate/breg-changes/#test-and-package-the-successor)
+  gives in full, and apply it with `bregctl plan` and `bregctl apply`, then repin
+  any Registry Casework BReg source for it with `caseworkctl source add ... --apply` and package,
+  plan, and apply the Casework project once.
+
+{/* Evidence: crates/registry-breg/src/tests/artifacts_response_schema_tests.rs,
+    prospective_row_boundary_refusal_is_documented_only_where_it_can_apply;
+    products/breg/CHANGELOG.md. */}
+
+- A BReg entity may declare `accessLog` to keep a subject-facing log of reads of its records. The
+  record subject reads it at `GET /v1/records/{route}/{id}/access-log`, retention defaults to 90
+  days, `trustedIntermediaries` may forward the original requester and purpose, and `exemptions`
+  delay a documented entry without omitting it. The log is stored apart from the operational
+  audit, and a failed log insert refuses the read.
+
+{/* Evidence: crates/registry-breg/src/api/access_log.rs, routes;
+    products/breg/ACCESS-LOG.md. */}
+
+- BReg automatic review executors can renew credentials with `privateKeyJwt`, and
+  `bregctl review-recovery retry-application` requeues an executor-denied job. Webhook dead letters
+  keep a closed failure reason, and `bregctl webhook discard` closes eligible work captured under a
+  superseded binding without replaying it.
+
+{/* Evidence: products/breg/CHANGELOG.md;
+    crates/registry-platform-hooks/src/delivery_schema.rs, dead_letter_reason. */}
+
+- BREAKING: Registry Casework and Registry Scheduling activation (`plan`, `apply`, and `status`)
+  and runtime startup refuse a PostgreSQL server older than 17, before any migration or activation
+  write. Upgrade the database server before upgrading either product.
+
+{/* Evidence: crates/registry-platform-activation/src/lib.rs, UnsupportedPostgres;
+    crates/registry-casework/src/activation.rs, UnsupportedPostgres. */}
+
+- BREAKING: Registry Scheduling publishes the `v1alpha2` HTTP contract. Holds and appointments
+  carry a required `externalReferences` array of opaque `{product, recordType, identifier}`
+  links, a hold or direct booking may send it, and a reschedule must omit it.
+  `GET /v1/appointments` lists the caller's own appointments carrying one exact reference.
+  Migration 10 stores the references, so run `schedulingctl plan` and `apply` before restarting,
+  and upgrade the runtime before any client sends the field.
+
+{/* Evidence: crates/registry-scheduling-core/src/wire.rs, ExternalReference;
+    crates/registry-scheduling/src/http.rs, list_appointments and bounded_external_reference;
+    crates/registry-scheduling/migrations/0010_external_references.sql. */}
+
+- BREAKING: an Evidence requirement's `subjectRoles[].role` is limited to 64 bytes instead of 128,
+  in the bundle schema and at startup. Shorten a longer role and every input that names it before
+  upgrading.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, SubjectRole. */}
+
+- An Evidence `http-json` source may declare `evidence` to read one predefined assertion from
+  another Evidence deployment, verified against pinned `trustedJwks` before projection.
+  Separately, a source that does not declare `evidence` may set `forwardAccessAttribution` to send
+  the verified requester and purpose to a source that trusts this service as an intermediary;
+  startup refuses a source that sets both. `evidence-oid4vci` validates its whole catalog and every offer
+  before an offer secret exists.
+
+{/* Evidence: crates/registry-evidence/src/source_evidence.rs, EvidenceSourceConfig;
+    products/evidence/reference/request-adapter/deployment-projects/CONFIG.md. */}
+
+- The release publishes a `discoveryctl` Linux amd64 binary and a standalone Registry Scheduling
+  Linux amd64 runtime binary beside the Scheduling image and `schedulingctl` binaries.
+
+{/* Evidence: release/scripts/release_roster.py, DISCOVERYCTL_FIRST_RELEASE and
+    SCHEDULING_BINARY_FIRST_RELEASE. */}
+
+- Registry Messaging and Registry Render ship for the first time, each as release binaries and a
+  `ghcr.io/registrystack/<name>` image, and the Evidence OID4VCI adapter gains the
+  `ghcr.io/registrystack/evidence-oid4vci` image. The unified Node.js and Python clients add a
+  `messaging` namespace. See [deploy Registry Messaging](../operate/messaging/) and
+  [run Registry Render in serve mode](../operate/registry-render/).
+
+{/* Evidence: release/scripts/release_roster.py, MESSAGING_FIRST_RELEASE, RENDER_FIRST_RELEASE,
+    and EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE;
+    crates/registry-stack-client-node/index.d.ts. */}
+
+<DocsetProduct product="registry-breg-services">
+
+- `breg-mcp` ships for the first time, a supporting service beside BReg: an MCP gateway a chat
+  host uses to act for one verified citizen. It reads the citizen's own
+  record and creates or patches change-request drafts for it, and has no
+  code path to submit, revise, cancel, or apply one. It verifies the chat
+  host's token as an OAuth protected resource and, for every tool call,
+  exchanges it (RFC 8693) for a registry token with the gateway as actor,
+  so the chat host's token never reaches BReg. It takes a draft's target
+  from the citizen's own linked record, never from a tool argument.
+  `breg-mcp check` validates the runtime configuration and `breg-mcp serve`
+  runs the gateway.
+  This release publishes `breg-mcp` and `breg-review` as binaries for Linux amd64, Linux arm64,
+  and macOS arm64, and as the `ghcr.io/registrystack/breg-mcp` and
+  `ghcr.io/registrystack/breg-review` images; the BReg installer does not
+  install them. See [operate the citizen chat assistant](../operate/breg-mcp/).
+
+{/* Evidence: release/scripts/release_roster.py, BREG_SERVICES_FIRST_RELEASE;
+    crates/registry-breg-mcp/src/cli.rs, Command;
+    crates/registry-breg-mcp/src/tools.rs;
+    crates/registry-breg-mcp/src/inbound.rs;
+    crates/registry-breg-mcp/src/outbound.rs;
+    crates/registry-breg-mcp/clippy.toml;
+    products/breg/MCP-GATEWAY.md. */}
+
+- `breg-review` ships for the first time, a server-rendered review page beside the gateway. The
+  citizen signs in with an authorization code and PKCE, reads the draft BReg
+  holds under their own token, and submits it; the page holds no authority
+  of its own. `breg-review check` validates the runtime configuration and
+  resolves its secrets without opening a socket, and `breg-review serve`
+  listens at its explicit private `listener.bind` and stops cleanly on SIGINT or
+  SIGTERM. Its shared audit stream records the action, the
+  `changeRequestId`, keyed `principalPseudonym` and `clientPseudonym`
+  values, and the outcome, never a field value or token.
+
+{/* Evidence: crates/registry-breg-review/src/lib.rs, command, check, and serve;
+    crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig;
+    crates/registry-breg-review/src/signin.rs;
+    crates/registry-breg-review/src/journal.rs;
+    crates/registry-breg-review/tests/binary.rs;
+    products/breg/MCP-GATEWAY.md. */}
+
+</DocsetProduct>
+
+- The VS Code and Zed integrations cover every maintained product, and the language server reads
+  only `.yaml`, `.yml`, and `.json` product documents.
+
+{/* Evidence: editors/vscode/package.json; crates/registry-language-server/src/products/mod.rs. */}
+
 ## v0.37.0 beta-49
 
 - BREAKING: Base Registry Engine (BReg) refuses to compile a standing
@@ -100,62 +242,18 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_task_grants.rs;
     products/breg/TASK_GRANTS.md. */}
 
-<DocsetProduct product="registry-breg-services">
-
-- `breg-mcp` is a new supporting service beside BReg: an MCP gateway a chat
-  host uses to act for one verified citizen. It reads the citizen's own
-  record and creates or patches change-request drafts for it, and has no
-  code path to submit, revise, cancel, or apply one. It verifies the chat
-  host's token as an OAuth protected resource and, for every tool call,
-  exchanges it (RFC 8693) for a registry token with the gateway as actor,
-  so the chat host's token never reaches BReg. It takes a draft's target
-  from the citizen's own linked record, never from a tool argument.
-  `breg-mcp check` validates the runtime configuration and `breg-mcp serve`
-  runs the gateway.
-  This release publishes both as binaries for Linux amd64, Linux arm64,
-  and macOS arm64, and as the `ghcr.io/registrystack/breg-mcp` and
-  `ghcr.io/registrystack/breg-review` images; the BReg installer does not
-  install them.
-
-{/* Evidence: crates/registry-breg-mcp/src/cli.rs, Command;
-    crates/registry-breg-mcp/src/tools.rs;
-    crates/registry-breg-mcp/src/inbound.rs;
-    crates/registry-breg-mcp/src/outbound.rs;
-    crates/registry-breg-mcp/clippy.toml;
-    products/breg/MCP-GATEWAY.md. */}
-
-- `breg-review` is a new server-rendered review page beside the gateway. The
-  citizen signs in with an authorization code and PKCE, reads the draft BReg
-  holds under their own token, and submits it; the page holds no authority
-  of its own. `breg-review check` validates the runtime configuration and
-  resolves its secrets without opening a socket, and `breg-review serve`
-  listens at its explicit private `listener.bind` and stops cleanly on SIGINT or
-  SIGTERM. Its shared audit stream records the action, the
-  `changeRequestId`, keyed `principalPseudonym` and `clientPseudonym`
-  values, and the outcome, never a field value or token.
-
-{/* Evidence: crates/registry-breg-review/src/lib.rs, command, check, and serve;
-    crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig;
-    crates/registry-breg-review/src/signin.rs;
-    crates/registry-breg-review/src/journal.rs;
-    crates/registry-breg-review/tests/binary.rs;
-    products/breg/MCP-GATEWAY.md. */}
-
-</DocsetProduct>
-
 - `registry-platform-ratelimit` is a new shared crate with two in-memory
   keyed limiters, `TokenBucketLimiter` and `FixedWindowCounter`, each capped
   at a fixed number of tracked keys. Evidence now uses it for its request
   budget and failed-selector counter with no change in behavior: the same
-  refill, key cap, pruning, and refusals.<DocsetProduct product="registry-breg-services"> The
-  gateway and the review page use it for their limits.</DocsetProduct>
+  refill, key cap, pruning, and refusals.
 
 {/* Evidence: crates/registry-platform-ratelimit/src/lib.rs, MAX_TRACKED_KEYS;
     crates/registry-platform-ratelimit/src/token_bucket.rs, TokenBucketLimiter;
     crates/registry-platform-ratelimit/src/fixed_window.rs, FixedWindowCounter;
     crates/registry-evidence/src/rate_limit.rs. */}
 
-- Platform crates gain<DocsetProduct product="registry-breg-services"> what the gateway and the review page need</DocsetProduct><DocsetProduct product="registry-breg-services" absent> token exchange, sign-in, and security header primitives</DocsetProduct>.
+- Platform crates gain token exchange, sign-in, and security header primitives.
   `ExchangeAuthorization::upstream` sends an optional actor token with an
   RFC 8693 exchange. `PrivateKeyJwt::redeem_authorization_code` redeems an
   authorization code with PKCE and the configured resource, and returns any

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.38.0 - 2026-10-01
+
 - BREAKING: package activation (`schedulingctl plan`, `apply`, and `status`) and
   `scheduling serve` startup refuse a PostgreSQL server older than 17 with an
   upgrade instruction, before any migration or activation write. Operators
@@ -14,6 +16,9 @@
   set. Add the owner-scoped `GET /v1/appointments` filter over one exact
   product, record type, and record identifier tuple, with bounded paging whose
   cursor is bound to both the caller and filter.
+- Migration 10 stores external references. The runtime refuses to start
+  until `schedulingctl plan` and `apply` run it, and existing holds and
+  appointments receive an empty reference set.
 
 - Add a standalone Linux amd64 runtime binary from v0.38.0, alongside the
   existing Docker image and operator binary.
