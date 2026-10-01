@@ -47,12 +47,14 @@ COPY crates ./crates
 COPY products ./products
 ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
 ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
-RUN --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
+ADD --checksum=sha256:ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 https://snapshot.debian.org/archive/debian-security/20260930T060347Z/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb /workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_amd64.deb
+ADD --checksum=sha256:d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97 https://snapshot.debian.org/archive/debian-security/20260930T060347Z/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_arm64.deb /workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_arm64.deb
+RUN --mount=type=bind,source=release/scripts/install-runtime-packages.sh,target=/workspace/install-runtime-packages.sh,readonly \
     cargo build --release --locked -p registry-evidence --bin evidence \
     && mkdir -p \
         /workspace/runtime-root/etc/registry-evidence \
         /workspace/runtime-root/var/lib/registry-evidence/audit \
-    && /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
+    && /workspace/install-runtime-packages.sh /workspace/runtime-root /workspace/runtime-packages \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-evidence \
     && chmod 0700 /workspace/runtime-root/var/lib/registry-evidence/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
@@ -85,12 +87,14 @@ COPY crates ./crates
 COPY products ./products
 ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
 ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
-RUN --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
+ADD --checksum=sha256:ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 https://snapshot.debian.org/archive/debian-security/20260930T060347Z/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb /workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_amd64.deb
+ADD --checksum=sha256:d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97 https://snapshot.debian.org/archive/debian-security/20260930T060347Z/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_arm64.deb /workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_arm64.deb
+RUN --mount=type=bind,source=release/scripts/install-runtime-packages.sh,target=/workspace/install-runtime-packages.sh,readonly \
     cargo build --release --locked -p registry-casework --bin casework \
     && mkdir -p \
         /workspace/runtime-root/etc/registry-casework \
         /workspace/runtime-root/var/lib/registry-casework/audit \
-    && /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
+    && /workspace/install-runtime-packages.sh /workspace/runtime-root /workspace/runtime-packages \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-casework \
     && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +

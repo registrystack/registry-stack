@@ -40,8 +40,8 @@ done
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
 cp "${repo_root}/THIRD_PARTY_NOTICES" "${context_dir}/THIRD_PARTY_NOTICES"
 cp \
-  "${repo_root}/release/scripts/install-runtime-libc6.sh" \
-  "${context_dir}/release/scripts/install-runtime-libc6.sh"
+  "${repo_root}/release/scripts/install-runtime-packages.sh" \
+  "${context_dir}/release/scripts/install-runtime-packages.sh"
 
 docker buildx create \
   --name "${smoke_builder}" \
