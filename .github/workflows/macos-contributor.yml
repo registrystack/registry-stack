@@ -123,6 +123,9 @@ jobs:
           set -euo pipefail
           # The runner builds the tutorial binaries itself and serves them with
           # their AWS-LC FIPS runtime library, as a contributor's gate does.
+          # The runner needs only pure-JS packages. Skipping install scripts
+          # keeps the Vale postinstall's unauthenticated GitHub download, which
+          # shared macOS runner addresses get rate-limited on, out of this gate.
           cd docs/site
-          npm ci --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           npm run check:tutorial:discovery
