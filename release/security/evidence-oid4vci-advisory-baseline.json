@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "service": "discovery",
+  "service": "evidence-oid4vci",
   "runtime": {
     "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97",
     "layer_ids": [
@@ -27,18 +27,20 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:8b139e39a931e80d5a92b0189f87a6e8b46a02d96bb580b6c62a73b6589d1e14"
+      "sha256:4a7354f0f050e6db81f9d2fdefb00dee6cec87052b9fc673c59476e491705436",
+      "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
       "user": "65532",
       "entrypoint": [
-        "/usr/local/bin/discovery"
+        "/usr/local/bin/evidence-oid4vci"
       ],
       "command": [
-        "--runtime-config",
-        "/etc/registry-discovery/runtime.yaml"
+        "serve",
+        "--config",
+        "/etc/registry-evidence-oid4vci/runtime.yaml"
       ],
-      "working_dir": "/home/nonroot",
+      "working_dir": "/var/lib/registry-evidence-oid4vci",
       "environment": [
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
@@ -46,11 +48,11 @@
       "healthcheck": null,
       "args_escaped": true,
       "exposed_ports": [
-        "8080/tcp"
+        "8090/tcp"
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253"
+    "definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3"
   },
   "policies": [
     {
@@ -73,7 +75,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, beside the pinned libssl3t64 3.5.7-1~deb13u3, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, beside the pinned libssl3t64 3.5.7-1~deb13u3, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -88,17 +90,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
-      "component_layer_id": "sha256:8b139e39a931e80d5a92b0189f87a6e8b46a02d96bb580b6c62a73b6589d1e14",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
+      "component_layer_id": "sha256:4a7354f0f050e6db81f9d2fdefb00dee6cec87052b9fc673c59476e491705436",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -117,11 +119,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     },
     {
@@ -131,7 +133,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, beside the pinned libssl3t64 3.5.7-1~deb13u3, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian fixes the issue only in forky and sid.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, beside the pinned libssl3t64 3.5.7-1~deb13u3, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian fixes the issue only in forky and sid.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -146,17 +148,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
-      "component_layer_id": "sha256:8b139e39a931e80d5a92b0189f87a6e8b46a02d96bb580b6c62a73b6589d1e14",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
+      "component_layer_id": "sha256:4a7354f0f050e6db81f9d2fdefb00dee6cec87052b9fc673c59476e491705436",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -175,11 +177,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     },
     {
@@ -189,7 +191,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed zlib package for Trixie.",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed zlib package for Trixie.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -204,17 +206,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -233,11 +235,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     },
     {
@@ -247,7 +249,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -262,17 +264,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -291,11 +293,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     },
     {
@@ -305,7 +307,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -320,17 +322,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -349,11 +351,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     },
     {
@@ -363,7 +365,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -378,17 +380,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -407,11 +409,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     },
     {
@@ -421,7 +423,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Discovery local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
       "reviewed_at": "2026-10-01",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -436,17 +438,17 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+      "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+        "reference_image_digest": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
         "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:b7486372836d551dbd573904f0c25255defd215cdbedd6d25256a8246098b253",
+        "runtime_definition_digest": "sha256:a3fa3062115f8cde0ccae2a4da2c320a4067a1a0bb995ba97d1ff14b5a5052e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -465,11 +467,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:3ff88d4ad97782cecfb400ae91cd8e1a31c0dcb69c63483cb9972b516c6aa69a"
+            "path": "/usr/local/bin/evidence-oid4vci",
+            "sha256": "sha256:fb0211257dae4ecfe15293bb31054b374241feb607fc8abb1c5c3934a279accf"
           }
         ],
-        "definition_digest": "sha256:20dfa6209c89d874799fcd1b8090ccc50bf0c9311c44d9ae97ea560bb7a759ea"
+        "definition_digest": "sha256:55785cdae9f124cd21708d6e3e3fdec4cdbd9cbe05e2dd8fab0474d1929d85cd"
       }
     }
   ]
