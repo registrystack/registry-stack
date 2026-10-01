@@ -129,8 +129,10 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, and Relay bindings.
-The Messaging bindings stay out of them until Messaging joins a release.
+are generated from the BReg, Casework, Discovery, Evidence, Messaging, and Relay
+bindings. Published packages include Messaging from v0.38.0; earlier release
+assembly preserves its version-selected inventory. Source CI uses the explicit
+local `--include-messaging` override when assembling the current six bindings.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
