@@ -533,6 +533,17 @@ def syft_files(report: Any) -> tuple[frozenset[str], tuple[tuple[str, str], ...]
     return frozenset(paths), tuple(sorted(sha256_digests.items()))
 
 
+def location_multiset(locations: Any) -> list[str] | None:
+    """Return package locations in a canonical order.
+
+    Grype and Syft may list the same package locations in different orders.
+    """
+
+    if not isinstance(locations, list):
+        return None
+    return sorted(json.dumps(location, sort_keys=True) for location in locations)
+
+
 def component_layer(
     artifact: dict[str, Any], layer_ids: tuple[str, ...]
 ) -> tuple[str, str]:
@@ -544,7 +555,17 @@ def component_layer(
         layer_id = location.get("layerID") if isinstance(location, dict) else None
         if not isinstance(layer_id, str) or SHA256_DIGEST_RE.fullmatch(layer_id) is None:
             return "", "artifact location layerID is missing or malformed"
+        # A supporting location, such as a copyright file reached through a
+        # /usr/share/doc symlink into another package, does not say which layer
+        # installed the package; it must still belong to the image.
+        annotations = location.get("annotations")
+        if isinstance(annotations, dict) and annotations.get("evidence") == "supporting":
+            if layer_id not in layer_ids:
+                return "", "artifact location layer is absent from image layers"
+            continue
         ids.add(layer_id)
+    if not ids:
+        return "", "artifact has no primary package location"
     if len(ids) != 1:
         return "", "artifact locations span multiple component layers"
     layer_id = next(iter(ids))
@@ -578,9 +599,14 @@ def normalize_grype(
             fail("grype report matches must contain vulnerability and artifact objects")
         artifact_id = nonblank(artifact.get("id"), "grype artifact id")
         syft_artifact = artifacts.get(artifact_id)
-        if syft_artifact is None or any(
-            artifact.get(field) != syft_artifact.get(field)
-            for field in ("id", "name", "version", "type", "locations")
+        if (
+            syft_artifact is None
+            or any(
+                artifact.get(field) != syft_artifact.get(field)
+                for field in ("id", "name", "version", "type")
+            )
+            or location_multiset(artifact.get("locations"))
+            != location_multiset(syft_artifact.get("locations"))
         ):
             fail("grype finding artifact does not match the Syft package model")
         vulnerability_id = nonblank(

@@ -25,21 +25,31 @@ LIVE_BASELINES = (
     ROOT / "release/security/discovery-advisory-baseline.json",
     ROOT / "release/security/evidence-advisory-baseline.json",
     ROOT / "release/security/scheduling-advisory-baseline.json",
+    ROOT / "release/security/breg-mcp-advisory-baseline.json",
+    ROOT / "release/security/breg-review-advisory-baseline.json",
+    ROOT / "release/security/evidence-oid4vci-advisory-baseline.json",
+    ROOT / "release/security/messaging-advisory-baseline.json",
+    ROOT / "release/security/registry-render-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:6b4ae3db810b9b8f228fb7289ece005dce662741828738355ff1f1f7e75b5325",
-    "breg": "sha256:6dfe07aead9919ec5fd56b64164ba59954d6b81dc9decff91ad3bd73c5c47dd2",
-    "casework": "sha256:0a6f0348288c8648ec53b9c75eb0f934573f56289ab1c9dc10631009c26ddf06",
-    "discovery": "sha256:be529fd11e539b06113764f37a2b0aa7b1f7bc39cf119dde44ac076a9d725834",
-    "evidence": "sha256:0d54a24bbcceda0ee78e5f19ff2a1a206b53c5fef9ffb7877a6019dde911027e",
-    "scheduling": "sha256:0b7dc4ac9cb545f763eac4f2358d9c262b04cd9b74acf9a5137d1767b1b2eaa5",
+    "relay": "sha256:3055b584ef680ab1f71c937bc653f89470088044e14814858b4bf5ea6d290dd5",
+    "breg": "sha256:f995d3965b38ad9037132908db6408b2358cc75fc97d60f3f5ee15df1649a4bc",
+    "casework": "sha256:a50ecbee234c092060e0588346543b2543c956d5b2ed3ad021379a05dd81af6e",
+    "discovery": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
+    "evidence": "sha256:17199ede48d9f708178a6afedfc1e9b5e8bbd4d4fb9e9598dd1eddb1091dafab",
+    "scheduling": "sha256:18c23b1237f1d1ecffece5cfde982457fa2288a8b22fd7b0cb0e656d1587a96f",
+    "breg-mcp": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
+    "breg-review": "sha256:af9b05b6e2aee4cb2c99b1e1101b8e907d8b75f0c81d984cca4213bae91a1df0",
+    "evidence-oid4vci": "sha256:d654d38c2ffa1f7b93b2e6b9263cabb17930941d762309e90fb00a472df160ea",
+    "messaging": "sha256:89b4a4dcc7dead771d79128739f68726dfdb9845ce1511ab7d60c6b26dcae4d1",
+    "registry-render": "sha256:30d0e2494c801538c2c703249a2c79fbfcac46c3a0634bd90a1d369517f647b7",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "8fdda658d1448567b0326ab10a0a2f2a5c89fa84"
+LIVE_REFERENCE_SOURCE_REVISION = "252c1bf435c332f65c3a391ccb16a70c0a22587a"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-09-29"
+LIVE_REVIEW_EVALUATION_DATE = "2026-10-01"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "local_reproduction",
     "breg": "local_reproduction",
@@ -47,6 +57,11 @@ LIVE_REFERENCE_PROVENANCE = {
     "discovery": "local_reproduction",
     "evidence": "local_reproduction",
     "scheduling": "local_reproduction",
+    "breg-mcp": "local_reproduction",
+    "breg-review": "local_reproduction",
+    "evidence-oid4vci": "local_reproduction",
+    "messaging": "local_reproduction",
+    "registry-render": "local_reproduction",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
@@ -55,6 +70,11 @@ LIVE_EXECUTABLES = {
     "discovery": "/usr/local/bin/discovery",
     "evidence": "/usr/local/bin/evidence",
     "scheduling": "/usr/local/bin/scheduling",
+    "breg-mcp": "/usr/local/bin/breg-mcp",
+    "breg-review": "/usr/local/bin/breg-review",
+    "evidence-oid4vci": "/usr/local/bin/evidence-oid4vci",
+    "messaging": "/usr/local/bin/messaging",
+    "registry-render": "/usr/local/bin/registry-render",
 }
 
 
@@ -275,6 +295,8 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         image_digest=None,
         component_layer=None,
         severity="High",
+        locations=None,
+        grype_locations=None,
     ):
         component_layer = component_layer or self.BASE_LAYER_1
         artifact = {
@@ -282,13 +304,17 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             "name": "openssl",
             "version": "3.0.0",
             "type": "deb",
-            "locations": [
+            "locations": locations
+            or [
                 {
                     "path": "/var/lib/dpkg/status.d/openssl",
                     "layerID": component_layer,
                 }
             ],
         }
+        grype_artifact = copy.deepcopy(artifact)
+        if grype_locations is not None:
+            grype_artifact["locations"] = grype_locations
         target = self.image_target(layers, image_digest)
         grype = {
             "descriptor": {"name": "grype", "version": "0.104.0"},
@@ -300,7 +326,7 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                         "severity": severity,
                         "fix": {"versions": [], "state": "not-fixed"},
                     },
-                    "artifact": copy.deepcopy(artifact),
+                    "artifact": grype_artifact,
                 }
             ],
         }
@@ -1051,6 +1077,103 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             self.load_baseline(baseline)
+
+    def package_location(self, path, layer, evidence=None):
+        location = {"path": path, "layerID": layer}
+        if evidence is not None:
+            location["annotations"] = {"evidence": evidence}
+        return location
+
+    def shared_copyright_locations(self):
+        # A Debian package whose /usr/share/doc directory is a symlink into the
+        # source package's base package, as libgcc-s1 is into gcc-14-base.
+        return [
+            self.package_location(
+                "/var/lib/dpkg/status.d/openssl", self.BASE_LAYER_2, "primary"
+            ),
+            self.package_location(
+                "/usr/share/doc/openssl-base/copyright", self.BASE_LAYER_1, "supporting"
+            ),
+            self.package_location(
+                "/var/lib/dpkg/status.d/openssl.md5sums",
+                self.BASE_LAYER_2,
+                "supporting",
+            ),
+        ]
+
+    def test_syft_package_model_ignores_location_order(self):
+        locations = self.shared_copyright_locations()
+        finding = self.finding(
+            locations=locations, grype_locations=list(reversed(locations))
+        )
+
+        self.assertEqual(self.BASE_LAYER_2, finding.component_layer_id)
+        self.assertEqual("", finding.component_layer_error)
+
+    def test_syft_package_model_refuses_different_locations(self):
+        locations = self.shared_copyright_locations()
+        for grype_locations in (
+            locations[:2],
+            locations + [copy.deepcopy(locations[0])],
+            [locations[0], self.package_location(
+                "/usr/share/doc/openssl/copyright", self.BASE_LAYER_1, "supporting"
+            ), locations[2]],
+        ):
+            with self.subTest(grype_locations=grype_locations):
+                grype, syft = self.reports(
+                    locations=locations, grype_locations=grype_locations
+                )
+                with self.assertRaises(SystemExit):
+                    self.module.normalize_grype(grype, self.SUBJECT, syft)
+
+    def test_supporting_location_does_not_decide_component_layer(self):
+        finding = self.finding(locations=self.shared_copyright_locations())
+        baseline = self.load_baseline(self.baseline(finding))
+
+        self.assertEqual(self.BASE_LAYER_2, finding.component_layer_id)
+        self.assertEqual(0, self.check(finding, baseline))
+
+    def test_component_layer_requires_one_layer_for_package_evidence(self):
+        unknown_layer = "sha256:" + "f" * 64
+        status = "/var/lib/dpkg/status.d/openssl"
+        copyright_path = "/usr/share/doc/openssl/copyright"
+        for locations, error in (
+            (
+                [
+                    self.package_location(status, self.BASE_LAYER_1),
+                    self.package_location(copyright_path, self.BASE_LAYER_2),
+                ],
+                "artifact locations span multiple component layers",
+            ),
+            (
+                [
+                    self.package_location(status, self.BASE_LAYER_1, "primary"),
+                    self.package_location(
+                        "/var/lib/dpkg/status.d/openssl.md5sums",
+                        self.BASE_LAYER_2,
+                    ),
+                ],
+                "artifact locations span multiple component layers",
+            ),
+            (
+                [
+                    self.package_location(status, self.BASE_LAYER_1, "supporting"),
+                    self.package_location(copyright_path, self.BASE_LAYER_2, "supporting"),
+                ],
+                "artifact has no primary package location",
+            ),
+            (
+                [
+                    self.package_location(status, self.BASE_LAYER_2, "primary"),
+                    self.package_location(copyright_path, unknown_layer, "supporting"),
+                ],
+                "artifact location layer is absent from image layers",
+            ),
+        ):
+            with self.subTest(locations=locations):
+                finding = self.finding(locations=locations)
+                self.assertEqual("", finding.component_layer_id)
+                self.assertEqual(error, finding.component_layer_error)
 
     def test_added_candidate_layer_blocks_unreviewed_loader_input(self):
         finding = self.finding()
