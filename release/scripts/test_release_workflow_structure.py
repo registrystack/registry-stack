@@ -2051,15 +2051,25 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "publish-identifiers",
             "Dispatch and verify exact identifier publication",
         )
-        self.assertIn("registrystack/registrystack-id", run)
         self.assertIn(
-            '-f "source_sha=${{ needs.verify.outputs.source_sha }}"',
+            "repos/registrystack/registrystack-id/actions/workflows/"
+            "deploy-cloudflare-workers.yml/dispatches",
             run,
         )
         self.assertIn(
-            '-f "catalog_sha256=${{ needs.verify.outputs.identifier_catalog_sha256 }}"',
+            '-f "inputs[source_sha]=${{ needs.verify.outputs.source_sha }}"',
             run,
         )
+        self.assertIn(
+            '-f "inputs[catalog_sha256]='
+            '${{ needs.verify.outputs.identifier_catalog_sha256 }}"',
+            run,
+        )
+        # A rerun dispatches under the same request ID, so only the run the
+        # dispatch itself created may be watched, never one found by title.
+        self.assertIn("--jq .workflow_run_id", run)
+        self.assertNotIn("displayTitle", run)
+        self.assertNotIn("gh run list", run)
         self.assertIn('gh run watch "${target_run_id}"', run)
         self.assertIn("--exit-status", run)
 
