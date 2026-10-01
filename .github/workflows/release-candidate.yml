@@ -1914,6 +1914,8 @@ jobs:
             messaging-in-release "${version}")"
           if [[ "${messaging_in_release}" == true ]]; then
             for messaging_binary in messaging messagingctl; do
+              chmod 0755 \
+                "candidate/bundle-root/${messaging_binary}-${{ needs.validate.outputs.tag }}-linux-amd64"
               observed="$("candidate/bundle-root/${messaging_binary}-${{ needs.validate.outputs.tag }}-linux-amd64" --version)"
               test "${observed}" = \
                 "${messaging_binary} ${{ needs.validate.outputs.version }}"
