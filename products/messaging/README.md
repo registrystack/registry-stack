@@ -11,9 +11,8 @@ attempt. It is a native Rust runtime over PostgreSQL with no broker.
 ## Status
 
 Not yet released. Messaging builds from source in this repository and now
-uses the shared platform activation ledger. No release carries its binaries,
-container image, or clients yet: its first release waits for its GHCR image
-package onboarding and a reviewed advisory baseline.
+uses the shared platform activation ledger. Registry Stack 0.38.0 is planned
+to be the first release carrying its binaries, container image, and clients.
 
 Pre-1.0 and under construction. This version is the product skeleton:
 

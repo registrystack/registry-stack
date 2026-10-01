@@ -299,6 +299,36 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
             ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
         )
 
+    def test_v0_38_roster_includes_render_and_oid4vci_images(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "release/scripts/release_candidate.py"),
+                "image-names",
+                "--version",
+                "0.38.0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            MODULE.parse_roster(result.stdout),
+            (
+                "breg",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "discovery",
+                "evidence",
+                "evidence-oid4vci",
+                "messaging",
+                "registry-render",
+                "relay",
+                "scheduling",
+            ),
+        )
+
     def test_operator_tools_are_parsed_against_the_image_roster(self) -> None:
         roster = ("breg", "casework", "evidence")
         self.assertEqual({}, MODULE.parse_operator_tools("", roster))
@@ -414,12 +444,35 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
-    def test_no_version_roster_includes_a_held_surface_until_it_joins_a_release(
+    def test_messaging_joins_the_collector_roster_from_v0_38(
         self,
     ) -> None:
-        # Messaging, the breg citizen services, Registry Render, and the
-        # Evidence OID4VCI image have no first release in release_roster.
-        for version in ("0.35.0", "0.36.0", "0.38.0", "1.0.0"):
+        for version, expected in (
+            (
+                "0.35.0",
+                ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
+            ),
+            (
+                "0.36.0",
+                ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
+            ),
+            (
+                "1.0.0",
+                (
+                    "breg",
+                    "breg-mcp",
+                    "breg-review",
+                    "casework",
+                    "discovery",
+                    "evidence",
+                    "evidence-oid4vci",
+                    "messaging",
+                    "registry-render",
+                    "relay",
+                    "scheduling",
+                ),
+            ),
+        ):
             with self.subTest(version=version):
                 result = subprocess.run(
                     [
@@ -435,7 +488,7 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 )
                 self.assertEqual(
                     MODULE.parse_roster(result.stdout),
-                    ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
+                    expected,
                 )
 
     def test_first_messaging_release_roster_includes_messaging(self) -> None:
@@ -482,8 +535,7 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 "scheduling",
             ),
         )
-        # The collector also supports the held-out breg citizen services,
-        # Registry Render, and the Evidence OID4VCI image.
+        # The collector also supports the held-out breg citizen services.
         self.assertEqual(
             MODULE.IMAGE_NAMES - set(roster),
             {
