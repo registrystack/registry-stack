@@ -26,25 +26,35 @@ const withoutMessaging = { products: { 'registry-casework': { ref: 'HEAD' } } };
 const withBregServices = { products: { 'registry-breg-services': { ref: 'HEAD' } } };
 const withoutBregServices = withoutMessaging;
 
-// Registry Messaging is merged but not released: until an activation change
-// adds it to the latest docset, nothing published may describe it.
-test('the latest docset does not publish Registry Messaging', () => {
+// Registry Messaging, breg-mcp, and breg-review first ship in v0.38.0
+// (release_roster.MESSAGING_FIRST_RELEASE and BREG_SERVICES_FIRST_RELEASE).
+// The prepared release docset copies the current docset's products, so the
+// latest docset names them, and no docset archived before v0.38.0 does.
+test('the latest docset publishes Registry Messaging and the BReg citizen services', () => {
   const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
   const latest = manifest.docsets.find((docset) => docset.id === 'latest');
   assert.ok(latest, 'docsets.yaml must declare the latest docset');
-  assert.equal(latest.products?.['registry-messaging'], undefined);
+  for (const product of ['registry-messaging', 'registry-breg-services']) {
+    assert.deepEqual(
+      latest.products?.[product],
+      { version: 'main source (unreleased)', ref: 'HEAD' },
+      product,
+    );
+  }
   assert.equal(selectedDocset(manifest, { DOCS_DOCSET: 'latest' }), latest);
   assert.equal(selectedDocset(manifest, {}).id, manifest.current);
   assert.throws(() => selectedDocset(manifest, { DOCS_DOCSET: 'missing' }), /"missing" not found/);
 });
 
-// breg-mcp and breg-review are merged but held out of releases
-// (release_roster.BREG_SERVICES_FIRST_RELEASE). The prepared release docset
-// copies the current docset's products, so no docset may name them until the
-// change that admits them to a release.
-test('no docset publishes the Base Registry Engine citizen services', () => {
+test('no docset archived before v0.38.0 publishes Registry Messaging or the BReg citizen services', () => {
   const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
-  for (const docset of manifest.docsets) {
+  const earlier = manifest.docsets.filter((docset) => {
+    const match = /^v0\.(\d+)\.\d+$/.exec(docset.id);
+    return match !== null && Number(match[1]) < 38;
+  });
+  assert.ok(earlier.length > 0, 'docsets.yaml must keep archived docsets');
+  for (const docset of earlier) {
+    assert.equal(docset.products?.['registry-messaging'], undefined, docset.id);
     assert.equal(docset.products?.['registry-breg-services'], undefined, docset.id);
   }
 });
