@@ -127,7 +127,7 @@ class SupportingReleaseImageTests(unittest.TestCase):
                 self.assertIn(f'"{name}"', collector)
                 self.assertIn(name, smoke.split("images=(", 1)[1].split(")", 1)[0])
                 self.assertIn(f'"{name}",', cleanup)
-                self.assertNotIn(f'"{name}-candidate",', cleanup)
+                self.assertIn(f'"{name}-candidate",', cleanup)
 
 
 if __name__ == "__main__":

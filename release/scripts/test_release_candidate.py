@@ -183,6 +183,16 @@ class ReleaseCandidateTest(TestCase):
             shutil.copy2(source, destination)
         return root
 
+    def without_candidate_packages(self, root: Path, *names: str) -> None:
+        """Model packages whose private candidate identity is not bootstrapped."""
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        text = cleanup.read_text(encoding="utf-8")
+        for name in names:
+            entry = f'    "{name}-candidate",\n'
+            self.assertIn(entry, text)
+            text = text.replace(entry, "")
+        cleanup.write_text(text, encoding="utf-8")
+
 
 
 
@@ -1356,6 +1366,7 @@ class ReleaseCandidateTest(TestCase):
         self.hold_out("RENDER_FIRST_RELEASE")
         self.hold_out("EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE")
         root = self.onboarding_repository()
+        self.without_candidate_packages(root, "messaging")
         for image_name in ("scheduling", "messaging"):
             shutil.copy2(
                 ROOT / f"release/docker/Dockerfile.{image_name}",
@@ -1396,6 +1407,7 @@ class ReleaseCandidateTest(TestCase):
         self.hold_out("BREG_SERVICES_FIRST_RELEASE")
         self.hold_out("MESSAGING_FIRST_RELEASE")
         root = self.onboarding_repository()
+        self.without_candidate_packages(root, "evidence-oid4vci", "registry-render")
         for relative_path in (
             "release/docker/Dockerfile.scheduling",
             "release/security/scheduling-advisory-baseline.json",
@@ -1441,6 +1453,7 @@ class ReleaseCandidateTest(TestCase):
         self.hold_out("RENDER_FIRST_RELEASE")
         self.hold_out("EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE")
         root = self.onboarding_repository()
+        self.without_candidate_packages(root, "breg-mcp", "breg-review")
         for relative_path in (
             "release/docker/Dockerfile.scheduling",
             "release/security/scheduling-advisory-baseline.json",
@@ -1448,19 +1461,6 @@ class ReleaseCandidateTest(TestCase):
             "release/docker/Dockerfile.breg-review",
         ):
             shutil.copy2(ROOT / relative_path, root / relative_path)
-        for service in ("breg-mcp", "breg-review"):
-            with self.subTest(service=service):
-                self.assertFalse(
-                    (
-                        ROOT / f"release/security/{service}-advisory-baseline.json"
-                    ).exists()
-                )
-                self.assertNotIn(
-                    f'"{service}-candidate"',
-                    (
-                        ROOT / "release/scripts/cleanup-release-candidates.py"
-                    ).read_text(encoding="utf-8"),
-                )
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "breg-mcp advisory baseline is missing",

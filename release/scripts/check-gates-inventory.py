@@ -1080,7 +1080,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Candidate cleanup exact package allowlist",
         "release/scripts/cleanup-release-candidates.py",
         (
-            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist only after its private package identity is bootstrapped.\n    "breg-candidate",\n    "casework-candidate",\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n    "scheduling-candidate",\n)',
+            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist only after its private package identity is bootstrapped.\n    "breg-candidate",\n    "breg-mcp-candidate",\n    "breg-review-candidate",\n    "casework-candidate",\n    "discovery-candidate",\n    "evidence-candidate",\n    "evidence-oid4vci-candidate",\n    "messaging-candidate",\n    "mint-candidate",\n    "registry-render-candidate",\n    "relay-candidate",\n    "scheduling-candidate",\n)',
             'PUBLIC_PACKAGES = (\n    # Retired public names stay denylisted so cleanup can never delete history.',
             '    "discovery",\n',
             '    "evidence",\n',
