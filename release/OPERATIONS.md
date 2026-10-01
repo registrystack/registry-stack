@@ -201,14 +201,12 @@ The two Base Registry Engine supporting services, the citizen MCP gateway
 single place that decides the first release that ships them, and every release
 script and workflow reads it. From that release both checks include both
 services. The release
-source deny-lists the public `breg-mcp` and `breg-review` packages while
-leaving `breg-mcp-candidate` and `breg-review-candidate` out of scheduled
-cleanup until their private package identities exist. Provision all four
-identities, add both candidate names to the cleanup allowlist with their
-matching test, and merge a reviewed advisory baseline for each image before
-requesting a candidate at or after that release. Until then, a rehearsal or
-candidate at that release stops at the image-onboarding check, as the
-procedure above intends.
+source deny-lists the public `breg-mcp` and `breg-review` packages and
+includes the bootstrapped private `breg-mcp-candidate` and
+`breg-review-candidate` packages in scheduled cleanup. Verify all four
+identities have the visibility and Actions access documented above, and
+require a reviewed advisory baseline for each image before requesting a
+candidate at or after that release.
 
 Both service images run as the Distroless `nonroot` user (UID and GID 65532)
 and start `serve` with the runtime configuration at
@@ -230,12 +228,11 @@ shared platform activation crate supplies the ledger and role boundary behind
 `messagingctl plan`, `apply`, and `status`.
 From `v0.38.0`, both
 checks include Messaging. The release source deny-lists the
-public `messaging` package, but the commands do not establish that `messaging`
-or `messaging-candidate` has already been provisioned. Complete the onboarding
-steps above, add `messaging-candidate` to the cleanup allowlist only after its
-private package exists, and merge the reviewed
-`release/security/messaging-advisory-baseline.json` before requesting a
-candidate at or after that release.
+public `messaging` package and includes the bootstrapped private
+`messaging-candidate` package in scheduled cleanup. Verify both identities
+have the visibility and Actions access documented above, and require the
+reviewed `release/security/messaging-advisory-baseline.json` before requesting
+a candidate at or after that release.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be

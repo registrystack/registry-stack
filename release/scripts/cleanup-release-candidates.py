@@ -22,10 +22,15 @@ CANDIDATE_PACKAGES = (
     # Listing an absent package fails closed, so a candidate name joins this
     # allowlist only after its private package identity is bootstrapped.
     "breg-candidate",
+    "breg-mcp-candidate",
+    "breg-review-candidate",
     "casework-candidate",
     "discovery-candidate",
     "evidence-candidate",
+    "evidence-oid4vci-candidate",
+    "messaging-candidate",
     "mint-candidate",
+    "registry-render-candidate",
     "relay-candidate",
     "scheduling-candidate",
 )
