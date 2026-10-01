@@ -34,8 +34,8 @@ deployment it calls unless a release note states a wider compatibility range.
 The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
 carry no Base Registry Engine client package and no unified package; they distribute one standalone
 package per product instead. The `casework` namespace is present in those same unified packages
-beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present only in
-packages built from main source, and no release carries it yet</DocsetProduct>. Python requires version 3.10 or later and the wheels use the
+beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
+beginning with Registry Stack v0.38.0</DocsetProduct>. Python requires version 3.10 or later and the wheels use the
 Python 3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
 macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains

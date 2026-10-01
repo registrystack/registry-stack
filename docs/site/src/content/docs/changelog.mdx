@@ -112,8 +112,10 @@ relevant product pages on this site rather than duplicating release notes.
   from the citizen's own linked record, never from a tool argument.
   `breg-mcp check` validates the runtime configuration and `breg-mcp serve`
   runs the gateway.
-  No release publishes the gateway or the review page yet; build both
-  from source.
+  This release publishes both as binaries for Linux amd64, Linux arm64,
+  and macOS arm64, and as the `ghcr.io/registrystack/breg-mcp` and
+  `ghcr.io/registrystack/breg-review` images; the BReg installer does not
+  install them.
 
 {/* Evidence: crates/registry-breg-mcp/src/cli.rs, Command;
     crates/registry-breg-mcp/src/tools.rs;
