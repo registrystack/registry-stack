@@ -25,19 +25,6 @@ IMAGE_DIGEST = "sha256:" + "c" * 64
 CONFIG_DIGEST = "sha256:" + "d" * 64
 LAYER_DIGEST = "sha256:" + "e" * 64
 ATTESTATION_DIGEST = "sha256:" + "f" * 64
-# breg-mcp and breg-review, Messaging, Registry Render, and the Evidence OID4VCI
-# image have no first release: each release_roster constant below is None.
-# Fixtures patch a hypothetical first release of v0.38.0 so their roster paths
-# stay covered without any production knob. The real v0.38.0 roster is
-# asserted with these patches lifted.
-HYPOTHETICAL_FIRST_RELEASES = {
-    "BREG_SERVICES_FIRST_RELEASE": (0, 38, 0),
-    "MESSAGING_FIRST_RELEASE": (0, 38, 0),
-    "RENDER_FIRST_RELEASE": (0, 38, 0),
-    "EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE": (0, 38, 0),
-}
-
-
 def load_module():
     spec = importlib.util.spec_from_file_location("release_candidate", SCRIPT)
     if spec is None or spec.loader is None:
@@ -148,14 +135,6 @@ def security_evidence_tar(
 class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
-        self.roster_patches = []
-        for constant, first_release in HYPOTHETICAL_FIRST_RELEASES.items():
-            roster_patch = mock.patch.object(
-                self.module.release_roster, constant, first_release
-            )
-            roster_patch.start()
-            self.addCleanup(roster_patch.stop)
-            self.roster_patches.append(roster_patch)
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -959,41 +938,6 @@ class ReleaseCandidateTest(TestCase):
                 for name, kind in current.items()
                 if not name.startswith("schedulingctl-")
             },
-        )
-
-    def test_v0_38_ships_no_held_surface(self) -> None:
-        for roster_patch in self.roster_patches:
-            roster_patch.stop()
-        for constant in HYPOTHETICAL_FIRST_RELEASES:
-            self.assertIsNone(getattr(self.module.release_roster, constant), constant)
-        self.assertEqual(
-            {"breg", "casework", "discovery", "evidence", "relay", "scheduling"},
-            self.module._candidate_image_names("0.38.0"),
-        )
-        self.assertEqual(
-            {
-                "breg": "bregctl",
-                "casework": "caseworkctl",
-                "scheduling": "schedulingctl",
-            },
-            self.module.image_operator_tools("0.38.0"),
-        )
-        payloads = self.module._relay_v2_payload_inventory("0.38.0")
-        for binary in (
-            "discoveryctl-v0.38.0-linux-amd64",
-            "scheduling-v0.38.0-linux-amd64",
-            "evidence-oid4vci-v0.38.0-linux-amd64",
-        ):
-            with self.subTest(binary=binary):
-                self.assertEqual("binary", payloads[binary])
-        self.assertFalse(
-            any(
-                name.startswith(
-                    ("messaging", "breg-mcp", "breg-review", "registry-render")
-                )
-                for name in payloads
-            ),
-            sorted(payloads),
         )
 
     def test_render_and_oid4vci_images_join_only_the_v0_38_roster(self) -> None:

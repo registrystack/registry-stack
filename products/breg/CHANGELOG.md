@@ -21,6 +21,9 @@
   release before subject access-log storage activated, without an apply. The
   next successor apply installs the storage.
 
+- Publish `breg-mcp` and its paired `breg-review` service as release binaries
+  and Docker images from v0.38.0.
+
 - BREAKING: a direct create, patch, or batch item whose resulting row falls
   outside the caller's row boundary answers `412 precondition.failed` before
   any write, where it answered `503 service.unavailable` (#1771). The body is

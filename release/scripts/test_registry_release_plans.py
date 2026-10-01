@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest import mock
 
 import yaml
 
@@ -672,18 +671,14 @@ class RegistryReleasePlanTest(unittest.TestCase):
                     owner.artifact_inventory_errors(version, document["artifacts"]),
                 )
 
-    def test_v0_38_manifest_inventory_adds_discoveryctl_and_holds_render(
-        self,
-    ) -> None:
+    def test_render_artifact_joins_only_the_v0_38_manifest_inventory(self) -> None:
         owner = _load_registry_release()
         historical = manifest("0.37.99", "beta-fixture", "v0.37.99", "candidate")
         current = manifest("0.38.0", "beta-fixture", "v0.38.0", "candidate")
+        self.assertNotIn("registry-render", historical["artifacts"])
+        self.assertIn("registry-render", current["artifacts"])
         self.assertNotIn("discoveryctl", historical["artifacts"])
         self.assertIn("discoveryctl", current["artifacts"])
-        # Registry Render has no first release in release_roster.
-        self.assertIsNone(owner.release_roster.RENDER_FIRST_RELEASE)
-        self.assertNotIn("registry-render", historical["artifacts"])
-        self.assertNotIn("registry-render", current["artifacts"])
         self.assertEqual(
             [],
             owner.artifact_inventory_errors("0.37.99", historical["artifacts"]),
@@ -692,37 +687,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
             [],
             owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
         )
-
-    def test_render_artifact_joins_the_manifest_inventory_from_its_first_release(
-        self,
-    ) -> None:
-        owner = _load_registry_release()
-        # Patch a hypothetical first release so the Render inventory path stays
-        # covered without any production knob.
-        with mock.patch.object(
-            owner.release_roster, "RENDER_FIRST_RELEASE", (0, 38, 0)
-        ):
-            historical = manifest(
-                "0.37.99", "beta-fixture", "v0.37.99", "candidate"
-            )
-            current = manifest("0.38.0", "beta-fixture", "v0.38.0", "candidate")
-            self.assertNotIn("registry-render", historical["artifacts"])
-            self.assertIn("registry-render", current["artifacts"])
-            self.assertEqual(
-                [],
-                owner.artifact_inventory_errors(
-                    "0.37.99", historical["artifacts"]
-                ),
-            )
-            self.assertEqual(
-                [],
-                owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
-            )
-            del current["artifacts"]["registry-render"]
-            self.assertNotEqual(
-                [],
-                owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
-            )
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
