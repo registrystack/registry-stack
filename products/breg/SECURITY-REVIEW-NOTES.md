@@ -1422,3 +1422,59 @@ names both fingerprints.
   found by the operator's own rehearsal on a restored copy and by `apply`.
 - The receipt's `postgresMajor` is not compared with the server the rehearsal
   or `apply` runs on.
+
+## Wasmtime build features
+
+The change builds the pinned Wasmtime release behind the WebAssembly handler
+executor without its default features
+(`crates/registry-platform-script/Cargo.toml`). It keeps `cranelift`,
+`runtime`, `pulley`, `threads`, and `parallel-compilation`, and moves
+text-format parsing (`wat`) to a dev-dependency. It touches release
+provenance, because a default feature linked a build script that embedded the
+source commit into release binaries, and the deployment default for which
+WebAssembly proposals a handler module may use.
+
+### Threat
+
+1. A release binary embeds the commit it was built from, so the image
+   advisory baseline built from one commit never matches the candidate built
+   from the next (`release/REPEATABLE-BUILDS.md`, "The source tree, not the
+   checkout").
+2. Engine surfaces the executor never calls (the module cache, GC, component
+   model, profiling, debugging, coredumps, and the text parser) widen what a
+   reviewed but hostile or careless module can reach.
+
+### Enforcement and defaults
+
+- `wasmtime-internal-cache`, whose build script keys the module cache on the
+  enclosing git commit, is no longer in `Cargo.lock`. `cranelift-codegen`
+  still reads the commit for its `VERSION` constant and stays behind the
+  `GIT_CEILING_DIRECTORIES=/workspace` contract in
+  `release/scripts/build-release-binaries.sh`.
+- The executor admits WebAssembly binaries only; WebAssembly text is refused
+  by the engine as well as by BREG's binary magic check.
+- Without `gc`, a module using GC types, exception handling, or `externref`
+  is refused at prepare, and therefore at compile time for action and hook
+  handlers. Funcref tables and indirect calls stay admitted. `threads` is
+  kept only so `Config::wasm_threads(false)` holds the proposal off.
+
+### Tests
+
+`crates/registry-platform-script/tests/wasm_executor_wat.rs`:
+`wat_text_is_refused`, `gc_exceptions_and_externref_are_refused`, and
+`funcref_tables_and_indirect_calls_are_admitted`, on both backends.
+`crates/registry-platform-script/src/wasm.rs`:
+`module_rejection_summary_keeps_the_summary_limit_not_the_name_limit`. The
+first two failed against the default-feature build (it accepted text and
+those proposals on the native backend).
+
+### Accepted residuals
+
+- **No gate pins the feature set.** Re-enabling `cache`, directly or through
+  another crate unifying Wasmtime features, would bring the commit-reading
+  build script back. The release build's full-commit read-back check and the
+  git ceiling still apply, and `gc_exceptions_and_externref_are_refused`
+  fails if `gc` is unified back on.
+- **The handler SDK workspace is separate.** `products/breg/wasm-handler-sdk`
+  has its own lock and builds Wasmtime with its default features for guest
+  preinitialization; it ships in no release binary.
