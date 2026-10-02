@@ -4103,3 +4103,214 @@ fn a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime() 
         ]
     );
 }
+
+/// Run `caseworkctl --format json dev start` through the command entry point
+/// and return its exit code, its parsed report, and the raw report text.
+fn json_dev_start(project: &Path, extra: &[&str]) -> (std::process::ExitCode, Value, String) {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let arguments = ["caseworkctl", "--format", "json", "dev", "start"]
+        .into_iter()
+        .map(OsString::from)
+        .chain(std::iter::once(project.as_os_str().to_owned()))
+        .chain(extra.iter().map(OsString::from));
+    let exit = crate::main_entry_from(arguments, &mut stdout, &mut stderr);
+    let text = String::from_utf8(stdout).unwrap();
+    let report = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("{error}: {text}{}", String::from_utf8_lossy(&stderr)));
+    (exit, report, text)
+}
+
+/// A free loopback port, released before it is returned.
+fn free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// A stopped retained session whose inputs match the authored project, as a
+/// first start leaves it.
+fn retained_session(project: &Path) -> State {
+    let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let captured = capture(project, &clients).unwrap();
+    let mut state = session(project);
+    state.source_digest = captured.digest.clone();
+    state.clients = captured.reported;
+    parent_directory(project).unwrap();
+    initialize(&state.root(), &state, &captured.clients).unwrap();
+    state
+}
+
+#[test]
+fn a_start_on_an_occupied_port_names_the_port() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = occupied.local_addr().unwrap().port();
+    let (issuer, database) = (free_port(), free_port());
+
+    let (exit, report, _) = json_dev_start(
+        &project,
+        &[
+            "--casework-port",
+            &port.to_string(),
+            "--issuer-port",
+            &issuer.to_string(),
+            "--database-port",
+            &database.to_string(),
+        ],
+    );
+
+    assert_eq!(exit, std::process::ExitCode::from(3), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["code"], "caseworkctl.dev.port-occupied",
+        "{report}"
+    );
+    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["path"], format!("dev:/ports/{port}"));
+    assert_eq!(
+        diagnostic["message"],
+        format!("Local port {port} is already in use by another process.")
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("--casework-port"),
+        "{report}"
+    );
+    drop(occupied);
+}
+
+#[test]
+fn an_edited_project_over_retained_records_names_dev_stop_remove() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let mut state = retained_session(&project);
+    state.container_id = Some("a".repeat(64));
+    state.save().unwrap();
+    fs::write(
+        project.join("casework.yaml"),
+        format!("{STANDALONE_YAML}# edited after the first start\n"),
+    )
+    .unwrap();
+
+    let (exit, report, _) = json_dev_start(&project, &[]);
+
+    assert_eq!(exit, std::process::ExitCode::from(3), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["code"], "caseworkctl.dev.inputs-changed",
+        "{report}"
+    );
+    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["path"], ".casework/dev");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("differ from the retained development session"),
+        "{report}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("caseworkctl dev stop --remove"),
+        "{report}"
+    );
+    assert_eq!(read_state(&state.root()).unwrap().owner, state.owner);
+}
+
+/// The first line a release before the shared JSONL audit streams wrote to
+/// its hash-chained journal: `envelope_id`, `prev_hash`, and `record_hash`,
+/// none of which the shared stream's envelope carries.
+const EARLIER_RELEASE_AUDIT_LINE: &str = "{\"envelope_id\":\"01J000000000000000000000\",\
+    \"timestamp_unix_ms\":0,\"prev_hash\":null,\"record\":{},\"record_hash\":\"sha256:00\"}\n";
+
+#[test]
+fn a_retained_audit_stream_from_an_earlier_release_names_the_directory_to_move() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let state = retained_session(&project);
+    let audit = state.root().join("audit/casework.ndjson");
+    private::create(&audit, EARLIER_RELEASE_AUDIT_LINE.as_bytes()).unwrap();
+    let missing = project.join("missing-casework");
+
+    let (exit, report, text) =
+        json_dev_start(&project, &["--casework-bin", missing.to_str().unwrap()]);
+
+    assert_eq!(exit, std::process::ExitCode::from(3), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["code"], "caseworkctl.dev.audit-format-unsupported",
+        "{report}"
+    );
+    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["path"], ".casework/dev/audit");
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(message.contains(".casework/dev/audit"), "{report}");
+    assert!(message.contains("earlier caseworkctl release"), "{report}");
+    let action = diagnostic["suggestedAction"].as_str().unwrap();
+    assert!(action.contains("Move .casework/dev/audit"), "{report}");
+    assert!(action.contains("dev stop --remove does not"), "{report}");
+    assert!(!text.contains(root.path().to_str().unwrap()), "{text}");
+    // Naming the cause changes nothing retained.
+    assert_eq!(
+        fs::read(&audit).unwrap(),
+        EARLIER_RELEASE_AUDIT_LINE.as_bytes()
+    );
+}
+
+#[test]
+fn a_retained_audit_directory_the_runtime_cannot_open_is_named() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let state = retained_session(&project);
+    let audit = state.root().join("audit");
+    fs::set_permissions(&audit, fs::Permissions::from_mode(0o777)).unwrap();
+    let missing = project.join("missing-casework");
+
+    let (exit, report, text) =
+        json_dev_start(&project, &["--casework-bin", missing.to_str().unwrap()]);
+
+    assert_eq!(exit, std::process::ExitCode::from(3), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["code"], "caseworkctl.dev.audit-unavailable",
+        "{report}"
+    );
+    assert_eq!(diagnostic["path"], ".casework/dev/audit");
+    assert!(!text.contains(root.path().to_str().unwrap()), "{text}");
+}
+
+#[test]
+fn a_failed_supervised_start_names_the_log_directory_without_its_cause() {
+    let root = crate::canonical_tempdir();
+    let dev_root = root.path().join("project/.casework/dev");
+    let secret = "postgres://casework:hunter2-secret@127.0.0.1:55433/casework";
+    let error = start_failure(
+        Some(&format!("native activation failed: {secret}")),
+        &dev_root,
+    )
+    .context("bearer eyJhbGciOiJub25lIn0.secret-token");
+    assert!(format!("{error:#}").contains("hunter2"));
+
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
+
+    assert_eq!(exit, 3);
+    assert_eq!(diagnostic["code"], "caseworkctl.dev.start-failed");
+    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["path"], ".casework/dev/logs");
+    let rendered = diagnostic.to_string();
+    assert!(
+        rendered.contains(".casework/dev/logs/casework.log"),
+        "{rendered}"
+    );
+    for leaked in ["hunter2", "secret-token", root.path().to_str().unwrap()] {
+        assert!(!rendered.contains(leaked), "{leaked} leaked: {rendered}");
+    }
+}

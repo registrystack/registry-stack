@@ -612,7 +612,7 @@ fn ports(casework: u16, issuer: u16, database: u16) -> Result<()> {
 fn probe(port: u16) -> Result<()> {
     TcpListener::bind(("127.0.0.1", port))
         .map(drop)
-        .context("a requested local port is already occupied; stop its owner or choose other ports")
+        .map_err(|source| DevFailure::PortOccupied { port, source }.into())
 }
 
 fn bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
@@ -1417,6 +1417,7 @@ fn start(args: StartArgs) -> Result<Value> {
         initialize(&root, &state, &clients)?;
         read_state(&root)?
     };
+    retained_audit(&root)?;
     if clients.integrations.is_some() {
         integrations::validate_bindings(&root, &project)?;
     }
@@ -1677,13 +1678,19 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
 /// proves that neither exact owner-derived resource exists.
 fn discard_changed_state(root: &Path, state: &State, docker_bin: Option<&Path>) -> Result<()> {
     if state.container_id.is_some() {
-        bail!("the authored project, clients or ports differ from the retained development session, which still holds records; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records");
+        return Err(DevFailure::InputsChanged {
+            holds_records: true,
+        }
+        .into());
     }
     let docker = executable("docker", docker_bin)?;
     let container = inspect(&docker, state)?;
     let volume = inspect_volume_with_termination(&docker, state, None)?;
     if container.is_some() || volume.is_some() {
-        bail!("the authored project, clients or ports differ from the retained development session, which still owns database resources; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the resources");
+        return Err(DevFailure::InputsChanged {
+            holds_records: false,
+        }
+        .into());
     }
     fs::remove_dir_all(root).context("cannot replace the owned development session")
 }
@@ -3357,18 +3364,163 @@ fn activation_outcome(result: Result<Value>, root: &Path) -> Result<()> {
 fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
     let logs = root.join("logs");
     let logs = logs.display().to_string();
-    match cause {
+    let detail = match cause {
         // A cause carried out of a named check already points at the retained
         // log directory, and reading the same path twice teaches nothing.
-        Some(cause) if cause.contains(&logs) => anyhow::anyhow!(
+        Some(cause) if cause.contains(&logs) => format!(
             "local start failed: {cause}. Retry the same command after correcting the cause; retained data is preserved"
         ),
-        Some(cause) => anyhow::anyhow!(
+        Some(cause) => format!(
             "local start failed: {cause}. Private diagnostics are in {logs}. Retry the same command after correcting the cause; retained data is preserved"
         ),
-        None => anyhow::anyhow!(
+        None => format!(
             "local start failed; private diagnostics are in {logs}. Retry the same command after correcting the cause; retained data is preserved"
         ),
+    };
+    DevFailure::StartFailed { detail }.into()
+}
+
+/// Refuse a retained audit stream the runtime would refuse to open, before
+/// the start locates its prerequisites or launches the supervisor. The
+/// supervisor's own refusal reaches this terminal only as a bounded string,
+/// so its cause could not be named from there.
+fn retained_audit(root: &Path) -> Result<()> {
+    let operator: Value =
+        serde_norway::from_slice(&private::read(&root.join("operator.yaml"), MAX_BYTES)?)?;
+    let audit: registry_casework::AuditConfig =
+        serde_json::from_value(operator["audit"].clone())
+            .context("the development operator configuration has no valid audit section")?;
+    let service = audit.destination()?;
+    let operator = service.for_process("caseworkctl")?;
+    for destination in [service, operator] {
+        destination.check_writable().map_err(DevFailure::audit)?;
+    }
+    Ok(())
+}
+
+/// A development-session failure whose cause the command report may name.
+///
+/// The report carries only the fixed message and action of each class, with
+/// non-secret parameters: a port number or a path relative to the project.
+/// The `Display` text and the source stay private chain detail, which may
+/// hold absolute paths or a supervisor cause, and are never reported.
+#[derive(Debug)]
+pub(crate) enum DevFailure {
+    /// A loopback port the session needs is bound by another process.
+    PortOccupied { port: u16, source: std::io::Error },
+    /// The authored inputs changed while the session retains records or
+    /// database resources.
+    InputsChanged { holds_records: bool },
+    /// The retained audit stream is in a format this release cannot append to.
+    AuditFormatUnsupported {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The retained audit directory or stream cannot be opened as the runtime
+    /// opens it.
+    AuditUnavailable {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The supervised start failed after launch; its cause is in the logs.
+    StartFailed { detail: String },
+}
+
+/// The report location of the retained audit directory.
+const AUDIT_DIRECTORY: &str = ".casework/dev/audit";
+
+impl DevFailure {
+    /// Classify an audit destination refusal. Invalid data in the retained
+    /// stream is the refusal the shared writer gives a file it did not write.
+    fn audit(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        while let Some(current) = cause {
+            if current
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidData)
+            {
+                return Self::AuditFormatUnsupported {
+                    source: Box::new(error),
+                };
+            }
+            cause = current.source();
+        }
+        Self::AuditUnavailable {
+            source: Box::new(error),
+        }
+    }
+
+    /// The reported `(code, path, message, suggestedAction)`, built only from
+    /// fixed text and non-secret parameters.
+    pub(crate) fn diagnostic(&self) -> (&'static str, String, String, String) {
+        match self {
+            Self::PortOccupied { port, .. } => (
+                "caseworkctl.dev.port-occupied",
+                format!("dev:/ports/{port}"),
+                format!("Local port {port} is already in use by another process."),
+                format!("Stop the process listening on port {port}, then retry. Before a session's first start, --casework-port, --issuer-port, and --database-port choose other ports; a retained session keeps the ports it started with."),
+            ),
+            Self::InputsChanged { holds_records } => (
+                "caseworkctl.dev.inputs-changed",
+                ".casework/dev".to_owned(),
+                format!(
+                    "The authored project, clients file, or ports differ from the retained development session, which still holds {}.",
+                    if *holds_records { "records" } else { "database resources" }
+                ),
+                "Run caseworkctl dev stop --remove to discard the retained session and start again from the edited inputs, or copy the authored files to a new project directory to keep it.".to_owned(),
+            ),
+            Self::AuditFormatUnsupported { .. } => (
+                "caseworkctl.dev.audit-format-unsupported",
+                AUDIT_DIRECTORY.to_owned(),
+                format!("The retained audit stream in {AUDIT_DIRECTORY} is in a format this release cannot append to, usually because an earlier caseworkctl release wrote it; the runtime refuses to start over it."),
+                format!("Move {AUDIT_DIRECTORY} out of the project (keep it if you need its records), then run caseworkctl dev start again; caseworkctl dev stop --remove does not remove it."),
+            ),
+            Self::AuditUnavailable { .. } => (
+                "caseworkctl.dev.audit-unavailable",
+                AUDIT_DIRECTORY.to_owned(),
+                format!("The retained audit directory {AUDIT_DIRECTORY} cannot be opened as the runtime opens it."),
+                format!("Make {AUDIT_DIRECTORY} and its files owner-only, readable, and writable by the current user, then retry."),
+            ),
+            Self::StartFailed { .. } => (
+                "caseworkctl.dev.start-failed",
+                ".casework/dev/logs".to_owned(),
+                "The local development session did not start; its cause is recorded in .casework/dev/logs/casework.log and .casework/dev/logs/supervisor.log.".to_owned(),
+                "Read .casework/dev/logs/casework.log, correct the cause, then retry caseworkctl dev start; retained data is preserved.".to_owned(),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for DevFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PortOccupied { .. } => f.write_str(
+                "a requested local port is already occupied; stop its owner or choose other ports",
+            ),
+            Self::InputsChanged {
+                holds_records: true,
+            } => f.write_str("the authored project, clients or ports differ from the retained development session, which still holds records; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records"),
+            Self::InputsChanged {
+                holds_records: false,
+            } => f.write_str("the authored project, clients or ports differ from the retained development session, which still owns database resources; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the resources"),
+            Self::AuditFormatUnsupported { .. } => f.write_str(
+                "the retained development audit stream is in a format this release cannot append to",
+            ),
+            Self::AuditUnavailable { .. } => {
+                f.write_str("the retained development audit destination cannot be opened")
+            }
+            Self::StartFailed { detail } => f.write_str(detail),
+        }
+    }
+}
+
+impl std::error::Error for DevFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PortOccupied { source, .. } => Some(source),
+            Self::AuditFormatUnsupported { source } | Self::AuditUnavailable { source } => {
+                Some(source.as_ref())
+            }
+            Self::InputsChanged { .. } | Self::StartFailed { .. } => None,
+        }
     }
 }
 

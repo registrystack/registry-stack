@@ -10,6 +10,20 @@
   differs only in its endpoint is refused with a message naming the option
   (#1435).
 
+- `caseworkctl dev start` and `dev stop` name the cause of a local session
+  failure instead of a generic filesystem or runtime dependency failure,
+  still exiting 3. The report names an occupied port
+  (`caseworkctl.dev.port-occupied`), authored inputs that differ from a
+  session retaining records (`caseworkctl.dev.inputs-changed`, with
+  `caseworkctl dev stop --remove`), a retained `.casework/dev/audit` stream
+  an earlier release wrote (`caseworkctl.dev.audit-format-unsupported`,
+  refused before the supervisor starts), an audit directory the runtime
+  cannot open (`caseworkctl.dev.audit-unavailable`), and a supervised start
+  that failed, pointing at `.casework/dev/logs`
+  (`caseworkctl.dev.start-failed`). Each message is fixed text with a port
+  number or a project-relative path; no absolute path, credential, or
+  supervisor cause is reported (#1433).
+
 ## v0.38.0 - 2026-10-01
 
 - BREAKING: package activation (`caseworkctl plan`, `apply`, and `status`) and
