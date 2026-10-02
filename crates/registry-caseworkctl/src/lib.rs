@@ -121,6 +121,10 @@ struct SourceAddArgs {
     /// Apply the exact reported local authoring changes.
     #[arg(long)]
     apply: bool,
+    /// Loopback URL of the local Casework session that the generated BReg
+    /// review authority calls; match the session's --casework-port.
+    #[arg(long, value_name = "URL", default_value = source_add::DEFAULT_CASEWORK_ENDPOINT)]
+    casework_endpoint: String,
     /// Public bregctl binary of the same Registry Stack version.
     #[arg(long, env = "BREGCTL_BIN", default_value = "bregctl")]
     bregctl_bin: PathBuf,

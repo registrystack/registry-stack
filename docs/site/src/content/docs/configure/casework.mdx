@@ -583,6 +583,7 @@ caseworkctl source add ./tutorial-work/project \
 `source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding. It also reports a finding when another change-request entity in the same BReg registry names this Casework project's review authority with a `policyId` that no declared `reviewKinds` entry matches, since that entity would pass BReg's own compile check yet still be unreviewable here; several Casework projects can share an authority id, so that entity's policy may legitimately live in one of them, and pairing does not wait on it.
 Without `--apply` it previews the lifecycle event, the least-privilege `casework-reader` profile,
 the paired local clients, and the authority and optional executor runtime bindings.
+The local review authority it adds to BReg's `dev-clients.yaml` calls Casework at `http://127.0.0.1:8092`, the default `caseworkctl dev` port; when your Casework session runs on another port, pass its URL with `--casework-endpoint http://127.0.0.1:PORT`.
 The report includes the exact candidate fragments, `status: preview`, and
 `activation: not_performed`.
 Each paired request entity gets its own lifecycle hook, `casework-lifecycle-v1-<entity>`, because BReg requires a hook id to be unique across the registry and sends it as the event's `ce-type`.

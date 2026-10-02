@@ -185,6 +185,16 @@ reports the authoring still needed; it does not invent a credential. More than
 one eligible service client, or more than one human source-context profile, is
 refused as ambiguous.
 
+The local `reviewAuthorities` entry `source add --apply` writes into the BReg
+`dev-clients.yaml` calls Casework at `http://127.0.0.1:8092`, the default
+`caseworkctl dev` port. When the Casework session runs on another port, for
+example beside other registries on per-registry port ranges, pass the session's
+URL with `--casework-endpoint http://127.0.0.1:PORT`. The option accepts only
+an exact loopback HTTP URL with an explicit nonzero port, the shape
+`bregctl dev` admits, and refuses anything else without repeating the value.
+An existing entry that differs only in its endpoint is refused with a message
+naming the option, so repeat the pairing with the endpoint that entry names.
+
 `caseworkctl check` reports each request's `applicationMode` from its imported
 BReg description, and `caseworkctl test` checks the fixture against that mode.
 Before the description is imported, the mode is `null`; a local fixture never
