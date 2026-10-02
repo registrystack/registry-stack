@@ -1363,3 +1363,62 @@ before it.
   operational log renders only `the Registry package was refused`, without
   the digests. `bregctl doctor` and `bregctl verify` against the same runtime
   file report the sentence.
+
+## Reviewed migration rehearsal evidence
+
+The change holds the `test` rehearsal of a reviewed migration to the lock and
+statement timeouts its descriptor declares (`rehearse_assertions` and
+`rehearse_reviewed_steps` in `crates/registry-breg/src/postgres/rehearsal.rs`),
+removes the rehearsal receipt's `proofs` member
+(`MigrationRehearsalReceipt` in `crates/registry-breg/src/migration_plan.rs`),
+and names both schema fingerprints in `migration.review.fingerprint_mismatch`,
+measured with `bregctl test --fingerprint-only`
+(`measure` in `crates/registry-bregctl/src/test_lifecycle.rs`). It touches the
+evidence a reviewed migration carries into a package, not activation:
+`apply` already ran each reviewed statement under the declared timeouts and
+never read `proofs`, so no security invariant row changes.
+
+### Threat
+
+A rehearsal that ran every reviewed statement under a fixed 5 second lock and
+300 second statement timeout passed a migration that activation, under a
+shorter declared bound, cancels, so `package` published a plan that fails in
+maintenance. The `proofs` booleans read as evidence of lock-timeout and resume
+behavior while proving neither: the parser accepted them only when they
+equalled what the descriptor already fixed.
+
+### Enforcement and defaults
+
+- Before a migration's assertions and before each reviewed step, the rehearsal
+  sets the descriptor's `lockTimeoutMs` and `statementTimeoutMs`, or a
+  backfill step's own, through the same bounded setter activation uses, and
+  restores the compiler's bound for the generated statements.
+- A receipt that carries `proofs` is refused at capture with
+  `migration.review.receipt_proofs_retired`, and a package built with one
+  no longer loads; there is no accept-and-ignore path.
+- The mismatch refusal and the `--fingerprint-only` report carry schema
+  fingerprints only, which are catalog digests and already appear in `test`
+  reports and package manifests. `--fingerprint-only` takes no credentials,
+  runs no fixtures, writes no receipt, and rolls its install back.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_migration.rs`:
+`real_postgres_rehearsal_holds_a_reviewed_migration_to_its_declared_timeouts`
+(SQLSTATE `57014` in the rehearsal, then the same package refused by `apply`).
+`crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
+`reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
+`crates/registry-bregctl/src/lib.rs`:
+`review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint`.
+`crates/registry-bregctl/tests/wasm_test_lifecycle.rs`:
+`public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds`.
+`products/breg/scripts/test-adopter-workflow.sh` asserts that the refusal
+names both fingerprints.
+
+### Accepted residuals
+
+- The rehearsal runs over empty tables and does not load reviewed fixtures,
+  which are bound by digest only, so a timeout that only real rows reach is
+  found by the operator's own rehearsal on a restored copy and by `apply`.
+- The receipt's `postgresMajor` is not compared with the server the rehearsal
+  or `apply` runs on.
