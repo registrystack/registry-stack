@@ -31,10 +31,10 @@ use registry_breg::migration::{
 };
 use registry_breg::migration_plan::{
     AffectedRowBounds, ArtifactDigestBinding, MigrationRehearsalReceipt, RehearsalFixture,
-    RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
-    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
-    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    RehearsalRowAssertion, ReviewedChangeCover, ReviewedMigrationAssertionDescriptor,
+    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
+    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
+    ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
@@ -892,11 +892,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: false,
-            destructive_resume: false,
-        },
     };
     let mut files = steps
         .into_iter()

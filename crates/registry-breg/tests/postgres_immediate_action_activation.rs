@@ -26,7 +26,7 @@ use registry_breg::migration::{
     ApplyVerifiedPackageRequest,
 };
 use registry_breg::migration_plan::{
-    MigrationRehearsalReceipt, RehearsalProofs, ReviewedChangeCover, ReviewedMigrationDescriptor,
+    MigrationRehearsalReceipt, ReviewedChangeCover, ReviewedMigrationDescriptor,
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{
@@ -948,11 +948,6 @@ fn metadata_only_source(
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_schema_fingerprint.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: false,
-            destructive_resume: false,
-        },
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),

@@ -24,11 +24,10 @@ use registry_breg::migration::{
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
-    RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
-    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
-    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
-    ReviewedMigrationStepDescriptor,
+    RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
+    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
+    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::migration_reconcile::{
     reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
@@ -5749,7 +5748,6 @@ fn backfill_source_with_steps(
             .collect(),
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
-        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-rank".to_owned(),
             affected_rows: rehearsed_rows,
@@ -5833,7 +5831,6 @@ fn added_required_source(
         steps: vec![(update_path, update_sql)],
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
-        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-batch".to_owned(),
             affected_rows: rehearsed_rows,
@@ -5963,7 +5960,6 @@ fn encrypted_flip_source(request: FlipSourceRequest<'_>) -> ReviewedMigrationSou
         steps: vec![(drop_path, drop_sql)],
         pre: (pre_path, assertion_sql.clone()),
         post: (post_path, assertion_sql),
-        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "seal-secret".to_owned(),
             affected_rows: rehearsed_rows,
@@ -6529,7 +6525,6 @@ fn destructive_source_with_recovery_fault(
         steps: step_files,
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        destructive_resume: true,
         row_assertions: Vec::new(),
     })
 }
@@ -6541,7 +6536,6 @@ struct ReviewedSourceRequest<'a> {
     steps: Vec<(String, String)>,
     pre: (String, String),
     post: (String, String),
-    destructive_resume: bool,
     row_assertions: Vec<RehearsalRowAssertion>,
 }
 
@@ -6553,7 +6547,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         steps,
         pre,
         post,
-        destructive_resume,
         row_assertions,
     } = request;
     let descriptor_path = format!("modules/core/migrations/{}/descriptor.json", descriptor.id);
@@ -6593,17 +6586,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: descriptor.steps.iter().any(|step| {
-                matches!(
-                    step,
-                    ReviewedMigrationStepDescriptor::ChunkedBackfill { .. }
-                        | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
-                )
-            }),
-            destructive_resume,
-        },
     };
     let mut files = steps
         .into_iter()
@@ -7876,7 +7858,6 @@ fn pattern_reviewed_source(
         steps: vec![(step_path, sql)],
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        destructive_resume: true,
         row_assertions: Vec::new(),
     })
 }

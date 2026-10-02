@@ -691,7 +691,6 @@ receipt = {
     "fixtureInventory": [{"id": "representative", "path": f"{base}/fixtures/representative.jsonl",
                           "sha256": digest(fixture), "rowCount": 1}],
     "postgresMajor": int(postgres_major), "rowAssertions": [], "finalSchemaFingerprint": final_fingerprint,
-    "proofs": {"lockTimeout": True, "chunkResume": False, "destructiveResume": True},
 }
 directory = root / "review-2" / base
 for relative, data in {

@@ -1092,7 +1092,6 @@ receipt = {
     "planSha256": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
     "sqlSha256": [], "assertionSha256": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
     "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
-    "proofs": {"lockTimeout": True, "chunkResume": False, "destructiveResume": False},
 }
 directory = root / "review-v3" / base
 directory.mkdir(parents=True)

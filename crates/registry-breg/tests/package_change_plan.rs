@@ -15,10 +15,10 @@ use registry_breg::contract::{
 #[cfg(feature = "tooling")]
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, MigrationRehearsalReceipt, RehearsalFixture,
-    RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
-    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
-    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    RehearsalRowAssertion, ReviewedChangeCover, ReviewedMigrationAssertionDescriptor,
+    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
+    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
+    ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set,
@@ -2394,11 +2394,6 @@ fn metadata_only_source_between(
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: false,
-            destructive_resume: false,
-        },
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -2524,11 +2519,6 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: false,
-            destructive_resume: true,
-        },
     };
     let mut files = vec![
         ReviewedMigrationFile {
@@ -2687,11 +2677,6 @@ fn reviewed_source_with_canaries(
         }],
         final_schema_fingerprint:
             "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: true,
-            destructive_resume: false,
-        },
     };
     let mut files = vec![
         ReviewedMigrationFile {

@@ -53,8 +53,18 @@ pub(crate) fn capture(root: &Path) -> Result<CapturedReview, Diagnostic> {
         let parts = path.split('/').collect::<Vec<_>>();
         let base = parts[..4].join("/");
         if reviewed_artifact_kind(&path) == Some(ReviewedArtifactKind::RehearsalReceipt) {
-            let receipt: MigrationRehearsalReceipt = parse_json_strict(&bytes)
-                .ok()
+            let value = parse_json_strict(&bytes).ok();
+            if value
+                .as_ref()
+                .is_some_and(|value| value.get("proofs").is_some())
+            {
+                return Err(refusal(
+                    "migration.review.receipt_proofs_retired",
+                    &path,
+                    "the rehearsal receipt carries the retired proofs member, which asserted nothing its descriptor does not already determine; regenerate the receipt without it",
+                ));
+            }
+            let receipt: MigrationRehearsalReceipt = value
                 .and_then(|value| serde_json::from_value(value).ok())
                 .ok_or_else(|| refusal("migration.review.receipt", &path, "provide a strict rehearsal receipt using the existing MigrationRehearsalReceipt format"))?;
             if declared_schema_fingerprint
@@ -256,11 +266,6 @@ mod ordering_tests {
             "postgresMajor": 16,
             "rowAssertions": [],
             "finalSchemaFingerprint": "fingerprint-2",
-            "proofs": {
-                "lockTimeout": true,
-                "chunkResume": true,
-                "destructiveResume": true,
-            },
         });
         std::fs::write(path, serde_json::to_vec(&receipt).unwrap()).unwrap();
     }
