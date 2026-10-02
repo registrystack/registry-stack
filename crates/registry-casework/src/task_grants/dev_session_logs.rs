@@ -241,8 +241,8 @@ mod tests {
     fn diagnostics_show_state_cause_and_log_tails_without_session_secrets() {
         let root = tempfile::tempdir().unwrap();
         let root = &root.path().join("dev");
-        let password = "0123456789abcdef0123456789abcdef";
-        let key = "kq3Zp1rL8vN2xW5yB7cD9eF0gH4jK6mQ";
+        let password = "synthetic-database-password";
+        let key = "synthetic-integration-key";
         let token =
             "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJzdGFmZi1zdWJqZWN0In0.c2lnbmF0dXJlLWJ5dGVzLXZhbHVl";
         write(
@@ -332,7 +332,7 @@ mod tests {
     fn a_secret_the_tail_boundary_cuts_through_is_not_printed_in_part() {
         let root = tempfile::tempdir().unwrap();
         let root = &root.path().join("dev");
-        let password = "0123456789abcdef0123456789abcdef";
+        let password = "synthetic-database-password";
         write(
             &root.join("database/postgres.env"),
             format!("POSTGRES_PASSWORD={password}\n").as_bytes(),
@@ -378,7 +378,7 @@ mod tests {
     fn diagnostics_are_withheld_when_a_secret_file_cannot_be_read_for_redaction() {
         let root = tempfile::tempdir().unwrap();
         let root = &root.path().join("dev");
-        let password = "0123456789abcdef0123456789abcdef";
+        let password = "synthetic-database-password";
         let mut oversized = format!("POSTGRES_PASSWORD={password}\n");
         oversized.push_str(&"#".repeat(MAX_SECRET_FILE as usize));
         write(&root.join("database/postgres.env"), oversized.as_bytes());
