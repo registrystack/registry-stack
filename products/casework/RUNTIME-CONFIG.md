@@ -182,10 +182,12 @@ operational: `baseUrl`, `readerProfile`, `tokenEndpoint`,
 credential, moving the token endpoint, or tuning a timeout keeps the generation,
 the in-flight work items, their claims, and their durable attempts.
 
-`sources.<id>.reconciliationIntervalMilliseconds` controls only how often
-Casework schedules source readback. When a readback pass lasts longer than the
+`sources.<id>.reconciliationIntervalMilliseconds` controls how often Casework
+schedules source readback. When a readback pass lasts longer than the
 interval, Casework skips missed ticks instead of replaying them back-to-back
-against the source.
+against the source. It also sets how long a reconciled source counts as
+current for an empty inbox view: the larger of twice the interval and 2
+minutes.
 
 For a BREG source, `tokenEndpoint` selects the reader's OAuth endpoint.
 `clientAssertionAudience` explicitly overrides the JWT client assertion audience;

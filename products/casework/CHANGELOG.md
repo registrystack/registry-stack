@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- Empty source-backed inbox views over a recently reconciled source return
-  `complete` without requeueing subjects or clearing source completeness. Callers serving
+- Empty source-backed inbox views over a source reconciled within the larger
+  of twice its `reconciliationIntervalMilliseconds` and 2 minutes return
+  `complete` without requeueing subjects or clearing source completeness. A
+  source reconciled less often than once a minute keeps that status for its
+  whole window rather than for a fixed 2 minutes. Callers serving
   no queue receive `complete` regardless of discovery state. Pages waiting only
   for source discovery no longer issue a cursor that repeats the same position;
   retry those `budget_exhausted` pages without a cursor after reconciliation.

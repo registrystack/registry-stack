@@ -318,7 +318,8 @@ default to 30000 and 10000, accept at most 300000, and are refused when the conn
 larger of the two, and `reconciliationIntervalMilliseconds`, how often the runtime re-reads the
 source for work the source's own notifications did not deliver, which defaults to 60000 and accepts
 1000 to 3600000. If one pass outlasts the interval, Casework skips missed ticks instead of
-replaying them back-to-back against the source.
+replaying them back-to-back against the source. An empty inbox view treats a reconciled source as
+current for the larger of twice the interval and 2 minutes.
 
 A binding has no event type to set. Each lifecycle event carries, as its `ce-type`, the id of the
 hook `caseworkctl source add` wrote on the request entity, `casework-lifecycle-v1-<entity>`, and

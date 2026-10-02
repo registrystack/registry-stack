@@ -250,9 +250,11 @@ reconciliation. The retried walk starts from the first position and can return
 items earlier pages already returned: deduplicate work items by `itemId`, and
 replace holdings totals instead of adding to them. A caller serving no queue
 receives `complete` without a cursor.
-An empty view over a recently reconciled source stays complete, and its
+An empty view over a source reconciled within the larger of twice its
+`reconciliationIntervalMilliseconds` and 2 minutes stays complete, and its
 successful availability probe does not requeue source subjects or clear
-completeness.
+completeness. Once that window has passed, the probe requeues the subjects it
+finds and the view reports `budget_exhausted` until reconciliation completes.
 Its opaque cursor is bound to the actor, both selected profiles, optional queue,
 the next-item feed, and fixed `due` ordering.
 
