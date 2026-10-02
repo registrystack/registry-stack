@@ -23,6 +23,13 @@
   (`caseworkctl.dev.start-failed`). Each message is fixed text with a port
   number or a project-relative path; no absolute path, credential, or
   supervisor cause is reported (#1433).
+- `caseworkctl dev stop --remove` also empties the project's retained
+  `.casework/dev/audit` directory, since the audit there describes the
+  records the removal discards; a stream an earlier release wrote no longer
+  outlives the session it described. Only an owner-only tree of ordinary
+  files is removed, a symlink is refused rather than followed, and the audit
+  hash key and other session state are kept. A plain `dev stop` keeps the
+  audit directory.
 
 ## v0.38.0 - 2026-10-01
 

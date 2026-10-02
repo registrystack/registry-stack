@@ -4256,7 +4256,7 @@ fn a_retained_audit_stream_from_an_earlier_release_names_the_directory_to_move()
     assert!(message.contains("earlier caseworkctl release"), "{report}");
     let action = diagnostic["suggestedAction"].as_str().unwrap();
     assert!(action.contains("Move .casework/dev/audit"), "{report}");
-    assert!(action.contains("dev stop --remove does not"), "{report}");
+    assert!(action.contains("dev stop --remove to discard"), "{report}");
     assert!(!text.contains(root.path().to_str().unwrap()), "{text}");
     // Naming the cause changes nothing retained.
     assert_eq!(
@@ -4285,6 +4285,68 @@ fn a_retained_audit_directory_the_runtime_cannot_open_is_named() {
     );
     assert_eq!(diagnostic["path"], ".casework/dev/audit");
     assert!(!text.contains(root.path().to_str().unwrap()), "{text}");
+}
+
+#[test]
+fn dev_stop_remove_clears_the_retained_audit_directory() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let state = retained_session(&project);
+    let audit = state.root().join("audit");
+    private::create(
+        &audit.join("casework.ndjson"),
+        EARLIER_RELEASE_AUDIT_LINE.as_bytes(),
+    )
+    .unwrap();
+    let docker = DockerInventory::new(&state);
+
+    stop(&project, true, Some(&docker.executable)).unwrap();
+
+    // The audit described records the removal discarded; an empty owner-only
+    // directory is what the next start appends a fresh stream to.
+    private::check(&audit, true).unwrap();
+    assert_eq!(fs::read_dir(&audit).unwrap().count(), 0);
+    retained_audit(&state.root()).unwrap();
+}
+
+#[test]
+fn dev_stop_keeps_the_retained_audit_directory() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let state = retained_session(&project);
+    let stream = state.root().join("audit/casework.ndjson");
+    private::create(&stream, EARLIER_RELEASE_AUDIT_LINE.as_bytes()).unwrap();
+    let docker = DockerInventory::new(&state);
+
+    stop(&project, false, Some(&docker.executable)).unwrap();
+
+    assert_eq!(
+        fs::read(&stream).unwrap(),
+        EARLIER_RELEASE_AUDIT_LINE.as_bytes()
+    );
+}
+
+#[test]
+fn dev_stop_remove_refuses_an_audit_directory_that_leaves_the_session() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let state = retained_session(&project);
+    let outside = root.path().join("outside");
+    private::directory(&outside).unwrap();
+    private::create(&outside.join("kept"), b"kept").unwrap();
+    let audit = state.root().join("audit");
+    fs::remove_dir(&audit).unwrap();
+    std::os::unix::fs::symlink(&outside, &audit).unwrap();
+    let docker = DockerInventory::new(&state);
+
+    let refusal = format!(
+        "{:#}",
+        stop(&project, true, Some(&docker.executable)).unwrap_err()
+    );
+
+    assert!(refusal.contains("retained audit directory"), "{refusal}");
+    assert!(fs::symlink_metadata(&audit).unwrap().is_symlink());
+    assert_eq!(fs::read(outside.join("kept")).unwrap(), b"kept");
 }
 
 #[test]
