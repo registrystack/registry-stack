@@ -479,7 +479,10 @@ impl OperationalEvent {
     }
 
     /// Emit one record through the production JSON tracing subscriber. This is
-    /// the only production tracing entry point in Base Registry Engine.
+    /// the entry point for the closed operational event vocabulary. It is not
+    /// the only production tracing call in Base Registry Engine: some modules
+    /// call `tracing` macros directly, and those records are outside this
+    /// vocabulary and its value-free contract test.
     pub fn emit(&self) {
         let record = self.record();
         match self {
