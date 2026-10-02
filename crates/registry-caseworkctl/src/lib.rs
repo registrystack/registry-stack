@@ -710,6 +710,21 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             }),
         );
     }
+    // A development-session cause is named only from its allowlisted class;
+    // the chain text beside it may carry absolute paths or a supervisor cause.
+    if let Some(failure) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<dev::DevFailure>())
+    {
+        let (code, path, message, action) = failure.diagnostic();
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({
+                "severity":"error", "code":code, "artifact":"dev_session", "path":path,
+                "message":message, "suggestedAction":action
+            }),
+        );
+    }
     let runtime_error = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<RuntimeConfigError>());
