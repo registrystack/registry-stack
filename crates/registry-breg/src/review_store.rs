@@ -34,7 +34,7 @@ use crate::postgres::SqlIdentifier;
 use crate::request_workflow::ProposalSnapshot;
 
 const APPLICATION_LEASE_MINIMUM_SECONDS: i64 = 30;
-const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
+pub(crate) const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
 const APPLICATION_ATTEMPTS_EXHAUSTED: &str = "application-attempts-exhausted";
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
@@ -53,9 +53,10 @@ pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 /// pass. `verify_retained_bindings` shares this predicate: a job it would not
 /// let the worker claim is not durable work either, so it does not pin the
 /// review authority or executor binding it used, and an operator may drop
-/// that binding. `q` names the candidate job row in every query this is
-/// spliced into.
-const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
+/// that binding. The metrics queue-age sample shares it too, so a job left
+/// `queued` this way does not age the application queue. `q` names the
+/// candidate job row in every query this is spliced into.
+pub(crate) const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
         SELECT 1 FROM registry_internal.registry_request_review_results r
          WHERE (r.request_entity_id,r.request_id,r.proposal_version)
                =(q.request_entity_id,q.request_id,q.proposal_version)

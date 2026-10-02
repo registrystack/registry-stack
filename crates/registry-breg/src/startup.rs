@@ -339,6 +339,9 @@ pub enum OperationalEvent {
     /// At least one due review result lookup could not reach its authority on
     /// this pass.
     ReviewResultLookupsUnavailable,
+    /// The queue ages could not be read for one metrics scrape, so that
+    /// scrape publishes none.
+    MetricsQueueSampleFailed,
     WebhookStateTransitionFailed(WebhookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
@@ -434,6 +437,13 @@ impl OperationalEvent {
                 error: None,
                 code: Some("review.result_lookups.unavailable"),
             },
+            Self::MetricsQueueSampleFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::metrics",
+                message: "queue ages could not be sampled for this metrics scrape",
+                error: None,
+                code: Some("metrics.queue_sample.failed"),
+            },
             Self::WebhookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::webhook",
@@ -516,6 +526,10 @@ impl OperationalEvent {
             Self::ReviewWorkerIterationFailed | Self::ReviewResultLookupsUnavailable => {
                 let code = record.code.expect("review warning records have a code");
                 tracing::warn!(target: "registry_breg::review", code, message = record.message);
+            }
+            Self::MetricsQueueSampleFailed => {
+                let code = record.code.expect("metrics warning records have a code");
+                tracing::warn!(target: "registry_breg::metrics", code, message = record.message);
             }
             Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
                 let code = record.code.expect("webhook warning records have a code");

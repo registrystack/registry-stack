@@ -16,6 +16,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use registry_breg::metrics::{metrics_app, Metrics};
 use registry_breg::mutation::MutationError;
 use registry_breg::review_store::{
     back_off_review_token_failure_for_test, install_review_storage_for_test, poll_one_result,
@@ -34,6 +35,7 @@ use registry_review_client::{
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
+use tower::ServiceExt as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -6151,6 +6153,145 @@ async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_ev
         .join("\n");
     assert!(!output.contains("casework-a"));
     assert!(!logs.text().contains(&request_id.to_string()));
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+/// Scrape the metrics listener once and return its Prometheus text.
+async fn scrape_metrics(metrics: Arc<Metrics>) -> String {
+    let response = metrics_app(metrics)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/metrics")
+                .body(axum::body::Body::empty())
+                .expect("scrape request builds"),
+        )
+        .await
+        .expect("scrape responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("scrape body reads");
+    String::from_utf8(body.to_vec()).expect("scrape body is UTF-8")
+}
+
+fn queue_age(scrape: &str, queue: &str) -> Option<f64> {
+    let prefix = format!("breg_queue_oldest_pending_age_seconds{{queue=\"{queue}\"}} ");
+    scrape
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(|value| value.parse().expect("a queue age is a number of seconds"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    let due = Uuid::from_u128(0xb1);
+    seed_submission(&database.admin, due, "casework-a", "producer-a", "policy-a").await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET next_attempt_at=transaction_timestamp()-interval '90 seconds'
+              WHERE request_id=$1",
+            &[&due],
+        )
+        .await
+        .expect("the submission has been due for ninety seconds");
+    // Work scheduled for later is not yet waiting, however old the row is.
+    let later = Uuid::from_u128(0xb2);
+    seed_submission(
+        &database.admin,
+        later,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET next_attempt_at=transaction_timestamp()+interval '1 hour',
+                    created_at=transaction_timestamp()-interval '1 day'
+              WHERE request_id=$1",
+            &[&later],
+        )
+        .await
+        .expect("the second submission is scheduled for later");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let submission = queue_age(&scrape, "review_submission")
+        .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
+    assert!(
+        (90.0..3600.0).contains(&submission),
+        "the oldest due submission has waited about ninety seconds: {submission}"
+    );
+    assert_eq!(queue_age(&scrape, "webhook_delivery"), Some(0.0));
+    assert_eq!(queue_age(&scrape, "review_application"), Some(0.0));
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event() {
+    // No webhook delivery state is installed, so the sample cannot be read.
+    let database = prepare_review_database().await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_writer(logs.clone())
+        .finish();
+    let capture = tracing::subscriber::set_default(subscriber);
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+    drop(capture);
+
+    assert!(scrape.contains("# TYPE breg_queue_oldest_pending_age_seconds gauge\n"));
+    assert!(
+        !scrape.contains("breg_queue_oldest_pending_age_seconds{"),
+        "an unreadable sample publishes no queue age rather than an empty queue:\n{scrape}"
+    );
+    assert!(
+        scrape.contains("breg_pool_connections{state=\"max_size\"}"),
+        "the rest of the scrape is still served"
+    );
+    let records = logs
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "one event per failed sample: {records:?}");
+    assert_eq!(records[0]["level"], "WARN");
+    assert_eq!(records[0]["fields"]["code"], "metrics.queue_sample.failed");
+    assert_eq!(
+        records[0]["fields"]
+            .as_object()
+            .expect("fields are an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["code", "message"]
+    );
 
     drop(pool);
     database.cleanup().await;
