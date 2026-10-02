@@ -115,13 +115,24 @@ pub(super) fn diagnostics(root: &Path) -> String {
     redact(&out, &secrets)
 }
 
-/// The last `limit` bytes of `path`, marked when earlier bytes were dropped.
+/// The complete lines within the last `limit` bytes of `path`, marked when
+/// earlier bytes were dropped. The line the cut falls in is dropped whole:
+/// a secret value never spans a line, so one the cut splits lies in that
+/// line, where redaction could no longer match it.
 fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
     let mut file = File::open(path)?;
-    let start = file.metadata()?.len().saturating_sub(limit);
+    let mut start = file.metadata()?.len().saturating_sub(limit);
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
     file.take(limit).read_to_end(&mut bytes)?;
+    if start > 0 {
+        let partial = bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| newline + 1);
+        bytes.drain(..partial);
+        start += partial as u64;
+    }
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Ok(if start > 0 {
         format!("[... {start} earlier bytes omitted]\n{text}")
@@ -239,6 +250,32 @@ mod tests {
             assert!(!out.contains(segment), "{segment} leaked:\n{out}");
         }
         assert!(!out.contains("clients"), "only status and failure:\n{out}");
+    }
+
+    #[test]
+    fn a_secret_the_tail_boundary_cuts_through_is_not_printed_in_part() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let password = "0123456789abcdef0123456789abcdef";
+        write(
+            &root.join("database/postgres.env"),
+            format!("POSTGRES_PASSWORD={password}\n").as_bytes(),
+        );
+        // The tail starts halfway through the echoed password.
+        let after = format!("\n{}\nlatest-line\n", "x".repeat(TAIL_BYTES as usize - 30));
+        write(
+            &root.join("logs/casework.log"),
+            format!("early-line\nconnecting with {password}{after}").as_bytes(),
+        );
+
+        let out = diagnostics(root);
+
+        assert!(out.contains("latest-line"), "{out}");
+        assert!(out.contains("earlier bytes omitted"), "{out}");
+        assert!(
+            !out.contains(&password[16..]),
+            "password suffix leaked:\n{out}"
+        );
     }
 
     #[test]
