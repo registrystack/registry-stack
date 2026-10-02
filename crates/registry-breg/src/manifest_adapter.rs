@@ -34,10 +34,7 @@ pub(crate) fn project_manifest_artifacts(
     projection: &CompiledManifestProjection,
     entities: &BTreeMap<String, CompiledEntity>,
 ) -> Result<ProjectedManifestArtifacts, Diagnostic> {
-    let publication = ManifestPublicationContext {
-        access_profile: &projection.access_profile,
-        classification_ceiling: projection.classification_ceiling,
-    };
+    let publication = ManifestPublicationContext::of(projection);
     let visible_datasets = visible_dataset_ids(projection, publication);
 
     // Compile the complete typed source once so Registry Manifest remains the
@@ -69,6 +66,15 @@ pub(crate) fn project_manifest_artifacts(
 struct ManifestPublicationContext<'a> {
     access_profile: &'a str,
     classification_ceiling: Classification,
+}
+
+impl<'a> ManifestPublicationContext<'a> {
+    fn of(projection: &'a CompiledManifestProjection) -> Self {
+        Self {
+            access_profile: &projection.access_profile,
+            classification_ceiling: projection.classification_ceiling,
+        }
+    }
 }
 
 fn visible_dataset_ids<'a>(
@@ -123,6 +129,7 @@ fn project_manifest(
         })
         .map(|service| service.source.id.as_str())
         .collect::<BTreeSet<_>>();
+    let codelists = project_codelists(projection, entities);
 
     MetadataManifest {
         schema_version: "registry-manifest/v1".to_owned(),
@@ -267,12 +274,20 @@ fn project_manifest(
                     evidence_offerings: Vec::new(),
                     entities: visible_entities
                         .iter()
-                        .map(|entity| project_entity(projection, dataset, entity, visible_entities))
+                        .map(|entity| {
+                            project_entity(
+                                projection,
+                                dataset,
+                                entity,
+                                visible_entities,
+                                &codelists,
+                            )
+                        })
                         .collect(),
                 }
             })
             .collect(),
-        codelists: project_codelists(projection, entities, &included_datasets),
+        codelists,
     }
 }
 
@@ -320,6 +335,7 @@ fn project_entity(
     dataset: &CompiledManifestDataset,
     entity: &CompiledEntity,
     visible_entities: &[&CompiledEntity],
+    codelists: &[CodelistManifest],
 ) -> registry_manifest_core::EntityManifest {
     let metadata = projection
         .entities
@@ -340,13 +356,7 @@ fn project_entity(
         .values()
         .filter(|field| readable_fields.contains(&field.id))
         .filter(|field| field.classification <= dataset.effective_classification_ceiling)
-        .filter_map(|field| {
-            project_field(
-                field,
-                field_metadata(metadata, &field.id),
-                &projection.vocabularies,
-            )
-        })
+        .filter_map(|field| project_field(field, field_metadata(metadata, &field.id), codelists))
         .collect();
     let relationships = entity
         .fields
@@ -398,7 +408,7 @@ fn field_metadata<'a>(
 fn project_field(
     field: &CompiledField,
     metadata: Option<&ManifestProjectionFieldSource>,
-    vocabularies: &[ManifestProjectionVocabularySource],
+    codelists: &[CodelistManifest],
 ) -> Option<FieldManifest> {
     // Encrypted storage has no portable plaintext representation to project.
     if field.encryption.is_some() {
@@ -456,11 +466,14 @@ fn project_field(
         concepts: metadata
             .map(|metadata| metadata.concepts.clone())
             .unwrap_or_default(),
+        // A field references a codelist only when the projected source carries
+        // it, so a vocabulary only protected fields use leaves no dangling
+        // reference in the complete source.
         codelist: match &field.field_type {
             FieldTypeSource::VocabularyCode { vocabulary, .. }
-                if vocabularies
+                if codelists
                     .iter()
-                    .any(|metadata| metadata.id.as_str() == vocabulary) =>
+                    .any(|codelist| codelist.id.as_str() == vocabulary) =>
             {
                 Some(vocabulary.clone())
             }
@@ -498,8 +511,12 @@ fn project_relationship(
 fn project_codelists(
     projection: &CompiledManifestProjection,
     entities: &BTreeMap<String, CompiledEntity>,
-    included_datasets: &BTreeSet<&str>,
 ) -> Vec<CodelistManifest> {
+    // Codes come only from datasets the publication can see, even in the
+    // complete source: Registry Manifest's filter keeps a referenced codelist
+    // whole, so a protected code must never enter one.
+    let publication_datasets =
+        visible_dataset_ids(projection, ManifestPublicationContext::of(projection));
     // A codelist carries the union of the codes its projected fields admit, in
     // first-seen order, so a field narrowed to fewer codes drops none of the
     // codes another projected field uses.
@@ -508,7 +525,7 @@ fn project_codelists(
     for (vocabulary, values) in projection
         .datasets
         .values()
-        .filter(|dataset| included_datasets.contains(dataset.source.id.as_str()))
+        .filter(|dataset| publication_datasets.contains(dataset.source.id.as_str()))
         .flat_map(|dataset| {
             visible_entities(dataset, entities)
                 .into_iter()
@@ -643,11 +660,101 @@ fn manifest_canonicalization_diagnostic() -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use registry_manifest_core::FieldType;
+    use registry_manifest_core::{compile_manifest, FieldType};
+    use serde_json::json;
 
-    use super::project_field;
-    use crate::contract::{Classification, FieldTypeSource};
+    use super::{project_field, project_manifest};
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::{parse_project_json, Classification, FieldTypeSource};
     use crate::model::CompiledField;
+
+    #[test]
+    fn complete_manifest_source_codelists_hold_only_codes_the_publication_admits() {
+        // `case-status` is shared: the public field admits `open`, the
+        // protected field also admits `sealed-by-court`. `sealing-reason` is
+        // used only by the protected dataset.
+        let project = json!({
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
+          "manifestProjection":{
+            "accessProfile":"public-reader",
+            "classificationCeiling":"public",
+            "catalog":{"baseUrl":"https://shared-codes.example.test","title":"Shared Codes","publisher":{"id":"publisher","name":"Publisher"}},
+            "publicService":{"id":"shared-codes-service","title":"Shared Codes"},
+            "datasets":[
+              {"id":"public-cases","title":"Public cases","accessProfile":"public-reader","classificationCeiling":"public"},
+              {"id":"protected-cases","title":"Protected cases","accessProfile":"protected-reader","classificationCeiling":"restricted"}
+            ],
+            "dataServices":[
+              {"id":"public-api","title":"Public API","endpointUrl":"https://shared-codes.example.test/public","servesDatasets":["public-cases"]},
+              {"id":"protected-api","title":"Protected API","endpointUrl":"https://shared-codes.example.test/protected","servesDatasets":["protected-cases"]}
+            ],
+            "vocabularies":[
+              {"id":"case-status","schemeIri":"https://shared-codes.example.test/vocab/case-status","concepts":[
+                {"code":"open","label":{"en":"Open"}},
+                {"code":"sealed-by-court","label":{"en":"Sealed by court order"}}
+              ]},
+              {"id":"sealing-reason","schemeIri":"https://shared-codes.example.test/vocab/sealing-reason","concepts":[
+                {"code":"witness-protection","label":{"en":"Witness protection"}}
+              ]}
+            ]
+          },
+          "vocabularies":[
+            {"id":"case-status","values":["open","sealed-by-court"]},
+            {"id":"sealing-reason","values":["witness-protection"]}
+          ],
+          "entities":[
+            {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create_only","classification":"public",
+             "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
+            {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create_only","classification":"restricted",
+             "fields":[
+               {"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"},
+               {"id":"sealing-reason","type":"vocabulary-code","vocabulary":"sealing-reason","classification":"restricted"}
+             ]}
+          ],
+          "accessProfiles":[
+            {"id":"public-reader","anonymous":true,"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":[]}]}
+          ]
+        });
+        let project =
+            parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
+                .expect("project parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+            .unwrap_or_else(|failure| panic!("project compiles: {:?}", failure.diagnostics()));
+        let projection = compiled
+            .manifest_projection()
+            .expect("the project declares a Manifest projection");
+
+        // The complete source is what Registry Manifest filters before DCAT
+        // rendering, and its filter keeps a referenced codelist whole.
+        let source = project_manifest("shared-codes", projection, compiled.entities(), None);
+        compile_manifest(&source).expect("the complete source compiles");
+        let codelists = source
+            .codelists
+            .iter()
+            .map(|codelist| {
+                (
+                    codelist.id.as_str(),
+                    codelist
+                        .concepts
+                        .iter()
+                        .map(|concept| {
+                            (
+                                concept.code.as_str(),
+                                concept.label.as_ref().map(|label| label.text()),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codelists,
+            [("case-status", vec![("open", Some("Open".to_owned()))])]
+        );
+    }
 
     #[test]
     fn decimal_projection_preserves_the_canonical_string_wire_contract() {
