@@ -10,7 +10,9 @@ pub mod authority;
 mod subject_access_log;
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
-pub use subject_access_log::expire_subject_access_log_for_test;
+pub use subject_access_log::{
+    expire_subject_access_log_for_test, run_subject_access_log_retention_for_test,
+};
 
 #[cfg(feature = "runtime")]
 pub mod action_evidence;

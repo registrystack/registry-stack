@@ -27,7 +27,7 @@ use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
 use crate::auth::RegistryAuthenticator;
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use crate::metrics::{self, Metrics};
+use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{
@@ -655,7 +655,7 @@ pub struct PreparedServer {
     webhook_worker: Option<WebhookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
-    access_log_retention_pool: Option<RuntimePool>,
+    access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -726,7 +726,7 @@ impl PreparedServer {
             webhook_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
-            access_log_retention_pool: None,
+            access_log_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -753,7 +753,7 @@ impl PreparedServer {
             webhook_worker: Some(webhook_worker),
             attachment_verification_worker: None,
             review_worker: None,
-            access_log_retention_pool: None,
+            access_log_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -1262,7 +1262,9 @@ async fn finish_prepared_server(
     let telemetry_pool = pool.clone();
     // Retention runs only where the storage exists; a Registry that collects
     // a subject access log is never verified without it.
-    let access_log_retention_pool = startup.subject_access_log_installed().then(|| pool.clone());
+    let access_log_retention = startup
+        .subject_access_log_installed()
+        .then(|| (pool.clone(), Arc::<LastSuccess>::default()));
     let event_destinations = Arc::new(
         config
             .activate_event_destinations(&registry)
@@ -1427,6 +1429,7 @@ async fn finish_prepared_server(
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
+    let webhook_progress = webhook_delivery.last_success();
     let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
     let evidence = config
         .activate_evidence(&registry)
@@ -1527,9 +1530,26 @@ async fn finish_prepared_server(
     // The metrics registry exists only when the operator configured the
     // separate metrics listener; when absent, no series are recorded and no
     // metrics surface is served at all.
-    let telemetry_metrics = config
-        .metrics_listener()
-        .map(|_| Arc::new(Metrics::new(telemetry_pool)));
+    let telemetry_metrics = config.metrics_listener().map(|_| {
+        let mut registry = Metrics::new(telemetry_pool)
+            .with_worker_progress(ProgressWorker::Webhook, webhook_progress);
+        if let Some(worker) = &attachment_verification_worker {
+            registry = registry.with_worker_progress(
+                ProgressWorker::AttachmentVerification,
+                worker.last_success(),
+            );
+        }
+        if let Some(worker) = &review_worker {
+            registry = registry.with_worker_progress(ProgressWorker::Review, worker.last_success());
+        }
+        if let Some((_, last_success)) = &access_log_retention {
+            registry = registry.with_worker_progress(
+                ProgressWorker::SubjectAccessLogRetention,
+                Arc::clone(last_success),
+            );
+        }
+        Arc::new(registry)
+    });
     let app = with_request_timeout(
         authenticated_router(service, authenticator),
         config.operational_timeouts().http_request,
@@ -1549,7 +1569,7 @@ async fn finish_prepared_server(
         webhook_worker,
         attachment_verification_worker,
         review_worker,
-        access_log_retention_pool,
+        access_log_retention,
         metrics,
         postgres_advisories,
         role_mode: RoleMode::from_roles(
@@ -1758,7 +1778,7 @@ pub async fn serve_until_shutdown(
         webhook_worker,
         attachment_verification_worker,
         review_worker,
-        access_log_retention_pool,
+        access_log_retention,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -1797,10 +1817,14 @@ pub async fn serve_until_shutdown(
             task_stopped_tx.clone(),
         )
     });
-    let mut access_log_worker = access_log_retention_pool.map(|pool| {
+    let mut access_log_worker = access_log_retention.map(|(pool, last_success)| {
         SupervisedTask::spawn(
             BackgroundTask::SubjectAccessLogRetention,
-            crate::subject_access_log::run_retention(pool, worker_shutdown_rx.clone()),
+            crate::subject_access_log::run_retention(
+                pool,
+                last_success,
+                worker_shutdown_rx.clone(),
+            ),
             worker_shutdown_rx.clone(),
             task_stopped_tx.clone(),
         )

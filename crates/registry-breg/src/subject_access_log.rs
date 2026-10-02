@@ -254,6 +254,7 @@ pub(crate) async fn record_reads(
 /// live database without granting the runtime arbitrary DELETE authority.
 pub(crate) async fn run_retention(
     pool: RuntimePool,
+    last_success: std::sync::Arc<crate::metrics::LastSuccess>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -266,11 +267,14 @@ pub(crate) async fn run_retention(
             _ = interval.tick() => {
                 if let Ok(client) = pool.get().await {
                     match expire_tick(&**client, MAX_EXPIRY_BATCHES_PER_TICK).await {
-                        Ok(tick) => tracing::debug!(
-                            erased = tick.erased,
-                            bound_reached = tick.bound_reached,
-                            "subject access log expiry tick finished"
-                        ),
+                        Ok(tick) => {
+                            last_success.record();
+                            tracing::debug!(
+                                erased = tick.erased,
+                                bound_reached = tick.bound_reached,
+                                "subject access log expiry tick finished"
+                            );
+                        }
                         Err(_) => tracing::error!("subject access log expiry failed"),
                     }
                 } else {
@@ -329,6 +333,17 @@ async fn expire_tick(
         erased,
         bound_reached: true,
     })
+}
+
+/// Runs the retention loop until `shutdown` carries `true`.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn run_subject_access_log_retention_for_test(
+    pool: RuntimePool,
+    last_success: std::sync::Arc<crate::metrics::LastSuccess>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    run_retention(pool, last_success, shutdown).await;
 }
 
 /// Runs one retention tick, bounded by `max_batches` when given.

@@ -196,6 +196,7 @@ struct BregDeliverySeams {
     lock_timeout: Duration,
     audit: RegistryAudit,
     field_encryption: Option<Arc<FieldEncryptionService>>,
+    last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl BregDeliverySeams {
@@ -445,6 +446,10 @@ impl DeliverySeams for BregDeliverySeams {
                 OperationalEvent::WebhookStateTransitionFailed(transition_code(code)).emit();
             }
         }
+    }
+
+    fn iteration_succeeded(&self) {
+        self.last_success.record();
     }
 }
 
@@ -752,6 +757,7 @@ fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
 #[derive(Clone)]
 pub struct WebhookDeliveryService {
     delivery: DeliveryService<BregDeliverySeams>,
+    last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl WebhookDeliveryService {
@@ -803,6 +809,7 @@ impl WebhookDeliveryService {
             idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
             delivery_source: delivery_source(&expected.package_id, instance_id),
         };
+        let last_success = Arc::<crate::metrics::LastSuccess>::default();
         let seams = BregDeliverySeams {
             pool,
             destinations,
@@ -814,10 +821,19 @@ impl WebhookDeliveryService {
             lock_timeout,
             audit,
             field_encryption,
+            last_success: Arc::clone(&last_success),
         };
         Self {
             delivery: DeliveryService::new(seams, config),
+            last_success,
         }
+    }
+
+    /// The handle the delivery worker notes each iteration without failure
+    /// on.
+    #[must_use]
+    pub fn last_success(&self) -> Arc<crate::metrics::LastSuccess> {
+        Arc::clone(&self.last_success)
     }
 
     /// Claim, audit, send, and finalize at most one due delivery.
