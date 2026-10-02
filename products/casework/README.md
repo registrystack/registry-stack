@@ -244,6 +244,17 @@ do not participate in source work-item selectors or sorts.
 `GET /v1/work-items/next` returns the same `WorkItemPage` envelope with at most
 one item. Empty `complete` and `budget_exhausted` pages are successful `200`
 responses and retain `servedQueues`; callers follow `nextCursor` when present.
+Source discovery alone does not issue a cursor. If a source-backed page reports
+`budget_exhausted` without a cursor, retry the query without a cursor after
+reconciliation. The retried walk starts from the first position and can return
+items earlier pages already returned: deduplicate work items by `itemId`, and
+replace holdings totals instead of adding to them. A caller serving no queue
+receives `complete` without a cursor.
+An empty view over a source reconciled within the larger of twice its
+`reconciliationIntervalMilliseconds` and 2 minutes stays complete, and its
+successful availability probe does not requeue source subjects or clear
+completeness. Once that window has passed, the probe requeues the subjects it
+finds and the view reports `budget_exhausted` until reconciliation completes.
 Its opaque cursor is bound to the actor, both selected profiles, optional queue,
 the next-item feed, and fixed `due` ordering.
 

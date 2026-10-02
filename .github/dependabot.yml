@@ -17,7 +17,7 @@ updates:
       cargo-major:
         update-types:
           - major
-    # wasmtime is pinned to an LTS line (=48.0.3 today). Patch updates
+    # wasmtime is pinned to an LTS line (=48.0.5 today). Patch updates
     # within the line are wanted; a minor or major proposal is an LTS jump
     # the pin exists to prevent. wasmtime is the only direct
     # wasmtime-family dependency; add sibling entries here if that changes.
@@ -85,7 +85,7 @@ updates:
         update-types:
           - major
     # wasmtime and wasmtime-wizer are pinned to the same LTS line as the root
-    # workspace's wasmtime dependency (=48.0.3 today); a minor or major
+    # workspace's wasmtime dependency (=48.0.5 today); a minor or major
     # proposal is the LTS jump the pin exists to prevent. phonenumber is
     # pinned exactly because the module-size ceiling was measured against its
     # bundled metadata at this release (template/Cargo.toml); any bump,

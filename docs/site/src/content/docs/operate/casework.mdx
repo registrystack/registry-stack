@@ -318,7 +318,8 @@ default to 30000 and 10000, accept at most 300000, and are refused when the conn
 larger of the two, and `reconciliationIntervalMilliseconds`, how often the runtime re-reads the
 source for work the source's own notifications did not deliver, which defaults to 60000 and accepts
 1000 to 3600000. If one pass outlasts the interval, Casework skips missed ticks instead of
-replaying them back-to-back against the source.
+replaying them back-to-back against the source. An empty inbox view treats a reconciled source as
+current for the larger of twice the interval and 2 minutes.
 
 A binding has no event type to set. Each lifecycle event carries, as its `ce-type`, the id of the
 hook `caseworkctl source add` wrote on the request entity, `casework-lifecycle-v1-<entity>`, and
@@ -348,7 +349,13 @@ before they become the anchor for verification.
     crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
     generation_ignores_credentials_transport_and_presentation_settings(),
     DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
-    crates/registry-casework/src/http.rs; products/casework/README.md. */}
+    crates/registry-casework/src/http.rs;
+    crates/registry-casework/src/service.rs, source_status_window(),
+    MINIMUM_SOURCE_STATUS_WINDOW, with_reconciliation_intervals(), and
+    source_status_window_is_twice_the_interval_and_at_least_two_minutes();
+    crates/registry-casework/tests/inbox_ordering_postgres.rs,
+    a_reconciled_source_stays_fresh_for_twice_its_reconciliation_interval;
+    products/casework/README.md. */}
 
 ### Create the secret files
 

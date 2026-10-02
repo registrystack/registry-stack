@@ -13,7 +13,7 @@ use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
-    PostgresStore, ReconciliationFailure, ServiceError, StoreError,
+    PostgresStore, ReconciliationFailure, ServiceError, StoreError, MINIMUM_SOURCE_STATUS_WINDOW,
     RECONCILIATION_FAILURE_THRESHOLD,
 };
 use registry_casework_core::{
@@ -993,7 +993,7 @@ async fn completed_discovery_waits_for_the_pending_tail_before_restarting() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .expect("source status"),
         Some((true, false))
@@ -1037,7 +1037,7 @@ async fn expired_remote_lease_fences_the_stale_page() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -1068,7 +1068,7 @@ async fn expired_remote_lease_fences_the_stale_failure() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .expect("source status after stale failure"),
         Some((true, false))
@@ -1128,7 +1128,7 @@ async fn generation_change_fences_the_stale_discovery_page() {
     assert_eq!(
         replacement
             .store()
-            .source_status(SOURCE_ID, "generation-2")
+            .source_status(SOURCE_ID, "generation-2", MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -1155,7 +1155,7 @@ async fn incomplete_reconciliation_preserves_outage_until_complete() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((false, true))
@@ -1173,7 +1173,7 @@ async fn incomplete_reconciliation_preserves_outage_until_complete() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -2907,6 +2907,206 @@ async fn stale_source_action_remains_not_offered() {
     .await;
 }
 
+#[tokio::test]
+async fn reconciled_empty_inboxes_preserve_source_completeness() {
+    let _database = DATABASE.lock().await;
+    let (mut source, _) = MockSource::with_large_discovery(1);
+    source.reads.insert(
+        Uuid::from_u128(1).to_string(),
+        CallerRead::Visible("active"),
+    );
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
+            .await
+            .unwrap(),
+        Some((true, false))
+    );
+    assert!(!fixture
+        .service
+        .store()
+        .source_has_pending(SOURCE_ID, GENERATION)
+        .await
+        .unwrap());
+
+    for (actor, view, queue) in [
+        (&fixture.outsider, InboxView::MyTeams, None),
+        (&fixture.staff, InboxView::Mine, None),
+        (&fixture.staff, InboxView::Overdue, None),
+        (&fixture.staff, InboxView::CompletedByMe, None),
+        (&fixture.staff, InboxView::MyTeams, Some("other-queue")),
+    ] {
+        for _ in 0..3 {
+            let page = fixture
+                .service
+                .inbox_for_view(actor, "reader", "token", view, 25, queue, None, None)
+                .await
+                .unwrap();
+            assert!(page.items.is_empty(), "{view:?}");
+            assert_eq!(page.status, PageStatus::Complete, "{view:?}");
+            assert!(page.next_cursor.is_none(), "{view:?}");
+            assert_eq!(
+                fixture
+                    .service
+                    .store()
+                    .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
+                    .await
+                    .unwrap(),
+                Some((true, false))
+            );
+            assert!(!fixture
+                .service
+                .store()
+                .source_has_pending(SOURCE_ID, GENERATION)
+                .await
+                .unwrap());
+        }
+    }
+    let configured_project = project(policy(10, 1_000));
+    let app = router(HttpState {
+        service: fixture.service.clone(),
+        authenticator: Arc::new(authenticator(&configured_project)),
+        project: Arc::new(configured_project),
+    });
+    for (principal, path, served) in [
+        (
+            "outsider",
+            "/v1/work-items?view=my_teams&limit=25",
+            json!([]),
+        ),
+        ("staff", "/v1/work-items?view=mine&limit=25", json!([QUEUE])),
+        ("outsider", "/v1/work-items/next", json!([])),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                path,
+                &access_token(principal),
+                "staff",
+                json!(null),
+                &[(SOURCE_PROFILE_HEADER, "reader")],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let page = response_body(response).await;
+        assert_eq!(page["items"], json!([]));
+        assert_eq!(page["status"], "complete");
+        assert!(page
+            .get("nextCursor")
+            .is_none_or(serde_json::Value::is_null));
+        assert_eq!(page["servedQueues"], served);
+    }
+    let invalid_cursor = app
+        .oneshot(authenticated_request(
+            "GET",
+            "/v1/work-items?view=my_teams&cursor=invalid",
+            &access_token("outsider"),
+            "staff",
+            json!(null),
+            &[(SOURCE_PROFILE_HEADER, "reader")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_cursor.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_body(invalid_cursor).await["code"],
+        "request.invalid"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
+            .await
+            .unwrap(),
+        Some((true, false))
+    );
+    assert!(!fixture
+        .service
+        .store()
+        .source_has_pending(SOURCE_ID, GENERATION)
+        .await
+        .unwrap());
+
+    let page = fixture
+        .service
+        .inbox(&fixture.staff, "reader", "token", 25, None, None)
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.status, PageStatus::Complete);
+    assert!(page.next_cursor.is_none());
+}
+
+#[tokio::test]
+async fn no_served_queue_completes_without_source_discovery() {
+    let _database = DATABASE.lock().await;
+    for source in [
+        MockSource::with_large_discovery(1).0,
+        MockSource::with_unavailable_discovery(),
+    ] {
+        let discovery_calls = Arc::clone(&source.discovery_cursors);
+        let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+        for view in [
+            InboxView::MyTeams,
+            InboxView::Mine,
+            InboxView::Overdue,
+            InboxView::CompletedByMe,
+        ] {
+            let page = fixture
+                .service
+                .inbox_for_view(
+                    &fixture.outsider,
+                    "reader",
+                    "token",
+                    view,
+                    25,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert!(page.items.is_empty());
+            assert_eq!(page.status, PageStatus::Complete);
+            assert!(page.next_cursor.is_none());
+            assert!(page.served_queues.is_empty());
+        }
+        let next = fixture
+            .service
+            .next_item(&fixture.outsider, "reader", "token", None, None)
+            .await
+            .unwrap();
+        assert_eq!(next.status, PageStatus::Complete);
+        assert!(next.next_cursor.is_none());
+        assert!(discovery_calls.lock().unwrap().is_empty());
+        assert_eq!(
+            fixture
+                .service
+                .store()
+                .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(!fixture
+            .service
+            .store()
+            .source_has_pending(SOURCE_ID, GENERATION)
+            .await
+            .unwrap());
+    }
+}
+
 async fn zero_local_candidates_distinguish_empty_source_from_outage() {
     let empty = fixture([], policy(10, 1_000)).await;
     let page = empty
@@ -2969,7 +3169,7 @@ async fn incomplete_multipage_discovery_stays_incomplete_across_requests() {
         .unwrap();
     assert!(first_probe.items.is_empty());
     assert_eq!(first_probe.status, PageStatus::BudgetExhausted);
-    assert!(first_probe.next_cursor.is_some());
+    assert!(first_probe.next_cursor.is_none());
     assert_eq!(fixture.service.synchronize_pending(100).await.unwrap(), 1);
 
     let concealed_first = fixture
@@ -2979,7 +3179,7 @@ async fn incomplete_multipage_discovery_stays_incomplete_across_requests() {
         .unwrap();
     assert!(concealed_first.items.is_empty());
     assert_eq!(concealed_first.status, PageStatus::BudgetExhausted);
-    assert!(concealed_first.next_cursor.is_some());
+    assert!(concealed_first.next_cursor.is_none());
 
     assert_eq!(
         fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
@@ -3902,7 +4102,9 @@ async fn http_authentication_and_directory_authority_are_enforced() {
     let page = response_body(response).await;
     assert_eq!(page["status"], "budget_exhausted");
     assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
-    assert!(page["nextCursor"].is_string());
+    assert!(page
+        .get("nextCursor")
+        .is_none_or(serde_json::Value::is_null));
 
     for profile in ["administrator", "supervisor"] {
         let list = authenticated_request(

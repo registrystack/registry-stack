@@ -3564,13 +3564,16 @@ impl PostgresStore {
         Ok(inventory)
     }
 
+    /// The recorded status of a source binding generation, when it was checked
+    /// within `fresh_within`.
     pub async fn source_status(
         &self,
         source_id: &str,
         generation: &str,
+        fresh_within: Duration,
     ) -> Result<Option<(bool, bool)>, StoreError> {
         let client = self.client().await?;
-        Ok(client.query_opt("SELECT remote_complete,unavailable FROM casework_source_status WHERE source_id=$1 AND binding_generation=$2 AND checked_at>now()-interval '2 minutes'", &[&source_id,&generation]).await?.map(|row|(row.get(0),row.get(1))))
+        Ok(client.query_opt("SELECT remote_complete,unavailable FROM casework_source_status WHERE source_id=$1 AND binding_generation=$2 AND checked_at>now()-make_interval(secs=>$3::double precision)", &[&source_id,&generation,&fresh_within.as_secs_f64()]).await?.map(|row|(row.get(0),row.get(1))))
     }
 
     pub async fn source_has_pending(

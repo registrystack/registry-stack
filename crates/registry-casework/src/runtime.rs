@@ -627,7 +627,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         })
         .transpose()?;
     let service = CaseworkService::new(store.clone(), project.clone(), adapters)?
-        .with_task_authority(task_authority);
+        .with_task_authority(task_authority)
+        .with_reconciliation_intervals(
+            config
+                .sources
+                .iter()
+                .map(|(source_id, binding)| (source_id.clone(), reconciliation_interval(binding))),
+        );
     let completion_dispatcher = Arc::new(ReviewCompletionDispatcher::new(
         store.clone(),
         &config.review_completion_destinations,
