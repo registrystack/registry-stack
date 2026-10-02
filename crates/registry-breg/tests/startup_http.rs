@@ -28,8 +28,8 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, with_request_timeout_and_metrics_for_test,
-    with_request_timeout_for_test, OperationalEvent, OperationalLogLevel, StartupError,
-    WebhookStateTransitionCode,
+    with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, OperationalEvent,
+    OperationalLogLevel, StartupError, WebhookStateTransitionCode,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
@@ -498,7 +498,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 26] {
+fn startup_errors() -> [StartupError; 27] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -540,6 +540,7 @@ fn startup_errors() -> [StartupError; 26] {
         StartupError::FieldEncryptionCustody,
         StartupError::Listener,
         StartupError::Shutdown,
+        StartupError::BackgroundTaskStopped,
         StartupError::Logging,
     ]
 }
@@ -609,6 +610,18 @@ fn expected_operational_event(
             "webhook state transition failed",
             None,
             Some(expected_webhook_state_transition_code(code)),
+        ),
+        OperationalEvent::BackgroundTaskStopped(task, stop) => (
+            OperationalLogLevel::Error,
+            "registry_breg::startup",
+            match stop {
+                BackgroundTaskStop::Panicked => "a Base Registry Engine background task panicked",
+                BackgroundTaskStop::Returned => {
+                    "a Base Registry Engine background task returned before shutdown was requested"
+                }
+            },
+            None,
+            Some(expected_background_task_stop_code(task, stop)),
         ),
         OperationalEvent::RoleMode(RoleMode::Single) => (
             OperationalLogLevel::Info,
@@ -727,6 +740,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         }
         StartupError::Listener => "the Registry listener could not be started",
         StartupError::Shutdown => "the Registry shutdown signal failed",
+        StartupError::BackgroundTaskStopped => {
+            "a Registry background task stopped before shutdown was requested"
+        }
         StartupError::Logging => "the Registry operational log level was refused",
     }
 }
@@ -740,6 +756,36 @@ fn expected_webhook_state_transition_code(code: WebhookStateTransitionCode) -> &
         WebhookStateTransitionCode::ClaimUpdateFailed => "webhook.claim.update_failed",
         WebhookStateTransitionCode::ClaimAuditFailed => "webhook.claim.audit_failed",
         WebhookStateTransitionCode::ClaimCommitFailed => "webhook.claim.commit_failed",
+    }
+}
+
+fn expected_background_task_stop_code(
+    task: BackgroundTask,
+    stop: BackgroundTaskStop,
+) -> &'static str {
+    match (task, stop) {
+        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
+        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
+            "attachment_verification.worker.panicked"
+        }
+        (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Returned) => {
+            "attachment_verification.worker.returned"
+        }
+        (BackgroundTask::ReviewWorker, BackgroundTaskStop::Panicked) => "review.worker.panicked",
+        (BackgroundTask::ReviewWorker, BackgroundTaskStop::Returned) => "review.worker.returned",
+        (BackgroundTask::SubjectAccessLogRetention, BackgroundTaskStop::Panicked) => {
+            "subject_access_log.retention.panicked"
+        }
+        (BackgroundTask::SubjectAccessLogRetention, BackgroundTaskStop::Returned) => {
+            "subject_access_log.retention.returned"
+        }
+        (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
+            "metrics.listener.panicked"
+        }
+        (BackgroundTask::MetricsListener, BackgroundTaskStop::Returned) => {
+            "metrics.listener.returned"
+        }
     }
 }
 
@@ -769,6 +815,13 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
+    for task in BackgroundTask::ALL {
+        events.extend(
+            BackgroundTaskStop::ALL
+                .into_iter()
+                .map(|stop| OperationalEvent::BackgroundTaskStopped(task, stop)),
+        );
+    }
     events.extend(
         WebhookStateTransitionCode::ALL
             .into_iter()
@@ -1608,6 +1661,165 @@ async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning()
         .await
         .expect("timeout cleanup joined the server before returning");
     drop(rebound);
+}
+
+/// Serve with a webhook worker probe that stops on its own, and return what
+/// serve returned plus the operational records it emitted.
+#[cfg(feature = "postgres-test")]
+async fn serve_with_self_stopping_worker(
+    probe: &registry_breg::webhook::WebhookWorkerLifecycleProbe,
+) -> (
+    registry_breg::startup::Result<()>,
+    Vec<Value>,
+    std::net::SocketAddr,
+) {
+    use axum::routing::get;
+    use registry_breg::startup::{serve_until_shutdown, PreparedServer};
+    use tokio::net::TcpListener;
+
+    let reservation = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("ephemeral listener reservation binds");
+    let bind = reservation
+        .local_addr()
+        .expect("ephemeral listener address reads");
+    drop(reservation);
+    let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
+    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+        bind,
+        app,
+        Duration::from_secs(2),
+        probe.worker(),
+    );
+    let writer = CapturedOperationalLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_writer(writer.clone())
+        .finish();
+    let result = {
+        // The current-thread runtime runs every spawned task on this thread,
+        // so the thread default subscriber observes the supervisors too.
+        let _default = tracing::subscriber::set_default(subscriber);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            serve_until_shutdown(
+                prepared,
+                std::future::pending::<registry_breg::startup::Result<()>>(),
+            ),
+        )
+        .await
+        .expect("a stopped background task ends serve without a shutdown signal")
+    };
+    let records = writer
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+        .collect();
+    (result, records, bind)
+}
+
+#[cfg(feature = "postgres-test")]
+fn background_task_stop_codes(records: &[Value]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| {
+            record["fields"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("background task"))
+        })
+        .filter_map(|record| record["fields"]["code"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test(flavor = "current_thread")]
+async fn a_panicking_background_task_stops_serve_with_a_distinct_error() {
+    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+
+    let _capture_guard = TRACING_CAPTURE.lock().await;
+    let probe = WebhookWorkerLifecycleProbe::panicking();
+    let (result, records, bind) = serve_with_self_stopping_worker(&probe).await;
+
+    assert_eq!(result, Err(StartupError::BackgroundTaskStopped));
+    assert_eq!(
+        background_task_stop_codes(&records),
+        vec!["webhook.worker.panicked".to_owned()]
+    );
+    let stopped = records
+        .iter()
+        .find(|record| record["fields"]["code"] == "webhook.worker.panicked")
+        .expect("the panicked task is reported");
+    assert_eq!(stopped["level"], "ERROR");
+    assert_eq!(
+        stopped["fields"]
+            .as_object()
+            .expect("fields are an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["code", "message"])
+    );
+    assert!(probe.started());
+    assert!(probe.stopped());
+    let rebound = tokio::net::TcpListener::bind(bind)
+        .await
+        .expect("serve joined the HTTP server after the task stopped");
+    drop(rebound);
+}
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test(flavor = "current_thread")]
+async fn an_early_returning_background_task_stops_serve_with_a_distinct_error() {
+    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+
+    let _capture_guard = TRACING_CAPTURE.lock().await;
+    let probe = WebhookWorkerLifecycleProbe::returning();
+    let (result, records, bind) = serve_with_self_stopping_worker(&probe).await;
+
+    assert_eq!(result, Err(StartupError::BackgroundTaskStopped));
+    assert_eq!(
+        background_task_stop_codes(&records),
+        vec!["webhook.worker.returned".to_owned()]
+    );
+    assert!(probe.started());
+    assert!(probe.stopped());
+    let rebound = tokio::net::TcpListener::bind(bind)
+        .await
+        .expect("serve joined the HTTP server after the task stopped");
+    drop(rebound);
+}
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test(flavor = "current_thread")]
+async fn a_requested_shutdown_reports_no_background_task_stop() {
+    use axum::routing::get;
+    use registry_breg::startup::{serve_until_shutdown, PreparedServer};
+    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+
+    let _capture_guard = TRACING_CAPTURE.lock().await;
+    let probe = WebhookWorkerLifecycleProbe::new(false);
+    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+        "127.0.0.1:0".parse().expect("ephemeral bind parses"),
+        axum::Router::new().route("/healthz", get(|| async { "ok" })),
+        Duration::from_secs(2),
+        probe.worker(),
+    );
+    let writer = CapturedOperationalLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(writer.clone())
+        .finish();
+    let result = {
+        let _default = tracing::subscriber::set_default(subscriber);
+        serve_until_shutdown(prepared, async { Ok(()) }).await
+    };
+
+    assert_eq!(result, Ok(()));
+    assert!(probe.stopped());
+    assert!(!writer.text().contains("background task"));
 }
 
 fn compiled_registry() -> Arc<CompiledRegistry> {

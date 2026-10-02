@@ -915,7 +915,18 @@ enum WebhookWorkerKind {
 #[derive(Clone)]
 pub struct WebhookWorkerLifecycleProbe {
     state: Arc<WebhookWorkerLifecycleState>,
-    hang: bool,
+    mode: WebhookWorkerLifecycleMode,
+}
+
+/// How the probe ends: on the shutdown signal, never, or on its own before
+/// shutdown is requested.
+#[cfg(feature = "postgres-test")]
+#[derive(Clone, Copy)]
+enum WebhookWorkerLifecycleMode {
+    UntilShutdown,
+    Hang,
+    Panic,
+    Return,
 }
 
 #[cfg(feature = "postgres-test")]
@@ -929,13 +940,33 @@ struct WebhookWorkerLifecycleState {
 impl WebhookWorkerLifecycleProbe {
     #[must_use]
     pub fn new(hang: bool) -> Self {
+        Self::with_mode(if hang {
+            WebhookWorkerLifecycleMode::Hang
+        } else {
+            WebhookWorkerLifecycleMode::UntilShutdown
+        })
+    }
+
+    /// A probe that panics as soon as it starts.
+    #[must_use]
+    pub fn panicking() -> Self {
+        Self::with_mode(WebhookWorkerLifecycleMode::Panic)
+    }
+
+    /// A probe that returns as soon as it starts, without a shutdown signal.
+    #[must_use]
+    pub fn returning() -> Self {
+        Self::with_mode(WebhookWorkerLifecycleMode::Return)
+    }
+
+    fn with_mode(mode: WebhookWorkerLifecycleMode) -> Self {
         Self {
             state: Arc::new(WebhookWorkerLifecycleState {
                 started: AtomicBool::new(false),
                 running: AtomicBool::new(false),
                 stopped: AtomicBool::new(false),
             }),
-            hang,
+            mode,
         }
     }
 
@@ -965,8 +996,11 @@ impl WebhookWorkerLifecycleProbe {
         self.state.started.store(true, Ordering::SeqCst);
         self.state.running.store(true, Ordering::SeqCst);
         let _guard = WebhookWorkerLifecycleGuard(Arc::clone(&self.state));
-        if self.hang {
-            std::future::pending::<()>().await;
+        match self.mode {
+            WebhookWorkerLifecycleMode::UntilShutdown => {}
+            WebhookWorkerLifecycleMode::Hang => std::future::pending::<()>().await,
+            WebhookWorkerLifecycleMode::Panic => panic!("webhook worker lifecycle probe panicked"),
+            WebhookWorkerLifecycleMode::Return => return,
         }
         while !*shutdown.borrow() {
             if shutdown.changed().await.is_err() {
