@@ -79,7 +79,7 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     let old = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=householdCode&$filter=householdCode%20eq%20'B'&$count=true",
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=householdCode&$filter=householdCode%20eq%20'BB'&$count=true",
             snapshot_ref(OLD_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -96,7 +96,10 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     assert!(old.get("@context").is_none());
     assert_eq!(old["items"][0]["recordIdentifier"], MEMBERSHIP);
     assert_eq!(old["items"][0]["revisionIdentifier"], "1");
-    assert_eq!(old["items"][0]["domainData"], json!({"householdCode": "B"}));
+    assert_eq!(
+        old["items"][0]["domainData"],
+        json!({"householdCode": "BB"})
+    );
 
     for (filter, expected) in [
         ("startswith(householdCode,'b')", vec![MEMBERSHIP]),
@@ -114,14 +117,30 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
         assert_eq!(response.status(), StatusCode::OK, "{filter}");
         let body = body_json(response).await;
         assert_eq!(item_ids(&body), expected);
-        assert_eq!(body["items"][0]["domainData"]["householdCode"], "B");
+        assert_eq!(body["items"][0]["domainData"]["householdCode"], "BB");
         assert_eq!(body["count"], expected.len());
     }
+
+    let vocabulary_search = send(
+        &app,
+        &format!(
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=jurisdiction&$filter=contains(jurisdiction,'ONE-A')&$top=1",
+            snapshot_ref(OLD_REFERENCE_UUID)
+        ),
+        Some(history_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(vocabulary_search.status(), StatusCode::OK);
+    let vocabulary_search = body_json(vocabulary_search).await;
+    assert_eq!(
+        vocabulary_search["items"][0]["domainData"]["jurisdiction"],
+        "zone-a"
+    );
 
     let corrected = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=householdCode&$filter=householdCode%20eq%20'A'",
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=householdCode&$filter=householdCode%20eq%20'AA'",
             snapshot_ref(LATEST_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -252,7 +271,7 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     let start_inclusive = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-01&$select=householdCode&$filter=householdCode%20eq%20'B'",
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-01&$select=householdCode&$filter=householdCode%20eq%20'BB'",
             snapshot_ref(OLD_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -265,7 +284,7 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     let before_start = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-05-31&$select=householdCode&$filter=householdCode%20eq%20'B'",
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-05-31&$select=householdCode&$filter=householdCode%20eq%20'BB'",
             snapshot_ref(OLD_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -280,7 +299,7 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     let before_end = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-14&$select=householdCode&$filter=householdCode%20eq%20'A'",
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-14&$select=householdCode&$filter=householdCode%20eq%20'AA'",
             snapshot_ref(LATEST_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -293,7 +312,7 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     let end_exclusive = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-15&$select=householdCode&$filter=householdCode%20eq%20'A'",
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-15&$select=householdCode&$filter=householdCode%20eq%20'AA'",
             snapshot_ref(LATEST_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -308,7 +327,7 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     let no_valid_at = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'A'",
+            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'AA'",
             snapshot_ref(LATEST_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -612,7 +631,7 @@ async fn snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_
     let after_timeout = send(
         &app,
         &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'A'",
+            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'AA'",
             snapshot_ref(LATEST_REFERENCE_UUID)
         ),
         Some(history_claims(["zone-a"])),
@@ -984,8 +1003,8 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       "entities":[{
         "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
         "fields":[
-          {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
-          {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"household-code","type":"string","minLength":2,"maxLength":32,"required":true,"classification":"internal"},
+          {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","values":["zone-a","zone-b"],"required":true,"classification":"internal"},
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
           {"id":"valid-to","type":"date","classification":"internal"},
           {"id":"case-note","type":"string","maxLength":64,"classification":"internal"}
@@ -1001,7 +1020,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
         "permissions":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
-          "filterableFields":["household-code"],"sortableFields":["household-code"],"allowCount":true,
+          "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
         }]
       },{
@@ -1009,7 +1028,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
         "permissions":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
-          "filterableFields":["household-code"],"sortableFields":["household-code"],"allowCount":true,
+          "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries": []
         }]
       }]
@@ -1159,7 +1178,7 @@ async fn seed_history(migration: &mut Client) {
         None,
         "active",
         json!({
-            "household-code": "B",
+            "household-code": "BB",
             "jurisdiction": "zone-a",
             "valid-from": "2026-06-01",
             "valid-to": null
@@ -1235,7 +1254,7 @@ async fn seed_history(migration: &mut Client) {
         Some(2),
         "active",
         json!({
-            "household-code": "A",
+            "household-code": "AA",
             "jurisdiction": "zone-a",
             "valid-from": "2026-01-01",
             "valid-to": "2026-06-15"
@@ -1265,7 +1284,7 @@ async fn seed_history(migration: &mut Client) {
         None,
         "active",
         json!({
-            "household-code": "C",
+            "household-code": "CC",
             "jurisdiction": "zone-a",
             "valid-from": "2026-01-01",
             "valid-to": null
@@ -1363,7 +1382,7 @@ async fn append_later_visible_commit(migration: &mut Client) {
         None,
         "active",
         json!({
-            "household-code": "D",
+            "household-code": "DD",
             "jurisdiction": "zone-a",
             "valid-from": "2026-01-01",
             "valid-to": null

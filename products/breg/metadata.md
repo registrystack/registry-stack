@@ -220,6 +220,12 @@ case, using PostgreSQL's locale rules, on string, text, and vocabulary-code fiel
 They treat `%`, `_`, and backslash literally; they do not fold accents or rank
 results. `equals` and `in` retain exact, case-sensitive matching.
 
+Prefix and contains operands are quoted text search terms, so they can be shorter
+than a string's `minLength` or contain only part of a vocabulary code. They keep
+the query literal size bound and string/text `maxLength`, and reject control
+characters. Empty terms are accepted and match every non-null value permitted by
+the caller's read profile.
+
 The temporal requirement applies to the first page; continuation is cursor-only
 apart from the selected access profile. Native direct lists can combine bbox
 with permitted scalar options. Temporal and relationship routes do not accept
