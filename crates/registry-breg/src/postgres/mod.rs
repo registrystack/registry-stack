@@ -227,6 +227,11 @@ pub enum PostgresKernelError {
     CatalogInvariant(&'static str),
     #[error("Registry is unavailable for record operations")]
     RegistryUnavailable,
+    /// Another session held the registry's exclusive migration lock until
+    /// this session's wait for it timed out: an apply, an adoption, or a
+    /// reconciliation is in progress.
+    #[error("another session holds the registry migration lock")]
+    MigrationLockHeld,
     /// Retained history coverage does not admit a successor package.
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverageIncomplete,

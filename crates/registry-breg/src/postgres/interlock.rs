@@ -305,10 +305,21 @@ impl DedicatedApplyConnection {
         if let Some(timeout) = statement_timeout {
             set_session_timeout(&client, "statement_timeout", timeout).await?;
         }
+        // The lock statement waits only for the lock, so the lock timeout,
+        // or a shorter statement timeout, ending that wait means another
+        // session holds it. Every other failure keeps its own refusal.
         client
             .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
             .await
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            .map_err(|error| match error.code() {
+                Some(code)
+                    if code == &tokio_postgres::error::SqlState::LOCK_NOT_AVAILABLE
+                        || code == &tokio_postgres::error::SqlState::QUERY_CANCELED =>
+                {
+                    PostgresKernelError::MigrationLockHeld
+                }
+                _ => PostgresKernelError::RegistryUnavailable,
+            })?;
         Ok(Self {
             client,
             connection_task,
@@ -4454,7 +4465,7 @@ mod tests {
         .await;
         assert!(matches!(
             competing_lock,
-            Err(PostgresKernelError::RegistryUnavailable)
+            Err(PostgresKernelError::MigrationLockHeld)
         ));
 
         apply

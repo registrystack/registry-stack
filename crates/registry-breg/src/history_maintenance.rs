@@ -71,6 +71,7 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::AdoptionFingerprintMismatch { .. }
             | PostgresKernelError::RegistryUnavailable
+            | PostgresKernelError::MigrationLockHeld
             | PostgresKernelError::HistoryCoverageIncomplete
             | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
         }

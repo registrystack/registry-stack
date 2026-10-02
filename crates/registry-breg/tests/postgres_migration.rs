@@ -31,7 +31,7 @@ use registry_breg::migration_plan::{
     ReviewedMigrationStepDescriptor,
 };
 use registry_breg::migration_reconcile::{
-    reconcile_failed_migration, ReconcileError, ReconcileOutcome, ReconcileReport,
+    reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
     ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
 };
 use registry_breg::package::{
@@ -948,11 +948,12 @@ async fn real_postgres_initial_apply_drops_retired_audit_rows_with_acknowledgeme
     database.cleanup().await;
 }
 
-/// An unreachable database or an apply lock another session holds, before
-/// maintenance begins, changes nothing, so it is reported as the database
-/// being unavailable and never as a failed migration that needs
-/// reconciliation. This holds for an activation and for reading the
-/// recorded registry state alike.
+/// An unreachable database or a migration lock another session holds, before
+/// maintenance begins, changes nothing, so it is never reported as a failed
+/// migration that needs reconciliation. An unreachable database is reported
+/// as unavailable and a held lock as held, never one as the other. This
+/// holds for an activation and for reading the recorded registry state
+/// alike, while the lock-free status read still answers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged() {
     let ActivePackageFixture {
@@ -998,12 +999,21 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
         apply(&database, &initial, ApplyPrecondition::InitialActivation)
             .await
             .err(),
-        MigrationError::DatabaseUnavailable,
+        MigrationError::MigrationLockHeld,
     );
     assert_value_free(
         recorded_state(&database, &initial).await.err(),
-        MigrationError::DatabaseUnavailable,
+        MigrationError::MigrationLockHeld,
     );
+    read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+    )
+    .await
+    .expect("the lock-free status read answers while the lock is held")
+    .expect("the database records an activation");
     holder
         .execute(
             "SELECT pg_catalog.pg_advisory_unlock($1)",
@@ -1220,6 +1230,98 @@ async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refu
     assert!(reverted.executed);
     assert_ready_target(&database, &active).await;
     assert_reconcile_audit_is_minimized(&database, "reverted").await;
+    database.cleanup().await;
+}
+
+/// Another session holding the exclusive migration lock is an apply in
+/// progress, not an unreachable database. Assessment reports it as the
+/// `in_progress` outcome, execution refuses with that outcome instead of
+/// reporting success, and the lock-free read of the recorded activation still
+/// answers while the lock is held. Nothing changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progress() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("in-progress scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-in-progress",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    let before = durable_snapshot(&database).await;
+
+    let lock_key = registry_breg::postgres::RegistryLockKey::derive(&package.manifest().package_id)
+        .expect("package lock key derives");
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("another session holds the migration lock");
+
+    let status = read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+    )
+    .await
+    .expect("the lock-free read answers while the lock is held")
+    .expect("the database records an activation");
+    assert_eq!(status.identity, active);
+    assert_eq!(status.maintenance_status, "failed");
+
+    let assessed = reconcile(&database, &package, &active, &base, false)
+        .await
+        .expect("assessment reports the held lock as an outcome");
+    assert_eq!(assessed.outcome, ReconcileOutcome::InProgress);
+    assert!(!assessed.executed);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("execution refuses while another session holds the lock"),
+        ReconcileError::NotExecutable(ReconcileOutcome::InProgress)
+    );
+
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the other session releases the migration lock");
+    holder_task.abort();
+    assert_eq!(durable_snapshot(&database).await, before);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
     database.cleanup().await;
 }
 
@@ -7222,9 +7324,12 @@ async fn reconcile(
         runtime_role: &database.runtime_role,
         timeouts: ReconcileTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
-        audit: &audit,
+        audit: if execute {
+            ReconcileAudit::Execute(&audit)
+        } else {
+            ReconcileAudit::Assess(audit.profile())
+        },
         operator_reference: RECONCILE_OPERATOR_CANARY,
-        execute,
     })
     .await
 }

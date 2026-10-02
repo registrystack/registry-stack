@@ -865,6 +865,96 @@ fi
 wait "$lock_pid" >/dev/null 2>&1 || true
 lock_pid=""
 
+# Another session holding the exclusive migration lock is an activation in
+# progress, never an unreachable database: assessment still answers, and
+# execution and apply refuse as in progress.
+migration_lock_key=$(
+  python3 - "$(json_field "$temporary_root/build-v1/package/package.json" manifest.packageId)" <<'PY'
+import hashlib
+import sys
+digest = hashlib.sha256(b"breg/advisory-lock/v1/" + sys.argv[1].encode()).digest()
+print(int.from_bytes(digest[:8], "big", signed=True))
+PY
+)
+psql "$adopter_production_admin_url" -v ON_ERROR_STOP=1 -q \
+  -c "SELECT pg_advisory_lock($migration_lock_key); SELECT pg_sleep(120);" >/dev/null 2>"$temporary_root/advisory-lock.stderr" &
+lock_pid=$!
+advisory_backend_pid=""
+for _ in $(seq 1 80); do
+  advisory_backend_pid=$(psql "$adopter_production_admin_url" -Atqc \
+    "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) AND ((classid::bigint << 32) | objid::bigint) = ($migration_lock_key::bigint) LIMIT 1")
+  [[ "$advisory_backend_pid" =~ ^[0-9]+$ ]] && break
+  sleep 0.25
+done
+if [[ ! "$advisory_backend_pid" =~ ^[0-9]+$ ]]; then
+  printf '%s\n' 'the competing session did not take the migration lock.' >&2
+  exit 1
+fi
+run_json "$temporary_root/reconcile-v2-in-progress.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-in-progress
+assert_json_ok "$temporary_root/reconcile-v2-in-progress.json" "migration reconcile"
+if [[ "$(json_field "$temporary_root/reconcile-v2-in-progress.json" outcome)" != "in_progress" ]]; then
+  printf '%s\n' 'assessment under a held migration lock did not report in_progress.' >&2
+  exit 1
+fi
+if run_json "$temporary_root/reconcile-v2-in-progress-execute.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-in-progress --execute; then
+  printf '%s\n' 'reconcile execution unexpectedly ran under a held migration lock.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/reconcile-v2-in-progress-execute.json" migration.reconcile.outcome.in_progress
+if run_json "$temporary_root/apply-v2-in-progress.json" apply \
+  --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
+  printf '%s\n' 'successor apply unexpectedly ran under a held migration lock.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/apply-v2-in-progress.json" apply.database.unavailable
+python3 - "$temporary_root/apply-v2-in-progress.json" <<'PY'
+import json
+import sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+messages = [item.get("message", "") for item in document.get("diagnostics", [])]
+if not any("another session held the exclusive migration lock" in message for message in messages):
+    raise SystemExit("apply under a held migration lock did not report it as in progress")
+if any("migrationUrlRef" in message for message in messages):
+    raise SystemExit("apply under a held migration lock reported an unreachable database")
+PY
+if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($advisory_backend_pid)")" != "t" ]]; then
+  printf '%s\n' 'the competing migration lock could not be released exactly.' >&2
+  exit 1
+fi
+wait "$lock_pid" >/dev/null 2>&1 || true
+lock_pid=""
+
+# Assessment writes nothing, so an audit destination it cannot write does not
+# refuse it; execution opens the audit writer first and refuses.
+mkdir -p "$temporary_root/audit-read-only"
+python3 - "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/runtime-operator-v1-read-only-audit.yaml" \
+  "$temporary_root/audit/audit.jsonl" "$temporary_root/audit-read-only/audit.jsonl" <<'PY'
+import sys
+from pathlib import Path
+source, output, writable, read_only = sys.argv[1:]
+text = Path(source).read_text(encoding="utf-8")
+if text.count(f"path: {writable}\n") != 1:
+    raise SystemExit("the audit path was not found in the runtime configuration")
+Path(output).write_text(text.replace(f"path: {writable}\n", f"path: {read_only}\n"), encoding="utf-8")
+PY
+chmod 0500 "$temporary_root/audit-read-only"
+run_json "$temporary_root/reconcile-v2-read-only-audit.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v1-read-only-audit.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-read-only-audit
+assert_json_ok "$temporary_root/reconcile-v2-read-only-audit.json" "migration reconcile"
+if run_json "$temporary_root/reconcile-v2-read-only-audit-execute.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v1-read-only-audit.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-read-only-audit --execute; then
+  printf '%s\n' 'reconcile execution unexpectedly ran without a writable audit destination.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/reconcile-v2-read-only-audit-execute.json" migration.reconcile.audit.unavailable
+chmod 0700 "$temporary_root/audit-read-only"
+
 run_json "$temporary_root/plan-v2-resume.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
 assert_json_ok "$temporary_root/plan-v2-resume.json" plan
 assert_plan "$temporary_root/plan-v2-resume.json" successor "$package_digest_v2" resumes
