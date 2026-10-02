@@ -80,10 +80,36 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
             self.workflow,
         )
         self.assertIn(
-            'test "$(crane digest "${published_ref}")" = "${index_digest}"',
+            'test "$(crane digest "${published_ref}")" = "${published_digest}"',
             self.workflow,
         )
         self.assertIn("compare-release-image-layouts.py", self.workflow)
+
+    def test_compares_the_layout_crane_wrote_bound_to_the_published_digest(
+        self,
+    ) -> None:
+        # crane's index.json names the pulled digest; replacing it with that
+        # digest's blob turned a published image manifest into a fake index
+        # and failed every scheduled run from 2026-08-03 to 2026-09-28.
+        self.assertNotIn('/index.json"', self.workflow)
+        self.assertNotIn("index_blob", self.workflow)
+        self.assertIn(
+            'crane pull "${published_repository}@${published_digest}" \\\n'
+            '              "${published_layout}" --format=oci',
+            self.workflow,
+        )
+        self.assertIn(
+            '[[ "${published_ref}" == "ghcr.io/registrystack/${name}:${TAG}" ]]',
+            self.workflow,
+        )
+        self.assertIn(
+            '--published-digest "${published_digest}"',
+            self.workflow,
+        )
+        self.assertIn(
+            "read -r -u 3 name published_ref published_digest", self.workflow
+        )
+        self.assertIn('done 3< "${image_rows}"', self.workflow)
 
     def test_pre_v0_19_requests_fail_before_release_discovery(self) -> None:
         diagnostic = (
