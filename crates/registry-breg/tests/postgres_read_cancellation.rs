@@ -8,7 +8,8 @@
 //! and gives up its session instead of leaving the backend running while the
 //! pool opens a replacement. The pool bound therefore holds in
 //! `pg_stat_activity`, and the abandoned read's audit attempt is answered
-//! exactly once.
+//! exactly once. A read that returns before its I/O cancels nothing and
+//! hands its idle session back to the pool.
 
 #![cfg(feature = "postgres-test")]
 
@@ -33,7 +34,7 @@ use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
     ReadFaultPoint, RegistryLockKey, RegistryStateTestIdentity, RevisionReadFaultPoint,
-    SnapshotReadFaultPoint,
+    RuntimePool, SnapshotReadFaultPoint,
 };
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
@@ -66,13 +67,13 @@ impl ReadinessProbe for AlwaysReady {
 struct Fixture {
     database: TestDatabase,
     slow: Router,
+    pool: RuntimePool,
     runtime_role: String,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn timed_out_reads_cancel_their_statement_and_stay_within_the_pool_bound() {
-    let fixture = fixture().await;
-    for (route, uri) in [
+/// The five reads the slow router serves, by route name and URI.
+fn read_routes() -> [(&'static str, String); 5] {
+    [
         ("record get", format!("/v1/records/entries/{RECORD_ID}")),
         ("record list", "/v1/records/entries".to_owned()),
         (
@@ -84,7 +85,13 @@ async fn timed_out_reads_cancel_their_statement_and_stay_within_the_pool_bound()
             format!("/v1/records/entries/{RECORD_ID}/revisions"),
         ),
         ("snapshot", "/v1/records/entries:snapshot".to_owned()),
-    ] {
+    ]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timed_out_reads_cancel_their_statement_and_stay_within_the_pool_bound() {
+    let fixture = fixture().await;
+    for (route, uri) in read_routes() {
         let sampler = SessionSampler::start(&fixture).await;
         // More concurrent reads than sessions, twice over, so later reads
         // queue for sessions the earlier ones abandoned.
@@ -173,6 +180,60 @@ async fn a_timed_out_read_answers_its_accepted_attempt_exactly_once() {
     fixture.database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_refused_before_its_io_keeps_its_pooled_session() {
+    let fixture = fixture().await;
+    // Every read now fails its pre-I/O audit before it runs a statement, so
+    // any session it already checked out is idle when the read returns.
+    fixture.database.audit_capture().fail_after(0);
+    let mut churned = Vec::new();
+    for (route, uri) in read_routes() {
+        let before = pooled_backends(&fixture.pool).await;
+        for _ in 0..POOL_SIZE {
+            assert_eq!(
+                send(&fixture.slow, &uri).await,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a {route} read whose audit attempt is refused answers source.unavailable"
+            );
+        }
+        if pooled_backends(&fixture.pool).await != before {
+            churned.push(route);
+        }
+    }
+    assert!(
+        churned.is_empty(),
+        "a read refused before its I/O hands its idle session back to the pool instead of \
+         cancelling and discarding it, but these reads replaced pooled sessions: {churned:?}"
+    );
+    fixture.database.cleanup().await;
+}
+
+/// The backend process of every session the pool holds, checked out all at
+/// once so each one is a distinct pooled session.
+async fn pooled_backends(pool: &RuntimePool) -> BTreeSet<i32> {
+    let mut sessions = Vec::with_capacity(POOL_SIZE);
+    let mut backends = BTreeSet::new();
+    for _ in 0..POOL_SIZE {
+        let session = pool
+            .get_for_test()
+            .await
+            .expect("the pool hands out a session");
+        let backend: i32 = session
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .expect("the session answers")
+            .get(0);
+        backends.insert(backend);
+        sessions.push(session);
+    }
+    assert_eq!(
+        backends.len(),
+        POOL_SIZE,
+        "every pooled session is distinct"
+    );
+    backends
+}
+
 async fn fixture() -> Fixture {
     let database = TestDatabase::create(POOL_SIZE).await;
     let registry = Arc::new(compiled_registry());
@@ -228,7 +289,7 @@ async fn fixture() -> Fixture {
     )
     .with_fault_for_test(RevisionReadFaultPoint::HistoricalStatementTimeout);
     let snapshots = PostgresSnapshotReadService::new(
-        pool,
+        pool.clone(),
         registry.clone(),
         identity.clone(),
         lock_key,
@@ -254,6 +315,7 @@ async fn fixture() -> Fixture {
     Fixture {
         database,
         slow,
+        pool,
         runtime_role,
     }
 }

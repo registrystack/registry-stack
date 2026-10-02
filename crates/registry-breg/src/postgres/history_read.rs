@@ -127,9 +127,6 @@ impl PostgresSnapshotReadService {
             .get()
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
-        // A read abandoned at its deadline stops its statement and gives up
-        // the session rather than leaving the backend running.
-        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
         let claims = strict_claim_context(&self.registry, &request.context, &request.entity_id)?;
         let plan = match SnapshotReadPlan::from_request(
             &self.registry,
@@ -174,6 +171,11 @@ impl PostgresSnapshotReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
 
+        // A read abandoned at its deadline stops its statement and gives up
+        // the session rather than leaving the backend running. The guard is
+        // armed only once the read reaches its I/O: a read refused or failed
+        // before then hands its idle session back to the pool.
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
         let materialized = self
             .read_rows(session.client(), &request, &claims, &plan)
             .await;
