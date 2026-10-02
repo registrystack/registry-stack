@@ -379,7 +379,7 @@ impl MutationCoordinator {
                         (SELECT result.target_record_revision
                            FROM registry_internal.registry_immediate_action_results AS result
                           WHERE result.key_reference = application.key_reference
-                          ORDER BY result.effect_id
+                          ORDER BY result.effect_id COLLATE \"C\"
                           LIMIT 1)
                    FROM registry_internal.registry_immediate_action_applications AS application
                   WHERE application.key_reference = $1",
@@ -803,7 +803,7 @@ impl MutationCoordinator {
                 "SELECT target_record_revision
                    FROM registry_internal.registry_immediate_action_results
                   WHERE key_reference = $1
-                  ORDER BY effect_id
+                  ORDER BY effect_id COLLATE \"C\"
                   LIMIT 1",
                 &[&binding.key_reference],
             )
@@ -1873,7 +1873,7 @@ impl MutationCoordinator {
                 "SELECT effect_id, target_entity_id, target_record_id, target_record_revision
                    FROM registry_internal.registry_immediate_action_results
                   WHERE key_reference = $1
-                  ORDER BY effect_id",
+                  ORDER BY effect_id COLLATE \"C\"",
                 &[&key_reference],
             )
             .await

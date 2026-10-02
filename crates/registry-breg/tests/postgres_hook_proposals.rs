@@ -392,6 +392,96 @@ fn hidden_result_registry() -> CompiledRegistry {
     )
 }
 
+/// The patch effect's identifier in the two-revision journey. A locale
+/// collation such as glibc en_US ignores the hyphens at the first comparison
+/// level and orders `followup` first; byte order puts this one first.
+const TALLY_EFFECT: &str = "follow-up-tally";
+
+/// The two-revision proposal: a followup create, which commits revision 1,
+/// and a patch of the tally record the case references, which commits
+/// revision 2. The hook reads the tally and its condition token from the
+/// case it was delivered for.
+const TALLY_PROPOSAL_HOOK_SCRIPT: &[u8] = br#"fn handle(ctx) {
+    #{"answer":"proposal","document":#{"action":"open-followup","input":#{"jurisdiction":"zone-a","origin":"hook-proposal","tally":ctx.data.values["tally"]},"outcome":#{"effects":[#{"id":"followup","set":#{"jurisdiction":"zone-a","label":"hook followup","origin":"hook-proposal"}},#{"id":"follow-up-tally","set":#{"label":"tallied"}}]},"preconditions":#{"tally":ctx.data.values["tally-condition"]}}}
+}"#;
+
+/// The two-revision journey registry: the standard proposal project with a
+/// mutable `tally` entity, a case reference to it, and a declared patch slot
+/// on the referenced tally beside the followup create, so one applied
+/// proposal commits two result records at different revisions.
+fn tally_proposal_registry() -> CompiledRegistry {
+    let hooks = r#"[{"phase":"after","id":"case-created","trigger":"created","principal":"case-hook","projection":["label","tally","tally-condition"],"handler":{"kind":"rhai","script":"hooks/propose-tally.rhai","abi":"registry.hook-handler/v1"}}]"#;
+    let mut project: Value = serde_json::from_str(&hook_project_json(
+        hooks,
+        "[]",
+        &format!(r#""results":["followup","{TALLY_EFFECT}"]"#),
+        &format!(
+            r#",{{"id":"{TALLY_EFFECT}","target":{{"fromField":"tally"}},"operation":"patch","fields":["label"]}}"#
+        ),
+    ))
+    .expect("hook proposal fixture is JSON");
+    project["entities"].as_array_mut().unwrap().push(json!({
+        "id": "tally", "primaryDataset": "test-dataset", "route": "tallies",
+        "mutationMode": "mutable", "classification": "internal",
+        "fields": [
+            {"id": "jurisdiction", "type": "string", "maxLength": 32, "required": true, "classification": "internal"},
+            {"id": "label", "type": "string", "maxLength": 64, "required": true, "classification": "internal"}
+        ],
+        "hooks": []
+    }));
+    let case_fields = project["entities"][0]["fields"].as_array_mut().unwrap();
+    case_fields.push(json!({
+        "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
+        "classification": "internal"
+    }));
+    case_fields.push(json!({
+        "id": "tally-condition", "apiName": "tallyCondition", "type": "string",
+        "maxLength": 160, "classification": "internal"
+    }));
+    project["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
+            "required": true, "classification": "internal"
+        }));
+    let operator = &mut project["accessProfiles"][0]["permissions"];
+    for field in ["tally", "tally-condition"] {
+        operator[0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(field));
+        operator[0]["writableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(field));
+    }
+    operator.as_array_mut().unwrap().push(json!({
+        "entity": "tally", "operations": ["create", "get"],
+        "readableFields": ["jurisdiction", "label"],
+        "writableFields": ["jurisdiction", "label"],
+        "rowBoundaries": [{"field": "jurisdiction", "claim": "jurisdiction", "operator": "equals"}]
+    }));
+    project["accessProfiles"][1]["permissions"][0]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"entity": "tally", "rowBoundaries": []}));
+    let project = parse_project_json(
+        &serde_json::to_vec(&project).expect("hook proposal fixture serializes"),
+    )
+    .expect("tally hook proposal fixture parses");
+    compile_project_with_assets(
+        &project,
+        &[],
+        &[
+            rhai_asset("scripts/open-followup.rhai", ACTION_HANDLER_SCRIPT),
+            rhai_asset("hooks/propose-tally.rhai", TALLY_PROPOSAL_HOOK_SCRIPT),
+        ],
+        CompileProfile::Authoring,
+    )
+    .expect("tally hook proposal fixture compiles")
+}
+
 /// One journey's deployment: database, compiled schema, activated
 /// destinations (a full destination table or none, per the handler kinds the
 /// registry holds), mutation coordinator, and delivery service.
@@ -441,6 +531,23 @@ async fn setup_with_options(
     enable_field_encryption: bool,
 ) -> Setup {
     let database = TestDatabase::create(pool_size).await;
+    setup_in(
+        database,
+        compiled,
+        receiver,
+        with_destinations,
+        enable_field_encryption,
+    )
+    .await
+}
+
+async fn setup_in(
+    database: TestDatabase,
+    compiled: CompiledRegistry,
+    receiver: &HttpsReceiver,
+    with_destinations: bool,
+    enable_field_encryption: bool,
+) -> Setup {
     let (migration, migration_task) = database.connect_migration().await;
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
@@ -607,9 +714,25 @@ async fn create_case(
     client: &mut deadpool_postgres::Client,
     label: &str,
 ) -> CapturedEvent {
+    create_case_with(setup, client, label, Map::new()).await
+}
+
+/// A case create carrying `extra` body members beside the standard ones.
+async fn create_case_with(
+    setup: &Setup,
+    client: &mut deadpool_postgres::Client,
+    label: &str,
+    extra: Map<String, Value>,
+) -> CapturedEvent {
     let plan = MutationPlan::from_compiled(&setup.compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
     let claims = mutation_claims(&setup.compiled);
+    let mut body = Map::from_iter([
+        ("jurisdiction".to_owned(), json!("zone-a")),
+        ("label".to_owned(), json!(label)),
+        ("restrictedNote".to_owned(), json!(RECORD_VALUE_CANARY)),
+    ]);
+    body.extend(extra);
     setup
         .coordinator
         .execute(
@@ -620,11 +743,7 @@ async fn create_case(
                 claims: &claims,
                 record_id: None,
                 expected_etag: None,
-                body: MutationBody::Create(Map::from_iter([
-                    ("jurisdiction".to_owned(), json!("zone-a")),
-                    ("label".to_owned(), json!(label)),
-                    ("restrictedNote".to_owned(), json!(RECORD_VALUE_CANARY)),
-                ])),
+                body: MutationBody::Create(body),
                 response_fields: BTreeSet::from([
                     "jurisdiction".to_owned(),
                     "label".to_owned(),
@@ -2406,6 +2525,185 @@ async fn real_postgres_a_proposal_failing_outcome_validation_is_refused_not_appl
 
     setup.teardown().await;
     receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_resulting_revision_follows_byte_order_under_a_locale_collation() {
+    // One applied proposal commits two result records: the followup create at
+    // revision 1 and the tally patch at revision 2. The delivery row reports
+    // the byte-first effect's revision, which is the tally patch, whatever
+    // the database collation is.
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create_with_locale(8, "en_US.utf8").await;
+    let locale_ordered = database
+        .admin
+        .query_one(
+            &format!("SELECT 'followup'::text < '{TALLY_EFFECT}'::text"),
+            &[],
+        )
+        .await
+        .expect("administrator can compare text")
+        .get::<_, bool>(0);
+    assert!(
+        locale_ordered,
+        "the test database must order text by locale, not by byte"
+    );
+    let setup = setup_in(database, tally_proposal_registry(), &receiver, false, false).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+
+    let tally_plan = MutationPlan::from_compiled(&setup.compiled, "records.tally.create")
+        .expect("tally create plan compiles");
+    let tally_claims = ClaimContext::for_compiled(
+        &setup.compiled,
+        "tally",
+        Some("operator-principal".to_owned()),
+        "operator",
+        Some("case-management".to_owned()),
+        vec![RowBoundaryContext::Equals {
+            field: "jurisdiction".to_owned(),
+            value: "zone-a".to_owned(),
+        }],
+    )
+    .expect("compiled tally authority context is valid");
+    setup
+        .coordinator
+        .execute(
+            &mut mutation_client,
+            MutationRequest {
+                plan: &tally_plan,
+                idempotency_key: "tally",
+                claims: &tally_claims,
+                record_id: None,
+                expected_etag: None,
+                body: MutationBody::Create(Map::from_iter([
+                    ("jurisdiction".to_owned(), json!("zone-a")),
+                    ("label".to_owned(), json!("untallied")),
+                ])),
+                response_fields: BTreeSet::from(["jurisdiction".to_owned(), "label".to_owned()]),
+                representation: registry_breg::record_profile::RecordRepresentation::Json,
+                correlation: registry_breg::correlation::RequestCorrelation::breg_created(),
+            },
+        )
+        .await
+        .expect("operator creates the tally record");
+    let tally_table = &setup.compiled.entities()["tally"].physical_table;
+    let tally_id: Uuid = setup
+        .database
+        .admin
+        .query_one(
+            &format!("SELECT record_id FROM registry_data.{tally_table}"),
+            &[],
+        )
+        .await
+        .expect("the tally record is readable")
+        .get(0);
+
+    let event = create_case_with(
+        &setup,
+        &mut mutation_client,
+        "two-revisions",
+        Map::from_iter([
+            ("tally".to_owned(), json!(tally_id.to_string())),
+            (
+                "tallyCondition".to_owned(),
+                json!(tally_condition_token(&tally_id, 1)),
+            ),
+        ]),
+    )
+    .await;
+    let delivery_id = single_delivery(&event).to_owned();
+    let payload = outbox_payload(&setup, &event).await;
+    drop(mutation_client);
+
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    let first = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(
+        first.disposition.as_deref(),
+        Some("applied"),
+        "{:?}: {:?}",
+        first.code,
+        first.summary
+    );
+    let revisions = setup
+        .database
+        .admin
+        .query(
+            "SELECT effect_id, target_record_revision
+               FROM registry_internal.registry_immediate_action_results
+              ORDER BY effect_id COLLATE \"C\"",
+            &[],
+        )
+        .await
+        .expect("administrator can read the applied results")
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, i64>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        revisions,
+        vec![(TALLY_EFFECT.to_owned(), 2), ("followup".to_owned(), 1)],
+        "the proposal committed two results at different revisions"
+    );
+    assert_eq!(
+        first.resulting_revision,
+        Some(2),
+        "the applied revision is the byte-first effect's, not the locale-first one's"
+    );
+
+    // The receipt recovery path reads the same results and must agree.
+    rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle)
+    );
+    wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    let second = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(second.attempt, 2);
+    assert_eq!(second.disposition.as_deref(), Some("applied"));
+    assert_eq!(
+        second.resulting_revision,
+        Some(2),
+        "the replayed receipt resolves to the same byte-first revision"
+    );
+    assert_eq!(record_count(&setup, "followup").await, 1);
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+/// The existing-target condition token the action's target-conditions route
+/// returns for `record_id` at `revision`, under this suite's audit key.
+fn tally_condition_token(record_id: &Uuid, revision: i64) -> String {
+    let canonical = registry_platform_canonical_json::canonicalize_json(&json!({
+        "version": 1,
+        "registry": "hook-proposal-registry",
+        "action": "open-followup",
+        "input": "tally",
+        "entity": "tally",
+        "record": record_id.to_string(),
+        "revision": revision,
+    }))
+    .expect("condition token input canonicalizes");
+    let digest = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+        .expect("test owns a keyed audit profile")
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-action-condition-token-v1",
+            "hook-proposal-registry",
+            std::str::from_utf8(&canonical).expect("canonical JSON is UTF-8"),
+        )
+        .expect("condition token hashes");
+    format!("\"breg-{digest}\"")
 }
 
 // ---------------------------------------------------------------------------
