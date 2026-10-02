@@ -249,6 +249,11 @@ pub struct MigrationRehearsalReceipt {
     pub postgres_major: u16,
     pub row_assertions: Vec<RehearsalRowAssertion>,
     pub final_schema_fingerprint: String,
+    /// Accepted only so a package the previous release built keeps loading;
+    /// nothing reads it, and `bregctl` refuses a captured receipt that
+    /// carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proofs: Option<RehearsalProofs>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -272,6 +277,16 @@ pub struct RehearsalFixture {
 pub struct RehearsalRowAssertion {
     pub step_id: String,
     pub affected_rows: u64,
+}
+
+/// The previous release's receipt `proofs` member, kept in its exact shape so
+/// its bytes still round-trip canonically. Nothing reads its values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RehearsalProofs {
+    pub lock_timeout: bool,
+    pub chunk_resume: bool,
+    pub destructive_resume: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

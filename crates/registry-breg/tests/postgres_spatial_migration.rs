@@ -642,6 +642,7 @@ fn metadata_only_source_between(
         postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_fingerprint.to_owned(),
+        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -791,6 +792,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_fingerprint.to_owned(),
+        proofs: None,
     };
     let mut files = steps
         .into_iter()
