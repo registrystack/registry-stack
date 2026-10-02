@@ -5923,7 +5923,7 @@ fn active_registry_failure(
             "database",
             "another session holds the exclusive migration lock, so an apply, an adoption, or a migration reconcile is in progress; rerun the command once it releases",
             DiagnosticArtifact::DatabaseMigration,
-            SuggestedAction::VerifyMigrationAuthority,
+            SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         ActiveRegistryError::Uninitialized => (
             "uninitialized",
@@ -16168,6 +16168,10 @@ fn an_active_registry_read_reports_a_held_migration_lock_as_in_progress() {
             format!("{prefix}.active_registry.in_progress")
         );
         assert_eq!(diagnostic.path, "database");
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases
+        );
         assert!(
             diagnostic
                 .message
