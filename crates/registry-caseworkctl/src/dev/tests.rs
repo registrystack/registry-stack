@@ -4372,6 +4372,13 @@ fn a_failed_supervised_start_names_the_log_directory_without_its_cause() {
         rendered.contains(".casework/dev/logs/casework.log"),
         "{rendered}"
     );
+    // A start that fails before the runtime launches (database, issuer, or
+    // activation) records its cause only in the supervisor log.
+    let action = diagnostic["suggestedAction"].as_str().unwrap();
+    assert!(
+        action.starts_with("Read .casework/dev/logs/supervisor.log"),
+        "{action}"
+    );
     for leaked in ["hunter2", "secret-token", root.path().to_str().unwrap()] {
         assert!(!rendered.contains(leaked), "{leaked} leaked: {rendered}");
     }
