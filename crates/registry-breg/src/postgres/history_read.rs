@@ -1304,11 +1304,11 @@ fn predicate_sql(
         ReadFilterOperator::IsNotNull => Ok(format!("{typed} IS NOT NULL")),
         ReadFilterOperator::StartsWith => {
             let parameter = builder.push_string(format!("{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{typed} LIKE ${parameter}::text ESCAPE '\\'"))
+            Ok(format!("{typed} ILIKE ${parameter}::text ESCAPE '\\'"))
         }
         ReadFilterOperator::Contains => {
             let parameter = builder.push_string(format!("%{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{typed} LIKE ${parameter}::text ESCAPE '\\'"))
+            Ok(format!("{typed} ILIKE ${parameter}::text ESCAPE '\\'"))
         }
     }
 }

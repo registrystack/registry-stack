@@ -272,6 +272,7 @@ pub fn compile_project_with_assets(
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
+    findings.extend(create_required_field_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -2885,6 +2886,7 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     let mut ids = BTreeSet::new();
     for constraint in &entity.constraints {
         let id = derived_constraint_id(constraint);
+        let constraint_path = format!("entities[id={}].constraints[id={id}]", entity.id);
         if !ids.insert(id) {
             errors.push(Diagnostic::error(
                 "constraint.id.duplicate",
@@ -2893,10 +2895,15 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ));
         }
         let referenced = match constraint {
-            ConstraintSource::Unique { fields, .. } => fields.clone(),
-            ConstraintSource::Compare { left, right, .. } => vec![left.clone(), right.clone()],
+            ConstraintSource::Unique { fields, .. } => fields
+                .iter()
+                .map(|field| ("fields", field.as_str()))
+                .collect::<Vec<_>>(),
+            ConstraintSource::Compare { left, right, .. } => {
+                vec![("left", left.as_str()), ("right", right.as_str())]
+            }
             ConstraintSource::IntRange { field, .. }
-            | ConstraintSource::Vocabulary { field, .. } => vec![field.clone()],
+            | ConstraintSource::Vocabulary { field, .. } => vec![("field", field.as_str())],
             ConstraintSource::TemporalNonOverlap {
                 scope_fields,
                 start_field,
@@ -2904,27 +2911,42 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 ..
             } => scope_fields
                 .iter()
-                .cloned()
-                .chain(start_field.iter().cloned())
-                .chain(end_field.iter().cloned())
+                .map(|field| ("scopeFields", field.as_str()))
+                .chain(
+                    start_field
+                        .iter()
+                        .map(|field| ("startField", field.as_str())),
+                )
+                .chain(end_field.iter().map(|field| ("endField", field.as_str())))
                 .collect(),
         };
-        if referenced.is_empty()
-            || referenced
-                .iter()
-                .any(|field| !fields.contains_key(field.as_str()))
-        {
+        if referenced.is_empty() {
+            let member = match constraint {
+                ConstraintSource::TemporalNonOverlap { .. } => "scopeFields",
+                _ => "fields",
+            };
             errors.push(Diagnostic::error(
                 "constraint.field.unknown",
-                "entities[].constraints[]",
-                "a constraint has an empty or unresolved field set",
+                format!("{constraint_path}.{member}"),
+                "a constraint must name at least one field",
             ));
             continue;
         }
-        if referenced
-            .iter()
-            .any(|field| fields[field.as_str()].encrypted)
-        {
+        let mut unresolved = false;
+        for (member, field) in &referenced {
+            if !fields.contains_key(*field) {
+                errors.push(Diagnostic::error(
+                    "constraint.field.unknown",
+                    format!("{constraint_path}.{member}[field={field}]"),
+                    "a constraint refers to an unknown field",
+                ));
+                unresolved = true;
+            }
+        }
+        if unresolved {
+            continue;
+        }
+        if referenced.iter().any(|(_, field)| fields[*field].encrypted) {
             errors.push(Diagnostic::error(
                 "constraint.field.encrypted",
                 "entities[].constraints[]",
@@ -3787,20 +3809,49 @@ fn validate_profiles(
                 .iter()
                 .map(|boundary| boundary.field.clone()),
         );
-        if read_processed.iter().any(|field| {
-            !fields.contains_key(field.as_str())
-                && !derived.contains_key(field.as_str())
-                && !entity.attachments.iter().any(|slot| &slot.id == field)
-        }) || stored_processed.iter().any(|field| {
-            field != "id"
+        let profile_path = format!(
+            "entities[id={}].accessProfiles[id={}]",
+            entity.id, access.id
+        );
+        for (member, referenced) in [
+            ("readableFields", &access.readable_fields),
+            ("filterableFields", &access.filterable_fields),
+            ("sortableFields", &access.sortable_fields),
+        ] {
+            for field in referenced {
+                if !fields.contains_key(field.as_str())
+                    && !derived.contains_key(field.as_str())
+                    && !entity.attachments.iter().any(|slot| &slot.id == field)
+                {
+                    errors.push(Diagnostic::error(
+                        "access_profile.field.unknown",
+                        format!("{profile_path}.{member}[field={field}]"),
+                        "an access profile refers to an unknown field",
+                    ));
+                }
+            }
+        }
+        for (member, field) in access
+            .writable_fields
+            .iter()
+            .map(|field| ("writableFields", field))
+            .chain(
+                access
+                    .row_boundaries
+                    .iter()
+                    .map(|boundary| ("rowBoundaries", &boundary.field)),
+            )
+        {
+            if field != "id"
                 && !fields.contains_key(field.as_str())
                 && !entity.attachments.iter().any(|slot| &slot.id == field)
-        }) {
-            errors.push(Diagnostic::error(
-                "access_profile.field.unknown",
-                "entities[].accessProfiles[]",
-                "an access profile refers to an unknown field",
-            ));
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.field.unknown",
+                    format!("{profile_path}.{member}[field={field}]"),
+                    "an access profile refers to an unknown field",
+                ));
+            }
         }
         if !access.filterable_fields.is_subset(&access.readable_fields)
             || !access.sortable_fields.is_subset(&access.readable_fields)
@@ -3956,6 +4007,32 @@ fn validate_profiles(
             errors,
         );
     }
+}
+
+fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for entity in entities.values() {
+        for access in &entity.access_profiles {
+            if !access.operations.contains(&Operation::Create) {
+                continue;
+            }
+            // Engine-managed record identity, revision, and lifecycle columns
+            // are not authored EntitySource fields and are therefore excluded.
+            for field in entity.fields.iter().filter(|field| {
+                field.required && !access.writable_fields.contains(field.id.as_str())
+            }) {
+                findings.push(Diagnostic::finding(
+                    "access.profile.create_required_field_not_writable",
+                    format!(
+                        "entities[id={}].accessProfiles[id={}].writableFields[field={}]",
+                        entity.id, access.id, field.id
+                    ),
+                    "this required stored field is not writable through the create grant; add it to writableFields or remove create from this permission",
+                ));
+            }
+        }
+    }
+    findings
 }
 
 /// Refuse multiple defaults. With no default, an ambiguous route requires
