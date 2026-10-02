@@ -38,11 +38,18 @@ const REDACTED: &str = "[redacted]";
 
 /// Describe the session under `root` (a project's `.casework/dev`).
 pub(super) fn diagnostics(root: &Path) -> String {
-    let secrets = secret_values(root);
     let mut out = format!(
         "=== caseworkctl dev session diagnostics: {} ===\n",
         root.display()
     );
+    let secrets = match secret_values(root) {
+        Ok(secrets) => secrets,
+        Err(reason) => {
+            out.push_str(&format!("diagnostics withheld: {reason}\n"));
+            out.push_str("=== end caseworkctl dev session diagnostics ===\n");
+            return out;
+        }
+    };
     match fs::read(root.join("state.json")) {
         Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
             Ok(state) => out.push_str(&format!(
@@ -125,26 +132,38 @@ fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
 
 /// Every run of token characters in the session's secret files, longest
 /// first so a longer value is never left partly visible by a shorter one.
-fn secret_values(root: &Path) -> Vec<String> {
+/// Redaction fails closed: a secret path that cannot be read in full is an
+/// error naming that path, and the caller then prints nothing it would have
+/// redacted. Only a secret directory the session never created is skipped.
+fn secret_values(root: &Path) -> Result<Vec<String>, String> {
     let mut files = SECRET_DIRS.map(|dir| root.join(dir)).to_vec();
     let mut values = Vec::new();
     while let Some(path) = files.pop() {
-        let Ok(metadata) = fs::symlink_metadata(&path) else {
-            continue;
+        let unreadable = |reason: String| {
+            let shown = path.strip_prefix(root).unwrap_or(&path);
+            format!("cannot read {} for redaction ({reason})", shown.display())
+        };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(unreadable(error.to_string())),
         };
         if metadata.is_dir() {
-            if let Ok(entries) = fs::read_dir(&path) {
-                files.extend(entries.filter_map(Result::ok).map(|entry| entry.path()));
+            for entry in fs::read_dir(&path).map_err(|error| unreadable(error.to_string()))? {
+                files.push(entry.map_err(|error| unreadable(error.to_string()))?.path());
             }
-        } else if metadata.is_file() && metadata.len() <= MAX_SECRET_FILE {
-            if let Ok(bytes) = fs::read(&path) {
-                values.extend(secret_runs(&String::from_utf8_lossy(&bytes)));
-            }
+        } else if !metadata.is_file() {
+            return Err(unreadable("not a regular file".to_owned()));
+        } else if metadata.len() > MAX_SECRET_FILE {
+            return Err(unreadable(format!("larger than {MAX_SECRET_FILE} bytes")));
+        } else {
+            let bytes = fs::read(&path).map_err(|error| unreadable(error.to_string()))?;
+            values.extend(secret_runs(&String::from_utf8_lossy(&bytes)));
         }
     }
     values.sort_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
     values.dedup();
-    values
+    Ok(values)
 }
 
 /// Runs of base64, base64url, hex, and identifier characters long enough to
@@ -220,6 +239,30 @@ mod tests {
             assert!(!out.contains(segment), "{segment} leaked:\n{out}");
         }
         assert!(!out.contains("clients"), "only status and failure:\n{out}");
+    }
+
+    #[test]
+    fn diagnostics_are_withheld_when_a_secret_file_cannot_be_read_for_redaction() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let password = "0123456789abcdef0123456789abcdef";
+        let mut oversized = format!("POSTGRES_PASSWORD={password}\n");
+        oversized.push_str(&"#".repeat(MAX_SECRET_FILE as usize));
+        write(&root.join("database/postgres.env"), oversized.as_bytes());
+        write(
+            &root.join("state.json"),
+            format!(r#"{{"status":"failed","failure":"password {password}"}}"#).as_bytes(),
+        );
+        write(
+            &root.join("logs/casework.log"),
+            format!("connecting with {password}\n").as_bytes(),
+        );
+
+        let out = diagnostics(root);
+
+        assert!(!out.contains(password), "{password} leaked:\n{out}");
+        assert!(out.contains("diagnostics withheld"), "{out}");
+        assert!(out.contains("database/postgres.env"), "{out}");
     }
 
     #[test]
