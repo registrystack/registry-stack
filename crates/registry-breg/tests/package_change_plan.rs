@@ -1258,7 +1258,7 @@ fn unchanged_derived_relation_emits_compiler_owned_view_replacement() {
 
 #[cfg(feature = "tooling")]
 #[test]
-fn unrelated_reviewed_change_keeps_unchanged_derived_view_as_replacement() {
+fn unrelated_reviewed_change_rebuilds_every_view_around_a_retained_derived_relation() {
     let previous_source = derived_source_for_sql(
         b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
     );
@@ -1289,23 +1289,37 @@ fn unrelated_reviewed_change_keeps_unchanged_derived_view_as_replacement() {
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
         migrations: vec![migration],
     };
-    let reviewed = prepare_package(request)
-        .expect("unrelated reviewed successor preserves derived replacement DDL");
-    let derived = reviewed
+    let reviewed =
+        prepare_package(request).expect("unrelated reviewed successor refreshes its read views");
+    // The reviewed executor drops every managed read view once the plan
+    // carries a non-spatial view statement, so a retained derived relation
+    // brings the complete candidate view set, its source views included.
+    let planned_views = reviewed
         .manifest()
         .migration_plan
         .statements
         .iter()
-        .filter(|statement| statement.id == "entity.asset.derived.summary.view")
+        .filter(|statement| statement.kind == registry_breg::generated_ddl::DdlStatementKind::View)
+        .map(|statement| (statement.id.as_str(), statement.sql.as_str()))
         .collect::<Vec<_>>();
-    assert_eq!(derived.len(), 1);
-    assert!(derived[0].sql.starts_with("CREATE OR REPLACE VIEW "));
-    assert!(!reviewed
-        .manifest()
-        .migration_plan
+    let candidate_views = candidate
+        .ddl()
         .statements
         .iter()
-        .any(|statement| statement.sql.starts_with("CREATE VIEW registry_derived.")));
+        .filter(|statement| statement.kind == registry_breg::generated_ddl::DdlStatementKind::View)
+        .map(|statement| (statement.id.as_str(), statement.sql.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(planned_views, candidate_views);
+    assert!(planned_views
+        .iter()
+        .any(|(_, sql)| sql.starts_with("CREATE VIEW registry_source.")));
+    assert_eq!(
+        planned_views
+            .iter()
+            .filter(|(id, _)| *id == "entity.asset.derived.summary.view")
+            .count(),
+        1
+    );
 }
 
 #[test]

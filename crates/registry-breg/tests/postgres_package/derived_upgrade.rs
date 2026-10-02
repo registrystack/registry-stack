@@ -189,6 +189,164 @@ async fn an_unchanged_successor_replaces_an_older_derived_wrapper() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reviewed_successor_rebuilds_read_views_around_a_retained_derived_relation() {
+    let database = TestDatabase::create(1).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let (first, verified_first) = publish_with_exact_fingerprint(
+        &database,
+        &mut migration,
+        derived_asset_request(DERIVED_SQL),
+    )
+    .await;
+    let active_first = apply_package(
+        &database,
+        &verified_first,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("initial derived package applies");
+    let views_before = managed_read_views(&database).await;
+    assert!(views_before
+        .iter()
+        .any(|view| view.starts_with("registry_source.")));
+    assert!(views_before
+        .iter()
+        .any(|view| view.starts_with("registry_derived.")));
+
+    // An unrelated access change needs a reviewed migration while the
+    // derived relation, its SQL, and its field model stay unchanged.
+    let successor_module_bytes = String::from_utf8(derived_module_bytes())
+        .expect("derived module fixture is UTF-8")
+        .replace(
+            r#""readableFields":["code","summary"]"#,
+            r#""readableFields":["code","summary"],"filterableFields":["code"]"#,
+        )
+        .into_bytes();
+    let mut successor_request =
+        derived_asset_request_with_module(successor_module_bytes, DERIVED_SQL);
+    let successor_registry = prepare_package(successor_request.clone())
+        .expect("successor model compiles")
+        .registry()
+        .clone();
+    let change_set = compiled_registry_change_set(
+        verified_first.registry(),
+        &successor_registry,
+        &active_first.package_digest,
+    );
+    assert!(change_set
+        .changes
+        .iter()
+        .any(|change| { change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange }));
+    let review = metadata_only_review_source(
+        &change_set.changes,
+        &active_first.package_digest,
+        &active_first.schema_fingerprint,
+        &active_first.schema_fingerprint,
+    );
+    successor_request.from_package_digest = Some(active_first.package_digest.clone());
+    successor_request
+        .schema_fingerprint
+        .clone_from(&active_first.schema_fingerprint);
+    successor_request.migration_plan = PackageMigrationPlanInput::ReviewedSuccessor {
+        prior_registry: Box::new(verified_first.registry().clone()),
+        prior_schema_fingerprint: active_first.schema_fingerprint.clone(),
+        migrations: vec![review],
+    };
+    let successor = prepare_package(successor_request).expect("reviewed successor prepares");
+    let successor_root = TempRoot::create();
+    successor
+        .publish_to_directory(successor_root.path())
+        .expect("reviewed successor publishes");
+    let verified_successor =
+        load_package(successor_root.path(), &local_context()).expect("reviewed successor verifies");
+    assert!(verified_successor
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .any(|statement| statement.id == "entity.neutral-record.derived.summary.view"));
+
+    let active_successor = apply_package(
+        &database,
+        &verified_successor,
+        ApplyPrecondition::Successor {
+            current: &active_first,
+        },
+        Duration::from_secs(1),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("reviewed successor rebuilds every read view it drops");
+    assert_eq!(
+        active_successor.schema_fingerprint,
+        active_first.schema_fingerprint
+    );
+    assert_eq!(managed_read_views(&database).await, views_before);
+    assert_startup(&database, &successor_root, &verified_successor).await;
+    drop(first);
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+async fn publish_with_exact_fingerprint(
+    database: &TestDatabase,
+    migration: &mut tokio_postgres::Client,
+    request: PackageBuildRequest,
+) -> (TempRoot, registry_breg::package::VerifiedPackage) {
+    let root = TempRoot::create();
+    prepare_package(request)
+        .expect("package prepares")
+        .publish_to_directory(root.path())
+        .expect("package publishes");
+    let provisional = load_package(root.path(), &local_context())
+        .expect("provisional package loads before exact fingerprinting");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(&transaction, provisional.registry(), &database.runtime_role)
+        .await
+        .expect("schema installs for fingerprinting");
+    let fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(provisional.registry()),
+    )
+    .await
+    .expect("schema fingerprint derives");
+    transaction
+        .rollback()
+        .await
+        .expect("fingerprint transaction rolls back");
+    rewrite_unsigned(root.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&fingerprint);
+    });
+    let verified =
+        load_package(root.path(), &local_context()).expect("package loads with its fingerprint");
+    (root, verified)
+}
+
+async fn managed_read_views(database: &TestDatabase) -> Vec<String> {
+    database
+        .admin
+        .query(
+            "SELECT schemaname || '.' || viewname
+               FROM pg_catalog.pg_views
+              WHERE schemaname IN ('registry_derived', 'registry_source')
+              ORDER BY 1",
+            &[],
+        )
+        .await
+        .expect("managed read views read")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
 fn snapshot_package_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
     let envelope = read_envelope(root);
     envelope
