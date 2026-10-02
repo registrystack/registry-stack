@@ -570,10 +570,6 @@ struct PackageCandidateArgs {
     _signature_key_id: Option<String>,
 }
 
-// Each retired package flag stays a hidden argument so an operator who still
-// passes it reads a usage error naming its replacement, not an unknown flag.
-// Its value is optional, so a bare flag reaches the same refusal instead of a
-// generic missing-value error.
 /// An `--expected-digest` value is a package digest in the form every command
 /// prints one: `sha256:` and 64 lowercase hex digits.
 fn parse_expected_digest(value: &str) -> Result<String, String> {
@@ -584,6 +580,10 @@ fn parse_expected_digest(value: &str) -> Result<String, String> {
     }
 }
 
+// Each retired package flag stays a hidden argument so an operator who still
+// passes it reads a usage error naming its replacement, not an unknown flag.
+// Its value is optional, so a bare flag reaches the same refusal instead of a
+// generic missing-value error.
 fn refuse_database_id_flag(_: &str) -> Result<String, String> {
     Err("`--database-id` is removed; a package names no database. Remove it: the runtime configuration's `identity.databaseId` names the database at apply".to_owned())
 }
