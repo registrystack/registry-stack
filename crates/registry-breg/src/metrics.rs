@@ -510,10 +510,8 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
                                       - MIN(s.next_attempt_at))::float8
                                 FROM registry_internal.registry_request_review_submissions s
-                               WHERE s.state IN ('pending','submitting','uncertain')
-                                 AND s.next_attempt_at <= transaction_timestamp()
-                                 AND (s.state <> 'submitting'
-                                      OR s.lease_until < transaction_timestamp())), 0),
+                               WHERE s.state IN ('pending','submitting','uncertain','cancelling')
+                                 AND {submission_claimable}), 0),
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
                                       - MIN(q.next_attempt_at))::float8
                                 FROM registry_internal.registry_request_application_jobs q
@@ -522,6 +520,7 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
                                  AND q.next_attempt_at <= transaction_timestamp()
                                  AND {claimable}), 0)",
                 schema = crate::webhook::DELIVERY_SCHEMA,
+                submission_claimable = crate::review_store::REVIEW_SUBMISSION_CLAIMABLE,
                 claimable = crate::review_store::APPLICATION_JOB_CLAIMABLE,
             ),
             &[&crate::review_store::MAX_APPLICATION_ATTEMPTS],
