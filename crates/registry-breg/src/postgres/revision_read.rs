@@ -416,9 +416,13 @@ struct RevisionReadPlan {
     action_effects: BTreeSet<ActionEffectOperation>,
 }
 
-/// One compiled action effect that writes the read entity, as the pair of its
-/// effect identifier and its mutation kind.
-type ActionEffectOperation = (String, &'static str);
+/// One compiled action effect that writes the read entity, as its action
+/// identifier, its effect identifier, and the mutation kind it journals.
+type ActionEffectOperation = (String, String, &'static str);
+
+/// A revision journaled under an action effect identifier, as its record,
+/// revision, effect identifier, and mutation kind.
+type LegacyEffectRevision = (Uuid, i64, String, String);
 
 impl RevisionReadPlan {
     fn from_request(
@@ -716,6 +720,7 @@ async fn revision_rows_from_rows(
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
 ) -> Result<Vec<RevisionEnvelope>, ReadServiceError> {
+    let legacy_origins = legacy_action_origins(transaction, entity, rows, action_effects).await?;
     let mut materialized = Vec::with_capacity(rows.len());
     for row in rows {
         if let Some(revision) = revision_from_row(
@@ -723,6 +728,7 @@ async fn revision_rows_from_rows(
             row,
             entity,
             action_effects,
+            &legacy_origins,
             context,
             selected_fields,
             provenance_fields,
@@ -745,6 +751,7 @@ async fn revision_from_row(
     row: &tokio_postgres::Row,
     entity: &CompiledEntity,
     action_effects: &BTreeSet<ActionEffectOperation>,
+    legacy_origins: &BTreeMap<LegacyEffectRevision, String>,
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
@@ -777,6 +784,18 @@ async fn revision_from_row(
     let request_lifecycle_revision = row
         .try_get::<_, bool>(11)
         .map_err(|_| ReadServiceError::Unavailable)?;
+    let originating_action_declares_effect = legacy_origins
+        .get(&(
+            record_id,
+            revision,
+            operation_id.clone(),
+            mutation_kind.clone(),
+        ))
+        .is_some_and(|action| {
+            action_effects.iter().any(|(action_id, effect_id, kind)| {
+                action_id == action && *effect_id == operation_id && *kind == mutation_kind
+            })
+        });
     if revision <= 0
         || predecessor.is_some_and(|value| value <= 0 || value >= revision)
         || !matches!(lifecycle.as_str(), "active" | "tombstoned")
@@ -784,7 +803,7 @@ async fn revision_from_row(
         || snapshot.len() > MAX_HISTORY_SNAPSHOT_BYTES
         || !valid_revision_provenance(
             entity,
-            action_effects,
+            originating_action_declares_effect,
             &operation_id,
             &mutation_kind,
             &actor_reference,
@@ -1150,8 +1169,8 @@ fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadS
     Ok(value)
 }
 
-/// Every effect a compiled action declares against `entity_id`, with the
-/// mutation kind it journals.
+/// Every effect a compiled action declares against `entity_id`, with its
+/// action and the mutation kind it journals.
 fn action_effect_operations(
     registry: &CompiledRegistry,
     entity_id: &str,
@@ -1160,20 +1179,108 @@ fn action_effect_operations(
         .actions()
         .actions
         .iter()
-        .flat_map(|action| &action.effects)
-        .filter(|effect| effect.target.entity_id == entity_id)
-        .map(|effect| {
-            (
-                effect.id.clone(),
-                crate::compiler::operation_id(effect.operation),
-            )
+        .flat_map(|action| {
+            action
+                .effects
+                .iter()
+                .filter(|effect| effect.target.entity_id == entity_id)
+                .map(|effect| {
+                    (
+                        action.id.clone(),
+                        effect.id.clone(),
+                        crate::compiler::operation_id(effect.operation),
+                    )
+                })
         })
         .collect()
 }
 
+/// The originating action of each read revision journaled under an action
+/// effect identifier. Effect identifiers are unique only within one action,
+/// so the action comes from the stored action result that names the same
+/// record, revision, effect, and mutation kind. A revision without such a
+/// result, or whose results name more than one action, has no entry. Only
+/// rows whose effect and mutation kind some declared action effect matches
+/// are looked up, so a page of canonical revisions issues no query.
+async fn legacy_action_origins(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity: &CompiledEntity,
+    rows: &[tokio_postgres::Row],
+    action_effects: &BTreeSet<ActionEffectOperation>,
+) -> Result<BTreeMap<LegacyEffectRevision, String>, ReadServiceError> {
+    let mut record_ids = BTreeSet::new();
+    let mut revisions = BTreeSet::new();
+    for row in rows {
+        let request_lifecycle_revision = row
+            .try_get::<_, bool>(11)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let operation_id = bounded_text(row, 5)?;
+        let mutation_kind = bounded_text(row, 6)?;
+        if request_lifecycle_revision
+            || !action_effects
+                .iter()
+                .any(|(_, effect_id, kind)| *effect_id == operation_id && *kind == mutation_kind)
+        {
+            continue;
+        }
+        record_ids.insert(
+            row.try_get::<_, Uuid>(0)
+                .map_err(|_| ReadServiceError::Unavailable)?,
+        );
+        revisions.insert(
+            row.try_get::<_, i64>(1)
+                .map_err(|_| ReadServiceError::Unavailable)?,
+        );
+    }
+    if revisions.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let record_ids = record_ids.into_iter().collect::<Vec<_>>();
+    let revisions = revisions.into_iter().collect::<Vec<_>>();
+    let results = transaction
+        .query(
+            "SELECT target_record_id, target_record_revision, effect_id, mutation_kind,
+                    action_id
+               FROM registry_internal.registry_immediate_action_results
+              WHERE target_entity_id = $1::text
+                AND target_record_id = ANY($2::uuid[])
+                AND target_record_revision = ANY($3::bigint[])",
+            &[&entity.id, &record_ids, &revisions],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    let mut actions = BTreeMap::<LegacyEffectRevision, BTreeSet<String>>::new();
+    for result in results {
+        let key = (
+            result
+                .try_get::<_, Uuid>(0)
+                .map_err(|_| ReadServiceError::Unavailable)?,
+            result
+                .try_get::<_, i64>(1)
+                .map_err(|_| ReadServiceError::Unavailable)?,
+            bounded_text(&result, 2)?,
+            bounded_text(&result, 3)?,
+        );
+        actions
+            .entry(key)
+            .or_default()
+            .insert(bounded_text(&result, 4)?);
+    }
+    Ok(actions
+        .into_iter()
+        .filter_map(|(key, actions)| {
+            let mut actions = actions.into_iter();
+            match (actions.next(), actions.next()) {
+                (Some(action_id), None) => Some((key, action_id)),
+                _ => None,
+            }
+        })
+        .collect())
+}
+
 fn valid_revision_provenance(
     entity: &CompiledEntity,
-    action_effects: &BTreeSet<ActionEffectOperation>,
+    originating_action_declares_effect: bool,
     operation_id: &str,
     mutation_kind: &str,
     actor_reference: &str,
@@ -1189,10 +1296,9 @@ fn valid_revision_provenance(
                     && valid_request_journal_operation(&entity.id, operation_id))
                 // Immediate actions once journaled the compiled effect
                 // identifier. Such a revision stays readable only while the
-                // active package declares that effect against this entity
-                // with the same mutation kind.
-                || (!request_lifecycle_revision
-                    && action_effects.contains(&(operation_id.to_owned(), mutation_kind))))
+                // action its stored result names still declares that effect
+                // against this entity with the same mutation kind.
+                || (!request_lifecycle_revision && originating_action_declares_effect))
                 && valid_hmac_reference(actor_reference)
                 && valid_hmac_reference(request_reference)
         }
