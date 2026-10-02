@@ -29,4 +29,6 @@ regexes = [
   '''"dci_crvs_api":\s*"5e31d1e381d4bd8c7c74112d714fd49d263c6df7"''',
   '''"AKIAABCDEFGHIJKLMNOP"''',
   '''"eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJzdWJqZWN0In0\.abcdefghijklmnop"''',
+  '''"eyJhbGciOiJFUzI1NiJ9\.eyJzdWIiOiJzdGFmZi1zdWJqZWN0In0\.c2lnbmF0dXJlLWJ5dGVzLXZhbHVl"''',
+  '''"eyJhbGciOiJFUzI1NiJ9\.eyJncmFudCI6InRhc2sifQ\.Z3JhbnQtc2lnbmF0dXJl"''',
 ]
