@@ -180,6 +180,21 @@
   migration rewrites them: once a later package removes or renames that
   action or effect, or changes the effect's operation, that revision's detail
   read and any list page that includes it answer `503 source.unavailable`.
+- BREAKING: `bregctl dev` pins a session on what it runs, not on how its
+  files are spelled: the compiled registry revision, the package
+  `sourceRevision`, and the canonical JSON form of `tests/journeys.yaml` and
+  the clients file. A comment, blank line or key-order edit to a YAML file
+  no longer counts as a changed input, so `dev start`, `dev examples run` and
+  `dev prepare-source` accept it while the session holds records. Any edit
+  to a Rhai script or WASM module, a comment included, still counts, because
+  the compiled revision carries the digest of the exact bytes it ships. A
+  `.breg/dev` session started by an earlier release holds the earlier pin and
+  reads as changed inputs: with records retained, `dev start`,
+  `dev examples run` and `dev prepare-source` refuse it, and `dev start` names
+  `dev stop --remove`; after `--remove`, `dev start` replaces the session as
+  for any edited project. Run `bregctl dev stop --remove` on such a session
+  before starting it with this release; no command carries its records
+  across.
 
 - A record, list, lookup, relationship, attachment, access-log, revision, or
   snapshot read abandoned at the request deadline (`504 request.timeout`) now
