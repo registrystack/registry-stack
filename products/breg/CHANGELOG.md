@@ -36,6 +36,10 @@
   and fingerprint binding and must not resume under the successor. A project
   whose SQL uses newly refused constructs must revise that SQL before rebuilding.
 
+- Review-completion callback authentication refusals now return the registered
+  `401 authentication.refused` problem and its catalogue type, title, and
+  detail instead of the undocumented
+  `review_completion.authentication_refused` code.
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers
