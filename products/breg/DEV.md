@@ -64,6 +64,7 @@ event receipts and seed checkpoints. The audit files are kept. For an initial pa
 database from the same authored project, ports, credentials and package. It also
 lets the next start take edited
 inputs: once no records are retained, a changed package, clients file or port
+([what counts as changed](#retained-state-and-recovery))
 replaces the session with a fresh one that keeps the previous ports and clients
 file and generates new keys. A successor package prepared for retained records
 cannot initialize an empty database after removal: start refuses before Docker.
@@ -582,6 +583,15 @@ credentials and bounded private diagnostic logs. The first start writes a
 out of version control. Preserve it with the retained database while the
 exercise matters. It is local development material, not production key
 provisioning.
+The state document also pins what the session runs: the compiled registry
+revision, the package `sourceRevision`, and the canonical JSON form of
+`tests/journeys.yaml` and the clients file. `dev start`, `dev examples run` and
+`dev prepare-source` compare the project against that pin, so an edit that
+changes only comments, blank lines or key order in a YAML file is not a changed
+input. The compiled revision carries the digest of every Rhai script, WASM
+module and derived SQL file it ships, so any edit to one of those files, a
+comment included, is a changed input. A session started by an earlier release
+holds an earlier pin, which reads as changed inputs.
 Records live in a named `breg-dev-<owner>` Docker volume, so the storage stays
 identifiable and reclaimable once the container is gone.
 
