@@ -4951,6 +4951,141 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
     );
 }
 
+/// Runs bregctl with the fixture's migration credential set to a database
+/// URL nothing listens on, so a refusal that reaches database contact reports
+/// the database as unavailable.
+fn bregctl_with_unreachable_database(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env(
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+            "postgresql://registry_migration@127.0.0.1:1/breg",
+        )
+        .args(arguments)
+        .output()
+        .expect("bregctl starts")
+}
+
+#[test]
+fn apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    // A successor reads the database's activation ledger before anything
+    // else an apply opens, so reaching the database is the first refusal
+    // after the package checks for both commands.
+    let successor = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        String::from_utf8(package_module_bytes())
+            .unwrap()
+            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .into_bytes(),
+    );
+    let other_digest = fixture.package_digest.as_str();
+    assert_ne!(other_digest, successor.package_digest);
+
+    for command in ["apply", "plan"] {
+        let run = |expected: Option<&str>| {
+            let mut arguments = vec![
+                "--format",
+                "json",
+                command,
+                "--runtime-config",
+                path(&fixture.runtime_config),
+                "--package",
+                path(&successor.package),
+            ];
+            if let Some(expected) = expected {
+                arguments.extend(["--expected-digest", expected]);
+            }
+            bregctl_with_unreachable_database(&arguments)
+        };
+
+        // Without the flag, and with the digest of the package named, the
+        // command reaches the database, which nothing serves.
+        for reached in [run(None), run(Some(successor.package_digest.as_str()))] {
+            assert_eq!(reached.status.code(), Some(1), "{reached:?}");
+            assert_eq!(
+                json_stdout(&reached)["diagnostics"][0]["code"],
+                "apply.database.unavailable",
+                "{command}"
+            );
+        }
+
+        let refused = run(Some(other_digest));
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(refused.stderr.is_empty(), "{refused:?}");
+        let report = json_stdout(&refused);
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["command"], command);
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "apply.package.digest_mismatch");
+        assert_eq!(diagnostic["path"], "package");
+        assert_tool_diagnostic(
+            diagnostic,
+            "verified_package",
+            "rerun_plan_on_intended_package",
+        );
+        let message = diagnostic["message"].as_str().expect("message is text");
+        assert!(message.contains(other_digest), "{message}");
+        assert!(message.contains(&successor.package_digest), "{message}");
+        let rendered = String::from_utf8_lossy(&refused.stdout);
+        for forbidden in [
+            path(&fixture.runtime_config),
+            path(&fixture.package),
+            path(&successor.package),
+            VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+        ] {
+            assert!(!rendered.contains(forbidden), "{rendered}");
+        }
+    }
+}
+
+#[test]
+fn apply_and_plan_take_the_expected_digest_only_as_a_sha256_label() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let digest_hex = fixture
+        .package_digest
+        .strip_prefix("sha256:")
+        .expect("the package digest is a sha256 label");
+    let uppercase = format!("sha256:{}", digest_hex.to_ascii_uppercase());
+    let short = format!("sha256:{}", &digest_hex[1..]);
+    let other_algorithm = format!("sha512:{digest_hex}");
+    for command in ["apply", "plan"] {
+        for malformed in [
+            "",
+            digest_hex,
+            uppercase.as_str(),
+            short.as_str(),
+            other_algorithm.as_str(),
+        ] {
+            let output = bregctl(&[
+                "--format",
+                "json",
+                command,
+                "--runtime-config",
+                path(&fixture.runtime_config),
+                "--package",
+                path(&fixture.package),
+                "--expected-digest",
+                malformed,
+            ]);
+            assert_eq!(output.status.code(), Some(2), "{command} {malformed:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let report = json_stdout(&output);
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(
+                diagnostic["code"], "usage.invalid",
+                "{command} {malformed:?}"
+            );
+            let message = diagnostic["message"].as_str().expect("message is text");
+            assert!(
+                message.contains("--expected-digest")
+                    && message.contains("sha256: followed by 64 lowercase hex digits"),
+                "{message}"
+            );
+        }
+    }
+}
+
 #[test]
 fn apply_refuses_a_stale_shared_envelope_before_database_authority() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());

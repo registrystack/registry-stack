@@ -1269,3 +1269,75 @@ before it.
 - **Execution outcomes without a transition.** `--execute` on a registry
   assessed as `ready`, or one whose identity changed under the lock, still
   answers with `executed: false` rather than a refusal.
+
+## Expected package digest for apply and plan
+
+The change adds `--expected-digest` to `bregctl apply` and `bregctl plan`
+(`parse_expected_digest` and `lifecycle_failure` in
+`crates/registry-bregctl/src/lib.rs`, and the check in `execute` in
+`crates/registry-bregctl/src/apply_lifecycle.rs`), and keeps the runtime
+file's `package.expectedDigest` mismatch sentence when the active package
+loaders refuse the configured package (`active_package_envelope_error` in
+`crates/registry-breg/src/runtime_config.rs`). It touches activation and
+release provenance. Its invariant row is BREG-SEC-148.
+
+### Threat
+
+`apply` activated whichever verified package `--package` named. A directory
+replaced or rebuilt between the review of `plan` and the `apply`, or a deploy
+job pointed at another build, activated a package nobody reviewed, and
+nothing tied the reviewed `packageDigest` to the activation. Separately, the
+active package loaders reduced a `package.expectedDigest` mismatch to the
+generic envelope refusal, so `apply`, `plan`, and the maintenance lifecycles
+named neither digest and the operator could not tell a pin mismatch from a
+damaged package.
+
+### Enforcement and defaults
+
+- `--expected-digest` takes only `sha256:` and 64 lowercase hex digits, the
+  form `package` and `plan` print. Any other value is a clap usage error,
+  exit status 2, `usage.invalid` in JSON mode.
+- The comparison runs right after the target package is verified and before
+  `DatabaseAccess::resolve`, so a mismatch resolves no database secret,
+  opens no connection, takes no lock, and writes no audit entry. Both
+  commands refuse with `apply.package.digest_mismatch` and the
+  `rerun_plan_on_intended_package` suggested action. The message names the
+  expected and the found digest; both are package identities, not secrets.
+- Without the flag, behaviour is unchanged. The activation audit entry
+  (`ActivationAttempt::begin` in `crates/registry-breg/src/migration.rs`)
+  already records `packageDigest` and `predecessorPackageDigest`, so the
+  flag adds no audit field.
+- A `package.expectedDigest` mismatch on the configured active package keeps
+  each command's code and path, for example `apply.package.refused` at
+  `package.root`, and its message is the platform sentence naming the pinned
+  and the found digest. Every other envelope refusal stays value free.
+
+### Tests
+
+`crates/registry-bregctl/tests/cli.rs`:
+`apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact`
+runs both commands against an unreachable database URL and proves that no
+flag and a matching digest reach the database while a mismatched digest
+refuses first; `apply_and_plan_take_the_expected_digest_only_as_a_sha256_label`
+covers malformed values; and
+`apply_names_both_digests_when_the_active_package_misses_its_pin` covers the
+pin sentence end to end. `crates/registry-bregctl/src/lib.rs`:
+`an_active_package_pin_mismatch_names_both_digests` covers the six lifecycle
+renderers. `crates/registry-breg/tests/runtime_config.rs`:
+`the_active_package_loaders_name_both_digests_of_a_package_pin_mismatch`.
+Each test the change adds was written first and failed against the code
+before it.
+
+### Accepted residuals
+
+- **The flag is opt-in.** An `apply` without `--expected-digest` is bound to
+  no reviewed digest and activates whichever verified package `--package`
+  names, as before. A deploy job must pass the digest its review recorded.
+- **The digest binds bytes, not authorship.** Packages are unsigned; a
+  matching digest proves the reviewed bytes are the ones activated, not who
+  built them.
+- **The `breg` operational log keeps its closed refusal class.** `breg`
+  startup keeps the pin sentence in its startup error, but its production
+  operational log renders only `the Registry package was refused`, without
+  the digests. `bregctl doctor` and `bregctl verify` against the same runtime
+  file report the sentence.

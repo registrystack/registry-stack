@@ -958,10 +958,22 @@ fi
 assert_json_failure "$temporary_root/reconcile-v2-read-only-audit-execute.json" migration.reconcile.audit.unavailable
 chmod 0700 "$temporary_root/audit-read-only"
 
-run_json "$temporary_root/plan-v2-resume.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
+run_json "$temporary_root/plan-v2-resume.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
+  --expected-digest "$package_digest_v2"
 assert_json_ok "$temporary_root/plan-v2-resume.json" plan
 assert_plan "$temporary_root/plan-v2-resume.json" successor "$package_digest_v2" resumes
-run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
+
+# An apply bound to another reviewed digest refuses before any database
+# contact and leaves the pinned target as it was; the digest the plan
+# reported lets the same apply proceed.
+if run_json "$temporary_root/apply-v2-wrong-digest.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
+  --expected-digest "$package_digest_v1"; then
+  printf '%s\n' 'successor apply unexpectedly ran under another expected digest.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/apply-v2-wrong-digest.json" apply.package.digest_mismatch
+run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
+  --expected-digest "$package_digest_v2"
 assert_json_ok "$temporary_root/apply-v2.json" apply
 
 kill "$breg_pid" >/dev/null 2>&1 || true

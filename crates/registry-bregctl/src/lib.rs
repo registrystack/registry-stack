@@ -574,6 +574,16 @@ struct PackageCandidateArgs {
 // passes it reads a usage error naming its replacement, not an unknown flag.
 // Its value is optional, so a bare flag reaches the same refusal instead of a
 // generic missing-value error.
+/// An `--expected-digest` value is a package digest in the form every command
+/// prints one: `sha256:` and 64 lowercase hex digits.
+fn parse_expected_digest(value: &str) -> Result<String, String> {
+    if registry_platform_config::is_sha256_label(value) {
+        Ok(value.to_owned())
+    } else {
+        Err("`--expected-digest` must be sha256: followed by 64 lowercase hex digits, the package digest as plan and package print it".to_owned())
+    }
+}
+
 fn refuse_database_id_flag(_: &str) -> Result<String, String> {
     Err("`--database-id` is removed; a package names no database. Remove it: the runtime configuration's `identity.databaseId` names the database at apply".to_owned())
 }
@@ -672,6 +682,10 @@ struct ApplyArgs {
     /// Operator change reference, at most 512 bytes, recorded as a keyed hash in the activation ledger and audit.
     #[arg(long, value_name = "REFERENCE")]
     operator_reference: Option<String>,
+
+    /// Package digest the target package must have, as plan and package print it; apply refuses another package before any database contact.
+    #[arg(long, value_name = "SHA256_DIGEST", value_parser = parse_expected_digest)]
+    expected_digest: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -687,6 +701,10 @@ struct PlanArgs {
     /// Reviewed backup binding to verify as apply would, as BINDING_PATH=BINDING_FILE; without it, the plan lists the bindings apply requires.
     #[arg(long = "backup", value_name = "BINDING_PATH=BINDING_FILE")]
     backups: Vec<String>,
+
+    /// Package digest the target package must have, as package prints it; plan refuses another package before any database contact.
+    #[arg(long, value_name = "SHA256_DIGEST", value_parser = parse_expected_digest)]
+    expected_digest: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1524,6 +1542,7 @@ enum SuggestedAction {
     VerifyPackagePermissions,
     VerifyPackageBinding,
     VerifyPackageIntegrity,
+    RerunPlanOnIntendedPackage,
     ReviewCompiledDiff,
     CorrectPackageBuild,
     SupplySchemaTestReceipt,
@@ -4640,6 +4659,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         backups: &args.backups,
         acknowledge_retired_audit_discard: args.acknowledge_retired_audit_discard,
         operator_reference: args.operator_reference.as_deref(),
+        expected_digest: args.expected_digest.as_deref(),
     })
     .map_err(apply_lifecycle_failure)?;
     Ok(ApplySuccessReport {
@@ -4662,6 +4682,7 @@ fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, FailureReport> {
         runtime_config: &args.runtime_config,
         package: &args.package,
         backups: &args.backups,
+        expected_digest: args.expected_digest.as_deref(),
     })
     .map_err(|error| lifecycle_failure("plan", error))?;
     Ok(PlanSuccessReport {
@@ -5183,6 +5204,23 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 &mismatch,
             );
         }
+        ApplyLifecycleError::PackageDigestMismatch { expected, found } => {
+            return FailureReport {
+                ok: false,
+                command,
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "apply.package.digest_mismatch",
+                        "package",
+                        &format!(
+                            "--expected-digest is {expected} but the package at --package is {found}; nothing was changed. Run `bregctl plan` on the intended package and pass the digest it reports"
+                        ),
+                    ),
+                    DiagnosticArtifact::VerifiedPackage,
+                    SuggestedAction::RerunPlanOnIntendedPackage,
+                )],
+            };
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5194,6 +5232,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ApplyLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        ApplyLifecycleError::PackageDigestMismatch { .. } => unreachable!("handled before match"),
         ApplyLifecycleError::TargetPackagePath => (
             "apply.package.path_invalid",
             "package",

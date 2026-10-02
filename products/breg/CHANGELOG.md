@@ -95,6 +95,12 @@
   `history.rebaseline.unavailable`, and
   `field_encryption.erase_history.unavailable`. Automation that retries those
   unavailable codes on contention must match the `in_progress` codes.
+- `bregctl apply` and `bregctl plan` take `--expected-digest`, the
+  `sha256:` package digest `plan` and `package` print. A package at
+  `--package` with another digest is refused with
+  `apply.package.digest_mismatch`, naming both digests, before any database
+  contact, and nothing changes. A malformed value is a usage error. Without
+  the flag, both commands behave as before.
 - A configured active package that `package.expectedDigest` does not pin is
   refused with the sentence `verify` already gives, naming the pinned and the
   found package digests, by `apply`, `plan`, `migration reconcile`,
