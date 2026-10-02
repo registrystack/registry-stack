@@ -4135,6 +4135,85 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
 }
 
 #[test]
+fn test_fingerprint_only_needs_only_the_runtime_configuration() {
+    let help = bregctl(&["test", "--help"]);
+    assert!(help.status.success(), "{help:?}");
+    assert!(String::from_utf8(help.stdout)
+        .expect("help is UTF-8")
+        .contains("--fingerprint-only"));
+
+    let project = TestProject::from_registry_source(authoring_fixture());
+    let project_path = path(project.path());
+    let runtime_config = project.path().join("runtime.yaml");
+    let credentials = project.path().join("credentials.yaml");
+    let output = project.path().join("receipt.json");
+    let baseline = project.path().join("baseline");
+    for (flag, value) in [
+        ("--credentials", path(&credentials)),
+        ("--output", path(&output)),
+        ("--baseline-package", path(&baseline)),
+    ] {
+        let conflicting = bregctl(&[
+            "--format",
+            "json",
+            "test",
+            project_path,
+            "--fingerprint-only",
+            "--runtime-config",
+            path(&runtime_config),
+            flag,
+            value,
+        ]);
+        assert_eq!(
+            conflicting.status.code(),
+            Some(2),
+            "{flag}: {conflicting:?}"
+        );
+        assert_eq!(
+            json_stdout(&conflicting)["diagnostics"][0]["code"],
+            "usage.invalid",
+            "{flag}"
+        );
+    }
+
+    let without_receipt_inputs = bregctl(&[
+        "--format",
+        "json",
+        "test",
+        project_path,
+        "--runtime-config",
+        path(&runtime_config),
+    ]);
+    assert_eq!(without_receipt_inputs.status.code(), Some(2));
+    assert_eq!(
+        json_stdout(&without_receipt_inputs)["diagnostics"][0]["code"],
+        "usage.invalid"
+    );
+
+    // Without credentials or an output, the measurement still reaches the
+    // configured database; the fixture names one that is unavailable.
+    let candidate = packaging_project();
+    let candidate_runtime = test_runtime_config(&candidate);
+    let measured = bregctl(&[
+        "--format",
+        "json",
+        "test",
+        path(candidate.path()),
+        "--fingerprint-only",
+        "--runtime-config",
+        path(&candidate_runtime),
+    ]);
+    assert_eq!(measured.status.code(), Some(1), "{measured:?}");
+    let report = json_stdout(&measured);
+    assert_eq!(report["command"], "test");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "test.database.unavailable"
+    );
+    assert!(!candidate.path().join("schema-test-receipt.json").exists());
+}
+
+#[test]
 fn refused_fixture_journeys_name_the_journey_file_and_the_refusal() {
     let project = packaging_project();
     let runtime = test_runtime_config(&project);

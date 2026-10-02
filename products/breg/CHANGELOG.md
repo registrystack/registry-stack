@@ -53,6 +53,14 @@
   backfill step under its own, as activation does. The rehearsal used a
   fixed 5 second lock and 300 second statement timeout for every reviewed
   statement, so a migration activation would cancel could pass it.
+- `bregctl test --fingerprint-only --runtime-config <file>` measures the
+  schema fingerprint a fresh install of the candidate produces, the value a
+  reviewed migration's `finalSchemaFingerprint` declares, and rolls back
+  without running fixtures or writing a receipt, so `--credentials` and
+  `--output` are not needed for it. Measuring the target used to take a full
+  schema test on a separate disposable database. The
+  `migration.review.fingerprint_mismatch` refusal names both the declared and
+  the measured fingerprint.
 - BREAKING: a background worker (webhook delivery, attachment verification,
   review, or subject access log retention) or the metrics listener that
   panics or returns before shutdown is requested ends `breg`: the process
