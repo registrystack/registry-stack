@@ -3393,6 +3393,85 @@ fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses
 }
 
 #[test]
+fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
+    let project = json!({
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
+      "manifestProjection":{
+        "accessProfile":"public-reader",
+        "classificationCeiling":"public",
+        "catalog":{"baseUrl":"https://shared-codes.example.test","title":"Shared Codes","publisher":{"id":"publisher","name":"Publisher"}},
+        "publicService":{"id":"shared-codes-service","title":"Shared Codes"},
+        "datasets":[
+          {"id":"public-cases","title":"Public cases","accessProfile":"public-reader","classificationCeiling":"public"},
+          {"id":"protected-cases","title":"Protected cases","accessProfile":"protected-reader","classificationCeiling":"restricted"}
+        ],
+        "dataServices":[
+          {"id":"public-api","title":"Public API","endpointUrl":"https://shared-codes.example.test/public","servesDatasets":["public-cases"]},
+          {"id":"protected-api","title":"Protected API","endpointUrl":"https://shared-codes.example.test/protected","servesDatasets":["protected-cases"]}
+        ],
+        "vocabularies":[{"id":"case-status","schemeIri":"https://shared-codes.example.test/vocab/case-status","concepts":[
+          {"code":"open","label":{"en":"Open"}},
+          {"code":"sealed-by-court","label":{"en":"Sealed by court order"}}
+        ]}]
+      },
+      "vocabularies":[{"id":"case-status","values":["open","sealed-by-court"]}],
+      "entities":[
+        {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create_only","classification":"public",
+         "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
+        {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create_only","classification":"restricted",
+         "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"}]}
+      ],
+      "accessProfiles":[
+        {"id":"public-reader","anonymous":true,"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
+        {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]}
+      ]
+    });
+    let project = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
+        .expect("project parses");
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+        .unwrap_or_else(|failure| panic!("project compiles: {:?}", failure.diagnostics()));
+    let manifest: MetadataManifest = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/manifest/registry-manifest.json")
+            .expect("Manifest projection is generated")
+            .bytes,
+    )
+    .expect("generated Manifest projection parses");
+    let projected = compile_manifest(&manifest).expect("generated Manifest projection compiles");
+    let codes = projected
+        .codelist("case-status")
+        .expect("the vocabulary a public field uses is projected as a codelist")
+        .concepts
+        .iter()
+        .map(|concept| concept.code.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(codes, ["open"]);
+    for path in [
+        "generated/manifest/registry-manifest.json",
+        "generated/manifest/dcat.jsonld",
+    ] {
+        let rendered = std::str::from_utf8(
+            &compiled
+                .artifacts()
+                .get(path)
+                .unwrap_or_else(|| panic!("{path} is generated"))
+                .bytes,
+        )
+        .expect("generated metadata is UTF-8")
+        .to_owned();
+        for protected in ["sealed-by-court", "Sealed by court order"] {
+            assert!(
+                !rendered.contains(protected),
+                "{path} disclosed {protected}, a code only a protected dataset admits: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
 fn manifest_projection_omits_physical_runtime_and_security_terms() {
     let compiled = compile_project(&asset_project(), &[], CompileProfile::Authoring)
         .expect("asset fixture compiles");
