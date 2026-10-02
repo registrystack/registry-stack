@@ -268,6 +268,37 @@ successor package: `bregctl package` classifies each one as a compatible
 additive index and the migration transaction creates it with a plain
 `CREATE INDEX`, which blocks writes to that table until it commits.
 
+## Live derived fields
+
+A derived relation is a reviewed SQL asset, compiled into a read-only,
+`security_invoker` view over the caller's `registry_source` rows. Its SQL must
+be one `SELECT` with the declared key and field aliases. The compiler accepts
+an explicit set of raw PostgreSQL grammar nodes, the aggregate functions
+`count`, `bool_and`, and `every`, and `registry_context.evaluation_date()`.
+`JSON_VALUE` and `JSON_EXISTS` may read scalars inside a structured field.
+An explicit `RETURNING` type must be a supported built-in scalar type.
+`JSON_QUERY`, table functions, SQL/JSON aggregates and constructors, and XML
+constructs are refused. Additions to this grammar require a concrete use case
+and review; a parser upgrade does not automatically admit new syntax.
+Joins use explicit `ON` conditions; source and join aliases cannot rename
+columns through alias lists.
+
+The generated view checks derived values before casting them to their declared
+types. String length bounds, text maximum length, exact decimal scale and
+precision, integer integrality and range, and vocabulary membership are
+enforced without truncation or rounding. Null values retain their existing
+nullable behavior. A violating value raises a stable database error identifying
+the field without including its value; an API read fails through the ordinary
+value-free source-unavailable response. Only derived relations reached by a
+read are evaluated.
+
+View definitions belong to the managed catalog fingerprint. When a compiler
+release changes these wrappers, follow the package upgrade instructions in
+[CHANGELOG.md](CHANGELOG.md), rebuilding from the authored project with the
+deployed package as the baseline and applying the successor before switching
+the runtime. An upgrade never rewrites the active catalog merely by starting
+the runtime.
+
 ## Product contracts
 
 The files in `contracts/` are the authoritative machine-readable delivery

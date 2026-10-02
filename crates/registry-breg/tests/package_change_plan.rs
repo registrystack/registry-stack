@@ -1222,6 +1222,93 @@ fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement(
 }
 
 #[test]
+fn unchanged_derived_relation_emits_compiler_owned_view_replacement() {
+    let source = derived_source_for_sql(
+        b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
+    );
+    let previous = compile_derived_source(&source);
+    let candidate = compile_derived_source(&source);
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+
+    assert!(
+        change_set.changes.is_empty(),
+        "unchanged authored input has no model change"
+    );
+    let plan = change_set_to_applicable_migration_plan(&change_set)
+        .expect("a compiler-owned derived wrapper is refreshable");
+    let [replacement] = plan.statements.as_slice() else {
+        panic!("one retained derived relation emits one view replacement");
+    };
+    assert_eq!(replacement.id, "entity.asset.derived.summary.view");
+    assert!(replacement.sql.starts_with("CREATE OR REPLACE VIEW "));
+    assert_eq!(
+        replacement
+            .sql
+            .strip_prefix("CREATE OR REPLACE VIEW ")
+            .expect("successor uses replacement DDL"),
+        candidate
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == replacement.id)
+            .and_then(|statement| statement.sql.strip_prefix("CREATE VIEW "))
+            .expect("candidate carries the generated derived view")
+    );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn unrelated_reviewed_change_keeps_unchanged_derived_view_as_replacement() {
+    let previous_source = derived_source_for_sql(
+        b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
+    );
+    let previous = compile_derived_source(&previous_source);
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&previous_source.module_bytes).expect("derived module parses");
+    module["entities"][0]["route"] = json!("equipment");
+    let module_bytes = serde_json::to_vec(&module).expect("derived module serializes");
+    let parsed_module = parse_module_yaml(&module_bytes).expect("derived module reparses");
+    let candidate_source = DerivedSourceFixture {
+        project_bytes: project_bytes(&module_digest_with_assets(
+            &parsed_module,
+            &[ModuleAssetSource {
+                module: Some("core".to_owned()),
+                path: "sql/summary.sql".to_owned(),
+                bytes: previous_source.sql.clone(),
+            }],
+        )),
+        module_bytes,
+        sql: previous_source.sql.clone(),
+    };
+    let candidate = compile_derived_source(&candidate_source);
+    let migration = metadata_only_source_between(&previous, &candidate);
+    let mut request =
+        derived_build_request(&candidate_source, Some(&previous), Some(PRIOR_REVISION));
+    request.migration_plan = PackageMigrationPlanInput::ReviewedSuccessor {
+        prior_registry: Box::new(previous),
+        prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
+        migrations: vec![migration],
+    };
+    let reviewed = prepare_package(request)
+        .expect("unrelated reviewed successor preserves derived replacement DDL");
+    let derived = reviewed
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .filter(|statement| statement.id == "entity.asset.derived.summary.view")
+        .collect::<Vec<_>>();
+    assert_eq!(derived.len(), 1);
+    assert!(derived[0].sql.starts_with("CREATE OR REPLACE VIEW "));
+    assert!(!reviewed
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .any(|statement| statement.sql.starts_with("CREATE VIEW registry_derived.")));
+}
+
+#[test]
 fn oversized_derived_sql_asset_is_refused_before_compilation() {
     let mut source = derived_source_for_sql(
         b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",

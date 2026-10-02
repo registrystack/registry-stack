@@ -12,6 +12,10 @@ mod fingerprint_tests;
 #[path = "postgres_package/policy_upgrade.rs"]
 mod policy_upgrade_tests;
 
+#[cfg(feature = "tooling")]
+#[path = "postgres_package/derived_upgrade.rs"]
+mod derived_upgrade_tests;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
