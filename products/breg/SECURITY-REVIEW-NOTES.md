@@ -1029,3 +1029,37 @@ immediate-action PostgreSQL suites still pass on an `en_US.utf8` server.
 - The policy's refusal of a mismatched field set is pinned through the
   runtime's own contexts; no test sets a hand-built context with an extra
   field as the runtime role. That backstop predates this change.
+
+## Immediate action history commit allocation
+
+### Threat
+
+An immediate action records revision rows without indexing them in the
+shared history commit journal. The latest snapshot omits accepted changes,
+and coverage rebaselining refuses their unindexed revisions. An aliased patch
+can also index one record twice if allocation follows effects rather than
+changed records.
+
+### Enforcement and defaults
+
+The action mutation path allocates one ordinary mutation commit before its
+transaction commits. It deduplicates effect results by entity and record,
+retaining the resulting revision. Allocation uses the same package binding,
+actor and request references, transaction, and commit-head locking as direct
+mutations. Production activation always initializes the coverage baseline;
+no missing-head compatibility path is introduced.
+
+### Tests
+
+`tests/support/action_history_commit_regressions.rs` reproduces the missing
+head and missing membership before the fix. Its real PostgreSQL tests verify
+one head advance, one member per changed record, a latest snapshot of an
+action-patched record, and successful coverage rebaselining. Existing action
+fault, retry, concurrency, and aliased-effect tests retain their rollback and
+replay assertions with normal activation initialization.
+
+### Accepted residuals
+
+This corrects future action commits. It does not fabricate historical commit
+positions for revisions that an earlier runtime left unindexed. The existing rebaseline command continues to refuse a retained journal head
+that has no commit member; this change supplies no repair for those rows.

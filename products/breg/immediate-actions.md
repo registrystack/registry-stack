@@ -787,3 +787,13 @@ Invoke trial actions over `POST /v1/actions/{action}` with the existing `input`
 envelope and `Idempotency-Key`. The current Rust, Node and Python clients do not
 yet expose immediate-action invocation or typed governed-refusal handling; this
 trial does not add that SDK convenience surface.
+
+## History commits
+
+An accepted immediate action allocates one history commit in the same
+transaction as its record effects, revision rows, events, and idempotency
+receipt. Each distinct changed record is indexed once at its resulting
+revision, even when several effects patch the same record. A snapshot of the
+latest committed state therefore includes those effects. A refused or
+rolled-back action leaves the commit head unchanged; replay returns its
+retained result without allocating another commit.

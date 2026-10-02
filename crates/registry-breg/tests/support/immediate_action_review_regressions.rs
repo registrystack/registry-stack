@@ -538,11 +538,10 @@ async fn setup_lock_order_action_registry() -> (
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs lock-order action schema");
-    let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             database_id: DATABASE_ID,
@@ -890,11 +889,10 @@ async fn setup_wide_action_registry() -> (
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs wide action schema");
-    let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             database_id: DATABASE_ID,

@@ -45,6 +45,13 @@
   and fingerprint binding and must not resume under the successor. A project
   whose SQL uses newly refused constructs must revise that SQL before rebuilding.
 
+- Immediate actions now advance the shared history commit head in the same
+  transaction as their effects (#1856). Each distinct changed record joins
+  one commit, including aliased patch effects. Latest snapshots and coverage
+  rebaselines can therefore observe action writes. Replays and rolled-back
+  actions allocate no commit. Existing unindexed action revisions are not backfilled by this fix and
+  still cause coverage rebaselining to refuse.
+
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers
