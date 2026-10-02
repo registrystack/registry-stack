@@ -2,6 +2,7 @@
 
 //! Bounded, durable verification work. Uploads never wait for this worker.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_audit::AuditEntry;
@@ -13,6 +14,7 @@ use crate::attachment_storage::AttachmentStorage;
 use crate::attachment_store::{self, VerificationJob};
 use crate::attachment_verification::{AttachmentVerification, AttachmentVerificationVerdict};
 use crate::audit::RegistryAudit;
+use crate::metrics::LastSuccess;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 
 #[derive(Clone)]
@@ -24,6 +26,7 @@ pub struct AttachmentVerificationWorker {
     audit: RegistryAudit,
     storage: AttachmentStorage,
     verification: AttachmentVerification,
+    last_success: Arc<LastSuccess>,
 }
 
 /// The audit schema of the attachment-verification attempt and outcome
@@ -56,7 +59,14 @@ impl AttachmentVerificationWorker {
             audit,
             storage,
             verification,
+            last_success: Arc::default(),
         }
+    }
+
+    /// The handle this worker notes each iteration without failure on.
+    #[must_use]
+    pub fn last_success(&self) -> Arc<LastSuccess> {
+        Arc::clone(&self.last_success)
     }
 
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
@@ -69,8 +79,9 @@ impl AttachmentVerificationWorker {
                     if changed.is_err() || *shutdown.borrow() { return; }
                 }
                 result = self.run_once() => {
-                    if result.is_err() {
-                        crate::startup::OperationalEvent::AttachmentVerificationIterationFailed.emit();
+                    match result {
+                        Ok(_) => self.last_success.record(),
+                        Err(_) => crate::startup::OperationalEvent::AttachmentVerificationIterationFailed.emit(),
                     }
                 }
             }

@@ -6045,6 +6045,30 @@ async fn review_worker_returns_when_its_shutdown_sender_is_dropped() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idle_review_worker_iteration_records_its_last_success() {
+    let database = prepare_review_database().await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = ReviewWorker::new(pool.clone(), None, None);
+    let last_success = worker.last_success();
+    assert!(last_success.age().is_none(), "no iteration has run yet");
+    let worker = tokio::spawn(worker.run(shutdown_rx));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while last_success.age().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "an iteration without failure was never recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    worker.await.expect("worker joins");
+
+    drop(pool);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_events() {
     let database = prepare_review_database().await;
@@ -6069,7 +6093,9 @@ async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_ev
         .finish();
     let capture = tracing::subscriber::set_default(subscriber);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let run = ReviewWorker::new(pool.clone(), Some(authorities), None).run(shutdown_rx);
+    let worker = ReviewWorker::new(pool.clone(), Some(authorities), None);
+    let last_success = worker.last_success();
+    let run = worker.run(shutdown_rx);
     tokio::pin!(run);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -6087,6 +6113,10 @@ async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_ev
         }
     }
     drop(capture);
+    assert!(
+        last_success.age().is_none(),
+        "a failed iteration is not a success"
+    );
 
     // The operational events this worker emits. The result feed's own
     // backoff lines name their authority under the review store's target.

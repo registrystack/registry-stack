@@ -31,7 +31,7 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{
     WebhookDeliveryError, WebhookDeliveryFailureReason, WebhookDeliveryService,
-    WebhookDeliveryStatusKind, WebhookRetainedBindingError, WebhookWorkOutcome,
+    WebhookDeliveryStatusKind, WebhookRetainedBindingError, WebhookWorkOutcome, WebhookWorker,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
@@ -1587,6 +1587,65 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     drop(service);
     drop(pool);
     receiver.stop().await;
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs webhook delivery state");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7d; 32].into())
+        .expect("test owns a keyed audit profile");
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        destinations,
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity,
+        "webhook-delivery-instance",
+        RegistryLockKey::derive("webhook-delivery-registry")
+            .expect("test lock identity is bounded"),
+        Duration::from_secs(2),
+        database.audit(audit_profile),
+    );
+    let last_success = service.last_success();
+    assert!(last_success.age().is_none(), "no iteration has run yet");
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(WebhookWorker::new(service).run(shutdown_rx));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while last_success.age().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "an idle delivery iteration was never recorded as a success"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    worker.await.expect("worker joins");
+
+    drop(pool);
     database.cleanup().await;
 }
 

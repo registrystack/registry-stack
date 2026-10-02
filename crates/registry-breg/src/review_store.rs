@@ -1224,6 +1224,7 @@ pub struct ReviewWorker {
     pool: crate::postgres::RuntimePool,
     authorities: Option<Arc<ReviewAuthorityRegistry>>,
     executors: Option<Arc<ReviewExecutorRegistry>>,
+    last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl ReviewWorker {
@@ -1236,7 +1237,14 @@ impl ReviewWorker {
             pool,
             authorities,
             executors,
+            last_success: Arc::default(),
         }
+    }
+
+    /// The handle this worker notes each iteration without failure on.
+    #[must_use]
+    pub fn last_success(&self) -> Arc<crate::metrics::LastSuccess> {
+        Arc::clone(&self.last_success)
     }
 
     pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
@@ -1298,6 +1306,8 @@ impl ReviewWorker {
             };
             if failed {
                 crate::startup::OperationalEvent::ReviewWorkerIterationFailed.emit();
+            } else {
+                self.last_success.record();
             }
             if worked {
                 continue;

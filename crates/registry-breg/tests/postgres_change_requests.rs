@@ -2520,6 +2520,59 @@ async fn real_s3_http_attachments_preserve_proposals_and_complete_operator_erasu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_verification_worker_records_its_last_success_when_idle() {
+    use registry_breg::attachment_storage::AttachmentStorage;
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use std::os::unix::fs::PermissionsExt;
+
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    std::fs::write(root.join("verifier"), "synthetic-verifier-token").unwrap();
+    std::fs::set_permissions(
+        root.join("verifier"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    // No job is queued, so the worker never contacts this endpoint.
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentVerification"] = json!({"kind":"http","endpoint":"http://127.0.0.1:9/verify","authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap();
+    let database = TestDatabase::create(4).await;
+    let registry =
+        Arc::new(compile_project(&attachment_project(), &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let worker = AttachmentVerificationWorker::new(
+        database.runtime_config.build_pool().unwrap(),
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        Duration::from_secs(2),
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x9b; 32].into()).unwrap()),
+        AttachmentStorage::Database,
+        verification,
+    );
+    let last_success = worker.last_success();
+    assert!(last_success.age().is_none(), "no iteration has run yet");
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(worker.run(shutdown_rx));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while last_success.age().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "an idle verification iteration was never recorded as a success"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    task.await.expect("worker joins");
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survives_worker_failures(
 ) {
     use registry_breg::attachment_storage::AttachmentStorage;

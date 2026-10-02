@@ -810,6 +810,34 @@ async fn one_retention_tick_erases_every_expired_batch_and_reports_a_bounded_bac
     db.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retention_tick_without_failure_records_its_last_success() {
+    let (db, app, idp) = setup().await;
+    let pool = db.runtime_config.build_pool().unwrap();
+    let last_success = Arc::new(registry_breg::metrics::LastSuccess::default());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let retention = tokio::spawn(registry_breg::run_subject_access_log_retention_for_test(
+        pool.clone(),
+        Arc::clone(&last_success),
+        shutdown_rx,
+    ));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while last_success.age().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a retention tick without failure was never recorded as a success"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).unwrap();
+    retention.await.unwrap();
+
+    drop(pool);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
 fn compiled_with_history() -> CompiledRegistry {
     let source = json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",

@@ -28,7 +28,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -63,6 +63,64 @@ pub struct Metrics {
     /// render. `None` for registries that are never served on the metrics
     /// listener (for example, a focused unit test).
     pool: Option<RuntimePool>,
+    /// The background workers this process runs, each with the handle its
+    /// loop notes a completed iteration on.
+    workers: Vec<(ProgressWorker, Arc<LastSuccess>)>,
+}
+
+/// A background worker reported by `breg_worker_last_success_age_seconds`.
+///
+/// The worker label is one of these fixed values, so the series count is
+/// bounded by the workers a process can run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum ProgressWorker {
+    Webhook,
+    AttachmentVerification,
+    Review,
+    SubjectAccessLogRetention,
+}
+
+impl ProgressWorker {
+    pub const ALL: [Self; 4] = [
+        Self::Webhook,
+        Self::AttachmentVerification,
+        Self::Review,
+        Self::SubjectAccessLogRetention,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::AttachmentVerification => "attachment_verification",
+            Self::Review => "review",
+            Self::SubjectAccessLogRetention => "subject_access_log_retention",
+        }
+    }
+}
+
+/// When one background worker last completed an iteration without failure,
+/// idle or not, on this process's monotonic clock.
+#[derive(Debug, Default)]
+pub struct LastSuccess(Mutex<Option<Instant>>);
+
+impl LastSuccess {
+    /// Note one iteration that completed without failure.
+    pub fn record(&self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
+    }
+
+    /// Time since the last noted success, or `None` before the first.
+    #[must_use]
+    pub fn age(&self) -> Option<Duration> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map(|succeeded| succeeded.elapsed())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -155,6 +213,18 @@ impl Metrics {
     #[must_use]
     pub fn without_pool_for_test() -> Self {
         Self::default()
+    }
+
+    /// Report `worker`'s progress from the handle its loop notes successes
+    /// on.
+    #[must_use]
+    pub fn with_worker_progress(
+        mut self,
+        worker: ProgressWorker,
+        last_success: Arc<LastSuccess>,
+    ) -> Self {
+        self.workers.push((worker, last_success));
+        self
     }
 
     /// Record one served request. `route` must come from
@@ -282,6 +352,19 @@ impl Metrics {
                 "breg_pool_connections{{state=\"{state}\"}} {}\n",
                 count.unwrap_or(0)
             ));
+        }
+        body.push_str(
+            "# HELP breg_worker_last_success_age_seconds Seconds since each background worker last completed an iteration without failure; absent until the first.\n",
+        );
+        body.push_str("# TYPE breg_worker_last_success_age_seconds gauge\n");
+        for (worker, last_success) in &self.workers {
+            if let Some(age) = last_success.age() {
+                body.push_str(&format!(
+                    "breg_worker_last_success_age_seconds{{worker=\"{}\"}} {}\n",
+                    worker.label(),
+                    age.as_secs_f64()
+                ));
+            }
         }
         body
     }
@@ -461,6 +544,56 @@ mod tests {
             !rendered.contains("breg_pool_connections{route="),
             "pool gauges carry no route label"
         );
+    }
+
+    #[test]
+    fn worker_last_success_age_is_absent_until_the_worker_first_succeeds() {
+        let review = Arc::new(LastSuccess::default());
+        let webhook = Arc::new(LastSuccess::default());
+        let metrics = Metrics::default()
+            .with_worker_progress(ProgressWorker::Review, Arc::clone(&review))
+            .with_worker_progress(ProgressWorker::Webhook, Arc::clone(&webhook));
+        let rendered = metrics.render();
+        assert!(rendered.contains("# TYPE breg_worker_last_success_age_seconds gauge\n"));
+        assert!(
+            !rendered.contains("breg_worker_last_success_age_seconds{"),
+            "a worker that never succeeded has no age:\n{rendered}"
+        );
+
+        review.record();
+        let rendered = metrics.render();
+        let ages = rendered
+            .lines()
+            .filter_map(|line| line.strip_prefix("breg_worker_last_success_age_seconds{"))
+            .collect::<Vec<_>>();
+        assert_eq!(ages.len(), 1, "only the worker that succeeded:\n{rendered}");
+        let age = ages[0]
+            .strip_prefix("worker=\"review\"} ")
+            .expect("the review worker carries its closed label")
+            .parse::<f64>()
+            .expect("the age is a number of seconds");
+        assert!(
+            (0.0..60.0).contains(&age),
+            "a fresh success is young: {age}"
+        );
+    }
+
+    #[test]
+    fn every_progress_worker_carries_a_distinct_snake_case_label() {
+        let labels: Vec<&str> = ProgressWorker::ALL
+            .into_iter()
+            .map(ProgressWorker::label)
+            .collect();
+        let unique: BTreeSet<&str> = labels.iter().copied().collect();
+        assert_eq!(unique.len(), labels.len(), "labels are distinct");
+        for label in labels {
+            assert!(
+                label
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character == '_'),
+                "{label} is a fixed snake_case token"
+            );
+        }
     }
 
     #[tokio::test]
