@@ -837,6 +837,78 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
 }
 
 #[test]
+fn import_grants_report_each_required_field_the_profile_cannot_write() {
+    let mut value = source();
+    value["entities"][0]["fields"][0]["required"] = json!(true);
+    value["entities"][0]["fields"][1]["required"] = json!(true);
+    value["entities"][0]["batch"] = json!({
+        "maximumItems": 100,
+        "maximumBytes": 1_048_576
+    });
+    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    grant["operations"] = json!(["import"]);
+    grant["writableFields"] = json!([]);
+
+    let compiled = compile(&value).expect("an import-only grant remains authoring-compatible");
+    let findings = compiled
+        .findings()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "access.profile.create_required_field_not_writable")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        findings
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entities[id=entry].accessProfiles[id=reader].writableFields[field=code]",
+            "entities[id=entry].accessProfiles[id=reader].writableFields[field=district]",
+        ]
+    );
+    assert!(findings
+        .iter()
+        .all(|diagnostic| diagnostic.message.contains("`import`")));
+
+    let mut production = value.clone();
+    production["package"] = json!({"sourceRevision":"test-revision"});
+    let production = compile_with_profile(&production, CompileProfile::Production)
+        .expect("production compilation reports import-only findings");
+    assert_eq!(
+        production
+            .findings()
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "access.profile.create_required_field_not_writable"
+            })
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>(),
+        findings
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code", "district"]);
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "access.profile.create_required_field_not_writable"
+        }));
+
+    value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list"]);
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!([]);
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "access.profile.create_required_field_not_writable"
+        }));
+}
+
+#[test]
 fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
     let mut value = source();
     value["entities"][0]

@@ -4013,9 +4013,15 @@ fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> 
     let mut findings = Vec::new();
     for entity in entities.values() {
         for access in &entity.access_profiles {
-            if !access.operations.contains(&Operation::Create) {
-                continue;
-            }
+            let create_operation = match (
+                access.operations.contains(&Operation::Create),
+                access.operations.contains(&Operation::Import),
+            ) {
+                (true, true) => "`create` and `import`",
+                (true, false) => "`create`",
+                (false, true) => "`import`",
+                (false, false) => continue,
+            };
             // Engine-managed record identity, revision, and lifecycle columns
             // are not authored EntitySource fields and are therefore excluded.
             for field in entity.fields.iter().filter(|field| {
@@ -4027,7 +4033,9 @@ fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> 
                         "entities[id={}].accessProfiles[id={}].writableFields[field={}]",
                         entity.id, access.id, field.id
                     ),
-                    "this required stored field is not writable through the create grant; add it to writableFields or remove create from this permission",
+                    &format!(
+                        "this required stored field cannot be supplied through {create_operation}; add it to writableFields or remove the operation from this permission"
+                    ),
                 ));
             }
         }
