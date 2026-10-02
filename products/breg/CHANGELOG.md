@@ -71,14 +71,21 @@
   active identity without the lock, so its assessment reports `in_progress`
   where it refused with `migration.reconcile.active_registry.unavailable`, and
   `--execute` refuses with `migration.reconcile.outcome.in_progress`. `apply`
-  keeps `apply.database.unavailable` with a sentence that names the held lock
-  instead of `database.migrationUrlRef`. `history erase`,
+  and `plan` name the held lock instead of `database.migrationUrlRef`, under
+  the code the next entry gives. `history erase`,
   `history rebaseline`, `field-encryption preflight`, and
   `field-encryption erase-history` report a lock held while they read the
   active identity as `<prefix>.active_registry.in_progress`, for example
   `history.erase.active_registry.in_progress`. An assessment opens no audit
   writer, so it answers when the audit destination cannot be written;
   `--execute` still refuses with `migration.reconcile.audit.unavailable`.
+- BREAKING: `apply` and `plan` report a migration lock another session held
+  past the lock timeout as `apply.database.in_progress`, with the suggested
+  action `retry_after_migration_lock_releases`, where they reported
+  `apply.database.unavailable`. Automation that matches
+  `apply.database.unavailable` to detect contention must match
+  `apply.database.in_progress`. A database that cannot be reached keeps
+  `apply.database.unavailable`.
 
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and

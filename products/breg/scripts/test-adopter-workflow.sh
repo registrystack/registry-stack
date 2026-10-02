@@ -910,7 +910,7 @@ if run_json "$temporary_root/apply-v2-in-progress.json" apply \
   printf '%s\n' 'successor apply unexpectedly ran under a held migration lock.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/apply-v2-in-progress.json" apply.database.unavailable
+assert_json_failure "$temporary_root/apply-v2-in-progress.json" apply.database.in_progress
 python3 - "$temporary_root/apply-v2-in-progress.json" <<'PY'
 import json
 import sys
@@ -920,6 +920,9 @@ if not any("another session held the exclusive migration lock" in message for me
     raise SystemExit("apply under a held migration lock did not report it as in progress")
 if any("migrationUrlRef" in message for message in messages):
     raise SystemExit("apply under a held migration lock reported an unreachable database")
+actions = [item.get("suggestedAction") for item in document.get("diagnostics", [])]
+if "retry_after_migration_lock_releases" not in actions:
+    raise SystemExit(f"apply under a held migration lock suggested {actions}")
 PY
 if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($advisory_backend_pid)")" != "t" ]]; then
   printf '%s\n' 'the competing migration lock could not be released exactly.' >&2

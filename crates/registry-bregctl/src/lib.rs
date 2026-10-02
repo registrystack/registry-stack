@@ -1533,6 +1533,7 @@ enum SuggestedAction {
     RecreateDisposableDatabase,
     ChooseSchemaTestOutput,
     VerifyMigrationAuthority,
+    RetryAfterMigrationLockReleases,
     ReconcileFailedMigration,
     RestorePreActivationBackup,
     ResolveActiveRequestProposals,
@@ -5352,11 +5353,11 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::migration::MigrationError::MigrationLockHeld => (
-                "apply.database.unavailable",
+                "apply.database.in_progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout before maintenance began, so an apply, an adoption, or a migration reconcile is in progress. Nothing was changed. Retry the same apply once it releases",
                 DiagnosticArtifact::DatabaseMigration,
-                SuggestedAction::VerifyMigrationAuthority,
+                SuggestedAction::RetryAfterMigrationLockReleases,
             ),
             registry_breg::migration::MigrationError::StatementFailed(failure) => {
                 return source_failure(
@@ -16074,37 +16075,46 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
     );
 }
 
-/// A held migration lock keeps the documented `apply.database.unavailable`
-/// code, but its sentence names the session holding the lock and never sends
-/// the operator to check that the database is reachable.
+/// A held migration lock has its own `apply.database.in_progress` code for
+/// `apply` and `plan` alike: its sentence names the session holding the
+/// lock, and neither it nor its suggested action sends the operator to check
+/// that the database is reachable.
 #[cfg(test)]
 #[test]
 fn apply_reports_a_held_migration_lock_as_an_activation_in_progress() {
-    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
-        registry_breg::migration::MigrationError::MigrationLockHeld,
-    ));
-    let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "apply.database.unavailable");
-    assert_eq!(diagnostic.path, "database");
-    assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
-    for fragment in [
-        "another session held the exclusive migration lock",
-        "before maintenance began",
-        "Nothing was changed",
-        "Retry the same apply once it releases",
-    ] {
-        assert!(
-            diagnostic.message.contains(fragment),
-            "{fragment}: {}",
-            diagnostic.message
+    for command in ["apply", "plan"] {
+        let report = lifecycle_failure(
+            command,
+            ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::MigrationLockHeld),
         );
-    }
-    for fragment in ["reachable", "migrationUrlRef", "reconciliation"] {
-        assert!(
-            !diagnostic.message.contains(fragment),
-            "{fragment}: {}",
-            diagnostic.message
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, "apply.database.in_progress");
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases
         );
+        for fragment in [
+            "another session held the exclusive migration lock",
+            "before maintenance began",
+            "Nothing was changed",
+            "Retry the same apply once it releases",
+        ] {
+            assert!(
+                diagnostic.message.contains(fragment),
+                "{fragment}: {}",
+                diagnostic.message
+            );
+        }
+        for fragment in ["reachable", "migrationUrlRef", "reconciliation"] {
+            assert!(
+                !diagnostic.message.contains(fragment),
+                "{fragment}: {}",
+                diagnostic.message
+            );
+        }
     }
 }
 
