@@ -1369,7 +1369,7 @@ before it.
 The change holds the `test` rehearsal of a reviewed migration to the lock and
 statement timeouts its descriptor declares (`rehearse_assertions` and
 `rehearse_reviewed_steps` in `crates/registry-breg/src/postgres/rehearsal.rs`),
-removes the rehearsal receipt's `proofs` member
+retires the rehearsal receipt's `proofs` member
 (`MigrationRehearsalReceipt` in `crates/registry-breg/src/migration_plan.rs`),
 and names both schema fingerprints in `migration.review.fingerprint_mismatch`,
 measured with `bregctl test --fingerprint-only`
@@ -1393,9 +1393,11 @@ equalled what the descriptor already fixed.
   sets the descriptor's `lockTimeoutMs` and `statementTimeoutMs`, or a
   backfill step's own, through the same bounded setter activation uses, and
   restores the compiler's bound for the generated statements.
-- A receipt that carries `proofs` is refused at capture with
-  `migration.review.receipt_proofs_retired`, and a package built with one
-  no longer loads; there is no accept-and-ignore path.
+- A newly captured receipt that carries `proofs` is refused by `bregctl`
+  with `migration.review.receipt_proofs_retired`. A package the previous
+  release built with one keeps loading, with the member ignored, so an
+  active package survives the upgrade; nothing reads its values, and that
+  acceptance is removed in the next release.
 - The mismatch refusal and the `--fingerprint-only` report carry schema
   fingerprints only, which are catalog digests and already appear in `test`
   reports and package manifests. `--fingerprint-only` takes no credentials,
@@ -1408,6 +1410,8 @@ equalled what the descriptor already fixed.
 (SQLSTATE `57014` in the rehearsal, then the same package refused by `apply`).
 `crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
 `reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
+`crates/registry-breg/tests/migration_plan.rs`:
+`reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads`.
 `crates/registry-bregctl/src/lib.rs`:
 `review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint`.
 `crates/registry-bregctl/tests/wasm_test_lifecycle.rs`:

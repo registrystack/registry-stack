@@ -46,8 +46,10 @@
   values the descriptor already fixed, so they proved no lock-timeout or
   resume behavior. `test` and `package` refuse a receipt that still carries
   the member with `migration.review.receipt_proofs_retired`; remove it and
-  regenerate the receipt. A package built with such a receipt no longer
-  loads; rebuild it with `bregctl package`.
+  regenerate the receipt. A package the previous release built with such a
+  receipt keeps loading, so an active package survives the upgrade, and its
+  `proofs` values are ignored. That acceptance is removed in the next
+  release; rebuild such a package with `bregctl package` before then.
 - `test` rehearses a reviewed migration's assertions and transactional steps
   under the lock and statement timeouts its descriptor declares, and a
   backfill step under its own, as activation does. The rehearsal used a

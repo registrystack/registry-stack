@@ -92,6 +92,7 @@ impl ReviewFixture {
             postgres_major: 16,
             row_assertions: vec![],
             final_schema_fingerprint: FINGERPRINT.into(),
+            proofs: None,
         };
         let receipt_bytes = canonicalize_json(&serde_json::to_value(receipt).unwrap()).unwrap();
         let review = project.path().join("review");

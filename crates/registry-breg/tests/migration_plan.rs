@@ -148,6 +148,56 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
 }
 
 #[test]
+fn reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let mut source = artifacts.source();
+    let mut receipt = serde_json::to_value(&artifacts.receipt).expect("receipt serializes");
+    receipt["proofs"] = serde_json::json!({
+        "lockTimeout": true,
+        "chunkResume": true,
+        "destructiveResume": false,
+    });
+    let receipt_file = source
+        .files
+        .iter_mut()
+        .find(|file| file.path == artifacts.descriptor.rehearsal_receipt_path)
+        .expect("source carries the rehearsal receipt");
+    receipt_file.bytes = canonical(&receipt);
+    let prepared = prepare_reviewed_package(Variant::RequiredField, previous, vec![source])
+        .expect("a package the previous release built with receipt proofs prepares");
+
+    let root = tempfile::Builder::new()
+        .prefix("registry-migration-plan-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("temporary package parent");
+    let package = root.path().join("package");
+    prepared
+        .publish_to_directory(&package)
+        .expect("reviewed package publishes");
+    let inspected =
+        inspect_package_integrity(&package).expect("reviewed package with receipt proofs loads");
+    assert_eq!(
+        inspected.package_digest(),
+        prepared
+            .package_digest()
+            .expect("prepared package plans its digest")
+    );
+    let published_receipt = fs::read(package.join(&artifacts.descriptor.rehearsal_receipt_path))
+        .expect("published receipt reads");
+    assert_eq!(
+        published_receipt,
+        canonical(&receipt),
+        "the receipt keeps its proofs bytes, so the package digest is unchanged"
+    );
+}
+
+#[test]
 fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_evidence() {
     let previous = compile_variant(Variant::Base);
     let candidate = compile_variant(Variant::RequiredField);
@@ -1154,6 +1204,7 @@ fn receipt(row_assertions: Vec<RehearsalRowAssertion>) -> MigrationRehearsalRece
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
+        proofs: None,
     }
 }
 
