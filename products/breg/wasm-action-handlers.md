@@ -144,7 +144,7 @@ complementing admission-time enforcement.
 
 ## Operational notes
 
-- The wasmtime pin is an LTS line (`=48.0.3`, EOL 2028-08-20). Advisory
+- The wasmtime pin is an LTS line (`=48.0.5`, EOL 2028-08-20). Advisory
   detection runs in CI (cargo-deny's RustSec check), dependabot is constrained
   to LTS patch proposals against the pin, and each release cut checks the
   remaining support window, promoting the next-LTS migration to a release
