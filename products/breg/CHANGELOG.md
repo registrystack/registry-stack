@@ -29,6 +29,14 @@
   Manifest codelist likewise carries the union of the codes its projected
   fields admit, in first-seen order, instead of the last field's codes. A
   label for a code that no visible field admits is still refused.
+- BREAKING: when projected fields of one vocabulary admit different codes,
+  the generated `generated/manifest/registry-manifest.json` changes, so the
+  project compiles to a new `registryRevision` and a package an earlier
+  release built for it no longer loads. Rebuild the package unchanged with
+  this `bregctl package --baseline-package <deployed package>` and apply it. A Registry Casework BReg source pins the
+  old `registryRevision` and Casework startup refuses it: repin with
+  `caseworkctl source add BREG_PROJECT --project PROJECT --source-id ID
+  --apply`, then package, plan, and apply the Casework project once.
 
 ## v0.38.0 - 2026-10-01
 
