@@ -893,8 +893,8 @@ fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
             .map(|diagnostic| diagnostic.path.as_str())
             .collect::<Vec<_>>(),
         [
-            "entities[id=entry].constraints[id=empty].fields",
             "entities[id=entry].constraints[id=empty-temporal].scopeFields",
+            "entities[id=entry].constraints[id=empty].fields",
             "entities[id=entry].constraints[id=range].field[field=missing-range]",
             "entities[id=entry].constraints[id=unknowns].fields[field=missing-first]",
             "entities[id=entry].constraints[id=unknowns].fields[field=missing-second]",
