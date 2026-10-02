@@ -13,7 +13,7 @@ use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
-    PostgresStore, ReconciliationFailure, ServiceError, StoreError,
+    PostgresStore, ReconciliationFailure, ServiceError, StoreError, MINIMUM_SOURCE_STATUS_WINDOW,
     RECONCILIATION_FAILURE_THRESHOLD,
 };
 use registry_casework_core::{
@@ -993,7 +993,7 @@ async fn completed_discovery_waits_for_the_pending_tail_before_restarting() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .expect("source status"),
         Some((true, false))
@@ -1037,7 +1037,7 @@ async fn expired_remote_lease_fences_the_stale_page() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -1068,7 +1068,7 @@ async fn expired_remote_lease_fences_the_stale_failure() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .expect("source status after stale failure"),
         Some((true, false))
@@ -1128,7 +1128,7 @@ async fn generation_change_fences_the_stale_discovery_page() {
     assert_eq!(
         replacement
             .store()
-            .source_status(SOURCE_ID, "generation-2")
+            .source_status(SOURCE_ID, "generation-2", MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -1155,7 +1155,7 @@ async fn incomplete_reconciliation_preserves_outage_until_complete() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((false, true))
@@ -1173,7 +1173,7 @@ async fn incomplete_reconciliation_preserves_outage_until_complete() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -2924,7 +2924,7 @@ async fn reconciled_empty_inboxes_preserve_source_completeness() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -2956,7 +2956,7 @@ async fn reconciled_empty_inboxes_preserve_source_completeness() {
                 fixture
                     .service
                     .store()
-                    .source_status(SOURCE_ID, GENERATION)
+                    .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
                     .await
                     .unwrap(),
                 Some((true, false))
@@ -3025,7 +3025,7 @@ async fn reconciled_empty_inboxes_preserve_source_completeness() {
         fixture
             .service
             .store()
-            .source_status(SOURCE_ID, GENERATION)
+            .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
             .await
             .unwrap(),
         Some((true, false))
@@ -3093,7 +3093,7 @@ async fn no_served_queue_completes_without_source_discovery() {
             fixture
                 .service
                 .store()
-                .source_status(SOURCE_ID, GENERATION)
+                .source_status(SOURCE_ID, GENERATION, MINIMUM_SOURCE_STATUS_WINDOW)
                 .await
                 .unwrap(),
             None

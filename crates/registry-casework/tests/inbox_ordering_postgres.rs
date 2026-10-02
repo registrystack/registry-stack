@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Timelike, Utc};
@@ -1142,4 +1143,94 @@ async fn a_discovery_wait_ends_the_walk_and_a_restart_repeats_earlier_results() 
     assert_eq!(holdings.status, PageStatus::Complete);
     assert!(holdings.next_cursor.is_none());
     assert_eq!(holdings.items[0].active_items, 1);
+}
+
+async fn source_status_row(database: &tokio_postgres::Client) -> (bool, bool, DateTime<Utc>) {
+    let row = database
+        .query_one(
+            "SELECT remote_complete,unavailable,checked_at FROM casework_source_status WHERE source_id=$1",
+            &[&SOURCE_ID],
+        )
+        .await
+        .expect("source status row");
+    (row.get(0), row.get(1), row.get(2))
+}
+
+#[tokio::test]
+async fn a_reconciled_source_stays_fresh_for_twice_its_reconciliation_interval() {
+    let (store, database, service) = fixture().await;
+    let service =
+        service.with_reconciliation_intervals([(SOURCE_ID.to_owned(), Duration::from_secs(300))]);
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: Vec::new(),
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap",
+        )
+        .await
+        .expect("bootstrap directory");
+    store
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .expect("source is reconciled");
+
+    // Three minutes is past the two-minute floor but inside twice the
+    // five-minute reconciliation interval, so the status is still fresh and
+    // the empty view's probe leaves it alone.
+    database
+        .execute(
+            "UPDATE casework_source_status SET checked_at=now()-interval '3 minutes'",
+            &[],
+        )
+        .await
+        .expect("age source status");
+    let before = source_status_row(&database).await;
+    let page = service
+        .inbox(&staff, "reader", "token", 1, None, None)
+        .await
+        .expect("empty page over a fresh source");
+    assert_eq!(page.status, PageStatus::Complete);
+    assert!(page.next_cursor.is_none());
+    assert!(page.items.is_empty());
+    assert_eq!(source_status_row(&database).await, before);
+    assert!(!store
+        .source_has_pending(SOURCE_ID, GENERATION)
+        .await
+        .expect("pending subjects"));
+
+    // Eleven minutes is past twice the interval: the status is stale, so the
+    // probe requeues the active subject and clears completeness.
+    database
+        .execute(
+            "UPDATE casework_source_status SET checked_at=now()-interval '11 minutes'",
+            &[],
+        )
+        .await
+        .expect("age source status past its window");
+    let page = service
+        .inbox(&staff, "reader", "token", 1, None, None)
+        .await
+        .expect("empty page over a stale source");
+    assert_eq!(page.status, PageStatus::BudgetExhausted);
+    assert!(page.next_cursor.is_none());
+    assert!(page.items.is_empty());
+    let (remote_complete, unavailable, _) = source_status_row(&database).await;
+    assert!(!remote_complete);
+    assert!(!unavailable);
+    assert!(store
+        .source_has_pending(SOURCE_ID, GENERATION)
+        .await
+        .expect("pending subjects"));
 }
