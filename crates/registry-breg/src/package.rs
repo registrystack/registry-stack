@@ -2418,10 +2418,12 @@ fn reviewed_successor_migration_plan(
         &change_set.from_package_digest,
         additive_changes,
     );
+    // The reviewed executor drops every managed read view before reviewed
+    // steps when the plan carries any non-spatial view statement, including a
+    // retained derived-view replacement. Plan the complete candidate view set
+    // in that case so the views that replacement depends on are rebuilt too.
     let refresh_views = additive.statements.iter().any(|statement| {
-        statement.kind == DdlStatementKind::View
-            && !is_spatial_candidate_view_statement(statement)
-            && !is_derived_view_statement(statement)
+        statement.kind == DdlStatementKind::View && !is_spatial_candidate_view_statement(statement)
     }) || change_set.changes.iter().any(|change| {
         matches!(
             change.code,
@@ -2576,13 +2578,6 @@ fn is_spatial_candidate_view_statement(statement: &DdlStatement) -> bool {
     statement.kind == DdlStatementKind::View
         && (statement.id.ends_with(".spatial-candidates-view")
             || statement.id.ends_with(".spatial-candidates-view.drop"))
-}
-
-fn is_derived_view_statement(statement: &DdlStatement) -> bool {
-    statement.kind == DdlStatementKind::View
-        && statement.id.starts_with("entity.")
-        && statement.id.contains(".derived.")
-        && statement.id.ends_with(".view")
 }
 
 fn table_statement_entity_id(statement_id: &str) -> Option<&str> {
