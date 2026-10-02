@@ -1063,3 +1063,6 @@ replay assertions with normal activation initialization.
 This corrects future action commits. It does not fabricate historical commit
 positions for revisions that an earlier runtime left unindexed. The existing rebaseline command continues to refuse a retained journal head
 that has no commit member; this change supplies no repair for those rows.
+
+Affected pre-1.0 development databases containing unindexed action revisions
+must be rebuilt before relying on snapshots or coverage rebaselining.
