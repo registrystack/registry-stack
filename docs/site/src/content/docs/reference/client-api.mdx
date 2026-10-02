@@ -1242,12 +1242,19 @@ value is the camel case wire DTO the service returned.
 
 A paged read returns `items`, a `status` of `complete`, `budget_exhausted`, or `source_unavailable`,
 and `nextCursor` when another page exists. An empty page and an exhausted budget are both successful
-answers; pass the cursor back through the same method to continue.
+answers; pass the cursor back through the same method to continue. Source discovery alone does not
+issue a cursor. If a source-backed page reports `budget_exhausted` without a cursor, retry the read
+without a cursor after reconciliation. The retried walk starts from the first position and can
+return items earlier pages already returned: deduplicate work items by `itemId`, and replace
+holdings totals instead of adding to them.
 
 {/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete,
     crates/registry-casework-client-node/client.d.ts, CaseworkOutcome and PageStatus,
     crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    crates/registry-casework-client-py/README.md */}
+    crates/registry-casework-client-py/README.md,
+    products/casework/README.md, budget_exhausted without a cursor,
+    crates/registry-casework/tests/inbox_ordering_postgres.rs,
+    a_discovery_wait_ends_the_walk_and_a_restart_repeats_earlier_results */}
 
 ### Casework error contract
 
