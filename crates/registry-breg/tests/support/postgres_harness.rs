@@ -36,6 +36,23 @@ pub struct TestDatabase {
 
 impl TestDatabase {
     pub async fn create(pool_size: usize) -> Self {
+        Self::create_in(pool_size, "").await
+    }
+
+    /// A disposable database whose collation and character classification
+    /// are `locale`, whatever the server default is, for proving that
+    /// generated SQL does not depend on the database's text ordering.
+    #[allow(dead_code)] // Only collation-sensitive integration targets use this.
+    pub async fn create_with_locale(pool_size: usize, locale: &str) -> Self {
+        let literal = locale.replace('\'', "''");
+        Self::create_in(
+            pool_size,
+            &format!(" TEMPLATE template0 LC_COLLATE '{literal}' LC_CTYPE '{literal}'"),
+        )
+        .await
+    }
+
+    async fn create_in(pool_size: usize, database_options: &str) -> Self {
         let url = env::var("BREG_TEST_DATABASE_URL")
             .expect("BREG_TEST_DATABASE_URL is required for the real PostgreSQL kernel test");
         let admin_root =
@@ -64,9 +81,12 @@ impl TestDatabase {
         ))
         .await
         .expect("test administrator can create isolated roles");
-        root.batch_execute(&format!("CREATE DATABASE \"{}\";", database.as_str()))
-            .await
-            .expect("test administrator can create an isolated database");
+        root.batch_execute(&format!(
+            "CREATE DATABASE \"{}\"{database_options};",
+            database.as_str()
+        ))
+        .await
+        .expect("test administrator can create an isolated database");
         root_task.abort();
 
         let mut database_admin_config = admin_root.clone();

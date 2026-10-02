@@ -38,8 +38,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
-        ddl_sha256: "d9c6bd0c2023586b73a1e97f352d72134668b1f6d4170dddfb46ae730657056a",
-        revision: "sha256:c5c33b3bcd6705722e9c782210402703cafbe311d5e36f31d1f5afbe1148814b",
+        ddl_sha256: "aecd19165df9a20532616537f3e407bcd279b06d99d57c26aad1b4cd35f4d884",
+        revision: "sha256:635803e7e17ee99566a4284389781ce7043e3cbe3da92ed9381c152ebbd032ce",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -49,8 +49,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
-        ddl_sha256: "49eef3936bdfde9c9737cc8b81e2858d619431de9616c04e2256c57f73acfd6d",
-        revision: "sha256:31807d870127e0260ece046abd42fd3f8ffd465f7004371a431894f485b3d7ef",
+        ddl_sha256: "9bfd5199cc4b3e088eb1ca038a4cf107257412e7baea03c1bd2c077ed62c1587",
+        revision: "sha256:3f4b935d4b612399410d1ac338c5bc9766f6aeafdc77f052a13c45a7395afc24",
     },
     Fixture {
         name: "household-contact-actions",
@@ -60,8 +60,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
-        ddl_sha256: "b1dd61180f3101b4d0e768fc99906b5614f89000bc31145d1fb4855f0105f558",
-        revision: "sha256:5c2b472b44f9ea26f8618cec960a8e808fa92d3c8920877da3e01c8b2d51bc03",
+        ddl_sha256: "c34618ef0c2050aa34f76de318fae87433beec9b71d89c0d371b0c0e301e8b28",
+        revision: "sha256:1e9c34da39b1a06b65d1684d6ebf219e550e5457dabad55e7cdf87180e0abd2c",
     },
 ];
 

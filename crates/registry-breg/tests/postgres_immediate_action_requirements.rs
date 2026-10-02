@@ -55,7 +55,17 @@ async fn setup_with_project(
     Arc<registry_breg::CompiledRegistry>,
     ExpectedRegistryIdentity,
 ) {
-    let database = TestDatabase::create(8).await;
+    setup_in(TestDatabase::create(8).await, source).await
+}
+
+async fn setup_in(
+    database: TestDatabase,
+    source: Value,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -219,6 +229,74 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
     .await;
     assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
     assert_eq!(after, counts(&database, &registry).await);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn action_effect_fields_are_authorized_under_a_locale_collation() {
+    // A locale collation such as glibc en_US ignores the hyphen at the first
+    // comparison level and orders "awarded-by" before "award-number"; byte
+    // order puts it after. The row-level policy must accept the written-field
+    // set whatever the database collation is.
+    let mut source = support::project();
+    for (field, api_name) in [("award-number", "awardNumber"), ("awarded-by", "awardedBy")] {
+        source["entities"][1]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": field, "type": "string", "maxLength": 32, "required": true,
+                "classification": "restricted"
+            }));
+        source["actions"][0]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": field, "apiName": api_name, "type": "string", "maxLength": 32,
+                "required": true, "classification": "restricted"
+            }));
+        source["actions"][0]["effects"][0]["set"][field] = json!({"fromField": field});
+    }
+    let database = TestDatabase::create_with_locale(8, "en_US.utf8").await;
+    let locale_ordered = database
+        .admin
+        .query_one("SELECT 'awarded-by'::text < 'award-number'::text", &[])
+        .await
+        .unwrap()
+        .get::<_, bool>(0);
+    assert!(
+        locale_ordered,
+        "the test database must order text by locale, not by byte"
+    );
+    let (database, registry, identity) = setup_in(database, source).await;
+    let app = app(&database, registry.clone(), identity, None);
+    let accepted = invoke_with_input(
+        app,
+        "locale-collation",
+        json!({
+            "parentId": ID, "label": "synthetic", "awardNumber": "award-1",
+            "awardedBy": "registrar"
+        }),
+    )
+    .await;
+    assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
+    let child = &registry.entities()["child"];
+    let row = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT {}, {} FROM registry_data.{}",
+                q(&child.fields["award-number"].physical_name),
+                q(&child.fields["awarded-by"].physical_name),
+                q(&child.physical_table)
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (row.get::<_, String>(0), row.get::<_, String>(1)),
+        ("award-1".to_owned(), "registrar".to_owned())
+    );
     database.cleanup().await;
 }
 
