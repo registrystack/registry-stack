@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Empty source-backed inbox views over a recently reconciled source return
+  `complete` without requeueing subjects or clearing source completeness. Callers serving
+  no queue receive `complete` regardless of discovery state. Pages waiting only
+  for source discovery no longer issue a cursor that repeats the same position;
+  retry those `budget_exhausted` pages without a cursor after reconciliation
+  (#1838).
+
 - `caseworkctl source add --casework-endpoint URL` sets the Casework endpoint
   of the local BReg review authority it writes, for a Casework session on a
   port other than the default 8092. Without the option the output is

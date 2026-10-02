@@ -446,7 +446,8 @@ async fn queue_filter_keeps_incomplete_source_discovery_relevant_after_reassignm
 
     assert!(page.items.is_empty());
     assert_eq!(page.status, PageStatus::BudgetExhausted);
-    assert!(page.next_cursor.is_some());
+    // Discovery is incomplete, but this view has no local scan to resume.
+    assert!(page.next_cursor.is_none());
 
     let source_status = database
         .query_one(

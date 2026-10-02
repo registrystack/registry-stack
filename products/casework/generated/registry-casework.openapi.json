@@ -19224,7 +19224,7 @@
     },
     "/v1/work-items": {
       "get": {
-        "description": "Reads source-backed work under the separate current source authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. Exact reference lookup returns an item only when the current caller read still discloses the same configured reference. The cursor is bound to the full selector and selected sort; callers follow every page until nextCursor is absent. Unified review tasks are exposed only through /v1/review-tasks.",
+        "description": "Reads source-backed work under the separate current source authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. Exact reference lookup returns an item only when the current caller read still discloses the same configured reference. The cursor is bound to the full selector and selected sort; callers follow every page until nextCursor is absent. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation. Callers serving no queue receive complete without a cursor. Unified review tasks are exposed only through /v1/review-tasks.",
         "operationId": "listWorkItems",
         "parameters": [
           {
@@ -19562,7 +19562,7 @@
     },
     "/v1/work-items/next": {
       "get": {
-        "description": "Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget_exhausted pages remain successful responses; follow nextCursor when present. servedQueues is preserved on every page.",
+        "description": "Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget_exhausted pages remain successful responses; follow nextCursor when present. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation. Callers serving no queue receive complete without a cursor. servedQueues is preserved on every page.",
         "operationId": "getNextWorkItem",
         "parameters": [
           {
