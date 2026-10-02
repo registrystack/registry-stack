@@ -5829,3 +5829,198 @@ async fn sustained_application_backlog_does_not_starve_authority_result_polls() 
     drop(pool);
     database.cleanup().await;
 }
+
+/// A review authority whose result feed drops every connection until it is
+/// told to recover, then answers an empty page. It counts every fetch.
+struct FlakyResultFeed {
+    endpoint: reqwest::Url,
+    fetches: Arc<AtomicUsize>,
+    available: Arc<std::sync::atomic::AtomicBool>,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl FlakyResultFeed {
+    async fn start() -> Self {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let available = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = tokio::spawn({
+            let fetches = Arc::clone(&fetches);
+            let available = Arc::clone(&available);
+            async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.expect("accept");
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    if !available.load(Ordering::SeqCst) {
+                        // Unreachable: the connection closes before any answer.
+                        drop(stream);
+                        continue;
+                    }
+                    let mut head = Vec::new();
+                    let mut buffer = [0_u8; 1024];
+                    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                        let read = stream.read(&mut buffer).await.expect("request head");
+                        if read == 0 {
+                            break;
+                        }
+                        head.extend_from_slice(&buffer[..read]);
+                    }
+                    let body = br#"{"items":[],"nextCursor":null}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                         traceparent: {TRACEPARENT}\r\ncontent-length: {}\r\n\
+                         connection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("response head");
+                    stream.write_all(body).await.expect("response body");
+                    let _ = stream.shutdown().await;
+                }
+            }
+        });
+        Self {
+            endpoint,
+            fetches,
+            available,
+            server,
+        }
+    }
+
+    fn fetches(&self) -> usize {
+        self.fetches.load(Ordering::SeqCst)
+    }
+
+    fn recover(&self) {
+        self.available.store(true, Ordering::SeqCst);
+    }
+}
+
+/// The review worker's log lines from every test in this binary, at debug.
+///
+/// The subscriber is global rather than scoped to one test's thread. While a
+/// single scoped subscriber is registered, `tracing` decides whether a
+/// callsite is enabled from the thread that reaches it first, and other tests
+/// here reach the same feed callsites on threads with no subscriber, which
+/// would disable them for the whole process. Lines are told apart by the
+/// authority they name.
+fn captured_review_logs() -> &'static CapturedLogs {
+    static LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
+    LOGS.get_or_init(|| {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_env_filter("registry_breg::review_store=debug")
+            .with_writer(logs.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("the review log subscriber installs once for this test binary");
+        logs
+    })
+}
+
+/// The captured lines at `level` about `authority`'s result feed.
+fn feed_log_lines(logs: &CapturedLogs, level: &str, authority: &str) -> Vec<String> {
+    logs.text()
+        .lines()
+        .filter(|line| {
+            line.contains(level) && line.contains("review result feed") && line.contains(authority)
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unreachable_result_feed_backs_off_and_warns_only_on_transitions() {
+    const AUTHORITY: &str = "feed-backoff-authority";
+    let logs = captured_review_logs();
+    let database = prepare_review_database().await;
+    let feed = FlakyResultFeed::start().await;
+    // The backoff reads this clock, which the test moves one second per
+    // worker pass: the cadence of a worker that finds no other work.
+    let origin = tokio::time::Instant::now();
+    let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let clock = {
+        let elapsed = Arc::clone(&elapsed);
+        Arc::new(move || origin + Duration::from_secs(elapsed.load(Ordering::SeqCst)))
+    };
+    let authority = Arc::new(
+        ReviewAuthorityClient::new(
+            AUTHORITY.to_owned(),
+            authority_client(feed.endpoint.clone(), "producer-profile"),
+            Arc::new(
+                registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                    .expect("outgoing token"),
+            ),
+            "producer-profile".to_owned(),
+            "producer".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("review authority"),
+    );
+    let authorities =
+        ReviewAuthorityRegistry::new(BTreeMap::from([(AUTHORITY.to_owned(), authority)]))
+            .expect("authority registry")
+            .with_feed_clock_for_test(clock);
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let pass = |second: u64| {
+        elapsed.store(second, Ordering::SeqCst);
+        run_review_authority_once_for_test(&pool, &authorities)
+    };
+
+    // Five minutes of an unreachable authority, with no submission waiting.
+    for second in 0..300 {
+        let _ = pass(second).await;
+    }
+    // Retries double from one second to the sixty second ceiling: fetches at
+    // 0, 1, 3, 7, 15, 31, 63, 123, 183, and 243 seconds.
+    assert_eq!(
+        feed.fetches(),
+        10,
+        "an unreachable feed is fetched on a doubling backoff, not on every pass"
+    );
+    let warnings = feed_log_lines(logs, " WARN ", AUTHORITY);
+    assert_eq!(
+        warnings.len(),
+        1,
+        "only the transition to unavailable warns: {warnings:#?}"
+    );
+    assert!(warnings[0].contains("is unavailable"));
+    assert_eq!(
+        feed_log_lines(logs, "DEBUG", AUTHORITY).len(),
+        9,
+        "every repeated failure is logged at debug"
+    );
+
+    // The authority recovers. The next fetch is due sixty seconds after the
+    // last failure, at 303 seconds; its successful page ends the backoff, so
+    // every later pass fetches again.
+    feed.recover();
+    for second in 300..310 {
+        let _ = pass(second).await;
+    }
+    assert_eq!(
+        feed.fetches(),
+        17,
+        "the first successful page resets the backoff to one fetch per pass"
+    );
+    let warnings = feed_log_lines(logs, " WARN ", AUTHORITY);
+    assert_eq!(
+        warnings.len(),
+        2,
+        "recovery warns once, and later successful pages do not: {warnings:#?}"
+    );
+    assert!(warnings[1].contains("available again"));
+
+    feed.server.abort();
+    drop(pool);
+    database.cleanup().await;
+}
