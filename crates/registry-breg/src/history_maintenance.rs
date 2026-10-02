@@ -18,7 +18,9 @@ use std::time::Duration;
 use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditProfile, AuditRequest};
 
 use crate::audit::RegistryAudit;
-use crate::postgres::{ExpectedRegistryIdentity, PostgresKernelError};
+use crate::postgres::{
+    lock_wait_ended, ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey,
+};
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -49,6 +51,8 @@ pub enum HistoryMaintenanceError {
     InvalidInput,
     #[error("history maintenance requires the configured migration authority")]
     MigrationAuthority,
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
     #[error("history maintenance storage is unavailable")]
     Unavailable,
 }
@@ -71,9 +75,9 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::AdoptionFingerprintMismatch { .. }
             | PostgresKernelError::RegistryUnavailable
-            | PostgresKernelError::MigrationLockHeld
             | PostgresKernelError::HistoryCoverageIncomplete
             | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
+            PostgresKernelError::MigrationLockHeld => Self::MigrationLockHeld,
         }
     }
 }
@@ -97,6 +101,29 @@ pub(crate) async fn set_local_timeouts(
         )
         .await
         .map_err(|_| HistoryMaintenanceError::Unavailable)?;
+    Ok(())
+}
+
+/// Take the exclusive Registry advisory lock for the rest of the
+/// transaction. A wait the lock timeout ends means another session holds the
+/// lock; every other failure is an outage.
+pub(crate) async fn lock_registry(
+    transaction: &tokio_postgres::Transaction<'_>,
+    lock_key: RegistryLockKey,
+) -> Result<(), HistoryMaintenanceError> {
+    transaction
+        .execute(
+            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .map_err(|error| {
+            if lock_wait_ended(&error) {
+                HistoryMaintenanceError::MigrationLockHeld
+            } else {
+                HistoryMaintenanceError::Unavailable
+            }
+        })?;
     Ok(())
 }
 

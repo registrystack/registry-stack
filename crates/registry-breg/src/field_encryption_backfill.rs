@@ -34,8 +34,8 @@ use crate::history_erasure::{
     RecordHistoryErasureTarget, MAX_ERASURE_REVISIONS,
 };
 use crate::history_maintenance::{
-    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
-    verify_ready_identity, HistoryMaintenanceTimeouts,
+    append_maintenance_entries, begin_maintenance_request, lock_registry, profile_is_keyed,
+    set_local_timeouts, verify_ready_identity, HistoryMaintenanceTimeouts,
 };
 use crate::history_rebaseline::{
     history_rebaseline_entry, rebaseline_history_coverage_in_transaction, HistoryRebaselineError,
@@ -154,7 +154,11 @@ impl From<crate::history_maintenance::HistoryMaintenanceError>
             crate::history_maintenance::HistoryMaintenanceError::MigrationAuthority => {
                 Self::MigrationAuthority
             }
-            crate::history_maintenance::HistoryMaintenanceError::Unavailable => Self::Unavailable,
+            // The preflight takes no advisory lock, so no lock wait of its
+            // own can end; a held lock reaches it only as the active
+            // identity read bregctl reports before the preflight runs.
+            crate::history_maintenance::HistoryMaintenanceError::MigrationLockHeld
+            | crate::history_maintenance::HistoryMaintenanceError::Unavailable => Self::Unavailable,
         }
     }
 }
@@ -528,6 +532,8 @@ pub enum FieldEncryptionHistoryErasureError {
     Erasure(HistoryErasureError),
     #[error("field-encryption history erasure failed in the closing rebaseline")]
     Rebaseline(HistoryRebaselineError),
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
     #[error("field-encryption history erasure storage is unavailable")]
     Unavailable,
 }
@@ -548,6 +554,9 @@ impl From<crate::history_maintenance::HistoryMaintenanceError>
             crate::history_maintenance::HistoryMaintenanceError::InvalidInput => Self::InvalidInput,
             crate::history_maintenance::HistoryMaintenanceError::MigrationAuthority => {
                 Self::MigrationAuthority
+            }
+            crate::history_maintenance::HistoryMaintenanceError::MigrationLockHeld => {
+                Self::MigrationLockHeld
             }
             crate::history_maintenance::HistoryMaintenanceError::Unavailable => Self::Unavailable,
         }
@@ -639,13 +648,7 @@ pub async fn erase_field_encryption_history(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
-    transaction
-        .execute(
-            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-            &[&request.lock_key.get()],
-        )
-        .await
-        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
     let rebaseline_request = HistoryRebaselineRequest {
         expected: request.expected,
@@ -713,13 +716,7 @@ async fn scrub_plaintext_request_snapshots(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
-    transaction
-        .execute(
-            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-            &[&request.lock_key.get()],
-        )
-        .await
-        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
     let head = lock_history_head(&transaction)
         .await
@@ -1040,13 +1037,7 @@ async fn pending_erase_targets(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
-    transaction
-        .execute(
-            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-            &[&request.lock_key.get()],
-        )
-        .await
-        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
     let rows = transaction
         .query(

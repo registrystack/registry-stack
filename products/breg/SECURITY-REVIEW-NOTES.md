@@ -1218,6 +1218,18 @@ still be refused by an audit destination it never uses.
 - `history erase`, `history rebaseline`, `field-encryption preflight`, and
   `field-encryption erase-history` keep the locked preflight and report a
   held lock as `<prefix>.active_registry.in_progress`.
+- The history maintenance transactions take the exclusive lock through
+  `lock_registry` in `crates/registry-breg/src/history_maintenance.rs`, which
+  reads the lock wait with the same `lock_wait_ended` rule as
+  `acquire_inner`. A held lock there refuses as `MigrationLockHeld` before the
+  transaction changes anything, and `bregctl` reports it as
+  `history.erase.in_progress`, `history.rebaseline.in_progress`, or
+  `field_encryption.erase_history.in_progress` with the
+  `retry_after_migration_lock_releases` suggested action. Its request entry is
+  answered `unfinished`, as for any other refusal. An `erase-history` run
+  refused part way keeps the records it already erased, each in its own
+  committed transaction, and can be run again. `field-encryption preflight`
+  takes no advisory lock, so it has no such refusal.
 
 ### Tests
 
@@ -1226,9 +1238,12 @@ still be refused by an audit destination it never uses.
 and `real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged`.
 `crates/registry-breg/src/postgres/interlock.rs`: the competing lock
 assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
+`crates/registry-breg/tests/postgres_history_rebaseline.rs`:
+`erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing`.
 `crates/registry-bregctl/src/lib.rs`:
-`apply_reports_a_held_migration_lock_as_an_activation_in_progress` and
-`an_active_registry_read_reports_a_held_migration_lock_as_in_progress`.
+`apply_reports_a_held_migration_lock_as_an_activation_in_progress`,
+`an_active_registry_read_reports_a_held_migration_lock_as_in_progress`, and
+`history_maintenance_reports_a_held_migration_lock_as_in_progress`.
 `crates/registry-bregctl/src/active_registry.rs`:
 `a_held_migration_lock_reads_as_in_progress_not_as_unavailable`.
 `crates/registry-bregctl/src/reconcile_lifecycle.rs`:

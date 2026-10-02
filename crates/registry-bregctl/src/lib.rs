@@ -3171,6 +3171,13 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
                 DiagnosticArtifact::HistoryErasure,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
+            registry_breg::history_erasure::HistoryErasureError::MigrationLockHeld => (
+                "history.erase.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was erased. Retry the same erasure once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
+            ),
             registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
             | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
                 "history.erase.unavailable",
@@ -3315,6 +3322,13 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                  revisions to find it",
                 DiagnosticArtifact::HistoryRebaseline,
                 SuggestedAction::ReviewRetainedHistory,
+            ),
+            registry_breg::history_rebaseline::HistoryRebaselineError::MigrationLockHeld => (
+                "history.rebaseline.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was changed. Retry the same rebaseline once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
             ),
             registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
             | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
@@ -3675,6 +3689,13 @@ fn field_encryption_erase_history_failure(
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
+                registry_breg::history_erasure::HistoryErasureError::MigrationLockHeld => (
+                    "field_encryption.erase_history.in_progress",
+                    "database",
+                    "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::RetryAfterMigrationLockReleases,
+                ),
                 registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
                 | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
                     "field_encryption.erase_history.unavailable",
@@ -3724,6 +3745,13 @@ fn field_encryption_erase_history_failure(
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::ReviewRetainedHistory,
                 ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::MigrationLockHeld => (
+                    "field_encryption.erase_history.in_progress",
+                    "database",
+                    "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::RetryAfterMigrationLockReleases,
+                ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
                 | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
                     "field_encryption.erase_history.rebaseline.unavailable",
@@ -3733,6 +3761,13 @@ fn field_encryption_erase_history_failure(
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
             },
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::MigrationLockHeld => (
+                "field_encryption.erase_history.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
+            ),
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::Unavailable => (
                 "field_encryption.erase_history.unavailable",
                 "history",
@@ -16145,6 +16180,90 @@ fn an_active_registry_read_reports_a_held_migration_lock_as_in_progress() {
             "{}",
             diagnostic.message
         );
+    }
+}
+
+/// A migration lock held when a history maintenance transaction takes it has
+/// its own `in_progress` code for each command, with the wait-and-retry
+/// action, and is never reported as unavailable storage.
+#[cfg(test)]
+#[test]
+fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
+    use registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError;
+    use registry_breg::history_erasure::HistoryErasureError;
+    use registry_breg::history_rebaseline::HistoryRebaselineError;
+
+    for (report, command, code) in [
+        (
+            history_erasure_lifecycle_failure(HistoryErasureLifecycleError::Erasure(
+                HistoryErasureError::MigrationLockHeld,
+            )),
+            "history erase",
+            "history.erase.in_progress",
+        ),
+        (
+            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(
+                HistoryRebaselineError::MigrationLockHeld,
+            )),
+            "history rebaseline",
+            "history.rebaseline.in_progress",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::Erase(
+                    FieldEncryptionHistoryErasureError::MigrationLockHeld,
+                ),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.in_progress",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::Erase(
+                    FieldEncryptionHistoryErasureError::Erasure(
+                        HistoryErasureError::MigrationLockHeld,
+                    ),
+                ),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.in_progress",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::Erase(
+                    FieldEncryptionHistoryErasureError::Rebaseline(
+                        HistoryRebaselineError::MigrationLockHeld,
+                    ),
+                ),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.in_progress",
+        ),
+    ] {
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+            "{code}"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("another session held the exclusive migration lock"),
+            "{code}: {}",
+            diagnostic.message
+        );
+        for fragment in ["unavailable", "migrationUrlRef"] {
+            assert!(
+                !diagnostic.message.contains(fragment),
+                "{code} {fragment}: {}",
+                diagnostic.message
+            );
+        }
     }
 }
 
