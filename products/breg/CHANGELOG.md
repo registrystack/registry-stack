@@ -76,7 +76,8 @@
   `history rebaseline`, `field-encryption preflight`, and
   `field-encryption erase-history` report a lock held while they read the
   active identity as `<prefix>.active_registry.in_progress`, for example
-  `history.erase.active_registry.in_progress`. An assessment opens no audit
+  `history.erase.active_registry.in_progress`, with the suggested action
+  `retry_after_migration_lock_releases`. An assessment opens no audit
   writer, so it answers when the audit destination cannot be written;
   `--execute` still refuses with `migration.reconcile.audit.unavailable`.
 - BREAKING: `apply` and `plan` report a migration lock another session held
