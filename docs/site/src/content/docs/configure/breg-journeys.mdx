@@ -96,9 +96,11 @@ The output directory's parent must exist, and the directory itself must not: a m
 The command creates the directory and writes under a `generated/` subdirectory inside it, so the two commands produce `./generated/openapi/generated/openapi.json` and `./generated/schemas/generated/schemas/<entity>.schema.json`.
 
 Output is deterministic: the same project produces the same bytes, so commit the generated documents and, in review, generate into a fresh directory and diff it against the committed copy.
-The running server publishes the same OpenAPI document at `/openapi.json` and the same schemas under `/v1/schemas/`.
+The running server derives `/openapi.json` and the schemas under `/v1/schemas/` from the same
+compiled registry, then filters each document for the caller's selected access profile.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, generate() and write_files_with_before_publish(). */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, generate() and write_files_with_before_publish();
+    crates/registry-breg/src/api/mod.rs, openapi(), entity_schema(), and filtered_schema(). */}
 
 ## Findings
 
