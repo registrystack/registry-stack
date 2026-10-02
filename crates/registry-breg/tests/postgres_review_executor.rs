@@ -126,6 +126,84 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
     }
 }
 
+thread_local! {
+    static THREAD_LOGS: std::cell::RefCell<Option<CapturedLogs>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Routes each line the binary's global subscriber writes to the capture the
+/// emitting thread installed, and discards the rest.
+#[derive(Clone, Copy)]
+struct ThreadLogs;
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for ThreadLogs {
+    type Writer = tracing_subscriber::fmt::writer::EitherWriter<CapturedLogs, io::Sink>;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        THREAD_LOGS.with(|logs| match logs.borrow().as_ref() {
+            Some(logs) => tracing_subscriber::fmt::writer::EitherWriter::A(logs.clone()),
+            None => tracing_subscriber::fmt::writer::EitherWriter::B(io::sink()),
+        })
+    }
+}
+
+/// Clears this thread's capture when dropped.
+struct ThreadLogsGuard;
+
+impl Drop for ThreadLogsGuard {
+    fn drop(&mut self) {
+        THREAD_LOGS.with(|logs| logs.borrow_mut().take());
+    }
+}
+
+/// Captures the operational events this thread emits until the guard drops.
+///
+/// Tracing caches each callsite's interest process-wide, and a thread-local
+/// `set_default` subscriber missed events here while other tests in this
+/// binary installed and dropped their own. One global subscriber is consulted
+/// from every thread, so it routes by thread instead. What it captures is what
+/// runs on the test thread, as everything a `current_thread` test awaits does.
+fn capture_thread_logs() -> (CapturedLogs, ThreadLogsGuard) {
+    install_test_subscriber();
+    let logs = CapturedLogs::default();
+    THREAD_LOGS.with(|slot| *slot.borrow_mut() = Some(logs.clone()));
+    (logs, ThreadLogsGuard)
+}
+
+/// Installs this test binary's one global subscriber, which may be installed
+/// only once per process, and returns the review store's debug lines.
+///
+/// It carries two layers: the review store's lines at debug from every test,
+/// for [`captured_review_logs`], and JSON lines at info and above routed to the
+/// capture the emitting thread installed, for [`capture_thread_logs`].
+fn install_test_subscriber() -> &'static CapturedLogs {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::Layer as _;
+    static REVIEW_STORE_LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
+    REVIEW_STORE_LOGS.get_or_init(|| {
+        let logs = CapturedLogs::default();
+        let review_store = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(logs.clone())
+            .with_filter(tracing_subscriber::EnvFilter::new(
+                "registry_breg::review_store=debug",
+            ));
+        let thread = tracing_subscriber::fmt::layer()
+            .json()
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_writer(ThreadLogs)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry()
+                .with(review_store)
+                .with(thread),
+        )
+        .expect("one global log subscriber for this test binary");
+        logs
+    })
+}
+
 async fn accept_review_submission(
     State(state): State<Arc<AuthorityState>>,
     headers: HeaderMap,
@@ -5913,18 +5991,7 @@ impl FlakyResultFeed {
 /// would disable them for the whole process. Lines are told apart by the
 /// authority they name.
 fn captured_review_logs() -> &'static CapturedLogs {
-    static LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
-    LOGS.get_or_init(|| {
-        let logs = CapturedLogs::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_env_filter("registry_breg::review_store=debug")
-            .with_writer(logs.clone())
-            .finish();
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("the review log subscriber installs once for this test binary");
-        logs
-    })
+    install_test_subscriber()
 }
 
 /// The captured lines at `level` about `authority`'s result feed.
@@ -6086,14 +6153,7 @@ async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_ev
         Arc::new(UnavailableToken),
     );
 
-    let logs = CapturedLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_current_span(false)
-        .with_span_list(false)
-        .with_writer(logs.clone())
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+    let (logs, capture) = capture_thread_logs();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let worker = ReviewWorker::new(pool.clone(), Some(authorities), None);
     let last_success = worker.last_success();
@@ -6326,15 +6386,7 @@ async fn an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free
     // No webhook delivery state is installed, so the sample cannot be read.
     let database = prepare_review_database().await;
     let pool = database.runtime_config.build_pool().expect("runtime pool");
-    let logs = CapturedLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_target(false)
-        .with_current_span(false)
-        .with_span_list(false)
-        .with_writer(logs.clone())
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+    let (logs, capture) = capture_thread_logs();
 
     let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
     drop(capture);
