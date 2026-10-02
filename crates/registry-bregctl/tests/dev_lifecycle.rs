@@ -1787,8 +1787,17 @@ seed:
     );
     session.stop();
     let original = fs::read(project.join("registry.yaml")).unwrap();
-    let mut changed = original.clone();
-    changed.extend_from_slice(b"\n# reviewed authored edit\n");
+    // A comment changes no compiled meaning, so the retained session starts.
+    let mut commented = original.clone();
+    commented.extend_from_slice(b"\n# reviewed authored edit\n");
+    write(&project.join("registry.yaml"), &commented);
+    session.start();
+    session.stop();
+    let text = String::from_utf8(original.clone()).unwrap();
+    assert_eq!(text.matches("  version: 0.1.0\n").count(), 1);
+    let changed = text
+        .replace("  version: 0.1.0\n", "  version: 0.2.0\n")
+        .into_bytes();
     write(&project.join("registry.yaml"), &changed);
     assert!(!session.dev(&[]).status.success());
     assert_eq!(fs::read(project.join("registry.yaml")).unwrap(), changed);
