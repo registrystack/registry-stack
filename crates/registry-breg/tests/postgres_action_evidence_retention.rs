@@ -340,6 +340,63 @@ async fn retention_refuses_misbound_database_with_identical_roles_and_catalog_dr
     original.cleanup().await;
 }
 
+/// A migration lock another session holds past the lock timeout is reported
+/// as held, never as unavailable storage, and erases nothing; the same
+/// erasure succeeds once the lock releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retention_reports_a_held_migration_lock_and_erases_nothing() {
+    let database = TestDatabase::create(2).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "intended",
+    )
+    .await;
+    sentinel(&database).await;
+    let operator = service(
+        &database,
+        &registry,
+        &expected,
+        database.migration_config.clone(),
+    );
+    let lock_key = RegistryLockKey::derive(PACKAGE).unwrap();
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("a second session takes the migration lock");
+
+    assert!(
+        matches!(
+            operator.erase_expired(cutoff()).await,
+            Err(MutationError::MigrationLockHeld)
+        ),
+        "an erasure that cannot take the held lock reports it as held"
+    );
+    assert_eq!(
+        count(&database).await,
+        1,
+        "the refused erasure erased nothing"
+    );
+
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the second session releases the migration lock");
+    assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 1);
+    assert_retention_audited(&database, &[("failed", None), ("erased", Some(1))]);
+    drop(operator);
+    holder_task.abort();
+    database.assert_every_audit_request_answered_once();
+    database.cleanup().await;
+}
+
 async fn wait_for_lock(database: &TestDatabase) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {

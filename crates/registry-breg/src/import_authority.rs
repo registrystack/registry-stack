@@ -28,6 +28,7 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::contract::Operation;
+use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::model::CompiledRegistry;
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
@@ -148,6 +149,8 @@ pub enum ImportAuthorityError {
     NotFound,
     #[error("the registry is not ready for import authority maintenance")]
     NotReady,
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
     #[error("the import authority store is unavailable")]
     Unavailable,
 }
@@ -1043,13 +1046,14 @@ impl ImportAuthorityOperatorService {
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;
         self.set_timeouts(&transaction).await?;
-        transaction
-            .execute(
-                "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-                &[&self.lock_key.get()],
-            )
+        lock_registry(&transaction, self.lock_key)
             .await
-            .map_err(|_| ImportAuthorityError::Unavailable)?;
+            .map_err(|error| match error {
+                HistoryMaintenanceError::MigrationLockHeld => {
+                    ImportAuthorityError::MigrationLockHeld
+                }
+                _ => ImportAuthorityError::Unavailable,
+            })?;
         verify_catalog_identity_for_catalog(
             &transaction,
             &self.expected,

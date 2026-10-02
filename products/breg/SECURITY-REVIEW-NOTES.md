@@ -1232,6 +1232,18 @@ still be refused by an audit destination it never uses.
   refused part way keeps the records it already erased, each in its own
   committed transaction, and can be run again. `field-encryption preflight`
   takes no advisory lock, so it has no such refusal.
+- Action Evidence retention, request retention, import authority
+  maintenance, and instance claim adoption take the exclusive lock through
+  the same `lock_registry`. A held lock refuses as `MigrationLockHeld` before
+  their transaction changes anything, and `bregctl` reports it as
+  `evidence_retention.in_progress`, `request_retention.in_progress`,
+  `import_authority.in_progress`, or `instance_claim.in_progress` with the
+  same suggested action. The Evidence erasure, the request-detail erasure,
+  and the adoption answer their request entry `failed`, as for an outage;
+  import authority maintenance records only committed transitions, so a
+  refusal records nothing. A request-detail erasure that committed keeps its
+  `committed` response when the external-deletion retry after it meets the
+  held lock, and the command still reports `request_retention.in_progress`.
 
 ### Tests
 
@@ -1242,10 +1254,20 @@ and `real_postgres_reports_an_unavailable_database_before_maintenance_as_unchang
 assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
 `crates/registry-breg/tests/postgres_history_rebaseline.rs`:
 `erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing`.
+`crates/registry-breg/tests/postgres_action_evidence_retention.rs`:
+`retention_reports_a_held_migration_lock_and_erases_nothing`.
+`crates/registry-breg/tests/postgres_request_read_retention.rs`:
+`request_detail_erasure_reports_a_held_migration_lock_and_erases_nothing`.
+`crates/registry-breg/tests/postgres_import_authority.rs`:
+`a_held_migration_lock_is_reported_and_no_authority_changes` and
+`adopting_under_a_held_migration_lock_is_reported_and_supersedes_nothing`.
 `crates/registry-bregctl/src/lib.rs`:
 `apply_reports_a_held_migration_lock_as_an_activation_in_progress`,
-`an_active_registry_read_reports_a_held_migration_lock_as_in_progress`, and
-`history_maintenance_reports_a_held_migration_lock_as_in_progress`.
+`an_active_registry_read_reports_a_held_migration_lock_as_in_progress`,
+`history_maintenance_reports_a_held_migration_lock_as_in_progress`, and
+`operator_maintenance_reports_a_held_migration_lock_as_in_progress`.
+`crates/registry-bregctl/src/request_retention.rs`:
+`a_held_migration_lock_stays_distinct_from_a_refused_operation`.
 `crates/registry-bregctl/src/active_registry.rs`:
 `a_held_migration_lock_reads_as_in_progress_not_as_unavailable`.
 `crates/registry-bregctl/src/reconcile_lifecycle.rs`:

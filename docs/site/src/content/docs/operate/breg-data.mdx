@@ -262,6 +262,14 @@ server response is bounded at 2 MiB.
 | An import reports `data.import.ingestion_run.import_authority_required` | No open authority admits the run: none is open for the entity, it names another profile, it expired, its remaining volume is smaller than the input, or it pins other digests. Check `bregctl import-authority list`, then open one that covers this input. |
 | `import-authority open` reports `import_authority.already_open` | The entity already has an open authority. Close it, or wait for it to expire, before opening another. |
 | `import-authority open` reports `import_authority.grant.not_importable` | The profile holds no `import` grant on the entity in the active package. |
+| `import-authority open`, `close`, or `close-expired` reports `import_authority.in_progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. No authority changed. Wait for it to finish, then run the same command again. |
+
+{/* Evidence: crates/registry-breg/src/import_authority.rs, begin();
+    crates/registry-breg/src/history_maintenance.rs, lock_registry;
+    crates/registry-breg/tests/postgres_import_authority.rs,
+    a_held_migration_lock_is_reported_and_no_authority_changes;
+    crates/registry-bregctl/src/lib.rs, import_authority_failure(),
+    operator_maintenance_reports_a_held_migration_lock_as_in_progress. */}
 
 ## Next
 
