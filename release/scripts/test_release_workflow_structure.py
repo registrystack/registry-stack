@@ -811,7 +811,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         _, document = workflow("release-candidate.yml")
         shards = document["jobs"]["build-macos-platforms"]
         self.assertEqual("validate", shards["needs"])
-        self.assertEqual("macos-14", shards["runs-on"])
+        self.assertEqual("macos-26", shards["runs-on"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
             ["core", "breg", "bregctl", "casework", "scheduling"],
@@ -999,7 +999,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("release-isolated-clients", cache_key)
         self.assertIn("release-isolated-clients", restore_key)
-        macos_recipe = "${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}"
+        macos_recipe = "${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}"
         self.assertIn(macos_recipe, cache_key)
         self.assertIn(macos_recipe, restore_key)
         self.assertIn(".github/workflows/release-candidate.yml", cache_key)
@@ -1479,7 +1479,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertIn('["workspace"]["package"]["version"]', validation)
         build = document["jobs"]["build"]
         assert_pinned_go(self, document, "build")
-        self.assertEqual("macos-14", build["runs-on"])
+        self.assertEqual("macos-26", build["runs-on"])
         self.assertFalse(build["strategy"]["fail-fast"])
         self.assertEqual(
             ["core", "breg", "bregctl", "casework", "scheduling"],
