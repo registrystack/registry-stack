@@ -17,6 +17,16 @@
 //! republished from the live pool at scrape time and carry only a fixed state
 //! label.
 //!
+//! The worker and queue gauges carry one fixed label each, from
+//! [`ProgressWorker`] and [`PendingQueue`]. A worker's age is read from the
+//! handle its loop notes successes on. The queue ages are read from the
+//! database once per scrape, through at most one pool connection in a
+//! read-only transaction under a short statement timeout; when that read
+//! fails the scrape publishes no queue age and emits a closed operational
+//! event. The package info series carries the single `sha256:` digest of the
+//! package this process verified at startup, so it adds one series per
+//! process.
+//!
 //! The anonymous refusal counter is the operational signal for requests that
 //! carry no principal and are refused before admission. Those refusals are
 //! counted here rather than appended to the audit journal: they name no
@@ -73,6 +83,9 @@ pub struct Metrics {
     /// wait for each other and the metrics listener never holds more than
     /// one pool connection.
     queue_sample: tokio::sync::Mutex<()>,
+    /// The digest of the package this process verified at startup, published
+    /// as `breg_active_package_info`.
+    active_package_digest: Option<String>,
 }
 
 /// A background worker reported by `breg_worker_last_success_age_seconds`.
@@ -269,6 +282,24 @@ impl Metrics {
         self
     }
 
+    /// Report the digest of the package this process verified at startup.
+    /// `package_digest` is the verified `sha256:` identity, a fixed token
+    /// that is safe to publish as a label value.
+    #[must_use]
+    pub fn with_active_package(mut self, package_digest: &str) -> Self {
+        debug_assert!(
+            package_digest
+                .strip_prefix("sha256:")
+                .is_some_and(|hex| hex.len() == 64
+                    && hex
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))),
+            "the active package digest is a verified sha256 identity"
+        );
+        self.active_package_digest = Some(package_digest.to_owned());
+        self
+    }
+
     /// Record one served request. `route` must come from
     /// [`route_template`] so the label set stays closed.
     pub(crate) fn record_http(
@@ -417,6 +448,15 @@ impl Metrics {
             body.push_str(&format!(
                 "breg_queue_oldest_pending_age_seconds{{queue=\"{}\"}} {seconds}\n",
                 queue.label()
+            ));
+        }
+        body.push_str(
+            "# HELP breg_active_package_info The package this process verified at startup, by digest.\n",
+        );
+        body.push_str("# TYPE breg_active_package_info gauge\n");
+        if let Some(digest) = &self.active_package_digest {
+            body.push_str(&format!(
+                "breg_active_package_info{{package_digest=\"{digest}\"}} 1\n"
             ));
         }
         body
@@ -747,6 +787,30 @@ mod tests {
         ] {
             assert!(sampled.contains(expected), "{expected} in:\n{sampled}");
         }
+    }
+
+    #[test]
+    fn the_active_package_digest_is_published_once_as_an_info_series() {
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let unset = Metrics::default().render(None);
+        assert!(unset.contains("# TYPE breg_active_package_info gauge\n"));
+        assert!(
+            !unset.contains("breg_active_package_info{"),
+            "a registry with no verified package publishes no digest:\n{unset}"
+        );
+
+        let rendered = Metrics::default().with_active_package(&digest).render(None);
+        let samples = rendered
+            .lines()
+            .filter(|line| line.starts_with("breg_active_package_info{"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            samples,
+            [format!(
+                "breg_active_package_info{{package_digest=\"{digest}\"}} 1"
+            )],
+            "one sample carrying the verified digest:\n{rendered}"
+        );
     }
 
     #[test]

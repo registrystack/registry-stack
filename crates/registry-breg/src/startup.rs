@@ -718,6 +718,15 @@ impl PreparedServer {
         self.fixture_pool.clone()
     }
 
+    /// The metrics listener's Router, when the runtime file configured one,
+    /// so a test can scrape the registry the verified startup path built.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn metrics_app_for_test(&self) -> Option<Router> {
+        self.metrics.as_ref().map(|metrics| metrics.app.clone())
+    }
+
     /// Return the Router and PostgreSQL pool only when both were assembled by
     /// the verified startup path. Raw test-part constructors deliberately
     /// carry no such capability, so fixture receipt code cannot attest canned
@@ -1546,6 +1555,7 @@ async fn finish_prepared_server(
     // metrics surface is served at all.
     let telemetry_metrics = config.metrics_listener().map(|_| {
         let mut registry = Metrics::new(telemetry_pool)
+            .with_active_package(startup.package().package_digest())
             .with_worker_progress(ProgressWorker::Webhook, webhook_progress);
         if let Some(worker) = &attachment_verification_worker {
             registry = registry.with_worker_progress(
