@@ -277,6 +277,11 @@ an explicit set of raw PostgreSQL grammar nodes, the aggregate functions
 `count`, `bool_and`, and `every`, and `registry_context.evaluation_date()`.
 `JSON_VALUE` and `JSON_EXISTS` may read scalars inside a structured field.
 An explicit `RETURNING` type must be a supported built-in scalar type.
+Ordinary casts are limited separately to reviewed built-in scalar targets;
+arrays, catalog reference types, XML, money, and timestamp-with-time-zone casts
+are refused. Column references resolve against the columns exposed by each
+range in its own SELECT scope, so a range name cannot capture its whole row and
+attribute notation cannot invoke an unlisted function.
 `JSON_QUERY`, table functions, SQL/JSON aggregates and constructors, and XML
 constructs are refused. Additions to this grammar require a concrete use case
 and review; a parser upgrade does not automatically admit new syntax.

@@ -10,6 +10,11 @@
   encrypted-column checks as other derived SQL.
   Implicit `NATURAL`/`USING` joins and source/join column alias lists are refused
   because they can evade explicit column-reference checks.
+  Cast targets are limited to reviewed built-in scalar types, and column names
+  resolve against the compiler-known output of the exact source, CTE, or
+  subquery range in each SELECT scope. Whole-row references, row constructors,
+  attribute-notation function calls, arrays, catalog reference types, XML,
+  money, and timestamp-with-time-zone casts are refused (#1855).
 - Derived strings, decimals, and integers no longer silently truncate or round
   to their declared type (#1842). Generated views enforce string minimum and
   maximum length, text maximum length, decimal scale, precision and range,

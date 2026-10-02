@@ -145,3 +145,4 @@ traceability:
   - {id: BREG-SEC-142, state: enforced, negativeId: BREG-NEG-142, negativeTest: {path: crates/registry-breg/tests/postgres_immediate_actions.rs, name: action_written_revisions_are_readable_through_revision_history}}
   - {id: BREG-SEC-143, state: enforced, negativeId: BREG-NEG-143, negativeTest: {path: crates/registry-breg/src/derived_sql.rs, name: raw_node_allowlist_refuses_unreviewed_sql_json_xml_and_hidden_descendants}}
   - {id: BREG-SEC-144, state: enforced, negativeId: BREG-NEG-144, negativeTest: {path: crates/registry-breg/tests/postgres_derived_values.rs, name: real_postgres_derived_values_enforce_declared_contracts}}
+  - {id: BREG-SEC-145, state: enforced, negativeId: BREG-NEG-145, negativeTest: {path: crates/registry-breg/src/derived_sql.rs, name: casts_rows_and_attribute_notation_stay_inside_the_reviewed_scalar_surface}}
