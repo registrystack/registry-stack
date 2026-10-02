@@ -70,6 +70,17 @@ fn source_status_window(reconciliation_interval: Option<Duration>) -> Duration {
     })
 }
 
+/// The page for a caller serving no queue: complete, empty, and without a
+/// cursor, so it discloses no source state.
+fn no_served_queue_page() -> WorkItemPage {
+    WorkItemPage {
+        items: Vec::new(),
+        next_cursor: None,
+        status: PageStatus::Complete,
+        served_queues: Vec::new(),
+    }
+}
+
 /// How a caller read treats an active occurrence whose disclosed source
 /// binding moved within its generation before reconciliation applied it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1090,12 +1101,7 @@ impl CaseworkService {
             | registry_casework_core::CaseworkRole::Requester => Vec::new(),
         };
         if served_queues.is_empty() {
-            return Ok(WorkItemPage {
-                items: Vec::new(),
-                next_cursor: None,
-                status: PageStatus::Complete,
-                served_queues,
-            });
+            return Ok(no_served_queue_page());
         }
         let desired = limit.clamp(1, 100);
         let started = Instant::now();
@@ -1314,6 +1320,12 @@ impl CaseworkService {
                     || discovery_pending
                     || items.len() < desired && candidates.next_cursor.is_some())
         };
+        // Directory membership may have changed while source reads were in flight.
+        let served_queues = self.store.served_queues(actor).await?;
+        if served_queues.is_empty() {
+            return Ok(no_served_queue_page());
+        }
+        items.retain(|item| served_queues.binary_search(&item.queue_id).is_ok());
         let status = if unavailable {
             PageStatus::SourceUnavailable
         } else if exhausted {
@@ -1341,9 +1353,6 @@ impl CaseworkService {
         } else {
             None
         };
-        // Directory membership may have changed while source reads were in flight.
-        let served_queues = self.store.served_queues(actor).await?;
-        items.retain(|item| served_queues.binary_search(&item.queue_id).is_ok());
         Ok(WorkItemPage {
             items,
             next_cursor,
