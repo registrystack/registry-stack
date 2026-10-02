@@ -6,8 +6,10 @@
   `complete` without requeueing subjects or clearing source completeness. Callers serving
   no queue receive `complete` regardless of discovery state. Pages waiting only
   for source discovery no longer issue a cursor that repeats the same position;
-  retry those `budget_exhausted` pages without a cursor after reconciliation
-  (#1838).
+  retry those `budget_exhausted` pages without a cursor after reconciliation.
+  The retried walk starts from the first position and can return items earlier
+  pages already returned: deduplicate work items by `itemId`, and replace
+  holdings totals instead of adding to them (#1838).
 
 - `caseworkctl source add --casework-endpoint URL` sets the Casework endpoint
   of the local BReg review authority it writes, for a Casework session on a
