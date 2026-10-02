@@ -3508,7 +3508,7 @@ impl DevFailure {
                 "caseworkctl.dev.audit-unavailable",
                 AUDIT_DIRECTORY.to_owned(),
                 format!("The retained audit directory {AUDIT_DIRECTORY} cannot be opened as the runtime opens it."),
-                format!("Make {AUDIT_DIRECTORY} and its files owner-only, readable, and writable by the current user, then retry."),
+                format!("Make {AUDIT_DIRECTORY} and its files owner-only regular files, readable and writable by the current user, then retry. If the refusal persists, for example over a conflicting torn-line side file, move {AUDIT_DIRECTORY} out of the project, keeping it if its records matter, then run caseworkctl dev start again."),
             ),
             Self::StartFailed { .. } => (
                 "caseworkctl.dev.start-failed",
