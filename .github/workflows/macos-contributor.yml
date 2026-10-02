@@ -17,7 +17,7 @@ env:
 jobs:
   direct-cargo-binaries:
     name: Direct Cargo binaries and database-free gates
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -58,7 +58,7 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          key: macos-contributor
+          key: macos-contributor-macos-26
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test Cargo runtime-library resolution
