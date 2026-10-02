@@ -6,6 +6,11 @@
 //! secret-bearing file the session keeps (database passwords, keys, tokens,
 //! grants, client credentials, the issuer's secrets) is read only to redact
 //! its values from that output, and is never printed.
+//!
+//! Redaction is matched to the sessions these tests build: generated
+//! credentials, which are long token runs, and fixture secret files of at
+//! least four bytes. It is not a general redactor for arbitrary operator
+//! secrets, and must not be reused as one.
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
@@ -126,16 +131,17 @@ pub(super) fn diagnostics(root: &Path) -> String {
 }
 
 /// The complete lines within the last `limit` bytes of `path`, marked when
-/// earlier bytes were dropped. The line the cut falls in is dropped whole:
+/// earlier bytes were dropped. A line the cut falls inside is dropped whole:
 /// a secret value never spans a line, so one the cut splits lies in that
-/// line, where redaction could no longer match it.
+/// line, where redaction could no longer match it. The byte before the cut
+/// is read too, so a cut on a line boundary keeps its first line.
 fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
     let mut file = File::open(path)?;
-    let mut start = file.metadata()?.len().saturating_sub(limit);
+    let mut start = file.metadata()?.len().saturating_sub(limit + 1);
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
-    file.take(limit).read_to_end(&mut bytes)?;
-    if start > 0 {
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
         let partial = bytes
             .iter()
             .position(|byte| *byte == b'\n')
@@ -346,6 +352,26 @@ mod tests {
             !out.contains(&password[16..]),
             "password suffix leaked:\n{out}"
         );
+    }
+
+    #[test]
+    fn a_tail_that_starts_on_a_line_boundary_keeps_its_first_line() {
+        let root = tempfile::tempdir().unwrap();
+        let root = &root.path().join("dev");
+        let first = "root-cause line\n";
+        let last = "latest-line\n";
+        let filler = "x".repeat(TAIL_BYTES as usize - first.len() - last.len() - 1);
+        let kept = format!("{first}{filler}\n{last}");
+        assert_eq!(kept.len() as u64, TAIL_BYTES);
+        write(
+            &root.join("logs/casework.log"),
+            format!("early-line\n{kept}").as_bytes(),
+        );
+
+        let out = diagnostics(root);
+
+        assert!(out.contains("root-cause line"), "{out}");
+        assert!(out.contains("[... 11 earlier bytes omitted]"), "{out}");
     }
 
     #[test]
