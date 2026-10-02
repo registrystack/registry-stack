@@ -504,6 +504,7 @@ fn project_codelists(
     // first-seen order, so a field narrowed to fewer codes drops none of the
     // codes another projected field uses.
     let mut used = BTreeMap::<&str, Vec<&String>>::new();
+    let mut seen = BTreeSet::<(&str, &String)>::new();
     for (vocabulary, values) in projection
         .datasets
         .values()
@@ -532,7 +533,7 @@ fn project_codelists(
     {
         let codes = used.entry(vocabulary).or_default();
         for value in values {
-            if !codes.contains(&value) {
+            if seen.insert((vocabulary, value)) {
                 codes.push(value);
             }
         }
