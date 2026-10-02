@@ -53,6 +53,32 @@ pub struct CaseworkService {
     pub(crate) adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
     pub(crate) project: Arc<CaseworkProject>,
     pub(crate) task_authority: Option<Arc<crate::task_grants::TaskAuthority>>,
+    pub(crate) reconciliation_intervals: Arc<BTreeMap<String, Duration>>,
+}
+
+/// The shortest time a recorded source status stays fresh, and the window for
+/// a source whose reconciliation interval is not known.
+pub const MINIMUM_SOURCE_STATUS_WINDOW: Duration = Duration::from_secs(120);
+
+/// How long a recorded source status stays fresh: twice the source's
+/// reconciliation interval, so one skipped or slow pass does not make a
+/// reconciled source look stale, and never less than
+/// [`MINIMUM_SOURCE_STATUS_WINDOW`].
+fn source_status_window(reconciliation_interval: Option<Duration>) -> Duration {
+    reconciliation_interval.map_or(MINIMUM_SOURCE_STATUS_WINDOW, |interval| {
+        interval.saturating_mul(2).max(MINIMUM_SOURCE_STATUS_WINDOW)
+    })
+}
+
+/// The page for a caller serving no queue: complete, empty, and without a
+/// cursor, so it discloses no source state.
+fn no_served_queue_page() -> WorkItemPage {
+    WorkItemPage {
+        items: Vec::new(),
+        next_cursor: None,
+        status: PageStatus::Complete,
+        served_queues: Vec::new(),
+    }
 }
 
 /// How a caller read treats an active occurrence whose disclosed source
@@ -153,7 +179,19 @@ impl CaseworkService {
             adapters: Arc::new(registered),
             project: Arc::new(project),
             task_authority: None,
+            reconciliation_intervals: Arc::new(BTreeMap::new()),
         })
+    }
+
+    /// Set how often each named source is reconciled, so a source status
+    /// stays fresh for that source's own reconciliation cadence.
+    #[must_use]
+    pub fn with_reconciliation_intervals(
+        mut self,
+        intervals: impl IntoIterator<Item = (String, Duration)>,
+    ) -> Self {
+        self.reconciliation_intervals = Arc::new(intervals.into_iter().collect());
+        self
     }
 
     #[must_use]
@@ -1054,6 +1092,17 @@ impl CaseworkService {
             .store
             .resolve_cursor(actor, source_profile_id, &cursor_context, cursor)
             .await?;
+        let served_queues = match actor.role {
+            registry_casework_core::CaseworkRole::Staff
+            | registry_casework_core::CaseworkRole::Supervisor => {
+                self.store.served_queues(actor).await?
+            }
+            registry_casework_core::CaseworkRole::Administrator
+            | registry_casework_core::CaseworkRole::Requester => Vec::new(),
+        };
+        if served_queues.is_empty() {
+            return Ok(no_served_queue_page());
+        }
         let desired = limit.clamp(1, 100);
         let started = Instant::now();
         let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
@@ -1099,81 +1148,80 @@ impl CaseworkService {
             })
             .collect::<Vec<_>>();
         if subject.is_none() {
-            for source in &relevant_sources {
-                let adapter = self.adapter(&source.id)?;
-                let pending = self
-                    .store
-                    .source_has_pending(&source.id, adapter.binding_generation())
-                    .await?;
-                match self
-                    .store
-                    .source_status(&source.id, adapter.binding_generation())
-                    .await?
-                {
-                    Some((true, false)) => {}
-                    Some((_, true)) => unavailable = true,
-                    _ => discovery_pending = true,
-                }
-                discovery_pending |= pending;
-            }
-        }
-        if subject.is_none()
-            && reference.is_none()
-            && after.is_none()
-            && candidates.items.is_empty()
-        {
-            unavailable = false;
-            discovery_pending = false;
+            let probe_empty = reference.is_none() && after.is_none() && candidates.items.is_empty();
             for source in relevant_sources {
-                let remaining = deadline.saturating_sub(started.elapsed());
-                if remaining.is_zero() {
-                    unavailable = true;
-                    break;
-                }
-                match tokio::time::timeout(
-                    remaining,
-                    self.adapter(&source.id)?.discover_active(None, 1),
-                )
-                .await
-                {
-                    Ok(Ok(page)) => {
-                        if !page.subjects.is_empty() {
+                let adapter = self.adapter(&source.id)?;
+                let source_status = self
+                    .store
+                    .source_status(
+                        &source.id,
+                        adapter.binding_generation(),
+                        source_status_window(
+                            self.reconciliation_intervals.get(&source.id).copied(),
+                        ),
+                    )
+                    .await?;
+                if probe_empty {
+                    let remaining = deadline.saturating_sub(started.elapsed());
+                    if remaining.is_zero() {
+                        unavailable = true;
+                        break;
+                    }
+                    match tokio::time::timeout(remaining, adapter.discover_active(None, 1)).await {
+                        Ok(Ok(page)) => {
+                            // Active subjects do not invalidate a recently reconciled
+                            // inventory. Keep this probe read-only in that case.
+                            if source_status != Some((true, false)) {
+                                if !page.subjects.is_empty() {
+                                    self.store
+                                        .enqueue_discovered(
+                                            adapter.binding_generation(),
+                                            &page.subjects,
+                                        )
+                                        .await?;
+                                }
+                                let complete =
+                                    page.subjects.is_empty() && page.next_cursor.is_none();
+                                self.store
+                                    .set_source_status(
+                                        &source.id,
+                                        adapter.binding_generation(),
+                                        complete,
+                                        false,
+                                    )
+                                    .await?;
+                                discovery_pending |= !complete;
+                            }
+                        }
+                        Ok(Err(
+                            SourceAdapterError::Unavailable
+                            | SourceAdapterError::Concealed
+                            | SourceAdapterError::Denied,
+                        ))
+                        | Err(_) => {
+                            unavailable = true;
                             self.store
-                                .enqueue_discovered(
-                                    self.adapter(&source.id)?.binding_generation(),
-                                    &page.subjects,
+                                .set_source_status(
+                                    &source.id,
+                                    adapter.binding_generation(),
+                                    false,
+                                    true,
                                 )
                                 .await?;
                         }
-                        let complete = page.subjects.is_empty() && page.next_cursor.is_none();
-                        self.store
-                            .set_source_status(
-                                &source.id,
-                                self.adapter(&source.id)?.binding_generation(),
-                                complete,
-                                false,
-                            )
-                            .await?;
-                        discovery_pending |= !complete;
+                        Ok(Err(error)) => return Err(error.into()),
                     }
-                    Ok(Err(
-                        SourceAdapterError::Unavailable
-                        | SourceAdapterError::Concealed
-                        | SourceAdapterError::Denied,
-                    ))
-                    | Err(_) => {
-                        unavailable = true;
-                        self.store
-                            .set_source_status(
-                                &source.id,
-                                self.adapter(&source.id)?.binding_generation(),
-                                false,
-                                true,
-                            )
-                            .await?;
+                } else {
+                    match source_status {
+                        Some((true, false)) => {}
+                        Some((_, true)) => unavailable = true,
+                        _ => discovery_pending = true,
                     }
-                    Ok(Err(error)) => return Err(error.into()),
                 }
+                discovery_pending |= self
+                    .store
+                    .source_has_pending(&source.id, adapter.binding_generation())
+                    .await?;
             }
         }
         let mut reads = 0;
@@ -1261,8 +1309,8 @@ impl CaseworkService {
             }
         }
         drop(caller_reads);
-        let unvisited =
-            discovery_pending || examined < candidate_count || candidates.next_cursor.is_some();
+        let local_unvisited = examined < candidate_count || candidates.next_cursor.is_some();
+        let unvisited = discovery_pending || local_unvisited;
         let exhausted = if feed == "holdings" {
             unvisited
         } else {
@@ -1272,6 +1320,12 @@ impl CaseworkService {
                     || discovery_pending
                     || items.len() < desired && candidates.next_cursor.is_some())
         };
+        // Directory membership may have changed while source reads were in flight.
+        let served_queues = self.store.served_queues(actor).await?;
+        if served_queues.is_empty() {
+            return Ok(no_served_queue_page());
+        }
+        items.retain(|item| served_queues.binary_search(&item.queue_id).is_ok());
         let status = if unavailable {
             PageStatus::SourceUnavailable
         } else if exhausted {
@@ -1279,7 +1333,9 @@ impl CaseworkService {
         } else {
             PageStatus::Complete
         };
-        let next_cursor = if unvisited {
+        // A cursor resumes the local candidate scan, not remote discovery.
+        // Discovery-only pages must not perpetually reissue the same position.
+        let next_cursor = if local_unvisited {
             Some(
                 self.store
                     .issue_cursor(
@@ -1297,15 +1353,6 @@ impl CaseworkService {
         } else {
             None
         };
-        let served_queues = match actor.role {
-            registry_casework_core::CaseworkRole::Staff
-            | registry_casework_core::CaseworkRole::Supervisor => {
-                self.store.served_queues(actor).await?
-            }
-            registry_casework_core::CaseworkRole::Administrator
-            | registry_casework_core::CaseworkRole::Requester => Vec::new(),
-        };
-        items.retain(|item| served_queues.binary_search(&item.queue_id).is_ok());
         Ok(WorkItemPage {
             items,
             next_cursor,
@@ -2261,6 +2308,31 @@ pub enum ServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_status_window_is_twice_the_interval_and_at_least_two_minutes() {
+        assert_eq!(source_status_window(None), Duration::from_secs(120));
+        assert_eq!(
+            source_status_window(Some(Duration::from_secs(1))),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            source_status_window(Some(Duration::from_secs(30))),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            source_status_window(Some(Duration::from_secs(60))),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            source_status_window(Some(Duration::from_secs(300))),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            source_status_window(Some(Duration::from_secs(3_600))),
+            Duration::from_secs(7_200)
+        );
+    }
 
     #[test]
     fn cursor_context_preserves_colons_in_typed_queue_identity() {

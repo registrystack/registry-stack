@@ -5,7 +5,7 @@
 //!
 //! This example exists only to measure the binary, image, and dependency
 //! footprint of the platform executor (`registry-platform-script`'s `wasm`
-//! feature, pinned Wasmtime `=48.0.3`). It constructs the real executor for
+//! feature, pinned Wasmtime `=48.0.5`). It constructs the real executor for
 //! both backends through the platform API and does nothing else: it is not
 //! part of the `registry-breg` library, no request path, CLI command, or
 //! runtime code links against it, and the `wasm` feature stays off in every
