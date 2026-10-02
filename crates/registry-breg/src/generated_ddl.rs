@@ -3293,6 +3293,9 @@ fn immediate_action_effect_group_expression(
         })
         .collect::<Vec<_>>()
         .join(", ");
+    // The context's `fields` array is a byte-ordered set written by Rust, and
+    // jsonb array equality is order-sensitive, so the aggregate orders by the
+    // "C" collation rather than the database's locale-dependent default.
     format!(
         "jsonb_typeof({context} -> 'effectIds') = 'array' \
          AND jsonb_array_length({context} -> 'effectIds') BETWEEN 1 AND 128 \
@@ -3308,7 +3311,7 @@ fn immediate_action_effect_group_expression(
               WHERE context_effects.effect_id NOT IN ({allowed_effects}) \
          ) \
          AND {context} -> 'fields' = ( \
-             SELECT COALESCE(jsonb_agg(selected_fields.field ORDER BY selected_fields.field), '[]'::jsonb) \
+             SELECT COALESCE(jsonb_agg(selected_fields.field ORDER BY selected_fields.field COLLATE \"C\"), '[]'::jsonb) \
                FROM ( \
                    SELECT DISTINCT effect_fields.field \
                      FROM (VALUES {field_rows}) AS effect_fields(effect_id, field) \
