@@ -904,16 +904,21 @@ fn validate_manifest_projection(
         }
     }
 
-    let visible_vocabularies = visible
+    // A vocabulary's describable codes are the union over every visible field
+    // that uses it, so a field narrowed to fewer codes hides none of the codes
+    // another visible field admits.
+    let mut visible_vocabularies = BTreeMap::<&str, BTreeSet<&String>>::new();
+    for field in visible
         .values()
         .flat_map(|(_entity, fields)| fields.values())
-        .filter_map(|field| match &field.field_type {
-            FieldTypeSource::VocabularyCode { vocabulary, values } => {
-                Some((vocabulary.as_str(), values.as_slice()))
-            }
-            _ => None,
-        })
-        .collect::<BTreeMap<_, _>>();
+    {
+        if let FieldTypeSource::VocabularyCode { vocabulary, values } = &field.field_type {
+            visible_vocabularies
+                .entry(vocabulary.as_str())
+                .or_default()
+                .extend(values);
+        }
+    }
     let mut vocabulary_ids = BTreeSet::new();
     for metadata in &projection.vocabularies {
         let path = format!("project.manifestProjection.vocabularies[{}]", metadata.id);

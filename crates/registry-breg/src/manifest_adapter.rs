@@ -500,7 +500,11 @@ fn project_codelists(
     entities: &BTreeMap<String, CompiledEntity>,
     included_datasets: &BTreeSet<&str>,
 ) -> Vec<CodelistManifest> {
-    let used = projection
+    // A codelist carries the union of the codes its projected fields admit, in
+    // first-seen order, so a field narrowed to fewer codes drops none of the
+    // codes another projected field uses.
+    let mut used = BTreeMap::<&str, Vec<&String>>::new();
+    for (vocabulary, values) in projection
         .datasets
         .values()
         .filter(|dataset| included_datasets.contains(dataset.source.id.as_str()))
@@ -521,11 +525,18 @@ fn project_codelists(
         })
         .filter_map(|field| match &field.field_type {
             FieldTypeSource::VocabularyCode { vocabulary, values } => {
-                Some((vocabulary.as_str(), values.as_slice()))
+                Some((vocabulary.as_str(), values))
             }
             _ => None,
         })
-        .collect::<BTreeMap<_, _>>();
+    {
+        let codes = used.entry(vocabulary).or_default();
+        for value in values {
+            if !codes.contains(&value) {
+                codes.push(value);
+            }
+        }
+    }
     projection
         .vocabularies
         .iter()
