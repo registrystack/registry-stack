@@ -246,7 +246,10 @@ one item. Empty `complete` and `budget_exhausted` pages are successful `200`
 responses and retain `servedQueues`; callers follow `nextCursor` when present.
 Source discovery alone does not issue a cursor. If a source-backed page reports
 `budget_exhausted` without a cursor, retry the query without a cursor after
-reconciliation. A caller serving no queue receives `complete` without a cursor.
+reconciliation. The retried walk starts from the first position and can return
+items earlier pages already returned: deduplicate work items by `itemId`, and
+replace holdings totals instead of adding to them. A caller serving no queue
+receives `complete` without a cursor.
 An empty view over a recently reconciled source stays complete, and its
 successful availability probe does not requeue source subjects or clear
 completeness.

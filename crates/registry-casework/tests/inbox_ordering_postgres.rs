@@ -1047,3 +1047,99 @@ async fn holdings_continue_truthfully_beyond_a_single_source_read_page() {
         70
     );
 }
+
+#[tokio::test]
+async fn a_discovery_wait_ends_the_walk_and_a_restart_repeats_earlier_results() {
+    let (store, database, service) = fixture().await;
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let supervisor = actor("supervisor", "supervisor", CaseworkRole::Supervisor);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: vec![supervisor.principal.clone()],
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap",
+        )
+        .await
+        .expect("bootstrap directory");
+    store
+        .set_source_status(SOURCE_ID, GENERATION, false, false)
+        .await
+        .expect("source discovery is still running");
+    let now = Utc::now();
+    insert_item(
+        &database,
+        Uuid::from_u128(1),
+        "only-visible",
+        now,
+        Some(now + TimeDelta::days(1)),
+        &staff.principal,
+    )
+    .await;
+
+    // The walk has no local position left to resume, so the page ends it
+    // without a cursor. Restarting re-walks from the first position and
+    // returns the item an earlier page already returned.
+    let mut returned = Vec::new();
+    for _ in 0..2 {
+        let page = service
+            .inbox(&staff, "reader", "token", 1, None, None)
+            .await
+            .expect("work-item page while discovery is pending");
+        assert_eq!(page.status, PageStatus::BudgetExhausted);
+        assert!(page.next_cursor.is_none());
+        assert_eq!(item_subjects(&page), ["only-visible"]);
+        returned.push(page.items[0].item_id);
+
+        let next = service
+            .next_item(&staff, "reader", "token", None, None)
+            .await
+            .expect("next item while discovery is pending");
+        assert_eq!(next.status, PageStatus::BudgetExhausted);
+        assert!(next.next_cursor.is_none());
+        assert_eq!(item_subjects(&next), ["only-visible"]);
+    }
+    assert_eq!(returned[0], returned[1]);
+
+    // Holdings counts from a restarted walk replace the earlier ones; summing
+    // across the restart would count the same held item twice.
+    for _ in 0..2 {
+        let holdings = service
+            .caller_visible_holdings(&supervisor, "reader", "token", 100, None)
+            .await
+            .expect("holdings while discovery is pending");
+        assert_eq!(holdings.status, PageStatus::BudgetExhausted);
+        assert!(holdings.next_cursor.is_none());
+        assert_eq!(holdings.items.len(), 1);
+        assert_eq!(holdings.items[0].active_items, 1);
+    }
+
+    store
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .expect("source is reconciled");
+    let page = service
+        .inbox(&staff, "reader", "token", 1, None, None)
+        .await
+        .expect("work-item page after reconciliation");
+    assert_eq!(page.status, PageStatus::Complete);
+    assert!(page.next_cursor.is_none());
+    assert_eq!(item_subjects(&page), ["only-visible"]);
+    let holdings = service
+        .caller_visible_holdings(&supervisor, "reader", "token", 100, None)
+        .await
+        .expect("holdings after reconciliation");
+    assert_eq!(holdings.status, PageStatus::Complete);
+    assert!(holdings.next_cursor.is_none());
+    assert_eq!(holdings.items[0].active_items, 1);
+}
