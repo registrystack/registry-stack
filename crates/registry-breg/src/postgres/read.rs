@@ -195,9 +195,6 @@ impl PostgresRecordReadService {
             .get()
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
-        // A read abandoned at its deadline stops its statement and gives up
-        // the session rather than leaving the backend running.
-        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
         let claims = strict_claim_context(&self.registry, &request.context, &request.entity_id)?;
         let plan = match ReadPlan::from_request(
             &self.registry,
@@ -260,6 +257,11 @@ impl PostgresRecordReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
 
+        // A read abandoned at its deadline stops its statement and gives up
+        // the session rather than leaving the backend running. The guard is
+        // armed only once the read reaches its I/O: a read refused or failed
+        // before then hands its idle session back to the pool.
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
         let materialized = self
             .read_rows(session.client(), &request, &claims, &plan)
             .await;
@@ -333,9 +335,6 @@ impl PostgresRecordReadService {
             .get()
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
-        // A read abandoned at its deadline stops its statement and gives up
-        // the session rather than leaving the backend running.
-        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
         let claims = strict_claim_context(&self.registry, &request.context, &request.entity_id)?;
         let plan = ReadPlan::from_request(&self.registry, &self.expected, &self.cursors, &request);
         let valid = plan.as_ref().is_ok_and(|plan| {
@@ -381,6 +380,11 @@ impl PostgresRecordReadService {
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         let plan = plan.map_err(|_| ReadServiceError::Unavailable)?;
+        // A read abandoned at its deadline stops its statement and gives up
+        // the session rather than leaving the backend running. The guard is
+        // armed only once the read reaches its I/O: a read refused or failed
+        // before then hands its idle session back to the pool.
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
         let read = async {
             let transaction = begin_record_transaction(
                 session.client(),
