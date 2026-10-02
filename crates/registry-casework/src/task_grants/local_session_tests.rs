@@ -29,6 +29,9 @@ impl LocalSession {
             Command::new(binary)
                 .args(["--format", "json"])
                 .args(args)
+                // The issuer tooling then keeps a bounded stderr tail of a
+                // failed container command that carries no credential.
+                .env("REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS", "1")
                 .output()
                 .unwrap()
         })
@@ -37,6 +40,11 @@ impl LocalSession {
     }
     async fn success(&self, args: Vec<String>) -> Value {
         let result = self.ctl(args).await;
+        if !result.status.success() {
+            // caseworkctl reports a dev failure generically; the cause is in
+            // the session's own state and logs.
+            eprintln!("{}", super::dev_session_logs::diagnostics(&self.root()));
+        }
         assert!(
             result.status.success(),
             "CLI refusal: stdout={} stderr={}",
