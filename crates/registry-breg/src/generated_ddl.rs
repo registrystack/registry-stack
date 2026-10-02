@@ -13,7 +13,7 @@ use crate::contract::{
 use crate::model::{
     CompiledAction, CompiledActionEffect, CompiledActionInventory, CompiledActionMutation,
     CompiledActionTargetUse, CompiledActionTargetUseSource, CompiledChangeRequestEffect,
-    CompiledChangeRequestMutation, CompiledEntity,
+    CompiledChangeRequestMutation, CompiledEntity, CompiledLogicalField,
 };
 use crate::physical_names::{
     hex_prefix, spatial_candidate_view_name, spatial_geometry_column_name,
@@ -561,9 +561,8 @@ pub(crate) fn generate_ddl_with_actions(
                     .get(field_id)
                     .expect("compiled relation names only derived fields");
                 columns.push(format!(
-                    "{}::{} AS {}",
-                    quote_identifier(&field.logical.sql_name),
-                    sql_type(&field.logical.field_type),
+                    "{} AS {}",
+                    derived_field_projection(&entity.id, &field.logical),
                     quote_identifier(&field.logical.sql_name)
                 ));
             }
@@ -4110,6 +4109,96 @@ fn sql_type(field_type: &FieldTypeSource) -> String {
             "jsonb".to_owned()
         }
     }
+}
+
+/// Cast one reviewed-SQL result only after checking the parts of its declared
+/// contract that PostgreSQL casts would otherwise silently discard. The
+/// failure branch depends on the row, so the planner cannot fold it while
+/// creating or planning the view. Its deliberately invalid integer contains
+/// only governed identifiers; PostgreSQL never includes the source value in
+/// the resulting error.
+fn derived_field_projection(entity_id: &str, field: &CompiledLogicalField) -> String {
+    let identifier = quote_identifier(&field.sql_name);
+    let target_type = sql_type(&field.field_type);
+    let invalid = derived_field_contract_error(entity_id, &field.id, &identifier, &target_type);
+    match &field.field_type {
+        FieldTypeSource::String {
+            min_length,
+            max_length,
+        } => format!(
+            "CASE WHEN {identifier} IS NULL THEN NULL::{target_type} \
+             WHEN pg_catalog.char_length({identifier}::text) BETWEEN {min_length} AND {max_length} \
+             THEN {identifier}::{target_type} ELSE {invalid} END"
+        ),
+        FieldTypeSource::Text { max_length } => format!(
+            "CASE WHEN {identifier} IS NULL THEN NULL::{target_type} \
+             WHEN pg_catalog.char_length({identifier}::text) <= {max_length} \
+             THEN {identifier}::{target_type} ELSE {invalid} END"
+        ),
+        FieldTypeSource::VocabularyCode { values, .. } => {
+            let values = values
+                .iter()
+                .map(|value| quote_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "CASE WHEN {identifier} IS NULL THEN NULL::{target_type} \
+                 WHEN {identifier}::text IN ({values}) \
+                 THEN {identifier}::{target_type} ELSE {invalid} END"
+            )
+        }
+        FieldTypeSource::Int64 => {
+            let parsed = format!("({identifier}::text)::numeric");
+            format!(
+                "CASE WHEN {identifier} IS NULL THEN NULL::{target_type} \
+                 WHEN pg_catalog.pg_input_is_valid({identifier}::text, 'numeric') THEN \
+                   CASE WHEN {parsed} = pg_catalog.trunc({parsed}) \
+                             AND {parsed} BETWEEN -9223372036854775808 AND 9223372036854775807 \
+                        THEN {parsed}::{target_type} ELSE {invalid} END \
+                 ELSE {invalid} END"
+            )
+        }
+        FieldTypeSource::Decimal {
+            precision,
+            scale,
+            minimum,
+            maximum,
+        } => {
+            let parsed = format!("({identifier}::text)::numeric");
+            let magnitude = format!("1{}", "0".repeat(usize::from(precision - scale)));
+            let mut checks = vec![
+                format!("{parsed} = pg_catalog.trunc({parsed}, {scale})"),
+                format!("{parsed} > -{magnitude}"),
+                format!("{parsed} < {magnitude}"),
+            ];
+            if let Some(minimum) = minimum {
+                checks.push(format!("{parsed} >= {minimum}"));
+            }
+            if let Some(maximum) = maximum {
+                checks.push(format!("{parsed} <= {maximum}"));
+            }
+            format!(
+                "CASE WHEN {identifier} IS NULL THEN NULL::{target_type} \
+                 WHEN pg_catalog.pg_input_is_valid({identifier}::text, 'numeric') THEN \
+                   CASE WHEN {} THEN {parsed}::{target_type} ELSE {invalid} END \
+                 ELSE {invalid} END",
+                checks.join(" AND ")
+            )
+        }
+        _ => format!("{identifier}::{target_type}"),
+    }
+}
+
+fn derived_field_contract_error(
+    entity_id: &str,
+    field_id: &str,
+    identifier: &str,
+    target_type: &str,
+) -> String {
+    let label = quote_literal(&format!(
+        "derived field {entity_id}.{field_id} violates declared type"
+    ));
+    format!("(({label} || pg_catalog.left({identifier}::text, 0))::bigint)::text::{target_type}")
 }
 
 fn field_check(identifier: &str, field_type: &FieldTypeSource) -> Option<String> {

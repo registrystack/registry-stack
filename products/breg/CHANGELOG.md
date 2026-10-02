@@ -11,6 +11,40 @@
   idempotent publication and atomic withdrawal. See `STATISTICS.md` for
   disclosure risks, definition series, and the seven HTTP operations.
 
+- Derived SQL now accepts only explicitly reviewed raw PostgreSQL grammar
+  nodes (#1841). `JSON_VALUE` and `JSON_EXISTS` remain available for scalar
+  structured-field access; `JSON_QUERY`, `JSON_TABLE`, `XMLTABLE`, SQL/JSON
+  aggregates and constructors, and XML functions are refused. Expressions
+  inside accepted SQL/JSON functions receive the same relation, function, and
+  encrypted-column checks as other derived SQL.
+  Implicit `NATURAL`/`USING` joins and source/join column alias lists are refused
+  because they can evade explicit column-reference checks.
+  Cast targets are limited to reviewed built-in scalar types, and column names
+  resolve against the compiler-known output of the exact source, CTE, or
+  subquery range in each SELECT scope. Whole-row references, row constructors,
+  attribute-notation function calls, arrays, catalog reference types, XML,
+  money, and timestamp-with-time-zone casts are refused (#1855).
+- Derived strings, decimals, and integers no longer silently truncate or round
+  to their declared type (#1842). Generated views enforce string minimum and
+  maximum length, text maximum length, decimal scale, precision and range,
+  integer integrality and range, and vocabulary membership before casting.
+  An invalid value raises a stable, value-free database error identifying its
+  entity and field; API reads return the existing `503 source.unavailable`.
+- BREAKING: derived-view wrappers are compiled DDL and belong to the managed
+  catalog fingerprint. A project with these derived fields compiles to a new
+  `registryRevision`; its earlier package fails artifact rederivation with the
+  upgraded runtime. Starting the runtime changes no catalog or activation
+  binding. Before switching the runtime, rebuild and test the authored project
+  with the deployed package as `--baseline-package`, then package, plan, and
+  apply its successor with the matching `bregctl`. Rehearsal may report
+  `migration.rehearsal.baseline_fingerprint_drift` when reconstructing the
+  predecessor with the new compiler. Successor activation replaces every
+  retained compatible derived view, even when its authored SQL is unchanged,
+  verifies the exact target fingerprint, and records the successor binding
+  atomically. Existing import/export continuations keep their earlier package
+  and fingerprint binding and must not resume under the successor. A project
+  whose SQL uses newly refused constructs must revise that SQL before rebuilding.
+
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers

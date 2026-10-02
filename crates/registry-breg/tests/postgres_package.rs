@@ -12,6 +12,10 @@ mod fingerprint_tests;
 #[path = "postgres_package/policy_upgrade.rs"]
 mod policy_upgrade_tests;
 
+#[cfg(feature = "tooling")]
+#[path = "postgres_package/derived_upgrade.rs"]
+mod derived_upgrade_tests;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -3087,7 +3091,10 @@ fn derived_module_bytes() -> Vec<u8> {
 }
 
 fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {
-    let module_bytes = derived_module_bytes();
+    derived_asset_request_with_module(derived_module_bytes(), sql)
+}
+
+fn derived_asset_request_with_module(module_bytes: Vec<u8>, sql: &[u8]) -> PackageBuildRequest {
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
     let digest = module_digest_with_assets(
         &module,

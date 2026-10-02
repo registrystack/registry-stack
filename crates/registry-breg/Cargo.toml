@@ -128,6 +128,11 @@ path = "tests/postgres_read.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_derived_values"
+path = "tests/postgres_derived_values.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_spatial_storage"
 path = "tests/postgres_spatial_storage.rs"
 required-features = ["postgres-test"]

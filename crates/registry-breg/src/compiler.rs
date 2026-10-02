@@ -5325,11 +5325,20 @@ fn validate_derived_assets(
     assets: &[ModuleAssetSource],
     errors: &mut Vec<Diagnostic>,
 ) {
-    let known_relations = sources
+    let source_columns = sources
         .values()
-        .map(|entity| default_sql_name(&entity.id))
-        .collect::<Vec<_>>();
-    let known_relations = known_relations.iter().map(String::as_str).collect();
+        .map(|entity| {
+            let columns = std::iter::once("id".to_owned())
+                .chain(
+                    entity
+                        .fields
+                        .iter()
+                        .map(|field| default_sql_name(&field.id)),
+                )
+                .collect::<BTreeSet<_>>();
+            (default_sql_name(&entity.id), columns)
+        })
+        .collect::<BTreeMap<_, _>>();
     // Encrypted fields leave the registry_source layer, so derived SQL can
     // never resolve them; collect their logical column names per relation.
     let encrypted_columns = sources
@@ -5363,7 +5372,7 @@ fn validate_derived_assets(
             validate_derived_sql(
                 derived,
                 sql,
-                &known_relations,
+                &source_columns,
                 &encrypted_columns,
                 &path,
                 errors,
