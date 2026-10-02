@@ -3765,7 +3765,7 @@ pub(crate) async fn set_force_row_security(
     Ok(())
 }
 
-async fn set_local_migration_timeouts(
+pub(super) async fn set_local_migration_timeouts(
     transaction: &impl GenericClient,
     lock_timeout_ms: u64,
     statement_timeout_ms: u64,

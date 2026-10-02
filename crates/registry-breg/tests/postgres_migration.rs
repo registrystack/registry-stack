@@ -43,7 +43,8 @@ use registry_breg::package::{
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    MigrationRehearsalError, PostgresFailure, RehearsalOutcome, SuccessorMigrationRehearsal,
+    MigrationRehearsalError, PostgresFailure, RehearsalAssertionPhase, RehearsalOutcome,
+    SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -4325,6 +4326,82 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
     database.cleanup().await;
 }
 
+/// The rehearsal runs a reviewed migration's assertions and steps under the
+/// lock and statement timeouts its descriptor declares, the ones activation
+/// sets, so an assertion that outlasts the declared statement timeout is
+/// refused by the rehearsal as activation refuses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_rehearsal_holds_a_reviewed_migration_to_its_declared_timeouts() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let base = compile_variant(Variant::Base);
+    let base_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &base_fingerprint);
+    let active = target_identity(&initial);
+    let candidate = compile_variant(Variant::RankRequired);
+    let target_fingerprint = initial_fingerprint(&database, &candidate).await;
+    let request = |current| BackfillSourceRequest {
+        id: "rank-outlasts-timeout",
+        current,
+        prior: &base,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        pre: AssertionMode::OutlastsStatementTimeout,
+        post: AssertionMode::True,
+        rehearsed_rows: 0,
+    };
+    let prepared = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source(request(&active)),
+    );
+    let refused = rehearse(&database, &base, &base_fingerprint, &prepared)
+        .await
+        .expect_err("an assertion that outlasts the declared statement timeout is refused");
+    let MigrationRehearsalError::Assertion {
+        migration_id,
+        phase,
+        assertion_id,
+        failure,
+    } = &refused
+    else {
+        panic!("the refusal names the reviewed assertion: {refused:?}");
+    };
+    assert_eq!(migration_id, "rank-outlasts-timeout");
+    assert_eq!(*phase, RehearsalAssertionPhase::Pre);
+    assert_eq!(assertion_id, "pre");
+    assert_eq!(failure.sqlstate.as_deref(), Some("57014"));
+    assert_rehearsal_database_clean(&database).await;
+
+    // Activation sets the same declared timeout and refuses the same plan.
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the timeout scenario's initial package activates");
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(request(&active)),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+
+    database.cleanup().await;
+}
+
 /// A predecessor whose schema the current compiler cannot install is refused;
 /// only a fingerprint difference is advisory.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5050,6 +5127,21 @@ enum Variant {
 enum AssertionMode {
     True,
     False,
+    /// True, but only after it outlasts the statement timeout the migration
+    /// declares, so activation cancels it.
+    OutlastsStatementTimeout,
+}
+
+/// The statement timeout a backfill source declares, and the shorter one it
+/// declares when an assertion is written to outlast it.
+fn declared_statement_timeout_ms(pre: AssertionMode, post: AssertionMode) -> u64 {
+    if matches!(pre, AssertionMode::OutlastsStatementTimeout)
+        || matches!(post, AssertionMode::OutlastsStatementTimeout)
+    {
+        200
+    } else {
+        5_000
+    }
 }
 
 async fn false_assertion_refusals_are_closed() {
@@ -5073,9 +5165,10 @@ async fn false_assertion_refusals_are_closed() {
         let required = compile_variant(Variant::RankRequired);
         let target_fingerprint = required_target_fingerprint(&database, &required).await;
         let source = backfill_source(BackfillSourceRequest {
-            id: match pre {
-                AssertionMode::False => "false-pre",
-                AssertionMode::True => "false-post",
+            id: if matches!(pre, AssertionMode::False) {
+                "false-pre"
+            } else {
+                "false-post"
             },
             current: &active,
             prior: &base,
@@ -5579,14 +5672,26 @@ fn backfill_source_with_steps(
         "SELECT pg_catalog.count(*) = pg_catalog.count({}) FROM registry_data.{}",
         field.physical_name, entity.physical_table
     );
+    // The assertion grammar admits no sleep, so the slow assertion counts a
+    // hundred million rows of a cross join over literal values.
+    let values = "(VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10))";
+    let outlasting = format!(
+        "SELECT pg_catalog.count(*) > 0 FROM {}",
+        ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .map(|alias| format!("{values} AS {alias} (v)"))
+            .join(", ")
+    );
     let pre_sql = match pre {
         AssertionMode::True => true_pre,
         AssertionMode::False => "SELECT false".to_owned(),
+        AssertionMode::OutlastsStatementTimeout => outlasting.clone(),
     };
     let post_sql = match post {
         AssertionMode::True => true_post,
         AssertionMode::False => "SELECT false".to_owned(),
+        AssertionMode::OutlastsStatementTimeout => outlasting,
     };
+    let statement_timeout_ms = declared_statement_timeout_ms(pre, post);
     let object = ReviewedMigrationObject {
         schema: "registry_data".to_owned(),
         table: entity.physical_table.clone(),
@@ -5601,7 +5706,7 @@ fn backfill_source_with_steps(
         covers: vec![ReviewedChangeCover::from(&change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
         lock_timeout_ms: 50,
-        statement_timeout_ms: 5_000,
+        statement_timeout_ms,
         steps: std::iter::once(ReviewedMigrationStepDescriptor::ChunkedBackfill {
             id: "backfill-rank".to_owned(),
             entity_id: "asset".to_owned(),
@@ -5611,7 +5716,7 @@ fn backfill_source_with_steps(
             chunk_size: 2,
             max_total_rows: 10,
             lock_timeout_ms: 50,
-            statement_timeout_ms: 5_000,
+            statement_timeout_ms,
             exact_affected_rows: true,
         })
         .chain(
