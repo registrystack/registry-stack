@@ -2704,6 +2704,12 @@ fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> 
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
+            command,
+            "evidence_retention.package.refused",
+            "package",
+            &mismatch,
+        ),
         _ => source_failure(
             command,
             diagnostic(
@@ -2722,6 +2728,14 @@ fn request_retention_failure(
     error: RequestRetentionCliError,
 ) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
+        RequestRetentionCliError::PackagePinMismatch(mismatch) => {
+            return package_pin_failure(
+                command,
+                "request_retention.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
         RequestRetentionCliError::MigrationLockHeld => (
             "request_retention.in_progress",
             "database",
@@ -2891,6 +2905,14 @@ fn import_authority_failure(
             DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::PackagePinMismatch(mismatch)) => {
+            return package_pin_failure(
+                command,
+                "import_authority.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
         ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld) => (
             diagnostic(
                 "import_authority.in_progress",
@@ -4008,6 +4030,9 @@ fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
 
 fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
+        WebhookLifecycleError::PackagePinMismatch(mismatch) => {
+            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch)
+        }
         WebhookLifecycleError::Event => (
             "webhook.sample.event_refused",
             "event",

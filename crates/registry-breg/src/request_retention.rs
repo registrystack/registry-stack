@@ -22,6 +22,7 @@ use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::model::{
     CompiledChangeRequestRetentionMode, CompiledEntity, CompiledRegistry, HttpMethod,
 };
+use crate::package::PackageError;
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
@@ -38,7 +39,7 @@ pub const MAX_REQUEST_RETENTION_OPERATOR_PAGE_SIZE: u16 = 100;
 const RETENTION_OPERATION_ID: &str = "records.request.retention.erase";
 const RETENTION_REFERENCE: &str = "request-retention-erasure";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RequestRetentionError {
     #[error("active request proposals require explicit rebase or cancellation")]
     ActiveProposalRequiresRebase,
@@ -50,6 +51,11 @@ pub enum RequestRetentionError {
     AttachmentStorageBindingMismatch,
     #[error("another session held the exclusive migration lock past the lock timeout")]
     MigrationLockHeld,
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them.
+    #[error("{0}")]
+    PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
     #[error("request retention state is unavailable")]
     Unavailable,
     /// The erasure committed, but the audit destination refused the entry
@@ -211,9 +217,12 @@ impl RequestRetentionOperatorService {
             return Err(RequestRetentionError::Unavailable);
         }
         let config = load_runtime_config(path).map_err(|_| RequestRetentionError::Unavailable)?;
-        let package = config
-            .load_active_package()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let package = config.load_active_package().map_err(|error| match error {
+            PackageError::ExpectedDigestMismatch(mismatch) => {
+                RequestRetentionError::PackagePinMismatch(mismatch)
+            }
+            _ => RequestRetentionError::Unavailable,
+        })?;
         let runtime_connection = config
             .runtime_database_connection_config()
             .map_err(|_| RequestRetentionError::Unavailable)?;

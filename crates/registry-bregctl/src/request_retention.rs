@@ -13,10 +13,11 @@ use registry_breg::request_retention::{
     RequestRetentionError, RequestRetentionListPage, RequestRetentionOperatorService,
     MAX_REQUEST_RETENTION_OPERATOR_PAGE_SIZE,
 };
+use registry_platform_config::PackageDigestMismatch;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RequestRetentionCliError {
     Operator,
     ActiveDetailPinned,
@@ -27,6 +28,9 @@ pub(crate) enum RequestRetentionCliError {
     /// Another session held the exclusive migration lock past the lock
     /// timeout.
     MigrationLockHeld,
+    /// The configured active package does not match the runtime file's
+    /// `package.expectedDigest` pin.
+    PackagePinMismatch(PackageDigestMismatch),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -158,6 +162,9 @@ fn map_error(error: RequestRetentionError) -> RequestRetentionCliError {
         }
         RequestRetentionError::ErasureUnaudited => RequestRetentionCliError::ErasureUnaudited,
         RequestRetentionError::MigrationLockHeld => RequestRetentionCliError::MigrationLockHeld,
+        RequestRetentionError::PackagePinMismatch(mismatch) => {
+            RequestRetentionCliError::PackagePinMismatch(mismatch)
+        }
         RequestRetentionError::ActiveProposalRequiresRebase
         | RequestRetentionError::Unavailable => RequestRetentionCliError::Operator,
     }

@@ -5829,6 +5829,92 @@ fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
     }
 }
 
+/// Run one operator command against a runtime file whose
+/// `package.expectedDigest` pins another package than the one at
+/// `package.root`, and require the refusal to name both digests under the
+/// command's package code before any database is reached.
+fn assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+    command: &[&str],
+    arguments: &[&str],
+    code: &str,
+) {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let pinned = format!("sha256:{}", "0".repeat(64));
+    let wrong_pin = fixture.variant(
+        "wrong-pin",
+        &format!("  root: {}", path(&fixture.package)),
+        &format!(
+            "  root: {}\n  expectedDigest: {pinned}",
+            path(&fixture.package)
+        ),
+    );
+    let mut invocation = vec!["--format", "json"];
+    invocation.extend_from_slice(command);
+    invocation.extend_from_slice(&["--runtime-config", path(&wrong_pin)]);
+    invocation.extend_from_slice(arguments);
+
+    let output = bregctl(&invocation);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], code, "{report}");
+    assert_eq!(diagnostic["path"], "package");
+    assert_tool_diagnostic(diagnostic, "verified_package", "verify_package_integrity");
+    assert_eq!(
+        diagnostic["message"],
+        format!(
+            "package.expectedDigest is {pinned} but the package at package.root is {}; deploy the pinned package or update package.expectedDigest",
+            fixture.package_digest
+        )
+    );
+    let rendered = String::from_utf8(output.stdout).expect("operator refusal is UTF-8");
+    for forbidden in [
+        path(&wrong_pin),
+        path(&fixture.package),
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+    ] {
+        assert!(!rendered.contains(forbidden));
+    }
+}
+
+#[test]
+fn webhook_operations_name_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["webhook", "list"],
+        &[],
+        "webhook.package.refused",
+    );
+}
+
+#[test]
+fn request_retention_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["request-retention", "list"],
+        &[],
+        "request_retention.package.refused",
+    );
+}
+
+#[test]
+fn import_authority_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["import-authority", "list"],
+        &[],
+        "import_authority.package.refused",
+    );
+}
+
+#[test]
+fn evidence_retention_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["evidence-retention", "erase-expired"],
+        &["--before", "2020-01-01T00:00:00Z"],
+        "evidence_retention.package.refused",
+    );
+}
+
 #[test]
 fn canonical_package_tampering_is_refused_without_rendering_package_values() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());

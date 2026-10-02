@@ -137,7 +137,7 @@ pub struct ImportAuthority {
 
 /// The closed refusal vocabulary of the authority store. It is value-free:
 /// no operator reference, reason, or row value travels with it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ImportAuthorityError {
     #[error("the import authority request is invalid")]
     InvalidInput,
@@ -151,6 +151,11 @@ pub enum ImportAuthorityError {
     NotReady,
     #[error("another session held the exclusive migration lock past the lock timeout")]
     MigrationLockHeld,
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them.
+    #[error("{0}")]
+    PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
     #[error("the import authority store is unavailable")]
     Unavailable,
 }
@@ -748,9 +753,12 @@ impl ImportAuthorityOperatorService {
         }
         let config = crate::runtime_config::load_runtime_config(path)
             .map_err(|_| ImportAuthorityError::Unavailable)?;
-        let package = config
-            .load_active_package()
-            .map_err(|_| ImportAuthorityError::Unavailable)?;
+        let package = config.load_active_package().map_err(|error| match error {
+            crate::package::PackageError::ExpectedDigestMismatch(mismatch) => {
+                ImportAuthorityError::PackagePinMismatch(mismatch)
+            }
+            _ => ImportAuthorityError::Unavailable,
+        })?;
         let audit = crate::audit::RegistryAudit::open_companion(&config)
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;

@@ -116,6 +116,15 @@
   `field-encryption erase-history`. Each keeps its code, for example
   `apply.package.refused` at `package.root`; the message named neither
   digest before.
+- BREAKING: `webhook list`, `replay`, and `discard`, the `request-retention`
+  commands, the `import-authority` commands, and `evidence-retention
+  erase-expired` refuse that package with the same sentence under
+  `webhook.package.refused`, `request_retention.package.refused`,
+  `import_authority.package.refused`, and
+  `evidence_retention.package.refused` at `package`, where they reported
+  `webhook.operation.refused`, `request_retention.operation.refused`,
+  `import_authority.unavailable`, and `evidence_retention.unavailable` and
+  named neither digest.
 
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
