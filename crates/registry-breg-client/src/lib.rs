@@ -30,7 +30,7 @@ pub use batch::*;
 pub use client::BaseRegistryClient;
 pub use config::BaseRegistryClientConfig;
 pub use error::{
-    BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BRegRefusalCode,
+    BRegPlanRefusal, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRefusalCode,
     BaseRegistryClientError, TransportKind,
 };
 pub use geojson::*;

@@ -15,10 +15,11 @@ use registry_breg_client::{
     BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey,
     BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
     BRegLifecycleOperation, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
-    BRegPatchRequest, BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BRegRecordFormat,
-    BRegRecordOptions, BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig,
-    BaseRegistryClientError, RegistryRecordRepresentation, RegistryRecordResponse,
-    BREG_INGESTION_CHUNK_ALGORITHM_VERSION, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
+    BRegPatchRequest, BRegPlanRefusal, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
+    BRegRecordFormat, BRegRecordOptions, BRegRefusalCode, BaseRegistryClient,
+    BaseRegistryClientConfig, BaseRegistryClientError, RegistryRecordRepresentation,
+    RegistryRecordResponse, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Map, Value};
@@ -2717,7 +2718,7 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
         response.body = serde_json::to_vec(&value).unwrap();
         response
     };
-    let mut accepted = vec![(base.clone(), REFUSAL_CODE.to_owned())];
+    let mut accepted = vec![(base.clone(), REFUSAL_CODE.to_owned(), None)];
     for (path, refusal) in [
         ("/input/givenName", REFUSAL_CODE),
         ("/input/a", "a"),
@@ -2727,12 +2728,16 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
         value["fieldPath"] = json!(path);
         value["refusalCode"] = json!(refusal);
         value["detail"] = json!("A declared label canary.");
-        accepted.push((response_for(value), refusal.to_owned()));
+        accepted.push((
+            response_for(value),
+            refusal.to_owned(),
+            Some(path.to_owned()),
+        ));
     }
     let mut long = document.clone();
     long["detail"] = json!("é".repeat(256));
     long["refusalCode"] = json!("z".repeat(128));
-    accepted.push((response_for(long), "z".repeat(128)));
+    accepted.push((response_for(long), "z".repeat(128), None));
     let mut refused = Vec::new();
     for refusal in [
         Value::Null,
@@ -2801,15 +2806,15 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
     refused.push(duplicate);
     // One entry per exchange, in order: the declared code an accepted refusal
     // must carry, and nothing for a document the client has to fail closed on.
-    let expected: Vec<Option<String>> = accepted
+    let expected: Vec<Option<(String, Option<String>)>> = accepted
         .iter()
-        .map(|(_, code)| Some(code.clone()))
+        .map(|(_, code, path)| Some((code.clone(), path.clone())))
         .chain(refused.iter().map(|_| None))
         .collect();
     let total = expected.len();
     let fixture = test_client(
         std::iter::once(metadata_response())
-            .chain(accepted.into_iter().map(|(response, _)| response))
+            .chain(accepted.into_iter().map(|(response, _, _)| response))
             .chain(refused)
             .collect(),
     )
@@ -2832,15 +2837,20 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
             )
             .await
             .expect_err("refusal or protocol failure");
-        if let Some(code) = declared {
+        if let Some((code, path)) = declared {
             assert_eq!(error.problem_code(), Some(BRegProblemCode::ActionRefused));
             assert_eq!(error.status(), Some(422));
             assert_eq!(
                 error.refusal_code().map(BRegRefusalCode::as_str),
                 Some(code.as_str())
             );
+            assert_eq!(
+                error.field_path().map(BRegProblemFieldPath::as_str),
+                path.as_deref()
+            );
         } else {
             assert_eq!(error.refusal_code(), None);
+            assert_eq!(error.field_path(), None);
             assert!(matches!(
                 error,
                 BaseRegistryClientError::Protocol {
