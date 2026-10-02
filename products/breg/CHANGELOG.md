@@ -43,12 +43,14 @@
   changed. An action's revision is journaled under the entity's canonical
   operation identifier, such as `records.person.create`. A revision an earlier
   release journaled under the action's effect identifier stays readable, and
-  keeps reporting that identifier, while the active package declares that
-  effect against the same entity with the same operation.
+  keeps reporting that identifier, while the action that wrote it, as its
+  stored action result records, still declares that effect against the same
+  entity with the same operation. Another action declaring the same effect
+  identifier does not keep it readable.
   Such revisions are not backfilled to the canonical identifier and no
-  migration rewrites them: once a later package renames or removes that
-  effect, or changes its operation, that revision's detail read and any list
-  page that includes it answer `503 source.unavailable`.
+  migration rewrites them: once a later package removes or renames that
+  action or effect, or changes the effect's operation, that revision's detail
+  read and any list page that includes it answer `503 source.unavailable`.
 
 ## v0.38.0 - 2026-10-01
 
