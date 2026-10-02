@@ -212,9 +212,13 @@ caseworkctl dev stop tutorial-work/casework --remove
 ```
 
 :::caution[Removal discards this tutorial's Casework database]
-`--remove` deletes the retained development volume owned by this project. Export anything you need
-before running it.
+`--remove` deletes the retained development volume owned by this project and empties its local
+audit directory, `.casework/dev/audit`. Export anything you need before running it.
 :::
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop and clear_audit;
+    crates/registry-caseworkctl/src/dev/tests.rs,
+    dev_stop_remove_clears_the_retained_audit_directory. */}
 
 ## Next
 

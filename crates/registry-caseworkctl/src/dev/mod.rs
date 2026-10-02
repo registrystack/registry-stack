@@ -204,7 +204,8 @@ struct StopArgs {
     /// Casework project whose owned services should stop while preserving records.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Also remove the owned container and its data volume, discarding records.
+    /// Also remove the owned container, its data volume, and the retained audit directory,
+    /// discarding records.
     #[arg(long)]
     remove: bool,
     #[arg(long, hide = true)]
@@ -1667,8 +1668,25 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     state.save()?;
     if remove {
         reclaim(&docker, &mut state)?;
+        clear_audit(&root)?;
     }
     Ok(state.report())
+}
+
+/// Empty the retained audit directory after reclamation discarded the records
+/// it describes, so the next start appends a fresh stream instead of one an
+/// earlier release may have written. Only an owner-only directory tree of
+/// ordinary files inside this session is removed; a symlink is refused, not
+/// followed. The audit hash key and other session state are kept.
+fn clear_audit(root: &Path) -> Result<()> {
+    let audit = root.join("audit");
+    if fs::symlink_metadata(&audit).is_ok() {
+        private::validate_tree(&audit).context(
+            "the retained audit directory is not owned local state; nothing was removed from it",
+        )?;
+        fs::remove_dir_all(&audit).context("cannot remove the retained audit directory")?;
+    }
+    private::directory(&audit).context("cannot recreate the retained audit directory")
 }
 
 /// Discard a never-populated session after its inputs change. A failed Docker
@@ -3471,7 +3489,7 @@ impl DevFailure {
                 "caseworkctl.dev.audit-format-unsupported",
                 AUDIT_DIRECTORY.to_owned(),
                 format!("The retained audit stream in {AUDIT_DIRECTORY} is in a format this release cannot append to, usually because an earlier caseworkctl release wrote it; the runtime refuses to start over it."),
-                format!("Move {AUDIT_DIRECTORY} out of the project (keep it if you need its records), then run caseworkctl dev start again; caseworkctl dev stop --remove does not remove it."),
+                format!("Move {AUDIT_DIRECTORY} out of the project to keep its records, or run caseworkctl dev stop --remove to discard the retained session together with that audit directory, then run caseworkctl dev start again."),
             ),
             Self::AuditUnavailable { .. } => (
                 "caseworkctl.dev.audit-unavailable",
