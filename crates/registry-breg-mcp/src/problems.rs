@@ -255,6 +255,7 @@ mod tests {
             status: 400,
             code,
             trace_id: TraceId::parse(TRACE).expect("trace id"),
+            field_path: None,
             refusal_code: None,
         })
     }
