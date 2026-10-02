@@ -65,6 +65,17 @@ HTTP callers use public API names such as `assetCode`, `assetType`,
 `observedAt`, and `initialResult`. Effect mappings use logical input IDs such as
 `asset-code`, `asset-type`, `observed-at`, and `inspection-result`.
 
+Effects run in the order they are declared, inside the action's single
+transaction, with two adjustments: an effect that reads `{fromEffect: ...}` runs
+after the create it names, wherever that create is declared, and patches that
+resolve to the same stored record apply together as one write, at the position
+of the first. Effect identifiers do not affect order. Declare order-sensitive
+writes in the order the database must see them; for example, an action that
+replaces a temporal role under a `temporal-non-overlap` constraint declares the
+patch that ends the outgoing period before the create that starts the incoming
+one. A Rhai handler's effects follow the same rule, in the order the script
+emits them.
+
 To rename a public action input, edit its `apiName` under
 `actions[].inputs` in the module, then update that action's caller input keys in
 `tests/journeys.yaml`. Keep the logical input `id` and effect mappings unchanged.

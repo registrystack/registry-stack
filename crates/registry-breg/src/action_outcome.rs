@@ -553,7 +553,7 @@ fn validate_proposed_effects(
             }
         }
     }
-    let effects = rhai_planner::order_candidates(effects)
+    let effects = rhai_planner::order_candidates_as_emitted(effects)
         .map_err(|kind| {
             ActionHandlerDiagnostic::new(
                 kind.into(),

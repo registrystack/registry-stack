@@ -1111,7 +1111,13 @@ fn compile_effects(
         );
     }
 
-    let ordered = order_effects(compiled_by_id, errors)?;
+    let declared = action
+        .effects
+        .iter()
+        .enumerate()
+        .map(|(index, effect)| effect_id(effect, index))
+        .collect::<Vec<_>>();
+    let ordered = order_effects(&declared, compiled_by_id, errors)?;
     validate_required_create_fields(entities, &ordered, errors);
     let result_effects = ordered.iter().map(|effect| effect.id.clone()).collect();
     let conditioned_inputs = target_uses
@@ -1474,14 +1480,17 @@ fn remember_write(
     }
 }
 
+/// Orders effects for execution: declaration order, except that an effect
+/// reading a reserved create runs after the effect that creates it.
 fn order_effects(
+    declared: &[String],
     effects: BTreeMap<String, CompiledActionEffect>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<Vec<CompiledActionEffect>> {
     let mut state = BTreeMap::<String, VisitState>::new();
     let mut ordered = Vec::new();
-    for id in effects.keys() {
-        visit_effect(id, &effects, &mut state, &mut ordered, errors);
+    for id in declared {
+        visit_effect(id, declared, &effects, &mut state, &mut ordered, errors);
     }
     if errors
         .iter()
@@ -1499,6 +1508,7 @@ fn order_effects(
 
 fn visit_effect(
     id: &str,
+    declared: &[String],
     effects: &BTreeMap<String, CompiledActionEffect>,
     state: &mut BTreeMap<String, VisitState>,
     ordered: &mut Vec<String>,
@@ -1518,8 +1528,11 @@ fn visit_effect(
     }
     state.insert(id.to_owned(), VisitState::Visiting);
     if let Some(effect) = effects.get(id) {
-        for dependency in &effect.depends_on {
-            visit_effect(dependency, effects, state, ordered, errors);
+        for dependency in declared
+            .iter()
+            .filter(|candidate| effect.depends_on.contains(*candidate))
+        {
+            visit_effect(dependency, declared, effects, state, ordered, errors);
         }
     }
     state.insert(id.to_owned(), VisitState::Done);

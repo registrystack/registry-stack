@@ -1,0 +1,57 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: temporal-handover-action, version: "1", defaultLanguage: en, canonicalBaseIri: https://temporal-handover-action.example.test}
+entities:
+  - id: supervision
+    primaryDataset: test-dataset
+    route: supervisions
+    mutationMode: mutable
+    fields:
+      - {id: premises, type: string, maxLength: 40, required: true, classification: internal}
+      - {id: supervisor, type: string, maxLength: 40, required: true, classification: internal}
+      - {id: valid-from, type: timestamp, required: true, classification: internal}
+      - {id: valid-to, type: timestamp, required: false, classification: internal}
+    temporal: {startField: valid-from, endField: valid-to}
+    constraints:
+      - {kind: temporal-non-overlap, scopeFields: [premises], startField: valid-from, endField: valid-to}
+actions:
+  - id: assign-supervisor
+    inputs:
+      - {id: premises, type: string, maxLength: 40, required: true, classification: internal}
+      - {id: supervisor, type: string, maxLength: 40, required: true, classification: internal}
+      - {id: starts-at, apiName: startsAt, type: timestamp, required: true, classification: internal}
+    effects:
+      - id: assigned
+        target: {entity: supervision}
+        operation: create
+        set: {premises: {fromField: premises}, supervisor: {fromField: supervisor}, valid-from: {fromField: starts-at}}
+  # The effect ids sort opposite to the declared order: ending the outgoing
+  # role must run first, or the incoming role overlaps it.
+  - id: replace-supervisor
+    inputs:
+      - {id: outgoing, apiName: outgoingId, type: reference, target: supervision, required: true, classification: internal}
+      - {id: premises, type: string, maxLength: 40, required: true, classification: internal}
+      - {id: supervisor, type: string, maxLength: 40, required: true, classification: internal}
+      - {id: handover-at, apiName: handoverAt, type: timestamp, required: true, classification: internal}
+    effects:
+      - id: z-end-outgoing
+        target: {fromField: outgoing}
+        operation: patch
+        set: {valid-to: {fromField: handover-at}}
+      - id: a-start-incoming
+        target: {entity: supervision}
+        operation: create
+        set: {premises: {fromField: premises}, supervisor: {fromField: supervisor}, valid-from: {fromField: handover-at}}
+accessProfiles:
+  - id: registrar
+    default: true
+    principalClaim: registry_principal
+    permissions:
+      - action: assign-supervisor
+        operations: [invoke]
+        targets: [{entity: supervision, rowBoundaries: []}]
+        results: [assigned]
+      - action: replace-supervisor
+        operations: [invoke]
+        targets: [{entity: supervision, rowBoundaries: []}]
+        results: [z-end-outgoing, a-start-incoming]

@@ -541,6 +541,55 @@ pub(crate) fn order_candidates(
         .collect())
 }
 
+/// Orders immediate-action handler effects for execution: the order the
+/// script emitted them, except that an effect reading a reserved create runs
+/// after the effect that creates it. Change-request candidates keep the
+/// canonical identifier order of [`order_candidates`].
+pub(crate) fn order_candidates_as_emitted(
+    effects: Vec<CandidateChangeRequestEffect>,
+) -> Result<Vec<CandidateChangeRequestEffect>, ChangeRequestPlannerError> {
+    fn visit(
+        index: usize,
+        effects: &[CandidateChangeRequestEffect],
+        visiting: &mut BTreeSet<usize>,
+        done: &mut BTreeSet<usize>,
+        ordered: &mut Vec<usize>,
+    ) -> Result<(), ChangeRequestPlannerError> {
+        if done.contains(&index) {
+            return Ok(());
+        }
+        if !visiting.insert(index) {
+            return Err(ChangeRequestPlannerError::Result);
+        }
+        for dependency in &effects[index].depends_on {
+            if !effects.iter().any(|effect| &effect.id == dependency) {
+                return Err(ChangeRequestPlannerError::Result);
+            }
+        }
+        for (candidate, effect) in effects.iter().enumerate() {
+            if effects[index].depends_on.contains(&effect.id) {
+                visit(candidate, effects, visiting, done, ordered)?;
+            }
+        }
+        visiting.remove(&index);
+        done.insert(index);
+        ordered.push(index);
+        Ok(())
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut done = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(effects.len());
+    for index in 0..effects.len() {
+        visit(index, &effects, &mut visiting, &mut done, &mut ordered)?;
+    }
+    let mut effects = effects.into_iter().map(Some).collect::<Vec<_>>();
+    Ok(ordered
+        .into_iter()
+        .filter_map(|index| effects[index].take())
+        .collect())
+}
+
 fn decode_effect(
     planner: &CompiledChangeRequestPlanner,
     value: Dynamic,

@@ -166,6 +166,31 @@ fn handler_orders_symbolic_creates_and_permits_optional_patch_clears() {
 }
 
 #[test]
+fn handler_effects_keep_emitted_order_with_dependencies_first() {
+    let ids = |expression: &str| {
+        let ActionHandlerOutcome::Effects(effects) = evaluate(&result(expression)).unwrap() else {
+            panic!("effects expected")
+        };
+        effects
+            .into_iter()
+            .map(|effect| effect.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(r#"#{effects:[#{id:"person",set:#{name:"Mina"}},#{id:"existing",clear:["friend"]}]}"#),
+        vec!["person", "existing"],
+        "independent effects keep their emitted order, not slot-id order"
+    );
+    assert_eq!(
+        ids(
+            r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"existing",clear:["friend"]},#{id:"friend",set:#{name:"Sam"}}]}"#
+        ),
+        vec!["friend", "person", "existing"],
+        "a fromEffect dependency still runs before the effect that reads it"
+    );
+}
+
+#[test]
 fn local_handler_diagnostics_name_compiled_fields_and_preserve_runtime_errors() {
     for (expression, kind, slot, field, message) in [
         (

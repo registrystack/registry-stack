@@ -457,6 +457,41 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
     assert_eq!(inventory.access.len(), 2);
 }
 
+fn compiled_effect_ids(source: &str) -> Vec<String> {
+    let compiled = compile_json(source.as_bytes()).expect("household contact action compiles");
+    compiled.actions().actions[0]
+        .effects
+        .iter()
+        .map(|effect| effect.id.clone())
+        .collect()
+}
+
+#[test]
+fn fixed_effects_compile_in_declared_order_with_dependencies_first() {
+    assert_eq!(
+        compiled_effect_ids(&household_contact_project("")),
+        vec!["person", "membership", "household"],
+        "independent effects keep their declared order, not effect-id order"
+    );
+
+    let dependent_declared_first = household_contact_project("").replace(
+        r#"{"id":"person","target":{"entity":"person"},"operation":"create",
+                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"}}},
+              {"id":"membership","target":{"entity":"group-membership"},"operation":"create",
+                "set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},"#,
+        r#"{"id":"membership","target":{"entity":"group-membership"},"operation":"create",
+                "set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
+              {"id":"person","target":{"entity":"person"},"operation":"create",
+                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"}}},"#,
+    );
+    assert_ne!(dependent_declared_first, household_contact_project(""));
+    assert_eq!(
+        compiled_effect_ids(&dependent_declared_first),
+        vec!["person", "membership", "household"],
+        "a fromEffect dependency still runs before the effect that reads it"
+    );
+}
+
 #[test]
 fn action_grants_refuse_request_metadata_projection_overrides() {
     let mut source: serde_json::Value =

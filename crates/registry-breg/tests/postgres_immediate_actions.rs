@@ -729,6 +729,111 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fixed_effects_run_in_declared_order_under_a_temporal_exclusion_constraint() {
+    let project = registry_breg::contract::parse_project_yaml(include_bytes!(
+        "fixtures/temporal-handover-action.yaml"
+    ))
+    .expect("temporal handover fixture parses");
+    let registry =
+        compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles");
+    let (database, registry, identity) = install_action_registry(registry).await;
+    let app = action_router(&database, registry.clone(), identity);
+    let invoke = |route: &'static str, key: &'static str, body: Value| {
+        let app = app.clone();
+        async move {
+            let mut headers = vec![("content-type", "application/json")];
+            if !key.is_empty() {
+                headers.push(("idempotency-key", key));
+            }
+            response_parts(
+                send(
+                    &app,
+                    Method::POST,
+                    route,
+                    Some(action_claims()),
+                    &headers,
+                    serde_json::to_vec(&body).expect("action body serializes"),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+
+    let assigned = invoke(
+        "/v1/actions/assign-supervisor",
+        "assign-outgoing",
+        json!({"input": {
+            "premises": "premises-1",
+            "supervisor": "outgoing",
+            "startsAt": "2026-01-01T00:00:00Z"
+        }}),
+    )
+    .await;
+    assert_eq!(assigned.status, StatusCode::OK, "{}", assigned.body);
+    let outgoing_id = assigned.body["results"]["assigned"]["recordId"]
+        .as_str()
+        .expect("create result names the record")
+        .to_owned();
+
+    let condition = invoke(
+        "/v1/actions/replace-supervisor/target-conditions",
+        "",
+        json!({"input": {"outgoingId": outgoing_id}}),
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let replaced = invoke(
+        "/v1/actions/replace-supervisor",
+        "replace-outgoing",
+        json!({
+            "input": {
+                "outgoingId": outgoing_id,
+                "premises": "premises-1",
+                "supervisor": "incoming",
+                "handoverAt": "2026-06-01T00:00:00Z"
+            },
+            "preconditions": condition.body["preconditions"].clone()
+        }),
+    )
+    .await;
+    assert_eq!(
+        replaced.status,
+        StatusCode::OK,
+        "ending the outgoing role runs before the incoming role starts: {}",
+        replaced.body
+    );
+
+    let supervision = &registry.entities()["supervision"];
+    let periods = database
+        .admin
+        .query(
+            &format!(
+                "SELECT {supervisor}, {valid_to} IS NULL FROM registry_data.{table} ORDER BY {valid_from}",
+                table = q(&supervision.physical_table),
+                supervisor = q(&supervision.fields["supervisor"].physical_name),
+                valid_from = q(&supervision.fields["valid-from"].physical_name),
+                valid_to = q(&supervision.fields["valid-to"].physical_name),
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator reads supervision periods")
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, bool>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        periods,
+        vec![
+            ("outgoing".to_owned(), false),
+            ("incoming".to_owned(), true)
+        ],
+        "the outgoing period is closed and the incoming period is open"
+    );
+    database.cleanup().await;
+}
+
 async fn entry_values(
     database: &TestDatabase,
     registry: &registry_breg::CompiledRegistry,
@@ -1677,6 +1782,13 @@ async fn install_action_registry(
     registry_breg::postgres::ExpectedRegistryIdentity,
 ) {
     let database = TestDatabase::create(10).await;
+    if registry.ddl().requires_btree_gist {
+        database
+            .admin
+            .batch_execute("CREATE EXTENSION btree_gist")
+            .await
+            .expect("administrator provisions temporal exclusion prerequisites");
+    }
     let (migration, migration_task) = database.connect_migration().await;
     let registry = Arc::new(registry);
     install_compiled_schema(&migration, &registry, &database.runtime_role)

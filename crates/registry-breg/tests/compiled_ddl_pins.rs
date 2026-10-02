@@ -60,8 +60,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
-        ddl_sha256: "b1dd61180f3101b4d0e768fc99906b5614f89000bc31145d1fb4855f0105f558",
-        revision: "sha256:5c2b472b44f9ea26f8618cec960a8e808fa92d3c8920877da3e01c8b2d51bc03",
+        ddl_sha256: "07cbe487f7f698e44a8b06ebf8a954286f8958170472e5593e1312076a6fbfc7",
+        revision: "sha256:6040efdf4a8a2b53d9b8fc71bc21ad88359dc91ede221bea404213e6cab5b5bc",
     },
 ];
 
@@ -120,5 +120,5 @@ const ACTION_FINGERPRINTS: &[&str] = &[
     "asset-registration-actions/register-asset-with-inspection: sha256:3fa3f521dc91b83863d5afb93827fc6a85594d4af74b586afecd748a017402e1",
     "facility-registry-actions/register-facility: sha256:14179e571a8c08e1fb368972534e29143f084d2e858eafa4542963cb0da7fff8",
     "facility-registry-actions/transfer-facility: sha256:19df2b5b87d517e25815420acd0c3f8207575a2c48776eb451f62a2cd250c011",
-    "household-contact-actions/register-household-contact: sha256:121d47d280e477162d48a4c41d4db80d1778c1a6ab2252c8bf638deae997caab",
+    "household-contact-actions/register-household-contact: sha256:1c9a0e8ff79557e8e41acef14b908a38667831e95748ce02e24c9098a9fbc418",
 ];
