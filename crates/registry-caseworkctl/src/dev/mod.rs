@@ -613,7 +613,18 @@ fn ports(casework: u16, issuer: u16, database: u16) -> Result<()> {
 fn probe(port: u16) -> Result<()> {
     TcpListener::bind(("127.0.0.1", port))
         .map(drop)
-        .map_err(|source| DevFailure::PortOccupied { port, source }.into())
+        .map_err(|source| bind_failure(port, source))
+}
+
+/// Name a port as occupied only when another listener holds it; any other
+/// bind refusal keeps its I/O classification, since stopping a process
+/// would not resolve it.
+fn bind_failure(port: u16, source: std::io::Error) -> anyhow::Error {
+    if source.kind() == std::io::ErrorKind::AddrInUse {
+        DevFailure::PortOccupied { port, source }.into()
+    } else {
+        anyhow::Error::new(source).context(format!("cannot bind local port {port}"))
+    }
 }
 
 fn bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
