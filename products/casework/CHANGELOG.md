@@ -11,8 +11,10 @@
   (#1435).
 
 - `caseworkctl dev start` and `dev stop` name the cause of a local session
-  failure instead of a generic filesystem or runtime dependency failure,
-  still exiting 3. The report names an occupied port
+  failure instead of a generic filesystem or runtime dependency failure
+  (`caseworkctl.io-failure` or `caseworkctl.operational-failure`), still
+  exiting 3; scripts matching those codes for these failures see the
+  `caseworkctl.dev.*` codes instead. The report names an occupied port
   (`caseworkctl.dev.port-occupied`), authored inputs that differ from a
   session retaining records (`caseworkctl.dev.inputs-changed`, with
   `caseworkctl dev stop --remove`), a retained `.casework/dev/audit` stream
