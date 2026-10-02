@@ -1042,3 +1042,126 @@ immediate-action PostgreSQL suites still pass on an `en_US.utf8` server.
 - The policy's refusal of a mismatched field set is pinned through the
   runtime's own contexts; no test sets a hand-built context with an extra
   field as the runtime role. That backstop predates this change.
+
+## Background task supervision and worker progress metrics
+
+The change makes a stopped background task end the process
+(`SupervisedTask` and `serve` in `crates/registry-breg/src/startup.rs`, the
+exit in `crates/registry-breg/src/main.rs`), reports failed review worker
+iterations (`ReviewWorker` in `crates/registry-breg/src/review_store.rs`),
+and adds three series to the metrics listener
+(`crates/registry-breg/src/metrics.rs`): how long ago each worker last
+completed an iteration, how long the oldest due item in each queue has
+waited, and the package digest the process verified at startup. Successful
+webhook iterations reach BReg through
+`DeliverySeams::iteration_succeeded` in
+`crates/registry-platform-hooks/src/delivery/seams.rs`. It changes a
+deployment default: a worker or metrics listener that panics or returns
+before shutdown is requested no longer leaves `breg` serving, and the
+process exits with status 1. Its invariant row is BREG-SEC-146.
+
+### Threat
+
+A worker that dies while the process serves silently halts webhook
+delivery, attachment verification, review submission and application, or
+subject access log retention, and the last of these is a data-minimization
+control. The process keeps answering `GET /ready`, so nothing outside it
+notices. The added metrics could disclose data or credentials, or let a
+scrape exhaust the runtime pool or hold locks the workers need.
+
+### Enforcement and defaults
+
+- `serve` supervises the webhook, attachment verification, review, and
+  subject access log retention workers it starts, and the metrics listener.
+  A task that panics or returns before shutdown is requested emits a closed,
+  value-free `<task>.panicked` or `<task>.returned` error event, shuts the
+  rest down within the shutdown grace, and returns
+  `StartupError::BackgroundTaskStopped`; `main` logs
+  `Base Registry Engine stopped` and exits 1. A requested shutdown reports
+  no stop. `breg` does not restart a task in process, and `/ready` does not
+  reflect worker state; recovery is the supervisor's restart.
+- A failed review worker pass emits `review.worker.iteration_failed` instead
+  of counting as idle, and the worker returns when its shutdown sender is
+  dropped. The lookup outage warning joins the closed vocabulary as
+  `review.result_lookups.unavailable` and drops its count field. The result
+  feed's outage warnings stay outside that vocabulary: they back off per
+  authority, warn only on a transition, and name the configured authority
+  identifier.
+- `breg_worker_last_success_age_seconds` carries only a closed `worker`
+  label and an age; it is absent until the worker first succeeds.
+- `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
+  label (`webhook_delivery`, `review_submission`, `review_application`) and
+  an age. Each scrape takes one runtime pool connection, serialized across
+  scrapes by a mutex, inside a read-only transaction whose statement timeout
+  is 5 seconds, and runs one aggregate statement that reads only
+  `next_attempt_at`, state, lease, and attempt columns, never a row id,
+  payload, or record value. A failed sample omits every queue line and
+  emits the value-free `metrics.queue_sample.failed`.
+- `breg_active_package_info` publishes the `package_digest` startup already
+  verified against the activation ledger, a `sha256:` digest of the package
+  bytes, and nothing else.
+
+### Tests
+
+`crates/registry-breg/tests/startup_http.rs`:
+`a_panicking_background_task_stops_serve_with_a_distinct_error`,
+`an_early_returning_background_task_stops_serve_with_a_distinct_error`,
+`a_requested_shutdown_reports_no_background_task_stop`, and
+`every_operational_event_renders_exact_closed_value_free_json_fields`,
+which covers every stop code and the review and metrics events.
+`crates/registry-breg/tests/postgres_review_executor.rs`:
+`review_worker_returns_when_its_shutdown_sender_is_dropped`,
+`a_failed_review_worker_iteration_emits_closed_value_free_operational_events`,
+`an_idle_review_worker_iteration_records_its_last_success`,
+`a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited`,
+and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event`.
+`crates/registry-breg/tests/postgres_webhook_delivery.rs`:
+`real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.
+`crates/registry-breg/tests/postgres_change_requests.rs`:
+`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`.
+`crates/registry-breg/tests/postgres_access_log.rs`:
+`a_retention_tick_without_failure_records_its_last_success`.
+`crates/registry-breg/tests/postgres_startup.rs`:
+`prepared_server_wires_services_and_static_jwks_readiness_tracks_database`
+scrapes a real startup's metrics listener as the runtime role and expects
+exactly the verified package digest and every queue.
+`crates/registry-breg/src/metrics.rs`:
+`worker_last_success_age_is_absent_until_the_worker_first_succeeds`,
+`every_progress_worker_carries_a_distinct_snake_case_label`,
+`queue_ages_are_published_only_for_a_sampled_scrape`,
+`every_pending_queue_carries_a_distinct_snake_case_label`, and
+`the_active_package_digest_is_published_once_as_an_info_series`.
+`crates/registry-platform-hooks/src/delivery/service.rs`:
+`the_worker_loop_notes_an_idle_iteration_without_failure_as_a_success`.
+Each test the change adds was written first and failed, or did not compile,
+against the code before it; the operational event test is extended with the
+added codes.
+
+### Accepted residuals
+
+- **Crash loop.** A fault that recurs on every start, such as a worker that
+  panics on the same queued item, makes the process restart repeatedly and
+  takes reads and writes down between attempts, where earlier releases kept
+  serving reads without the worker. The supervisor's restart backoff bounds
+  how often; the stop code names the worker.
+- **Package digest on the metrics listener.** Anyone who reaches the
+  metrics listener can read the active package digest. It identifies the
+  deployed package bytes, not their content, and `bregctl status` already
+  reports it to an operator. The metrics listener carries no
+  authentication, and the runtime file refuses a `metricsListener.bind`
+  that is not a loopback or private address.
+- **Scrape load.** A scrape holds one runtime pool connection for up to the
+  5-second statement timeout, and a request waiting for a connection can
+  wait behind it. Scrapes do not run concurrently, so a scraper cannot hold
+  more than one connection, and the transaction is read-only and takes no
+  row locks.
+- **Readiness.** `/ready` does not reflect worker state, so a load balancer
+  keeps routing to a process until it exits. Between a task stopping and the
+  exit, the process drains within the shutdown grace.
+- **Attachment queue.** The attachment verification queue is not sampled by
+  `breg_queue_oldest_pending_age_seconds`, because its row policy admits
+  only a transaction the attachment worker has admitted; its worker progress
+  age is published.
+- **Retention failures.** A failed subject access log retention pass still
+  writes a raw error record without a closed `code`; only its last-success
+  age and its stop code are closed.

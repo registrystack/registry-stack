@@ -40,6 +40,29 @@
   `401 authentication.refused` problem and its catalogue type, title, and
   detail instead of the undocumented
   `review_completion.authentication_refused` code.
+- BREAKING: a background worker (webhook delivery, attachment verification,
+  review, or subject access log retention) or the metrics listener that
+  panics or returns before shutdown is requested ends `breg`: the process
+  stops serving, drains within the shutdown grace, logs
+  `Base Registry Engine stopped` with a closed
+  `<task>.panicked` or `<task>.returned` code, and exits with status 1.
+  Earlier releases kept serving without the task. `GET /ready` still does
+  not reflect the workers. Run `breg` under a supervisor that restarts it on
+  failure, such as an orchestrator's restart policy, systemd
+  `Restart=on-failure`, or Docker `--restart on-failure`.
+- A failed review worker iteration writes a warning with the closed code
+  `review.worker.iteration_failed` instead of being discarded as an idle
+  pass. The review result lookup outage warning carries the closed code
+  `review.result_lookups.unavailable` and no longer carries an unavailable
+  count.
+- The metrics listener publishes `breg_worker_last_success_age_seconds` by
+  `worker`, `breg_queue_oldest_pending_age_seconds` by `queue` for webhook
+  deliveries, review submissions, and application jobs, and
+  `breg_active_package_info` with the `package_digest` this process verified
+  at startup. A scrape that cannot read the queues omits every queue sample
+  and writes `metrics.queue_sample.failed`. Anyone who reaches the metrics
+  listener can read the package digest.
+
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers
