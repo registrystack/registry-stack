@@ -9,6 +9,6 @@ publish.workspace = true
 [dependencies]
 # Version-matched pre-initializer from the pinned Wasmtime release line; the
 # wasmtime feature enables the run() wrapper that drives our own Store.
-wasmtime-wizer = { version = "=48.0.3", features = ["wasmtime"] }
-wasmtime = "=48.0.3"
+wasmtime-wizer = { version = "=48.0.5", features = ["wasmtime"] }
+wasmtime = "=48.0.5"
 tokio = { version = "1", features = ["rt"] }
