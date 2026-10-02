@@ -663,7 +663,10 @@ use the same concealment behavior as the rest of the protected API.
 The compiler bounds an action to 16 target roles, 128 field mutations and a
 2 MiB maximum snapshot. Multiple non-overlapping effects that resolve to the
 same record share one committed revision and configured event. Each granted
-effect still has its own result reference in the receipt.
+effect still has its own result reference in the receipt. Revision history
+records each such revision under the entity's canonical operation identifier,
+`records.<entity>.create` or `records.<entity>.patch`, as a reviewed
+application does; the receipt keeps which action and effects produced it.
 
 ## Trial: conditional Evidence in Rhai
 

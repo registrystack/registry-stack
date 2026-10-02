@@ -1113,6 +1113,14 @@ impl MutationCoordinator {
                 &current.record_id,
             )?;
             let snapshot = canonical_snapshot(&current.data)?;
+            // The target journal describes the canonical entity operation.
+            // The application reference and the stored receipt record which
+            // action and effects produced it.
+            let operation_id = format!(
+                "records.{}.{}",
+                effect.target.entity_id,
+                mutation_kind(effect.operation)
+            );
             fault.fail_at(MutationFaultPoint::BeforeRevision)?;
             insert_revision(
                 transaction.transaction(),
@@ -1124,7 +1132,7 @@ impl MutationCoordinator {
                     predecessor_revision: current.predecessor_revision,
                     lifecycle: &current.record_lifecycle,
                     package_revision: &self.expected.activation_id,
-                    operation_id: &effect.id,
+                    operation_id: &operation_id,
                     mutation_kind: mutation_kind(effect.operation),
                     principal_reference: &binding.principal_reference,
                     request_reference: &application_reference,
