@@ -277,6 +277,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "shutdown",
             "the shutdown configuration was refused",
         ),
+        StartupError::BackgroundTaskStopped => (
+            "startup.background_task.stopped",
+            "backgroundTask",
+            "a background task stopped before shutdown was requested",
+        ),
         StartupError::Logging => (
             "startup.logging.refused",
             "logging",
@@ -579,6 +584,11 @@ mod tests {
                 StartupError::Shutdown,
                 "startup.shutdown.refused",
                 "shutdown",
+            ),
+            (
+                StartupError::BackgroundTaskStopped,
+                "startup.background_task.stopped",
+                "backgroundTask",
             ),
             (StartupError::Logging, "startup.logging.refused", "logging"),
         ];
