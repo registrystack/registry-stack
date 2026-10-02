@@ -2230,9 +2230,15 @@ fn additive_migration_plan(
                     if previous.sql_path == relation.sql_path
                         && previous.key_field == relation.key_field
                         && previous.execution == relation.execution
-                        && previous.fields == relation.fields
-                        && previous != relation =>
+                        && previous.fields == relation.fields =>
                 {
+                    // The wrapper around authored derived SQL is compiler-owned
+                    // DDL. Refresh every retained compatible relation so a
+                    // successor built by a newer compiler installs changes to
+                    // that wrapper even when the authored SQL and field model
+                    // are unchanged. PostgreSQL replaces the view definition
+                    // without rewriting stored rows, and the final catalog
+                    // fingerprint still fences the exact candidate definition.
                     let derived_view_id = format!("entity.{entity_id}.derived.{relation_id}.view");
                     replacement_statement_ids.insert(derived_view_id.clone());
                     new_statement_ids.insert(derived_view_id);
@@ -2413,7 +2419,9 @@ fn reviewed_successor_migration_plan(
         additive_changes,
     );
     let refresh_views = additive.statements.iter().any(|statement| {
-        statement.kind == DdlStatementKind::View && !is_spatial_candidate_view_statement(statement)
+        statement.kind == DdlStatementKind::View
+            && !is_spatial_candidate_view_statement(statement)
+            && !is_derived_view_statement(statement)
     }) || change_set.changes.iter().any(|change| {
         matches!(
             change.code,
@@ -2568,6 +2576,13 @@ fn is_spatial_candidate_view_statement(statement: &DdlStatement) -> bool {
     statement.kind == DdlStatementKind::View
         && (statement.id.ends_with(".spatial-candidates-view")
             || statement.id.ends_with(".spatial-candidates-view.drop"))
+}
+
+fn is_derived_view_statement(statement: &DdlStatement) -> bool {
+    statement.kind == DdlStatementKind::View
+        && statement.id.starts_with("entity.")
+        && statement.id.contains(".derived.")
+        && statement.id.ends_with(".view")
 }
 
 fn table_statement_entity_id(statement_id: &str) -> Option<&str> {

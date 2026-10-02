@@ -1952,7 +1952,11 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
     assert!(derived_view
         .contains("count(*) OVER (PARTITION BY canonical_derived.\"__registry$derived$key\")"));
     assert!(derived_view.contains("\"__registry$derived$cardinality\""));
-    assert!(derived_view.contains("\"registry_derived_key_cardinality\"::bigint"));
+    assert!(derived_view
+        .contains("CASE WHEN \"registry_derived_key_cardinality\" IS NULL THEN NULL::bigint"));
+    assert!(derived_view.contains(
+        "derived field household.registry-derived-key-cardinality violates declared type"
+    ));
     assert!(compiled
         .routes()
         .routes
