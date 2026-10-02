@@ -14,7 +14,9 @@ use crate::generated_ddl::{policy_sql, DdlObjectOwner, DdlPolicyRole, DdlStateme
 use crate::history_commit::install_empty_history_baseline;
 use crate::history_store::install_history_schema_store;
 use crate::model::CompiledRegistry;
-use crate::mutation::{install_mutation_schema, MutationError};
+use crate::mutation::{
+    install_mutation_schema, reconcile_action_result_target_index, MutationError,
+};
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::config::ConnectionTls;
@@ -106,6 +108,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
     registry: &CompiledRegistry,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
+    reconcile_action_result_target_index(client, !registry.actions().actions.is_empty()).await?;
     let candidate_bbox_role = spatial_bbox_role(runtime_role);
     let bbox_role =
         if registry.ddl().requires_postgis || role_exists(client, &candidate_bbox_role).await? {

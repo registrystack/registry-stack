@@ -19,6 +19,18 @@
   it: repin with `caseworkctl source add BREG_PROJECT --project PROJECT
   --source-id ID --apply`, then package, plan, and apply the Casework project
   once.
+- A Registry that declares immediate actions indexes its stored action
+  results by target entity, record, and revision, so revision history finds
+  the action that wrote a revision without scanning every result under the
+  2-second history statement timeout. The index is part of the managed
+  catalog, so such a project's package records a new schema fingerprint. The
+  rebuild with `bregctl package --baseline-package <deployed package>` that
+  the `"C"`-collation entry above already requires picks it up: `bregctl
+  test` reports the advisory `migration.rehearsal.baseline_fingerprint_drift`
+  finding for it, and the apply installs the index. No extra step is
+  needed. Until that apply, an upgraded runtime keeps verifying and serving
+  the earlier catalog. A project that declares no immediate actions is unchanged, and
+  removing a project's last immediate action removes the index.
 
 - `manifestProjection.vocabularies[].concepts` may label every code that any
   visible field of the vocabulary admits. Previously the compiler checked

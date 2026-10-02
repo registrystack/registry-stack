@@ -35,9 +35,10 @@ use registry_breg::package::{
     PackageSourceFile, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
+    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test,
+    rehearse_successor_migration, BaselineFingerprintDrift, ExpectedManagedCatalog,
     ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey,
+    RegistryLockKey, SuccessorMigrationRehearsal,
 };
 use registry_breg::startup::prepare_startup;
 use registry_breg::CompiledRegistry;
@@ -59,6 +60,233 @@ const HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000100";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
 journeys: []
 "#;
+const ACTION_RESULTS_PRIMARY_KEY: &str = "registry_immediate_action_results_pkey";
+const ACTION_RESULTS_TARGET_INDEX: &str = "registry_immediate_action_results_target_idx";
+
+/// The legacy action-revision lookup reads immediate-action results by target
+/// record revision under the history statement budget. A Registry that
+/// declares immediate actions installs the index that lookup uses, and its
+/// recorded fingerprint binds it. A Registry that declares none keeps exactly
+/// the catalog it had before the index existed, so its fingerprint is
+/// unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn action_result_target_index_follows_declared_immediate_actions() {
+    let database = TestDatabase::create(4).await;
+    let action_registry = Arc::new(compiled_registry(Variant::ActionV1));
+    let action_fingerprint = initial_schema_fingerprint(&database, &action_registry).await;
+    let action_package = publish_and_load(
+        build_request(
+            Variant::ActionV1,
+            None,
+            &action_fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ),
+        package_context(),
+    );
+    let active_action = apply_package(
+        &database,
+        &action_package.package,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await;
+    let indexes = action_result_indexes(&database).await;
+    assert_eq!(
+        indexes
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec![ACTION_RESULTS_PRIMARY_KEY, ACTION_RESULTS_TARGET_INDEX],
+    );
+    assert!(
+        indexes[1]
+            .1
+            .ends_with("USING btree (target_entity_id, target_record_id, target_record_revision)"),
+        "the target index covers the legacy lookup predicate: {}",
+        indexes[1].1
+    );
+    drop_action_result_target_index(&database).await;
+    assert_ne!(
+        live_schema_fingerprint(&database, &action_registry).await,
+        active_action.schema_fingerprint,
+        "the recorded fingerprint binds the target index"
+    );
+    drop(action_package);
+    database.cleanup().await;
+
+    let database = TestDatabase::create(4).await;
+    let plain_registry = Arc::new(compiled_registry(Variant::NoAction));
+    let plain_package = prepare_initial_package(&database, &plain_registry).await;
+    let active_plain = apply_package(
+        &database,
+        &plain_package.package,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await;
+    assert_eq!(
+        action_result_indexes(&database)
+            .await
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec![ACTION_RESULTS_PRIMARY_KEY],
+        "a Registry that declares no immediate action installs no target index"
+    );
+    // The catalog an earlier release installed has no target index; removing
+    // it, if present, leaves the recorded fingerprint intact.
+    drop_action_result_target_index(&database).await;
+    assert_eq!(
+        live_schema_fingerprint(&database, &plain_registry).await,
+        active_plain.schema_fingerprint,
+        "a Registry that declares no immediate action keeps its earlier fingerprint"
+    );
+    prepare_startup_for(&database, &plain_package)
+        .await
+        .expect("a Registry without immediate actions starts against its recorded catalog");
+    drop(plain_package);
+    database.cleanup().await;
+}
+
+/// A database an earlier release activated for a Registry that declares
+/// immediate actions has no target index. The upgraded runtime keeps serving
+/// it without an apply; a successor built with this code rehearses with the
+/// advisory baseline drift, and that apply installs the index and reaches the
+/// successor's fresh-install fingerprint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn action_result_target_index_reaches_an_existing_activation_at_its_next_apply() {
+    let database = TestDatabase::create(8).await;
+    let initial_project = consent_project_bytes(false);
+    let registry = Arc::new(compile_bytes(&initial_project));
+    let fingerprint = initial_schema_fingerprint(&database, &registry).await;
+    let initial = publish_and_load(
+        build_request_for_project(
+            initial_project.clone(),
+            None,
+            &fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ),
+        package_context(),
+    );
+    let mut active = apply_package(
+        &database,
+        &initial.package,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await;
+
+    // Reproduce the exact pre-index catalog and recorded package binding.
+    // This fixture surgery represents an already deployed older binary; the
+    // upgrade below uses the maintained rehearsal and apply APIs.
+    drop_action_result_target_index(&database).await;
+    let old_fingerprint = live_schema_fingerprint(&database, &registry).await;
+    assert_ne!(old_fingerprint, fingerprint);
+    let old_package = publish_and_load(
+        build_request_for_project(
+            initial_project,
+            None,
+            &old_fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ),
+        package_context(),
+    );
+    active.schema_fingerprint = old_fingerprint.clone();
+    active.package_digest = old_package.package.package_digest().to_owned();
+    let (migration, task) = database.connect_migration().await;
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_digest = $1, schema_fingerprint = $2
+              WHERE singleton",
+            &[&active.package_digest, &active.schema_fingerprint],
+        )
+        .await
+        .expect("fixture rebinds the earlier package");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET package_digest = $1
+              WHERE activation_id = $2::text::uuid",
+            &[&active.package_digest, &active.activation_id],
+        )
+        .await
+        .expect("fixture rebinds the earlier activation");
+    drop(migration);
+    task.abort();
+    drop(initial);
+
+    prepare_startup_for(&database, &old_package)
+        .await
+        .expect("the upgraded runtime serves the earlier catalog without an apply");
+    assert_eq!(
+        action_result_indexes(&database).await.len(),
+        1,
+        "startup installs nothing"
+    );
+
+    let successor_project = consent_project_bytes(true);
+    let successor_registry = Arc::new(compile_bytes(&successor_project));
+    let fresh = TestDatabase::create(2).await;
+    let fresh_fingerprint = initial_schema_fingerprint(&fresh, &successor_registry).await;
+    fresh.cleanup().await;
+    let successor_request = || {
+        build_request_for_project(
+            successor_project.clone(),
+            Some(active.package_digest.as_str()),
+            &fresh_fingerprint,
+            PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new((*registry).clone()),
+            },
+        )
+    };
+    let candidate = prepare_package(successor_request()).expect("successor package prepares");
+    let rehearsal = TestDatabase::create(2).await;
+    let outcome = rehearse_successor_migration(
+        &rehearsal.migration_config,
+        &rehearsal.migration_role,
+        &rehearsal.runtime_role,
+        SuccessorMigrationRehearsal {
+            predecessor: &registry,
+            predecessor_schema_fingerprint: &old_fingerprint,
+            candidate: &candidate,
+        },
+    )
+    .await
+    .expect("the successor rehearses over the earlier baseline");
+    assert_eq!(
+        outcome.baseline_fingerprint_drift,
+        Some(BaselineFingerprintDrift {
+            signed: old_fingerprint.clone(),
+            measured: fingerprint.clone(),
+        }),
+        "the earlier baseline drifts by the target index alone"
+    );
+    rehearsal.cleanup().await;
+    drop(candidate);
+
+    let successor = publish_and_load(successor_request(), package_context());
+    let upgraded = apply_package(
+        &database,
+        &successor.package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_eq!(upgraded.schema_fingerprint, fresh_fingerprint);
+    assert_exact_catalog(&database, &successor_registry, &upgraded).await;
+    assert_eq!(
+        action_result_indexes(&database)
+            .await
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec![ACTION_RESULTS_PRIMARY_KEY, ACTION_RESULTS_TARGET_INDEX],
+    );
+    prepare_startup_for(&database, &successor)
+        .await
+        .expect("the successor starts against the upgraded catalog");
+
+    drop(successor);
+    drop(old_package);
+    database.cleanup().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys() {
@@ -101,6 +329,11 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     )
     .await;
     assert_exact_catalog(&database, &action_registry, &active_action).await;
+    assert_eq!(
+        action_result_indexes(&database).await.len(),
+        2,
+        "adding the first immediate action installs the target index"
+    );
 
     let action_app = action_router(&database, action_registry.clone(), active_action.clone());
     let claims_v1 = action_claims("registry:contact:register");
@@ -222,6 +455,15 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     )
     .await;
     assert_exact_catalog(&database, &removed_registry, &active_removed).await;
+    assert_eq!(
+        action_result_indexes(&database)
+            .await
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec![ACTION_RESULTS_PRIMARY_KEY],
+        "removing the last immediate action removes the target index"
+    );
     prepare_startup_for(&database, &removed_package)
         .await
         .expect("removed-action package starts against the exact candidate catalog");
@@ -618,6 +860,48 @@ async fn assert_exact_catalog(
     .await
     .expect("activated schema matches the exact candidate catalog");
     assert_eq!(fingerprint, identity.schema_fingerprint);
+    task.abort();
+}
+
+async fn live_schema_fingerprint(database: &TestDatabase, registry: &CompiledRegistry) -> String {
+    let (migration, task) = database.connect_migration().await;
+    let fingerprint = managed_schema_fingerprint(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(registry),
+    )
+    .await
+    .expect("live fingerprint computes");
+    task.abort();
+    fingerprint
+}
+
+async fn action_result_indexes(database: &TestDatabase) -> Vec<(String, String)> {
+    database
+        .admin
+        .query(
+            "SELECT index_class.relname::text, pg_catalog.pg_get_indexdef(index_class.oid)
+               FROM pg_catalog.pg_index AS x
+               JOIN pg_catalog.pg_class AS index_class ON index_class.oid = x.indexrelid
+              WHERE x.indrelid = 'registry_internal.registry_immediate_action_results'::regclass
+              ORDER BY index_class.relname",
+            &[],
+        )
+        .await
+        .expect("action result indexes read")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
+async fn drop_action_result_target_index(database: &TestDatabase) {
+    let (migration, task) = database.connect_migration().await;
+    migration
+        .batch_execute(&format!(
+            "DROP INDEX IF EXISTS registry_internal.{ACTION_RESULTS_TARGET_INDEX}"
+        ))
+        .await
+        .expect("fixture drops the target index");
     task.abort();
 }
 
