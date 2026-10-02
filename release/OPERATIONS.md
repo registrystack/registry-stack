@@ -11,6 +11,11 @@ Publication promotes the candidate bytes and image manifests without rebuilding
 them. A normal release should need less than 15 minutes of operator time and
 less than one hour elapsed, dominated by the candidate build.
 
+Daily prerelease builds use a separate immutable channel and never enter this
+candidate-promotion path. Follow [`release/NIGHTLY.md`](NIGHTLY.md) to publish,
+verify, install, or recover a nightly build. A numbered release rebuilds from
+its source because the nightly version marker makes the bytes distinct.
+
 ## Prerequisites
 
 Start release preparation when:

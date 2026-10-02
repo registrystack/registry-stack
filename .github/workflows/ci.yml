@@ -1611,6 +1611,15 @@ jobs:
       - name: Test macOS bundle installers
         run: python3 -m unittest release/scripts/test_macos_installers.py
 
+      - name: Test nightly channel and immutable publication
+        run: python3 -m unittest release/scripts/test_nightly_release.py
+
+      - name: Test nightly installer resolution
+        run: python3 -m unittest release/scripts/test_nightly_installers.py
+
+      - name: Test nightly workflow trust boundaries
+        run: python3 -m unittest release/scripts/test_nightly_release_workflow.py
+
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
 

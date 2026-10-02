@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +23,7 @@ VERSION = "0.38.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
+NIGHTLY_TAG = f"v{VERSION}-nightly.20261002.{SOURCE_SHA}"
 CORE = [
     f"discovery-{TAG}-linux-amd64",
     f"discoveryctl-{TAG}-linux-amd64",
@@ -87,9 +90,13 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         self.output = self.root / "dist"
 
     def write_shard(
-        self, name: str, assets: list[str], version: str = VERSION
+        self,
+        name: str,
+        assets: list[str],
+        version: str = VERSION,
+        nightly_tag: str | None = None,
     ) -> Path:
-        root = self.root / version / name
+        root = self.root / (nightly_tag or version) / name
         bin_dir = root / "bin"
         bin_dir.mkdir(parents=True)
         sums = []
@@ -99,13 +106,21 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             sums.append(f"{digest(contents)}  {asset}\n")
         (bin_dir / "SHA256SUMS").write_text("".join(sums), encoding="utf-8")
         (root / "RELEASE_BUILDER_IMAGE").write_text(f"{BUILDER}\n", encoding="utf-8")
-        (root / "RELEASE_BINARY_SHARD").write_text(
+        metadata = (
             "registry-stack.release-binary-shard.v1\n"
             f"source_sha={SOURCE_SHA}\n"
             f"version={version}\n"
-            f"group={name}\n",
-            encoding="utf-8",
+            f"group={name}\n"
         )
+        if nightly_tag is not None:
+            metadata = (
+                "registry-stack.release-binary-shard.v2\n"
+                f"source_sha={SOURCE_SHA}\n"
+                f"version={version}\n"
+                f"nightly_tag={nightly_tag}\n"
+                f"group={name}\n"
+            )
+        (root / "RELEASE_BINARY_SHARD").write_text(metadata, encoding="utf-8")
         return root
 
     def merge(self) -> None:
@@ -178,6 +193,70 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             ),
             (image_dir / "SHA256SUMS").read_text(encoding="utf-8"),
         )
+
+    def test_cli_merges_nightly_shards_with_nightly_asset_names(self) -> None:
+        rosters, _ = MODULE.rosters(VERSION, NIGHTLY_TAG)
+        shards = {
+            name: self.write_shard(
+                name, assets, nightly_tag=NIGHTLY_TAG
+            )
+            for name, assets in rosters.items()
+        }
+        output = self.root / "nightly-dist"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--version",
+                VERSION,
+                "--source-sha",
+                SOURCE_SHA,
+                "--nightly-tag",
+                NIGHTLY_TAG,
+                "--core",
+                str(shards["core"]),
+                "--breg",
+                str(shards["breg"]),
+                "--casework",
+                str(shards["casework"]),
+                "--scheduling",
+                str(shards["scheduling"]),
+                "--messaging",
+                str(shards["messaging"]),
+                "--output",
+                str(output),
+                "--builder-image",
+                BUILDER,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        names = [path.name for path in (output / "bin").iterdir()]
+        self.assertTrue(any(NIGHTLY_TAG in name for name in names))
+        release_rosters, _ = MODULE.rosters(VERSION)
+        self.assertTrue(
+            set(names).isdisjoint(
+                asset for assets in release_rosters.values() for asset in assets
+            )
+        )
+
+    def test_nightly_merge_rejects_a_tag_bound_to_another_source(self) -> None:
+        wrong_tag = f"v{VERSION}-nightly.20261002.{'2' * 40}"
+        with self.assertRaisesRegex(MODULE.ShardError, "does not match --source-sha"):
+            MODULE.merge(
+                version=VERSION,
+                source_sha=SOURCE_SHA,
+                nightly_tag=wrong_tag,
+                core=self.core,
+                breg=self.breg,
+                casework=self.casework,
+                scheduling=self.scheduling,
+                messaging=self.messaging,
+                output=self.root / "wrong-nightly",
+                builder_image=BUILDER,
+            )
 
     def test_version_gates_select_the_historical_exact_rosters(self) -> None:
         rosters_023, images_023 = MODULE.rosters("0.23.9")

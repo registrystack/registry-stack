@@ -15,15 +15,18 @@ const BINARIES: [&str; 3] = ["evidence", "evidencectl", "evidence-oid4vci"];
 
 #[cfg(unix)]
 #[test]
-fn installer_refuses_to_run_without_a_pinned_release() {
+fn unpinned_installer_resolves_the_latest_numbered_release() {
     let fixture = InstallerFixture::new();
     let output = fixture.command_without_version().output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("EVIDENCECTL_VERSION"), "stderr: {stderr}");
     assert!(
-        !fixture.fake_curl_log().exists(),
-        "must fail before download"
+        stderr.contains("latest numbered Evidence toolset installer"),
+        "stderr: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.fake_curl_log()).unwrap(),
+        "https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh\n"
     );
 }
 

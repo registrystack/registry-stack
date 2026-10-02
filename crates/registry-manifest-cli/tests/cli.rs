@@ -101,6 +101,37 @@ fn help_flags_exit_zero_and_print_usage_to_stdout() {
 }
 
 #[test]
+fn version_reports_the_shared_build_identity() {
+    let output = Command::new(bin())
+        .arg("--version")
+        .output()
+        .expect("run cli with --version");
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout utf8"),
+        format!(
+            "registry-manifest {}\n",
+            registry_platform_buildinfo::DISPLAY_VERSION
+        )
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn no_command_keeps_the_existing_usage_error() {
+    let output = Command::new(bin())
+        .output()
+        .expect("run cli without a command");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8(output.stderr)
+        .expect("stderr utf8")
+        .contains("usage: registry-manifest validate"));
+}
+
+#[test]
 fn render_rejects_undeclared_dcat_profile() {
     let manifest =
         manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");

@@ -6,27 +6,49 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
 group=all
 include_casework_override=0
+nightly_tag=""
 while [[ "$#" -gt 1 ]]; do
   case "$1" in
     --group) group="${2:-}"; shift 2 ;;
     --include-casework) include_casework_override=1; shift ;;
+    --nightly-tag) nightly_tag="${2:-}"; shift 2 ;;
     *) break ;;
   esac
 done
 if [[ "$#" -eq 1 ]]; then
   version="$1"
 else
-  printf 'usage: %s [--include-casework] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
   exit 2
 fi
 if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
       ("${group}" != all && "${group}" != core && "${group}" != breg &&
        "${group}" != casework && "${group}" != scheduling &&
        "${group}" != messaging) ]]; then
-  printf 'usage: %s [--include-casework] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
   exit 2
 fi
 tag="v${version}"
+nightly_source_sha=""
+if [[ -n "${nightly_tag}" ]]; then
+  if [[ ! "${nightly_tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-nightly\.([0-9]{8})\.([0-9a-f]{40})$ ||
+        "${BASH_REMATCH[1]:-}" != "${version}" ]]; then
+    printf 'nightly tag must match v%s-nightly.<YYYYMMDD>.<40-character lowercase source SHA>\n' "${version}" >&2
+    exit 2
+  fi
+  nightly_date="${BASH_REMATCH[2]}"
+  nightly_source_sha="${BASH_REMATCH[3]}"
+  if ! python3 -c 'import datetime, sys; datetime.datetime.strptime(sys.argv[1], "%Y%m%d")' "${nightly_date}" 2>/dev/null; then
+    printf 'nightly tag contains an invalid YYYYMMDD date\n' >&2
+    exit 2
+  fi
+  if [[ -n "${RELEASE_SOURCE_SHA:-}" &&
+        "${RELEASE_SOURCE_SHA}" != "${nightly_source_sha}" ]]; then
+    printf 'nightly tag source SHA does not match RELEASE_SOURCE_SHA\n' >&2
+    exit 2
+  fi
+  tag="${nightly_tag}"
+fi
 # The Discovery binary joins the release payload at 0.24.0. A candidate rebuilt
 # for an earlier version must stage exactly the assets its recorded inventory
 # names, so seal-candidate keeps accepting it.
@@ -197,6 +219,14 @@ prepare_zig_toolchain() {
 # only an abbreviation of it passes here and is caught by the ceiling instead.
 check_source_commit_absent() {
   local commit="${RELEASE_SOURCE_COMMIT:-}"
+  if [[ -n "${nightly_tag}" &&
+        "${REGISTRY_NIGHTLY_TAG:-}" == "${nightly_tag}" &&
+        -z "${REGISTRY_RELEASE_TAG:-}" &&
+        "${nightly_source_sha}" == "${commit}" ]]; then
+    printf 'nightly tag %s intentionally embeds source commit %s; source commit absence check skipped\n' \
+      "${nightly_tag}" "${commit}"
+    return 0
+  fi
   if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
     # A checkout with no commit has none to embed, so there is nothing to find.
     printf 'source commit unknown, so staged binaries were not checked for it\n' >&2
@@ -226,6 +256,8 @@ build_payload() {
     cargo build --release --locked \
       -p registry-manifest-cli
     cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
+    test "$("dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64" --version)" = \
+      "registry-manifest ${RELEASE_TAG#v}"
 
     # Build and stage the production Relay before relayctl enables the separate
     # authoring-only tooling feature on the Relay library dependency.
@@ -361,12 +393,22 @@ build_payload() {
 # re-executed inside it as the host uid/gid so mounted release outputs are never
 # owned by root on either GitHub-hosted runners or an operator workstation.
 if [[ "${RELEASE_BUILDER_READY:-0}" -eq 1 ]]; then
+  identity_matches=0
+  if [[ -n "${nightly_tag}" &&
+        "${REGISTRY_NIGHTLY_TAG:-}" == "${tag}" &&
+        -z "${REGISTRY_RELEASE_TAG:-}" ]]; then
+    identity_matches=1
+  elif [[ -z "${nightly_tag}" &&
+          "${REGISTRY_RELEASE_TAG:-}" == "${tag}" &&
+          -z "${REGISTRY_NIGHTLY_TAG:-}" ]]; then
+    identity_matches=1
+  fi
   if [[ "${repo_root}" != "/workspace" ||
         "${CARGO_HOME:-}" != "/workspace/.cargo-home" ||
         "${CARGO_TARGET_DIR:-}" != "/workspace/target" ||
         "${GIT_CEILING_DIRECTORIES:-}" != "/workspace" ||
         "${RELEASE_TAG:-}" != "${tag}" ||
-        "${REGISTRY_RELEASE_TAG:-}" != "${tag}" ]]; then
+        "${identity_matches}" -ne 1 ]]; then
     printf 'RELEASE_BUILDER_READY is internal to the canonical builder container\n' >&2
     exit 2
   fi
@@ -422,9 +464,21 @@ release_source_commit="${RELEASE_SOURCE_SHA:-}"
 if [[ ! "${release_source_commit}" =~ ^[0-9a-f]{40}$ ]]; then
   release_source_commit="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || true)"
 fi
+if [[ -n "${nightly_tag}" && "${release_source_commit}" != "${nightly_source_sha}" ]]; then
+  printf 'nightly tag source SHA does not match the checked-out source commit\n' >&2
+  exit 2
+fi
 casework_args=()
 if [[ "${include_casework_override}" -eq 1 ]]; then
   casework_args+=(--include-casework)
+fi
+nightly_args=()
+identity_env_args=()
+if [[ -n "${nightly_tag}" ]]; then
+  nightly_args+=(--nightly-tag "${nightly_tag}")
+  identity_env_args+=(--env REGISTRY_NIGHTLY_TAG="${nightly_tag}")
+else
+  identity_env_args+=(--env REGISTRY_RELEASE_TAG="${tag}")
 fi
 
 docker build \
@@ -459,12 +513,13 @@ docker run --rm \
   --env RELEASE_INCLUDE_RENDER="${include_render}" \
   --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
-  --env REGISTRY_RELEASE_TAG="${tag}" \
+  "${identity_env_args[@]}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
   --env RELEASE_BUILDER_READY=1 \
   "${release_builder_image}" \
   /workspace/release/scripts/build-release-binaries.sh \
     "${casework_args[@]}" \
+    "${nightly_args[@]}" \
     --group "${group}" "${version}"
 
 if [[ "${group}" == all ]]; then
@@ -475,10 +530,17 @@ else
     exit 2
   fi
   printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/RELEASE_BUILDER_IMAGE"
-  printf '%s\nsource_sha=%s\nversion=%s\ngroup=%s\n' \
-    registry-stack.release-binary-shard.v1 \
-    "${RELEASE_SOURCE_SHA}" "${version}" "${group}" \
-    >"${repo_root}/dist/RELEASE_BINARY_SHARD"
+  if [[ -n "${nightly_tag}" ]]; then
+    printf '%s\nsource_sha=%s\nversion=%s\nnightly_tag=%s\ngroup=%s\n' \
+      registry-stack.release-binary-shard.v2 \
+      "${RELEASE_SOURCE_SHA}" "${version}" "${nightly_tag}" "${group}" \
+      >"${repo_root}/dist/RELEASE_BINARY_SHARD"
+  else
+    printf '%s\nsource_sha=%s\nversion=%s\ngroup=%s\n' \
+      registry-stack.release-binary-shard.v1 \
+      "${RELEASE_SOURCE_SHA}" "${version}" "${group}" \
+      >"${repo_root}/dist/RELEASE_BINARY_SHARD"
+  fi
 fi
 # The staged asset lists follow the same gate as the build above, so a version
 # that predates an asset neither checksums nor chmods a file it never built.
