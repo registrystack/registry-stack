@@ -45,6 +45,10 @@
   release journaled under the action's effect identifier stays readable, and
   keeps reporting that identifier, while the active package declares that
   effect against the same entity with the same operation.
+  Such revisions are not backfilled to the canonical identifier and no
+  migration rewrites them: once a later package renames or removes that
+  effect, or changes its operation, that revision's detail read and any list
+  page that includes it answer `503 source.unavailable`.
 
 ## v0.38.0 - 2026-10-01
 
