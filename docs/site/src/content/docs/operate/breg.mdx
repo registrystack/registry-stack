@@ -1223,3 +1223,17 @@ behind an upstream rate limit.
   [Evidence Compose adapter](https://github.com/registrystack/registry-stack/blob/main/docker/compose/docker-compose.yaml)
   cover Evidence deployment shapes, not Base Registry Engine; read them when this deployment also
   runs Evidence alongside the registry.
+
+## Operate statistical releases
+
+A package declares the datasets and profile grants. Use the HTTP publication command with a publisher access-token file from your institution's scheduler; BReg has no internal release scheduler. Publish only ended periods at or after the declared first period. Keep one idempotency key for each intended publication so a retry can recover a committed response.
+
+Current reads select versions whose definition digest matches the active package. A change to the population, dimensions, derived sources, publisher visibility, or disclosure parameters starts another definition series. Reader-only grant changes preserve the series. Withdrawal removes the version's content while preserving its header and reason; it cannot recall a copy a reader already downloaded.
+
+Every package installs the release store, including a package without dataset declarations. Upgrading across its introduction requires rebuilding against the active baseline and applying the package once because the managed schema fingerprint changes. The runtime role cannot update or delete release tables; preserve the separate migration credential.
+
+See [publish a statistical series](../../configure/breg-statistics/) and the [API reference](../../reference/breg-api/) for request shapes and refusal handling.
+
+{/* Evidence: crates/registry-breg/src/statistics_store.rs;
+    crates/registry-breg/src/postgres/catalog.rs;
+    crates/registry-breg/src/postgres/statistics.rs. */}

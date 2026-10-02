@@ -1,2 +1,21 @@
 id: facility-core
 version: 0.1.0
+extendEntities:
+  - entity: permit
+    derived:
+      - id: permit-statistics
+        sql: sql/permit-statistics.sql
+        key: id
+        fields:
+          - id: expiring-soon
+            type: boolean
+            classification: internal
+  - entity: discharge-report
+    derived:
+      - id: discharge-statistics
+        sql: sql/discharge-statistics.sql
+        key: id
+        fields:
+          - id: has-measured-quantity
+            type: boolean
+            classification: internal

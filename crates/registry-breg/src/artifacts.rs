@@ -23,7 +23,7 @@ use crate::model::{
     CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
-    CompiledRouteInventory, HttpMethod,
+    CompiledRouteInventory, CompiledStatisticalDataset, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
@@ -78,6 +78,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub module_order: &'a [String],
     pub module_closure: &'a [CompiledModuleIdentity],
     pub entities: &'a BTreeMap<String, CompiledEntity>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
     pub physical_names: &'a PhysicalNameInventory,
     #[serde(skip_serializing_if = "CompiledActionInventory::is_empty")]
     pub action_inventory: &'a CompiledActionInventory,
@@ -97,6 +99,7 @@ pub(crate) fn generate_artifacts(
     module_order: &[String],
     module_closure: &[CompiledModuleIdentity],
     entities: &BTreeMap<String, CompiledEntity>,
+    statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
     physical_names: &PhysicalNameInventory,
     actions: &CompiledActionInventory,
     routes: &CompiledRouteInventory,
@@ -116,6 +119,7 @@ pub(crate) fn generate_artifacts(
         module_order,
         module_closure,
         entities,
+        statistical_datasets,
         physical_names,
         action_inventory: actions,
         metadata_inventory: metadata,
@@ -129,6 +133,13 @@ pub(crate) fn generate_artifacts(
         &sanitized_effective_model(&effective_model)?,
     )?;
     insert_json(&mut artifacts, "compiled/modules.json", &module_closure)?;
+    if !statistical_datasets.is_empty() {
+        insert_json(
+            &mut artifacts,
+            "compiled/statistical-datasets.json",
+            statistical_datasets,
+        )?;
+    }
     if !actions.is_empty() {
         insert_json(&mut artifacts, "compiled/actions.json", actions)?;
     }
@@ -141,15 +152,11 @@ pub(crate) fn generate_artifacts(
         "compiled/event-deliveries.json",
         event_deliveries,
     )?;
-    if actions.is_empty() {
-        insert_json(&mut artifacts, REGISTRY_METADATA_ARTIFACT_PATH, metadata)?;
-    } else {
-        insert_json_value(
-            &mut artifacts,
-            REGISTRY_METADATA_ARTIFACT_PATH,
-            &registry_metadata_artifact(metadata, actions),
-        )?;
-    }
+    insert_json_value(
+        &mut artifacts,
+        REGISTRY_METADATA_ARTIFACT_PATH,
+        &registry_metadata_artifact(metadata, actions, statistical_datasets),
+    )?;
     insert_bytes(
         &mut artifacts,
         "generated/postgres/schema.sql",
@@ -222,6 +229,7 @@ pub(crate) fn generate_artifacts(
         actions,
         query,
         &schemas,
+        statistical_datasets,
     );
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
@@ -1313,15 +1321,24 @@ pub(crate) fn public_action_metadata(actions: &CompiledActionInventory) -> Value
 fn registry_metadata_artifact(
     metadata: &CompiledMetadataInventory,
     actions: &CompiledActionInventory,
+    statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
 ) -> Value {
     let mut value = serde_json::to_value(metadata).expect("compiled metadata serializes");
     let object = value
         .as_object_mut()
         .expect("compiled metadata serializes as object");
-    object.insert(
-        "actions".to_owned(),
-        public_action_metadata(actions)["actions"].clone(),
-    );
+    if !actions.is_empty() {
+        object.insert(
+            "actions".to_owned(),
+            public_action_metadata(actions)["actions"].clone(),
+        );
+    }
+    if !statistical_datasets.is_empty() {
+        object.insert(
+            "statisticalDatasets".to_owned(),
+            crate::statistical_artifacts::all_statistical_dataset_metadata(statistical_datasets),
+        );
+    }
     value
 }
 
@@ -1880,6 +1897,7 @@ fn openapi_document(
     actions: &CompiledActionInventory,
     query: &CompiledQueryInventory,
     schemas: &BTreeMap<String, Value>,
+    statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
 ) -> Value {
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
@@ -2046,6 +2064,11 @@ fn openapi_document(
         );
     }
     append_review_completion_openapi(&mut paths, &mut component_schemas);
+    crate::statistical_artifacts::append_statistics_openapi(
+        &mut paths,
+        &mut component_schemas,
+        statistical_datasets,
+    );
     let has_request_actions = routes
         .routes
         .iter()

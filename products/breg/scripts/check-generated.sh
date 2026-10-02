@@ -6,6 +6,7 @@ repository_root=$(cd -- "$script_dir/../../.." && pwd)
 fixtures=(
   acceptance/asset-site-placement
   acceptance/business-establishments
+  acceptance/facility
   acceptance/asset-site-placement-change-requests
   acceptance/publicschema-household-change-requests
   acceptance/person-name-change-rhai

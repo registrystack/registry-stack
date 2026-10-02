@@ -178,3 +178,13 @@
   already-encrypted field, or adding a required encrypted field to an existing
   entity. Add a new encrypted field as optional, populate it through authorized
   Registry writes, then make it required in a later package.
+
+- Statistical datasets declare fixed count populations and closed dimensions,
+  using PostgreSQL's native query planner and the existing list predicate path.
+  Live reads are count-equivalent to the selected profile's list grant.
+  Publication requires caller-independent visibility over the full source
+  dependency closure. Released-data readers have separate profile grants and
+  may have no record access. Releases are immutable definition-bound versions
+  with explicit suppression and deterministic rounding; their accepted
+  inference risks are documented in `STATISTICS.md`. The engine owns no
+  dashboard connector, scheduler, privacy budget, or general SQL analyst API.

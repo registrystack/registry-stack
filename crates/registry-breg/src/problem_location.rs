@@ -19,6 +19,9 @@ pub const MAX_FIELD_PATH_CHARS: usize = 256;
 /// The fixed query parameter names a `query.invalid` refusal may name.
 pub use crate::query::QUERY_PARAMETERS;
 
+/// Fixed query locations on the separate statistical dataset surface.
+pub const STATISTICS_QUERY_PARAMETERS: &[&str] = &["from", "to", "status"];
+
 /// The header a `request.invalid` refusal names when it is missing or
 /// malformed.
 pub const IDEMPOTENCY_KEY_HEADER: &str = "Idempotency-Key";
@@ -210,7 +213,7 @@ pub fn is_record_request_location(path: &str) -> bool {
 /// Whether `path` names a fixed query parameter.
 #[must_use]
 pub fn is_query_parameter_location(path: &str) -> bool {
-    QUERY_PARAMETERS.contains(&path)
+    QUERY_PARAMETERS.contains(&path) || STATISTICS_QUERY_PARAMETERS.contains(&path)
 }
 
 fn valid_record_data(segments: &[&str]) -> bool {

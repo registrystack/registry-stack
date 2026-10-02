@@ -17,6 +17,7 @@ mod rehearsal;
 mod revision_read;
 mod roles;
 mod schema;
+mod statistics;
 
 pub use baseline::{
     advise, inspect_baseline, AdvisorySeverity, BaselineAdvisory, BaselineSettings,
@@ -87,6 +88,15 @@ pub use revision_read::RevisionReadFaultPoint;
 pub(crate) use roles::find_runtime_write_authority;
 #[doc(hidden)]
 pub use roles::RuntimeRevoke;
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn install_statistics_store_for_test(
+    migration: &impl tokio_postgres::GenericClient,
+    runtime_role: &SqlIdentifier,
+) -> std::result::Result<(), tokio_postgres::Error> {
+    crate::statistics_store::install(migration, runtime_role).await
+}
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
@@ -106,6 +116,12 @@ pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
 pub use schema::{
     prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase,
     SchemaTestDatabaseIdentity,
+};
+pub use statistics::{
+    PostgresStatisticsService, StatisticsLiveRequest, StatisticsPublishRequest,
+    StatisticsReleaseListRequest, StatisticsReleasePage, StatisticsReleaseRefusal,
+    StatisticsReleaseSelection, StatisticsSeriesRequest, StatisticsServiceError,
+    StatisticsStoredDocument, StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
 };
 
 use thiserror::Error;

@@ -307,6 +307,19 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        for (table, privileges) in crate::statistics_store::STATISTICS_TABLES {
+            catalog.table(
+                &format!("registry_internal.{table}"),
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
+        }
+        catalog.function(
+            crate::statistics_store::WITHDRAWAL_FUNCTION,
+            Some("EXECUTE"),
+            None,
+        );
         for (table, privileges) in crate::import_authority::IMPORT_AUTHORITY_TABLES {
             let name = format!("registry_internal.{table}");
             catalog.table(
@@ -1305,6 +1318,14 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                AND p.proname = 'expire_subject_access_log'
                                AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
                                AND p.prorettype = 'bigint'::regtype
+                               AND NOT p.proretset AND p.prosecdef
+                               AND p.provolatile = 'v'
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
+                           OR (n.nspname = 'registry_internal'
+                               AND p.proname = 'withdraw_statistical_release'
+                               AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'text, text, bigint, text'
+                               AND p.prorettype = 'boolean'::regtype
                                AND NOT p.proretset AND p.prosecdef
                                AND p.provolatile = 'v'
                                AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: statistical datasets add engine-owned immutable release storage
+  to every package, changing every schema fingerprint. Rebuild the package
+  with the active baseline and apply it once before starting the upgraded
+  runtime. Root projects may declare count datasets with live read profiles,
+  one publisher, and separate released-data readers. The API serves exact live
+  counts and disclosure-controlled immutable JSON/CSV releases, with
+  idempotent publication and atomic withdrawal. See `STATISTICS.md` for
+  disclosure risks, definition series, and the seven HTTP operations.
+
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers

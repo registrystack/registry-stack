@@ -20,6 +20,7 @@ mod query;
 mod read;
 mod recovery;
 mod response;
+mod statistics;
 mod strict_json;
 mod transport;
 mod webhook;
@@ -53,6 +54,7 @@ pub use registry_record::{
     REGISTRY_RECORD_SCHEMA_IDENTIFIER,
 };
 pub use response::*;
+pub use statistics::*;
 pub use uuid::Uuid;
 pub use webhook::*;
 

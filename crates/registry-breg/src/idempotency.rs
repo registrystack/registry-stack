@@ -39,6 +39,7 @@ pub enum PermittedResponseHeader {
     Etag,
     Link,
     Location,
+    ReprDigest,
 }
 
 impl PermittedResponseHeader {
@@ -48,6 +49,7 @@ impl PermittedResponseHeader {
             Self::Etag => "etag",
             Self::Link => "link",
             Self::Location => "location",
+            Self::ReprDigest => "repr-digest",
         }
     }
 
@@ -57,6 +59,7 @@ impl PermittedResponseHeader {
             2 => Some(Self::Etag),
             3 => Some(Self::Location),
             4 => Some(Self::Link),
+            5 => Some(Self::ReprDigest),
             _ => None,
         }
     }
@@ -67,6 +70,7 @@ impl PermittedResponseHeader {
             Self::Etag => 2,
             Self::Location => 3,
             Self::Link => 4,
+            Self::ReprDigest => 5,
         }
     }
 }
@@ -189,6 +193,10 @@ pub(crate) enum StoredResultMetadata {
     },
     ImmediateAction {
         result_count: u16,
+    },
+    Release {
+        release_reference: String,
+        release_version: i64,
     },
 }
 
@@ -619,6 +627,23 @@ pub(crate) async fn lock_and_load(
                 .ok_or(IdempotencyError::Unavailable)?;
             StoredResultMetadata::ImmediateAction { result_count }
         }
+        "release" => {
+            let release_version = row
+                .get::<_, Option<i64>>(2)
+                .filter(|version| *version > 0)
+                .ok_or(IdempotencyError::Unavailable)?;
+            let release_reference = row
+                .get::<_, Option<String>>(6)
+                .filter(|reference| !reference.is_empty())
+                .ok_or(IdempotencyError::Unavailable)?;
+            if row.get::<_, Option<i16>>(7).is_some() || row.get::<_, Option<i64>>(8).is_some() {
+                return Err(IdempotencyError::Unavailable);
+            }
+            StoredResultMetadata::Release {
+                release_reference,
+                release_version,
+            }
+        }
         _ => return Err(IdempotencyError::Unavailable),
     };
     let status = u16::try_from(row.get::<_, i16>(3)).map_err(|_| IdempotencyError::Unavailable)?;
@@ -699,6 +724,16 @@ pub(crate) async fn insert_result(
                     None,
                 )
             }
+            StoredResultMetadata::Release {
+                release_reference,
+                release_version,
+            } if !release_reference.is_empty() && *release_version > 0 => (
+                "release",
+                Some(*release_version),
+                Some(release_reference.as_str()),
+                None,
+                None,
+            ),
             _ => return Err(IdempotencyError::InvalidInput),
         };
     let changed = transaction

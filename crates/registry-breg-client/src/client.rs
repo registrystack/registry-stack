@@ -1488,6 +1488,59 @@ impl BaseRegistryClient {
         })
     }
 
+    pub(crate) async fn statistics_get_raw(
+        &self,
+        segments: &[&str],
+        pairs: &[(String, String)],
+        media_type: &str,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let wire = self
+            .get(
+                segments,
+                pairs,
+                media_type,
+                Credential::Optional,
+                EntityTagExpectation::Forbidden,
+            )
+            .await?;
+        if media_type == APPLICATION_JSON {
+            crate::strict_json::from_slice(&wire.body)
+                .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        }
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
+    }
+
+    pub(crate) async fn statistics_post_json(
+        &self,
+        segments: &[&str],
+        pairs: &[(String, String)],
+        body: Vec<u8>,
+        idempotency_key: &BRegIdempotencyKey,
+        expected_status: StatusCode,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let url = self.url_with_query(segments, pairs)?;
+        let builder = self
+            .transport
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, APPLICATION_JSON)
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .header("idempotency-key", idempotency_key.as_str())
+            .body(body);
+        let builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let wire = self.bound_json_wire(response, expected_status).await?;
+        crate::strict_json::from_slice(&wire.body)
+            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
+    }
+
     /// POST one fixed ingestion-run JSON exchange without retry or link
     /// following. Ingestion routes carry no Idempotency-Key header: a resubmitted
     /// chunk is bound by the run's announced digests instead. A `content_type`

@@ -62,6 +62,7 @@ mod review_recovery;
 mod reviewed_migrations;
 mod safe_path;
 mod starters;
+mod statistics_lifecycle;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
@@ -96,13 +97,16 @@ use reconcile_lifecycle::{
 };
 use registry_breg::data::DataError;
 use registry_breg::migration_reconcile::{ReconcileError, ReconcileOutcome};
-use registry_breg_client::BRegIngestionBlockedReason;
+use registry_breg_client::{BRegIngestionBlockedReason, BRegReleaseStatus, BRegWithdrawalReason};
 use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
 };
 use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRecoveryOutcome};
 use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
+use statistics_lifecycle::{
+    StatisticsLifecycleError, StatisticsPublishRequest, StatisticsWithdrawRequest,
+};
 use test_lifecycle::{remove_exact_file, TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
     WebhookDiscardOutcome, WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome,
@@ -192,6 +196,8 @@ enum Command {
     History(HistoryArgs),
     /// Validate, import, or export data through authenticated Registry HTTP APIs.
     Data(DataArgs),
+    /// Publish or withdraw statistical releases through authenticated Registry HTTP APIs.
+    Statistics(StatisticsArgs),
     /// Inspect and operate configured webhook deliveries.
     Webhook(WebhookArgs),
     /// Inspect and erase eligible change-request retention detail.
@@ -1033,6 +1039,105 @@ enum DataCommand {
 }
 
 #[derive(Debug, Args)]
+struct StatisticsArgs {
+    #[command(subcommand)]
+    command: StatisticsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum StatisticsCommand {
+    /// Compute and publish one statistical release version.
+    Publish(StatisticsPublishArgs),
+    /// Withdraw one immutable statistical release version.
+    Withdraw(StatisticsWithdrawArgs),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum StatisticsStatusArg {
+    Provisional,
+    Final,
+}
+
+impl From<StatisticsStatusArg> for BRegReleaseStatus {
+    fn from(value: StatisticsStatusArg) -> Self {
+        match value {
+            StatisticsStatusArg::Provisional => Self::Provisional,
+            StatisticsStatusArg::Final => Self::Final,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum StatisticsWithdrawalReasonArg {
+    ComputationError,
+    SourceDataError,
+    DisclosureRisk,
+}
+
+impl From<StatisticsWithdrawalReasonArg> for BRegWithdrawalReason {
+    fn from(value: StatisticsWithdrawalReasonArg) -> Self {
+        match value {
+            StatisticsWithdrawalReasonArg::ComputationError => Self::ComputationError,
+            StatisticsWithdrawalReasonArg::SourceDataError => Self::SourceDataError,
+            StatisticsWithdrawalReasonArg::DisclosureRisk => Self::DisclosureRisk,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct StatisticsPublishArgs {
+    /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
+    #[arg(long, value_name = "URL")]
+    breg_url: String,
+    /// Absolute file containing one bearer access token and no other credential material.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    access_token_file: PathBuf,
+    /// Compiled statistical dataset identifier.
+    #[arg(long, value_name = "ID")]
+    dataset: String,
+    /// Statistical period code to publish.
+    #[arg(long, value_name = "PERIOD")]
+    period: String,
+    /// Release status assigned to the new version.
+    #[arg(long, value_enum)]
+    status: StatisticsStatusArg,
+    /// Compiled publisher access profile identifier.
+    #[arg(long, value_name = "ID")]
+    profile: String,
+    /// Caller-owned idempotency key for this exact publication request.
+    #[arg(long, value_name = "KEY")]
+    idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+struct StatisticsWithdrawArgs {
+    /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
+    #[arg(long, value_name = "URL")]
+    breg_url: String,
+    /// Absolute file containing one bearer access token and no other credential material.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    access_token_file: PathBuf,
+    /// Compiled statistical dataset identifier.
+    #[arg(long, value_name = "ID")]
+    dataset: String,
+    /// Statistical period code containing the version.
+    #[arg(long, value_name = "PERIOD")]
+    period: String,
+    /// Positive immutable release version to withdraw.
+    #[arg(long, value_name = "NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
+    version: u64,
+    /// Closed reason recorded with the withdrawal.
+    #[arg(long, value_enum)]
+    reason: StatisticsWithdrawalReasonArg,
+    /// Compiled publisher access profile identifier.
+    #[arg(long, value_name = "ID")]
+    profile: String,
+    /// Caller-owned idempotency key for this exact withdrawal request.
+    #[arg(long, value_name = "KEY")]
+    idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
 struct DataValidateArgs {
     /// Absolute closed package directory used only for deterministic planning.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
@@ -1493,6 +1598,7 @@ enum DiagnosticArtifact {
     DataOperation,
     DataCheckpoint,
     DataTransport,
+    StatisticsOperation,
     WebhookSample,
     WebhookOperations,
     RequestRetentionOperation,
@@ -1542,6 +1648,7 @@ enum SuggestedAction {
     CorrectDataInput,
     VerifyDataCheckpoint,
     VerifyDataTransport,
+    VerifyStatisticsOperation,
     SelectWebhookEvent,
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
@@ -1819,6 +1926,15 @@ struct DataExportSuccessReport {
     record_count: u64,
     output_length: u64,
     complete: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatisticsMutationSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    release: registry_breg::statistics::ReleaseVersionHeader,
 }
 
 #[derive(Serialize)]
@@ -2350,6 +2466,20 @@ where
             DataCommand::Export(args) => {
                 return match data_export(&args) {
                     Ok(report) => write_data_export_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
+        },
+        Command::Statistics(args) => match args.command {
+            StatisticsCommand::Publish(args) => {
+                return match statistics_publish(&args) {
+                    Ok(report) => write_statistics_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
+            StatisticsCommand::Withdraw(args) => {
+                return match statistics_withdraw(&args) {
+                    Ok(report) => write_statistics_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
@@ -3956,6 +4086,94 @@ fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Failure
         output_length: outcome.output_length,
         complete: outcome.complete,
     })
+}
+
+fn statistics_publish(
+    args: &StatisticsPublishArgs,
+) -> Result<StatisticsMutationSuccessReport, FailureReport> {
+    let release = statistics_lifecycle::publish(StatisticsPublishRequest {
+        breg_url: &args.breg_url,
+        access_token_file: &args.access_token_file,
+        dataset: &args.dataset,
+        period: &args.period,
+        status: args.status.into(),
+        profile: &args.profile,
+        idempotency_key: &args.idempotency_key,
+    })
+    .map_err(|error| statistics_lifecycle_failure("statistics publish", error))?;
+    Ok(StatisticsMutationSuccessReport {
+        ok: true,
+        command: "statistics publish",
+        release,
+    })
+}
+
+fn statistics_withdraw(
+    args: &StatisticsWithdrawArgs,
+) -> Result<StatisticsMutationSuccessReport, FailureReport> {
+    let release = statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
+        breg_url: &args.breg_url,
+        access_token_file: &args.access_token_file,
+        dataset: &args.dataset,
+        period: &args.period,
+        version: args.version,
+        reason: args.reason.into(),
+        profile: &args.profile,
+        idempotency_key: &args.idempotency_key,
+    })
+    .map_err(|error| statistics_lifecycle_failure("statistics withdraw", error))?;
+    Ok(StatisticsMutationSuccessReport {
+        ok: true,
+        command: "statistics withdraw",
+        release,
+    })
+}
+
+fn statistics_lifecycle_failure(
+    command: &'static str,
+    error: StatisticsLifecycleError,
+) -> FailureReport {
+    let (code, path, message) = match error {
+        StatisticsLifecycleError::BRegUrl => (
+            "statistics.url.invalid",
+            "--breg-url",
+            "the Base Registry Engine URL must be HTTPS or loopback HTTP and carry no credentials, query, or fragment",
+        ),
+        StatisticsLifecycleError::Token => (
+            "statistics.token.invalid",
+            "--access-token-file",
+            "the access-token file must be an absolute, bounded regular file containing one bearer token",
+        ),
+        StatisticsLifecycleError::IdempotencyKey => (
+            "statistics.idempotency_key.invalid",
+            "--idempotency-key",
+            "the idempotency key must use the bounded visible-ASCII header grammar",
+        ),
+        StatisticsLifecycleError::Runtime => (
+            "statistics.runtime.unavailable",
+            "statistics",
+            "the bounded HTTP runtime could not be initialized",
+        ),
+        StatisticsLifecycleError::Response => (
+            "statistics.response.invalid",
+            "statistics",
+            "the Registry returned an invalid statistical release header",
+        ),
+        StatisticsLifecycleError::Client => (
+            "statistics.operation.refused",
+            "statistics",
+            "the authenticated statistical release operation was refused",
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            DiagnosticArtifact::StatisticsOperation,
+            SuggestedAction::VerifyStatisticsOperation,
+        )],
+    }
 }
 
 fn operation_arg(operation: registry_breg::data::DataImportOperation) -> DataOperationArg {
@@ -12810,6 +13028,50 @@ fn write_data_export_success(
     write_result(result, stderr)
 }
 
+fn write_statistics_success(
+    report: &StatisticsMutationSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let status = match report.release.status {
+            registry_breg::statistics::ReleaseStatus::Provisional => "provisional",
+            registry_breg::statistics::ReleaseStatus::Final => "final",
+        };
+        let lead = if report.release.withdrawal.is_some() {
+            "Withdrew the statistical release version."
+        } else {
+            "Published the statistical release version."
+        };
+        let mut pairs = vec![
+            ("dataset", report.release.dataset.clone()),
+            ("period", report.release.period.clone()),
+            ("version", report.release.version.to_string()),
+            ("status", status.to_owned()),
+            ("snapshot", report.release.snapshot.clone()),
+            ("content digest", report.release.content_digest.clone()),
+        ];
+        if let Some(withdrawal) = &report.release.withdrawal {
+            let reason = match withdrawal.reason {
+                registry_breg::statistics::WithdrawalReason::ComputationError => {
+                    "computation-error"
+                }
+                registry_breg::statistics::WithdrawalReason::SourceDataError => "source-data-error",
+                registry_breg::statistics::WithdrawalReason::DisclosureRisk => "disclosure-risk",
+            };
+            pairs.push(("withdrawal reason", reason.to_owned()));
+            pairs.push(("withdrawn at", withdrawal.withdrawn_at.clone()));
+        }
+        render_report(lead, &pairs, stdout)
+    };
+    write_result(result, stderr)
+}
+
 fn write_webhook_sample_success(
     report: &WebhookSampleSuccessReport,
     format: OutputFormat,
@@ -13514,6 +13776,109 @@ mod tests {
         let rendered = String::from_utf8(stdout).unwrap();
         assert!(rendered.contains("ingestion run"));
         assert!(rendered.contains("00000000-0000-4000-8000-000000000001"));
+    }
+
+    #[test]
+    fn statistics_mutations_require_the_http_authority_and_explicit_key() {
+        let publish = Cli::try_parse_from([
+            "bregctl",
+            "statistics",
+            "publish",
+            "--breg-url",
+            "https://registry.example",
+            "--access-token-file",
+            "/tmp/token",
+            "--dataset",
+            "population",
+            "--period",
+            "2026-09",
+            "--status",
+            "final",
+            "--profile",
+            "publisher",
+            "--idempotency-key",
+            "release-2026-09-final",
+        ])
+        .expect("statistics publish parses");
+        let Command::Statistics(statistics) = publish.command else {
+            panic!("statistics command parsed");
+        };
+        let StatisticsCommand::Publish(publish) = statistics.command else {
+            panic!("statistics publish parsed");
+        };
+        assert_eq!(publish.dataset, "population");
+        assert_eq!(publish.status, StatisticsStatusArg::Final);
+
+        let withdraw = Cli::try_parse_from([
+            "bregctl",
+            "statistics",
+            "withdraw",
+            "--breg-url",
+            "https://registry.example",
+            "--access-token-file",
+            "/tmp/token",
+            "--dataset",
+            "population",
+            "--period",
+            "2026-09",
+            "--version",
+            "2",
+            "--reason",
+            "source-data-error",
+            "--profile",
+            "publisher",
+            "--idempotency-key",
+            "withdraw-2026-09-v2",
+        ])
+        .expect("statistics withdraw parses");
+        let Command::Statistics(statistics) = withdraw.command else {
+            panic!("statistics command parsed");
+        };
+        let StatisticsCommand::Withdraw(withdraw) = statistics.command else {
+            panic!("statistics withdraw parsed");
+        };
+        assert_eq!(withdraw.version, 2);
+        assert_eq!(
+            withdraw.reason,
+            StatisticsWithdrawalReasonArg::SourceDataError
+        );
+
+        let help = command()
+            .find_subcommand("statistics")
+            .expect("statistics help exists")
+            .clone()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("publish"));
+        assert!(help.contains("withdraw"));
+        assert!(!help.contains("database-url"));
+        assert!(!help.contains("database-secret"));
+    }
+
+    #[test]
+    fn statistics_withdraw_refuses_zero_version_in_the_parser() {
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "statistics",
+            "withdraw",
+            "--breg-url",
+            "http://127.0.0.1:8080",
+            "--access-token-file",
+            "/tmp/token",
+            "--dataset",
+            "population",
+            "--period",
+            "2026-09",
+            "--version",
+            "0",
+            "--reason",
+            "disclosure-risk",
+            "--profile",
+            "publisher",
+            "--idempotency-key",
+            "withdraw-v0",
+        ])
+        .is_err());
     }
 
     #[test]

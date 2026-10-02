@@ -143,6 +143,11 @@ fn classify_change(
         Code::EventAdded | Code::EventRemoved | Code::EventChanged => {
             DiffClassification::Unsupported
         }
+        Code::StatisticalDatasetAdded => DiffClassification::DisclosureWidening,
+        Code::StatisticalDatasetRemoved => DiffClassification::DisclosureNarrowing,
+        Code::StatisticalDatasetChanged => {
+            statistical_dataset_direction(baseline, candidate, change)
+        }
         // Consent configuration and actions change who may read or write
         // without changing storage; their details carry the review reasons.
         Code::ConsentRecordChanged
@@ -164,6 +169,67 @@ fn classify_change(
             // inheriting an access/disclosure guess.
             BaseClass::AccessOrDisclosureChange => DiffClassification::Unsupported,
         },
+    }
+}
+
+fn statistical_dataset_direction(
+    baseline: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    change: &CompiledRegistryChange,
+) -> DiffClassification {
+    let Some(id) = change.target.member_id.as_deref() else {
+        return DiffClassification::AccessChange;
+    };
+    let Some(before) = baseline.statistical_datasets().get(id) else {
+        return DiffClassification::AccessChange;
+    };
+    let Some(after) = candidate.statistical_datasets().get(id) else {
+        return DiffClassification::AccessChange;
+    };
+
+    let mut before_definition = before.clone();
+    before_definition.live_profiles.clear();
+    before_definition.access_profiles.clear();
+    if let Some(releases) = &mut before_definition.releases {
+        releases.readers.clear();
+    }
+    let mut after_definition = after.clone();
+    after_definition.live_profiles.clear();
+    after_definition.access_profiles.clear();
+    if let Some(releases) = &mut after_definition.releases {
+        releases.readers.clear();
+    }
+    if before_definition != after_definition {
+        return DiffClassification::AccessChange;
+    }
+    if before.access_profiles.iter().any(|(profile, definition)| {
+        after
+            .access_profiles
+            .get(profile)
+            .is_some_and(|candidate| candidate != definition)
+    }) {
+        return DiffClassification::AccessChange;
+    }
+
+    let profiles = before
+        .access_profiles
+        .keys()
+        .chain(after.access_profiles.keys())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut widens = false;
+    let mut narrows = false;
+    for profile in profiles {
+        let before_operations =
+            crate::statistical_artifacts::statistical_dataset_operations(before, profile);
+        let after_operations =
+            crate::statistical_artifacts::statistical_dataset_operations(after, profile);
+        widens |= !after_operations.is_subset(&before_operations);
+        narrows |= !before_operations.is_subset(&after_operations);
+    }
+    match (widens, narrows) {
+        (true, false) => DiffClassification::DisclosureWidening,
+        (false, true) => DiffClassification::DisclosureNarrowing,
+        _ => DiffClassification::AccessChange,
     }
 }
 

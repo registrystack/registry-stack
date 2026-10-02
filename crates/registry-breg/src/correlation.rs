@@ -56,6 +56,10 @@ impl RequestCorrelation {
     }
 }
 
+/// Absolute deadline shared by HTTP work and database statement budgets.
+#[derive(Clone, Copy)]
+pub(crate) struct RequestDeadline(pub tokio::time::Instant);
+
 /// Closed public problem metadata used by the correlation boundary.
 ///
 /// Carrying this in response extensions lets the outer timeout/observation
@@ -71,6 +75,7 @@ pub(crate) struct PublicProblem {
     field_path: Option<String>,
     declared_refusal: Option<(String, String)>,
     declared_field: Option<(String, String)>,
+    statistical_detail: Option<(&'static str, &'static str)>,
 }
 
 /// Build one value-free public problem. The boundary replaces this provisional
@@ -94,6 +99,7 @@ pub(crate) fn problem_response(
         field_path: None,
         declared_refusal: None,
         declared_field: None,
+        statistical_detail: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
@@ -125,6 +131,7 @@ pub(crate) fn problem_response_with_field_path(
         field_path: Some(field_path.clone()),
         declared_refusal: None,
         declared_field: None,
+        statistical_detail: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
@@ -171,6 +178,24 @@ pub(crate) fn action_refusal_response(
         .field
         .map(|field| format!("/input/{}", field.replace('~', "~0").replace('/', "~1")));
     problem.declared_refusal = Some((refusal.code, refusal.label));
+    response
+}
+
+pub(crate) fn statistics_problem(
+    code: crate::problem::ProblemCode,
+    detail: Option<(&'static str, &'static str)>,
+) -> Response {
+    let mut response = problem_response(
+        StatusCode::from_u16(code.status()).expect("catalogue status"),
+        code.title(),
+        code.description(),
+        code.code(),
+    );
+    response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem metadata")
+        .statistical_detail = detail;
     response
 }
 
@@ -245,6 +270,9 @@ pub(crate) fn finish_response(
         if let Some((code, label)) = &problem.declared_refusal {
             object.insert("refusalCode".to_owned(), Value::String(code.clone()));
             object.insert("detail".to_owned(), Value::String(label.clone()));
+        }
+        if let Some((name, value)) = problem.statistical_detail {
+            object.insert(name.to_owned(), Value::String(value.to_owned()));
         }
         if let Some((entity, field)) = &problem.declared_field {
             object.insert("entityId".to_owned(), Value::String(entity.clone()));

@@ -25,7 +25,7 @@ use crate::contract::{
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
     MAX_STRUCTURED_VALUE_BYTES,
 };
-use crate::derived_sql::validate_derived_sql;
+use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl_with_actions;
 use crate::immediate_actions::{compile_immediate_actions, hex_lower, CollectedActionSource};
@@ -58,6 +58,7 @@ use crate::physical_names::{
 };
 
 mod attachments;
+mod statistics;
 
 pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 pub const MAX_BATCH_ITEMS: u16 = 100;
@@ -279,6 +280,8 @@ pub fn compile_project_with_assets(
     }
 
     let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)?;
+    let statistical_datasets =
+        statistics::compile(project, &entities).map_err(CompileFailure::from_errors)?;
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     let owned_scripts = action_sources
@@ -346,6 +349,7 @@ pub fn compile_project_with_assets(
         &module_order,
         &module_closure,
         &entities,
+        &statistical_datasets,
         &physical_names,
         &action_inventory,
         &route_inventory,
@@ -376,6 +380,7 @@ pub fn compile_project_with_assets(
         module_order,
         module_closure,
         entities,
+        statistical_datasets,
         physical_names,
         action_inventory,
         route_inventory,
@@ -5567,6 +5572,7 @@ fn compile_entities(
                     },
                 );
             }
+            let dependencies = derived_sql_dependencies(&asset.bytes);
             derived_relations.insert(
                 derived.id.clone(),
                 CompiledDerivedRelation {
@@ -5577,6 +5583,17 @@ fn compile_entities(
                     sql_sha256: sha256_hex(&asset.bytes),
                     sql_bytes: asset.bytes.clone(),
                     fields: field_ids,
+                    source_entities: dependencies
+                        .source_relations
+                        .into_iter()
+                        .filter_map(|relation| {
+                            sources.values().find_map(|candidate| {
+                                (default_sql_name(&candidate.id) == relation)
+                                    .then(|| candidate.id.clone())
+                            })
+                        })
+                        .collect(),
+                    uses_evaluation_date: dependencies.uses_evaluation_date,
                 },
             );
         }

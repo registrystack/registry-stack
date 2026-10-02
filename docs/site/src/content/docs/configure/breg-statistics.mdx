@@ -1,0 +1,117 @@
+---
+title: Publish a statistical series
+description: Declare a count dataset, publish an ended period, read it through a separate profile, and plot its released CSV.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced:
+  - openapi
+  - sdmx
+---
+
+If you operate a Base Registry Engine (BReg) project and need a dashboard or republisher to consume counts without record access, declare a statistical dataset and publish an ended period. You need an activated project, a count-capable publisher profile, a separate reader profile, and access tokens satisfying your issuer and profile constraints.
+
+## Declare the population and grants
+
+Use the facility acceptance project's declaration as a starting point. Your root `registry.yaml` must already declare the named unit, fields, and vocabulary:
+
+```yaml
+statisticalDatasets:
+  - id: monthly-discharge-reports
+    unit: discharge-report
+    population: "substanceCode ne null"
+    period:
+      kind: flow
+      field: period-start
+      granularity: month
+      firstPeriod: 2025-01
+    dimensions: [administrative-boundary, has-measured-quantity]
+    disclosure: {minimumCount: 5, roundingBase: 5}
+    live: [facility-operator]
+    releases:
+      publisher: statistics-publisher
+      readers: [statistics-reader]
+```
+
+The publisher needs an ordinary `list` permission with `allowCount: true`, readable and filterable dataset fields, and caller-independent visibility on every source dependency. The reader profile may declare `permissions: []`: its dataset grant authorizes released statistics without granting record access. Review [disclosure risks](../../explanation/breg-statistical-datasets/) before choosing dimensions and release cadence.
+
+Compile your project, replacing `./facility` with its path:
+
+```sh
+bregctl check ./facility
+```
+
+Resolve a refused declaration before packaging. In particular, remove claim-bound source policies from a publisher, or keep the dataset live-only when the population must depend on the caller. Package and apply the project using [deploy a registry](../../operate/breg/).
+
+{/* Evidence: products/breg/acceptance/facility/registry.yaml;
+    crates/registry-breg/src/compiler/statistics.rs. */}
+
+## Publish an ended period
+
+[Obtain a publisher token](../request-an-access-token/) and keep it in an absolute owner-only token file. Set `BREG_URL` to your runtime's base URL and `PUBLISHER_TOKEN_FILE` to that file. The command uses HTTP and needs no database credential.
+
+```sh
+bregctl statistics publish \
+  --breg-url "$BREG_URL" \
+  --access-token-file "$PUBLISHER_TOKEN_FILE" \
+  --dataset monthly-discharge-reports \
+  --period 2025-01 \
+  --status final \
+  --profile statistics-publisher \
+  --idempotency-key monthly-discharge-reports-2025-01-final-1
+```
+
+The response identifies the version, definition digest, stored content digest, and snapshot. Keep the same key when retrying that exact publication. Choose another key for an intentional correction. A current or future period is refused; so is a provisional publication after a final version. Your institution's cron or CI can run this command with a refreshed token.
+
+## Read the series as a republisher
+
+Obtain a token for `statistics-reader` and put its `Authorization: Bearer` header in an owner-only file named by `READER_HEADERS_FILE`. Keep this profile free of record permissions. Read the series with an explicit period range:
+
+```sh
+curl --fail-with-body \
+  --header @"$READER_HEADERS_FILE" \
+  --header 'Accept: application/json' \
+  "$BREG_URL/v1/statistics/monthly-discharge-reports/releases:series?accessProfile=statistics-reader&from=2025-01&to=2025-03&status=final"
+```
+
+The result includes each requested period and the latest eligible final version where one exists. A period with no release has no invented cells. Read `/v1/registry?accessProfile=statistics-reader` to discover permitted datasets; that profile's entity list remains empty. Its attempt to read `monthly-discharge-reports:live` is concealed as 404.
+
+Save the same series as CSV:
+
+```sh
+curl --fail-with-body \
+  --header @"$READER_HEADERS_FILE" \
+  --header 'Accept: text/csv' \
+  "$BREG_URL/v1/statistics/monthly-discharge-reports/releases:series?accessProfile=statistics-reader&from=2025-01&to=2025-03&status=final" \
+  --output released-series.csv
+```
+
+Import the file into your plotting tool. Use `periodStart` for the horizontal date axis, choose the intended administrative and boolean codes, and plot `value`. Select `_T` deliberately when plotting a total. Keep `status`: a blank suppressed value is not zero, and independently rounded totals need not sum to visible cells. Verify the dashboard connector's OAuth token flow against your issuer before using it for refreshes.
+
+## Withdraw an incorrect version
+
+Withdrawal permanently removes the server's stored content and preserves its header and reason. It cannot remove a copy a reader already downloaded. Use the actual version number and an explicit closed reason:
+
+```sh
+bregctl statistics withdraw \
+  --breg-url "$BREG_URL" \
+  --access-token-file "$PUBLISHER_TOKEN_FILE" \
+  --dataset monthly-discharge-reports \
+  --period 2025-01 \
+  --version 1 \
+  --reason computation-error \
+  --profile statistics-publisher \
+  --idempotency-key monthly-discharge-reports-2025-01-withdraw-1
+```
+
+A direct read of the withdrawn version returns 410 with the reason. Latest reads use an earlier eligible version if one exists. Retry with the same key to recover the original withdrawal response; a second independent withdrawal is refused.
+
+For all request parameters, digests, and problem codes, use the [API reference](../../reference/breg-api/#statistical-datasets).
+
+{/* Evidence: crates/registry-breg/src/api/statistics.rs;
+    crates/registry-bregctl/src/lib.rs;
+    crates/registry-breg/src/postgres/statistics.rs. */}

@@ -892,6 +892,7 @@ pub struct HttpService {
     pub(crate) snapshots: Option<Arc<dyn SnapshotReadService>>,
     pub(crate) cursors: Arc<CursorCodec>,
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
+    pub(crate) statistics: Option<Arc<crate::postgres::PostgresStatisticsService>>,
     pub(crate) review_completions: Option<Arc<crate::review_store::ReviewCompletionReceiver>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
     pub(crate) public_origin: Option<crate::runtime_config::PublicOrigin>,
@@ -933,11 +934,22 @@ impl HttpService {
             snapshots: None,
             cursors,
             mutations: None,
+            statistics: None,
             review_completions: None,
             readiness,
             public_origin: None,
             field_encryption: None,
         }
+    }
+
+    /// Install the package-fenced statistical dataset service.
+    #[must_use]
+    pub fn with_statistics(
+        mut self,
+        service: Arc<crate::postgres::PostgresStatisticsService>,
+    ) -> Self {
+        self.statistics = Some(service);
+        self
     }
 
     /// Install active field-encryption key state. Startup calls this exactly

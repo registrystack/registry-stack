@@ -15,6 +15,7 @@ mod gis;
 mod ingestion;
 mod metadata;
 mod service;
+mod statistics;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -204,6 +205,7 @@ fn route_set(service: Arc<HttpService>) -> Router {
     app.merge(access_log::routes(&service))
         .merge(attachments::routes(&service))
         .merge(gis::routes())
+        .merge(statistics::routes(&service))
         .merge(ingestion::routes(&service))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
@@ -243,7 +245,7 @@ async fn review_completion(
     body: Body,
 ) -> Response {
     let Some(receiver) = service.review_completions.as_ref() else {
-        return not_found().await;
+        return concealed();
     };
     let Some(authorization) = single_header(&headers, AUTHORIZATION.as_str()) else {
         return review_completion_refused();
@@ -356,7 +358,12 @@ async fn openapi(
     let visible = visible_surfaces(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
     let imports = ingestion::import_surfaces(&service, &claims, &options);
-    if visible.is_empty() && visible_actions.is_empty() && imports.is_empty() {
+    let visible_statistics = statistics::metadata(&service, &claims, &options);
+    if visible.is_empty()
+        && visible_actions.is_empty()
+        && imports.is_empty()
+        && visible_statistics.is_empty()
+    {
         return concealed();
     }
 
@@ -466,6 +473,7 @@ async fn openapi(
         );
     }
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    statistics::append_openapi(&service, &claims, &options, &mut paths, &mut schemas);
     if service.review_completions.is_some() {
         crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
     }
@@ -496,7 +504,8 @@ async fn registry_metadata(
     let operations = metadata::operations(&service, &surfaces);
     let visible = visible_metadata_entries(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
-    if visible.is_empty() && visible_actions.is_empty() {
+    let visible_statistics = statistics::metadata(&service, &claims, &options);
+    if visible.is_empty() && visible_actions.is_empty() && visible_statistics.is_empty() {
         return concealed();
     }
 
@@ -574,6 +583,9 @@ async fn registry_metadata(
         "metadataVersion": "1",
         "operations": operations,
     });
+    if !visible_statistics.is_empty() {
+        metadata["statisticalDatasets"] = json!(visible_statistics);
+    }
     // Preserve action-free discovery output while omitting unavailable actions.
     if !visible_actions.is_empty() {
         metadata["actions"] = actions::metadata(&visible_actions);
@@ -2468,7 +2480,18 @@ async fn audited_mutation_concealment(
     }
 }
 
-async fn not_found() -> Response {
+async fn not_found(
+    State(service): State<Arc<HttpService>>,
+    claims: Option<Extension<VerifiedRequestClaims>>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    uri: axum::http::Uri,
+) -> Response {
+    if uri.path().starts_with("/v1/statistics/") && service.statistics.is_some() {
+        let claims = claims
+            .map(|Extension(c)| c)
+            .unwrap_or_else(VerifiedRequestClaims::anonymous);
+        return statistics::unknown(&service, &claims, &correlation).await;
+    }
     concealed()
 }
 
@@ -3662,6 +3685,23 @@ fn decimal_difference_within(
 ) -> Result<bool, ReadQueryError> {
     strict_query::decimal_difference_within(upper, lower, maximum)
         .map_err(|_| ReadQueryError::Invalid)
+}
+
+/// Use the record query's typed conversion for a reviewed statistical
+/// population. The count grant supplies the same fields and operators.
+pub(crate) fn compile_statistics_population(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    population: &str,
+) -> Result<Option<ReadFilterExpr>, ReadServiceError> {
+    if population.trim().is_empty() {
+        return Ok(None);
+    }
+    let parsed =
+        strict_query::parse_filter(population).map_err(|_| ReadServiceError::Unavailable)?;
+    read_filter_expr(entity, operation, &parsed)
+        .map(Some)
+        .map_err(|_| ReadServiceError::Unavailable)
 }
 
 fn read_filter_expr(
@@ -5230,6 +5270,7 @@ fn exact_mutation(
             PermittedResponseHeader::Etag => builder.header("etag", value),
             PermittedResponseHeader::Link => builder.header(LINK, value),
             PermittedResponseHeader::Location => builder.header("location", value),
+            PermittedResponseHeader::ReprDigest => builder.header("repr-digest", value),
         };
     }
     builder

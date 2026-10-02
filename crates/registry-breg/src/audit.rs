@@ -410,6 +410,110 @@ pub(crate) async fn begin_pre_io_audit(
     begin_attempt(audit, event.correlation, record).await
 }
 
+/// Statistics readers may have no entity grant. Their admitted profile is an
+/// HTTP authority, not a forged record-read claim context.
+pub(crate) async fn begin_statistics_pre_io_audit(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    context: &crate::api::AuthorizedRequestContext,
+    event: PreIoAudit<'_>,
+) -> Result<AuditRequest, RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Attempt
+        || event.target_record.is_some()
+        || event.operation_id.is_empty()
+        || context.principal().is_none()
+        || !profile_is_keyed(audit.profile())
+    {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    expected
+        .validate()
+        .map_err(|_| RegistryAuditError::InvalidContext)?;
+    let principal_reference = context
+        .principal()
+        .map(|principal| {
+            audit.profile().key_hasher().audit_reference_hash(
+                "breg-principal-v1",
+                &expected.activation_id,
+                principal,
+            )
+        })
+        .transpose()
+        .map_err(|_| RegistryAuditError::InvalidContext)?;
+    begin_attempt(
+        audit,
+        event.correlation,
+        json!({
+            "phase":"attempt", "method":method_name(event.method),
+            "operationId":event.operation_id,
+            "requestId":event.correlation.request_id().to_string(),
+            "traceId":event.correlation.trace_id().as_str(),
+            "packageRevision":expected.activation_id,
+            "selectedAccessProfile":context.selected_profile(),
+            "purposePresent":context.purpose().is_some(),
+            "principalReference":principal_reference,
+            "recordReference":null,
+        }),
+    )
+    .await
+}
+
+pub(crate) struct StatisticsTerminalAudit<'a> {
+    pub read: ReadTerminalAudit,
+    pub dataset_id: &'a str,
+    pub period_code: Option<&'a str>,
+    pub version: Option<i64>,
+    pub status: Option<&'a str>,
+    pub content_digest: Option<&'a str>,
+}
+
+/// Statistical audit summaries carry references and lifecycle metadata only.
+/// Cell values never enter the audit serializer.
+pub(crate) fn statistics_terminal_entry(
+    profile: &AuditProfile,
+    summary: StatisticsTerminalAudit<'_>,
+) -> Result<AuditEntry, RegistryAuditError> {
+    let correlation = summary.read.terminal.correlation.request_id().to_string();
+    let package_revision = summary.read.terminal.package_revision.clone();
+    let mut record = terminal_record(summary.read.terminal, profile)?;
+    let hasher = profile.key_hasher();
+    let dataset_reference = hasher
+        .audit_reference_hash(
+            "breg-statistical-dataset-v1",
+            &package_revision,
+            summary.dataset_id,
+        )
+        .map_err(|_| RegistryAuditError::InvalidContext)?;
+    record.insert(
+        "statisticalDatasetReference".to_owned(),
+        json!(dataset_reference),
+    );
+    if let Some(period) = summary.period_code {
+        let reference = hasher
+            .audit_reference_hash("breg-statistical-period-v1", &package_revision, period)
+            .map_err(|_| RegistryAuditError::InvalidContext)?;
+        record.insert("periodReference".to_owned(), json!(reference));
+    }
+    for (field, value) in [
+        ("version", summary.version.map(|v| json!(v))),
+        ("status", summary.status.map(|v| json!(v))),
+        ("contentDigest", summary.content_digest.map(|v| json!(v))),
+        (
+            "queryReference",
+            summary.read.query_reference.map(|v| json!(v)),
+        ),
+        (
+            "rowBoundaryReference",
+            summary.read.row_boundary_reference.map(|v| json!(v)),
+        ),
+    ] {
+        if let Some(value) = value {
+            record.insert(field.to_owned(), value);
+        }
+    }
+    Ok(response_entry(correlation, record))
+}
+
 fn pre_io_record(
     audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,

@@ -24,13 +24,15 @@ use breg_client_sdk::{
     BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
     BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
     BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegRequestMetadata, BRegRequestProposal,
-    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReviewRequirement,
-    BRegRequestState, BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
+    BRegRelationshipListRequest, BRegReleaseSelection, BRegReleaseStatus, BRegRequestMetadata,
+    BRegRequestProposal, BRegRequestResultReference as CoreRequestResultReference,
+    BRegRequestReviewRequirement, BRegRequestState,
+    BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
-    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
-    BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError,
-    RegistryRecordRepresentation, RegistryRecordResponse, TokenError,
+    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegStatisticsFormat,
+    BRegTombstoneBinding, BRegWithdrawalReason, BaseRegistryClient as RustClient,
+    BaseRegistryClientError as RustClientError, RegistryRecordRepresentation,
+    RegistryRecordResponse, TokenError,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -207,6 +209,45 @@ fn record_format(py: Python<'_>, value: &str) -> PyResult<BRegRecordFormat> {
         "json" => Ok(BRegRecordFormat::Json),
         "json-ld" => Ok(BRegRecordFormat::JsonLd),
         _ => Err(invalid(py, "format must be json or json-ld")),
+    }
+}
+
+fn statistics_format(py: Python<'_>, value: &str) -> PyResult<BRegStatisticsFormat> {
+    match value {
+        "json" => Ok(BRegStatisticsFormat::Json),
+        "csv" => Ok(BRegStatisticsFormat::Csv),
+        _ => Err(invalid(py, "statistics format must be json or csv")),
+    }
+}
+
+fn release_selection(py: Python<'_>, value: &str) -> PyResult<BRegReleaseSelection> {
+    match value {
+        "any" => Ok(BRegReleaseSelection::Any),
+        "final" => Ok(BRegReleaseSelection::Final),
+        _ => Err(invalid(
+            py,
+            "statistics release selection must be any or final",
+        )),
+    }
+}
+
+fn release_status(py: Python<'_>, value: &str) -> PyResult<BRegReleaseStatus> {
+    match value {
+        "provisional" => Ok(BRegReleaseStatus::Provisional),
+        "final" => Ok(BRegReleaseStatus::Final),
+        _ => Err(invalid(
+            py,
+            "statistics release status must be provisional or final",
+        )),
+    }
+}
+
+fn withdrawal_reason(py: Python<'_>, value: &str) -> PyResult<BRegWithdrawalReason> {
+    match value {
+        "computation-error" => Ok(BRegWithdrawalReason::ComputationError),
+        "source-data-error" => Ok(BRegWithdrawalReason::SourceDataError),
+        "disclosure-risk" => Ok(BRegWithdrawalReason::DisclosureRisk),
+        _ => Err(invalid(py, "statistics withdrawal reason is invalid")),
     }
 }
 
@@ -1971,6 +2012,188 @@ impl BaseRegistryClient {
             .detach(|| {
                 self.runtime
                     .block_on(self.inner.registry_metadata(access_profile))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (dataset, *, from_period=None, to_period=None, access_profile=None, format="json"))]
+    fn statistics_live<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        from_period: Option<&str>,
+        to_period: Option<&str>,
+        access_profile: Option<&str>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let format = statistics_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_live(
+                    dataset,
+                    from_period,
+                    to_period,
+                    access_profile,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (dataset, *, top=None, skip_token=None, access_profile=None))]
+    fn statistics_releases<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        top: Option<u16>,
+        skip_token: Option<&str>,
+        access_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_releases(
+                    dataset,
+                    top,
+                    skip_token,
+                    access_profile,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (dataset, period, selection, *, access_profile=None, format="json"))]
+    fn statistics_latest_release<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        period: &str,
+        selection: &str,
+        access_profile: Option<&str>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let selection = release_selection(py, selection)?;
+        let format = statistics_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_latest_release(
+                    dataset,
+                    period,
+                    selection,
+                    access_profile,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (dataset, period, version, *, access_profile=None, format="json"))]
+    fn statistics_release_version<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        period: &str,
+        version: u64,
+        access_profile: Option<&str>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let format = statistics_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_release_version(
+                    dataset,
+                    period,
+                    version,
+                    access_profile,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (dataset, from_period, to_period, selection, *, access_profile=None, format="json"))]
+    #[allow(clippy::too_many_arguments)]
+    fn statistics_release_series<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        from_period: &str,
+        to_period: &str,
+        selection: &str,
+        access_profile: Option<&str>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let selection = release_selection(py, selection)?;
+        let format = statistics_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_release_series(
+                    dataset,
+                    from_period,
+                    to_period,
+                    selection,
+                    access_profile,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    fn statistics_publish<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        period: &str,
+        status: &str,
+        access_profile: &str,
+        idempotency_key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let status = release_status(py, status)?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_publish(
+                    dataset,
+                    period,
+                    status,
+                    access_profile,
+                    &key,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn statistics_withdraw<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        period: &str,
+        version: u64,
+        reason: &str,
+        access_profile: &str,
+        idempotency_key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let reason = withdrawal_reason(py, reason)?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_withdraw(
+                    dataset,
+                    period,
+                    version,
+                    reason,
+                    access_profile,
+                    &key,
+                ))
             })
             .map_err(|error| sdk_error(py, error))?;
         raw_value(py, &value.value, &value.metadata)

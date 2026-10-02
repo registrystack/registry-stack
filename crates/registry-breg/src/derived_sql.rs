@@ -13,6 +13,43 @@ use crate::logical_names::default_sql_name;
 
 pub(crate) const MAX_DERIVED_SQL_BYTES: usize = 256 * 1024;
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DerivedSqlDependencies {
+    pub source_relations: BTreeSet<String>,
+    pub uses_evaluation_date: bool,
+}
+
+/// Extract dependency metadata from SQL which has already passed
+/// [`validate_derived_sql`]. A parse failure remains defensive and produces an
+/// empty inventory; compilation only calls this after validation succeeds.
+pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
+    let Ok(text) = std::str::from_utf8(sql) else {
+        return DerivedSqlDependencies::default();
+    };
+    let Ok(parsed) = pg_query::parse(text) else {
+        return DerivedSqlDependencies::default();
+    };
+    let mut dependencies = DerivedSqlDependencies::default();
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        match node {
+            NodeRef::RangeVar(range)
+                if range.catalogname.is_empty() && range.schemaname == "registry_source" =>
+            {
+                dependencies.source_relations.insert(range.relname.clone());
+            }
+            NodeRef::FuncCall(function)
+                if node_strings(&function.funcname).is_some_and(|name| {
+                    name.as_slice() == ["registry_context", "evaluation_date"]
+                }) =>
+            {
+                dependencies.uses_evaluation_date = true;
+            }
+            _ => {}
+        }
+    }
+    dependencies
+}
+
 pub(crate) fn validate_derived_sql(
     derived: &DerivedSource,
     sql: &[u8],
