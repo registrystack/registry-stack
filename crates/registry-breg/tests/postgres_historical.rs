@@ -98,6 +98,26 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     assert_eq!(old["items"][0]["revisionIdentifier"], "1");
     assert_eq!(old["items"][0]["domainData"], json!({"householdCode": "B"}));
 
+    for (filter, expected) in [
+        ("startswith(householdCode,'b')", vec![MEMBERSHIP]),
+        ("contains(householdCode,'b')", vec![MEMBERSHIP, TOMBSTONED]),
+    ] {
+        let response = send(
+            &app,
+            &format!(
+                "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=householdCode&$filter={filter}&$count=true",
+                snapshot_ref(OLD_REFERENCE_UUID)
+            ),
+            Some(history_claims(["zone-a"])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{filter}");
+        let body = body_json(response).await;
+        assert_eq!(item_ids(&body), expected);
+        assert_eq!(body["items"][0]["domainData"]["householdCode"], "B");
+        assert_eq!(body["count"], expected.len());
+    }
+
     let corrected = send(
         &app,
         &format!(

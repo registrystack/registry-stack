@@ -3232,11 +3232,17 @@ fn predicate_sql(
         ReadFilterOperator::IsNotNull => Ok(format!("{} IS NOT NULL", field.sql)),
         ReadFilterOperator::StartsWith => {
             let parameter = push_value(values, &format!("{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+            Ok(format!(
+                "{} ILIKE ${parameter}::text ESCAPE '\\'",
+                field.sql
+            ))
         }
         ReadFilterOperator::Contains => {
             let parameter = push_value(values, &format!("%{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+            Ok(format!(
+                "{} ILIKE ${parameter}::text ESCAPE '\\'",
+                field.sql
+            ))
         }
     }
 }

@@ -20,10 +20,17 @@ fn source() -> Value {
 }
 
 fn compile(value: &Value) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
+    compile_with_profile(value, CompileProfile::Authoring)
+}
+
+fn compile_with_profile(
+    value: &Value,
+    profile: CompileProfile,
+) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
     compile_project(
         &parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap(),
         &[],
-        CompileProfile::Authoring,
+        profile,
     )
 }
 
@@ -754,6 +761,151 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         .findings()
         .iter()
         .any(|d| d.code == "access.profile.anonymous_collection"));
+}
+
+#[test]
+fn create_grants_report_each_required_field_the_profile_cannot_write() {
+    let mut value = source();
+    value["entities"][0]["fields"][0]["required"] = json!(true);
+    value["entities"][0]["fields"][1]["required"] = json!(true);
+    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    grant["operations"] = json!(["create", "get", "list", "patch"]);
+    grant["writableFields"] = json!([]);
+
+    let compiled = compile(&value).expect("the authoring-compatible mistake remains a finding");
+    let findings = compiled
+        .findings()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "access.profile.create_required_field_not_writable")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        findings.len(),
+        2,
+        "one finding is reported per missing field"
+    );
+    assert_eq!(
+        findings
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entities[id=entry].accessProfiles[id=reader].writableFields[field=code]",
+            "entities[id=entry].accessProfiles[id=reader].writableFields[field=district]",
+        ]
+    );
+    assert!(findings
+        .iter()
+        .all(|diagnostic| diagnostic.message.contains("required")));
+
+    let mut production = value.clone();
+    production["package"] = json!({"sourceRevision":"test-revision"});
+    let production = compile_with_profile(&production, CompileProfile::Production)
+        .expect("production compilation reports the same review finding");
+    assert_eq!(
+        production
+            .findings()
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "access.profile.create_required_field_not_writable"
+            })
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>(),
+        findings
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code", "district"]);
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "access.profile.create_required_field_not_writable"
+        }));
+
+    value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list", "patch"]);
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!([]);
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "access.profile.create_required_field_not_writable"
+        }));
+}
+
+#[test]
+fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
+    let mut value = source();
+    value["entities"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessRequirements");
+    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    grant["operations"] = json!(["get", "list", "patch"]);
+    grant["readableFields"] = json!(["missing-readable"]);
+    grant["filterableFields"] = json!(["missing-filterable"]);
+    grant["sortableFields"] = json!(["missing-sortable"]);
+    grant["writableFields"] = json!(["missing-writable"]);
+    grant["rowBoundaries"] =
+        json!([{"field":"missing-boundary","claim":"districts","operator":"in"}]);
+
+    let failure = compile(&value).expect_err("unresolved field references fail compilation");
+    let paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "access_profile.field.unknown")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "entities[id=entry].accessProfiles[id=reader].filterableFields[field=missing-filterable]",
+            "entities[id=entry].accessProfiles[id=reader].readableFields[field=missing-readable]",
+            "entities[id=entry].accessProfiles[id=reader].rowBoundaries[field=missing-boundary]",
+            "entities[id=entry].accessProfiles[id=reader].sortableFields[field=missing-sortable]",
+            "entities[id=entry].accessProfiles[id=reader].writableFields[field=missing-writable]",
+        ]
+    );
+}
+
+#[test]
+fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
+    let mut value = source();
+    value["entities"][0]["constraints"] = json!([
+        {"kind":"unique","id":"unknowns","fields":["missing-first","missing-second"]},
+        {"kind":"int_range","id":"range","field":"missing-range","minimum":0},
+        {"kind":"unique","id":"empty","fields":[]},
+        {"kind":"temporal-non-overlap","id":"empty-temporal","scopeFields":[]}
+    ]);
+
+    let failure = compile(&value).expect_err("unresolved constraint fields fail compilation");
+    let diagnostics = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "constraint.field.unknown")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entities[id=entry].constraints[id=empty].fields",
+            "entities[id=entry].constraints[id=empty-temporal].scopeFields",
+            "entities[id=entry].constraints[id=range].field[field=missing-range]",
+            "entities[id=entry].constraints[id=unknowns].fields[field=missing-first]",
+            "entities[id=entry].constraints[id=unknowns].fields[field=missing-second]",
+        ]
+    );
+    assert!(diagnostics[..2]
+        .iter()
+        .all(|diagnostic| diagnostic.message == "a constraint must name at least one field"));
+    assert!(diagnostics[2..]
+        .iter()
+        .all(|diagnostic| diagnostic.message == "a constraint refers to an unknown field"));
 }
 
 #[test]
