@@ -2573,6 +2573,160 @@ async fn real_postgres_attachment_verification_worker_records_its_last_success_w
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_verification_worker_records_no_success_while_the_verifier_fails()
+{
+    use registry_breg::attachment_storage::AttachmentStorage;
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // The verifier answers every request as unavailable.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook = axum::Router::new().route(
+        "/verify",
+        axum::routing::post({
+            let calls = calls.clone();
+            move || {
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({})))
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/verify", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, hook).await.unwrap();
+    });
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    std::fs::write(root.join("verifier"), "synthetic-verifier-token").unwrap();
+    std::fs::set_permissions(
+        root.join("verifier"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap();
+    let database = TestDatabase::create(8).await;
+    let registry =
+        Arc::new(compile_project(&attachment_project(), &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_verification(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        AttachmentStorage::Database,
+        None,
+        verification.clone(),
+    ));
+    let steward = claims("steward", "verification-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "verifier-down-site",
+        json!({"tenant":TENANT,"name":"site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "verifier-down-placement",
+        json!({"tenant":TENANT,"site":site.id}),
+    )
+    .await;
+    let draft = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "verifier-down-draft",
+        json!({"tenant":TENANT,"placement":placement.id,"proposedSite":site.id,"reason":"verify"}),
+    )
+    .await;
+    let before = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=submitter",
+            draft.id
+        ),
+        submitter.clone(),
+    )
+    .await;
+    let response = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &format!(
+                "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+                draft.id
+            ),
+            Some(submitter),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "verifier-down-upload"),
+                ("if-match", &before.etag),
+            ],
+            vec![7, 8, 9],
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    let worker = AttachmentVerificationWorker::new(
+        database.runtime_config.build_pool().unwrap(),
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        Duration::from_secs(2),
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x9d; 32].into()).unwrap()),
+        AttachmentStorage::Database,
+        verification,
+    );
+    let last_success = worker.last_success();
+
+    // The failed verification leaves its job pending for a retry; that pass
+    // processed a job but is not a success.
+    assert!(
+        worker.run_once().await.unwrap(),
+        "the due job is claimed and left pending for a retry"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the verifier was asked once"
+    );
+    assert!(
+        last_success.age().is_none(),
+        "a pass whose verifier failed is not a success"
+    );
+
+    // The retried job is not yet due, so the next pass finds no work, and a
+    // pass that finds no work is a success.
+    assert!(
+        !worker.run_once().await.unwrap(),
+        "the retried job is not yet due"
+    );
+    assert!(
+        last_success.age().is_some(),
+        "a pass that finds no work is a success"
+    );
+
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting() {
     use registry_breg::attachment_storage::AttachmentStorage;
     use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
