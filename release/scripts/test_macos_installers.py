@@ -132,6 +132,8 @@ class MacOSInstallerTest(unittest.TestCase):
                 destination = self.root / f"{product}-installed"
                 result = self.install(product, prefix, "v0.33.0", assets, destination)
                 self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("/blob/v0.33.0/release/VERIFY.md", result.stdout)
+                self.assertNotIn("/blob/v0.33.0/release/NIGHTLY.md", result.stdout)
                 self.assert_commands(destination, binaries, "v0.33.0")
                 for binary in binaries:
                     self.assertEqual(

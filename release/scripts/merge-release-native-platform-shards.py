@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import os
 import re
@@ -38,12 +39,34 @@ class ShardError(ValueError):
     """A native shard cannot be used as release input."""
 
 
-def rosters(version: str) -> dict[str, list[str]]:
+def validate_nightly_tag(
+    version: str, source_sha: str, nightly_tag: str | None
+) -> None:
+    if nightly_tag is None:
+        return
+    match = re.fullmatch(
+        rf"v{re.escape(version)}-nightly\.([0-9]{{8}})\.([0-9a-f]{{40}})",
+        nightly_tag,
+    )
+    if match is None:
+        raise ShardError(
+            "nightly tag must match "
+            f"v{version}-nightly.<YYYYMMDD>.<40-character lowercase source SHA>"
+        )
+    try:
+        datetime.datetime.strptime(match.group(1), "%Y%m%d")
+    except ValueError as error:
+        raise ShardError("nightly tag contains an invalid YYYYMMDD date") from error
+    if match.group(2) != source_sha:
+        raise ShardError("nightly tag source SHA does not match --source-sha")
+
+
+def rosters(version: str, nightly_tag: str | None = None) -> dict[str, list[str]]:
     match = VERSION.fullmatch(version)
     if match is None:
         raise ShardError("version must be canonical semantic version text")
     parsed = tuple(int(part) for part in match.groups())
-    tag = f"v{version}"
+    tag = nightly_tag or f"v{version}"
     core = [
         f"relayctl-{tag}-{ASSET}",
         f"evidence-{tag}-{ASSET}",
@@ -113,6 +136,7 @@ def validate_shard(
     purpose: str,
     version: str,
     source_sha: str,
+    nightly_tag: str | None,
 ) -> dict[str, Path]:
     if not root.is_dir() or root.is_symlink():
         raise ShardError(f"{name} shard must be a directory: {root}")
@@ -145,16 +169,29 @@ def validate_shard(
         if parsed_version >= MACOS_FIPS_ARCHIVE_MINIMUM_VERSION
         else "v1"
     )
-    expected_metadata = (
-        f"registry-stack.release-native-platform-shard.{format_version}\n"
-        f"purpose={purpose}\n"
-        f"source_sha={source_sha}\n"
-        f"version={version}\n"
-        f"target={TARGET}\n"
-        f"asset={ASSET}\n"
-        f"group={name}\n"
-        f"rust_toolchain={RUST_TOOLCHAIN}\n"
-    )
+    if nightly_tag is None:
+        expected_metadata = (
+            f"registry-stack.release-native-platform-shard.{format_version}\n"
+            f"purpose={purpose}\n"
+            f"source_sha={source_sha}\n"
+            f"version={version}\n"
+            f"target={TARGET}\n"
+            f"asset={ASSET}\n"
+            f"group={name}\n"
+            f"rust_toolchain={RUST_TOOLCHAIN}\n"
+        )
+    else:
+        expected_metadata = (
+            "registry-stack.release-native-platform-shard.v3\n"
+            f"purpose={purpose}\n"
+            f"source_sha={source_sha}\n"
+            f"version={version}\n"
+            f"nightly_tag={nightly_tag}\n"
+            f"target={TARGET}\n"
+            f"asset={ASSET}\n"
+            f"group={name}\n"
+            f"rust_toolchain={RUST_TOOLCHAIN}\n"
+        )
     if metadata.read_text(encoding="utf-8") != expected_metadata:
         raise ShardError(f"{name} shard metadata does not match the requested build")
 
@@ -198,12 +235,16 @@ def merge(
     casework: Path | None,
     output: Path,
     scheduling: Path | None = None,
+    nightly_tag: str | None = None,
 ) -> None:
-    shard_rosters = rosters(version)
+    validate_nightly_tag(version, source_sha, nightly_tag)
+    shard_rosters = rosters(version, nightly_tag)
     if SOURCE_SHA.fullmatch(source_sha) is None:
         raise ShardError("source SHA must be an exact lowercase commit ID")
     if purpose not in PURPOSES:
         raise ShardError("purpose must be candidate_input or review_only")
+    if nightly_tag is not None and purpose != "review_only":
+        raise ShardError("nightly native shards must use purpose review_only")
     if output.exists() or output.is_symlink():
         raise ShardError(f"output already exists: {output}")
 
@@ -215,6 +256,7 @@ def merge(
             purpose=purpose,
             version=version,
             source_sha=source_sha,
+            nightly_tag=nightly_tag,
         ),
         "breg": validate_shard(
             "breg",
@@ -223,6 +265,7 @@ def merge(
             purpose=purpose,
             version=version,
             source_sha=source_sha,
+            nightly_tag=nightly_tag,
         ),
         "bregctl": validate_shard(
             "bregctl",
@@ -231,6 +274,7 @@ def merge(
             purpose=purpose,
             version=version,
             source_sha=source_sha,
+            nightly_tag=nightly_tag,
         ),
     }
     if casework is None:
@@ -245,6 +289,7 @@ def merge(
             purpose=purpose,
             version=version,
             source_sha=source_sha,
+            nightly_tag=nightly_tag,
         )
     if scheduling is None:
         if shard_rosters["scheduling"]:
@@ -258,6 +303,7 @@ def merge(
             purpose=purpose,
             version=version,
             source_sha=source_sha,
+            nightly_tag=nightly_tag,
         )
     sources = (
         inputs["core"]
@@ -298,6 +344,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--nightly-tag")
     parser.add_argument("--purpose", required=True)
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--breg", required=True, type=Path)
@@ -317,6 +364,7 @@ def main() -> int:
             casework=args.casework,
             scheduling=args.scheduling,
             output=args.output,
+            nightly_tag=args.nightly_tag,
         )
     except (OSError, UnicodeError, ShardError) as error:
         parser.error(str(error))

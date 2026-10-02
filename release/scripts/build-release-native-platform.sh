@@ -10,6 +10,7 @@ purpose=""
 source_sha=""
 version=""
 output=""
+nightly_tag=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --group) group="${2:-}"; shift 2 ;;
@@ -18,12 +19,13 @@ while [[ "$#" -gt 0 ]]; do
     --source-sha) source_sha="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
     --output) output="${2:-}"; shift 2 ;;
+    --nightly-tag) nightly_tag="${2:-}"; shift 2 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 
 usage() {
-  printf 'usage: %s [--include-casework] --group core|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--nightly-tag TAG] --group core|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
   exit 2
 }
 
@@ -54,7 +56,35 @@ target=aarch64-apple-darwin
 asset=macos-arm64
 rust_toolchain=1.95.0
 tag="v${version}"
-export REGISTRY_RELEASE_TAG="${tag}"
+display_version="${version}"
+if [[ -n "${nightly_tag}" ]]; then
+  if [[ ! "${nightly_tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-nightly\.([0-9]{8})\.([0-9a-f]{40})$ ||
+        "${BASH_REMATCH[1]:-}" != "${version}" ]]; then
+    printf 'nightly tag must match v%s-nightly.<YYYYMMDD>.<40-character lowercase source SHA>\n' "${version}" >&2
+    exit 2
+  fi
+  nightly_date="${BASH_REMATCH[2]}"
+  nightly_source_sha="${BASH_REMATCH[3]}"
+  if ! python3 -c 'import datetime, sys; datetime.datetime.strptime(sys.argv[1], "%Y%m%d")' "${nightly_date}" 2>/dev/null; then
+    printf 'nightly tag contains an invalid YYYYMMDD date\n' >&2
+    exit 2
+  fi
+  if [[ "${nightly_source_sha}" != "${source_sha}" ]]; then
+    printf 'nightly tag source SHA does not match --source-sha\n' >&2
+    exit 2
+  fi
+  if [[ "${purpose}" != review_only ]]; then
+    printf 'nightly native shards must use purpose review_only\n' >&2
+    exit 2
+  fi
+  tag="${nightly_tag}"
+  display_version="${nightly_tag#v}"
+  export REGISTRY_NIGHTLY_TAG="${nightly_tag}"
+  unset REGISTRY_RELEASE_TAG
+else
+  export REGISTRY_RELEASE_TAG="${tag}"
+  unset REGISTRY_NIGHTLY_TAG
+fi
 IFS=. read -r version_major version_minor _version_patch <<<"${version}"
 bundle_fips=0
 if ((version_major > 0 || version_minor >= 33)); then
@@ -162,7 +192,7 @@ build_core() {
 
   stage relayctl "relayctl-${tag}-${asset}"
   test "$("${staged_executable}" --version)" = \
-    "relayctl ${version}"
+    "relayctl ${display_version}"
   local binary
   for binary in evidence evidencectl evidence-oid4vci; do
     stage "${binary}" "${binary}-${tag}-${asset}"
@@ -179,7 +209,7 @@ build_breg() {
 
   stage breg "breg-${tag}-${asset}"
   test "$("${staged_executable}" --version)" = \
-    "breg ${version}"
+    "breg ${display_version}"
 }
 
 build_bregctl() {
@@ -192,7 +222,7 @@ build_bregctl() {
 
   stage bregctl "bregctl-${tag}-${asset}"
   test "$("${staged_executable}" --version)" = \
-    "bregctl ${version}"
+    "bregctl ${display_version}"
 
   if [[ "${include_breg_services}" -ne 1 ]]; then
     return
@@ -208,7 +238,7 @@ build_bregctl() {
   for binary in breg-mcp breg-review; do
     stage "${binary}" "${binary}-${tag}-${asset}"
     test "$("${staged_executable}" --version)" = \
-      "${binary} ${version}"
+      "${binary} ${display_version}"
   done
 }
 
@@ -227,7 +257,7 @@ build_casework() {
   for binary in casework caseworkctl; do
     stage "${binary}" "${binary}-${tag}-${asset}"
     test "$("${staged_executable}" --version)" = \
-      "${binary} ${version}"
+      "${binary} ${display_version}"
   done
 }
 
@@ -241,7 +271,7 @@ build_scheduling() {
 
   stage schedulingctl "schedulingctl-${tag}-${asset}"
   test "$("${staged_executable}" --version)" = \
-    "schedulingctl ${version}"
+    "schedulingctl ${display_version}"
 }
 
 cd -- "${repo_root}"
@@ -301,14 +331,24 @@ fi
   done
 )
 shard_format=registry-stack.release-native-platform-shard.v1
-if [[ "${bundle_fips}" -eq 1 ]]; then
+if [[ -n "${nightly_tag}" ]]; then
+  shard_format=registry-stack.release-native-platform-shard.v3
+elif [[ "${bundle_fips}" -eq 1 ]]; then
   shard_format=registry-stack.release-native-platform-shard.v2
 fi
-printf '%s\npurpose=%s\nsource_sha=%s\nversion=%s\ntarget=%s\nasset=%s\ngroup=%s\nrust_toolchain=%s\n' \
-  "${shard_format}" \
-  "${purpose}" "${source_sha}" "${version}" "${target}" "${asset}" \
-  "${group}" "${rust_toolchain}" \
-  >"${temporary}/RELEASE_NATIVE_PLATFORM_SHARD"
+if [[ -n "${nightly_tag}" ]]; then
+  printf '%s\npurpose=%s\nsource_sha=%s\nversion=%s\nnightly_tag=%s\ntarget=%s\nasset=%s\ngroup=%s\nrust_toolchain=%s\n' \
+    "${shard_format}" \
+    "${purpose}" "${source_sha}" "${version}" "${nightly_tag}" \
+    "${target}" "${asset}" "${group}" "${rust_toolchain}" \
+    >"${temporary}/RELEASE_NATIVE_PLATFORM_SHARD"
+else
+  printf '%s\npurpose=%s\nsource_sha=%s\nversion=%s\ntarget=%s\nasset=%s\ngroup=%s\nrust_toolchain=%s\n' \
+    "${shard_format}" \
+    "${purpose}" "${source_sha}" "${version}" "${target}" "${asset}" \
+    "${group}" "${rust_toolchain}" \
+    >"${temporary}/RELEASE_NATIVE_PLATFORM_SHARD"
+fi
 
 mv -- "${temporary}" "${output}"
 trap - EXIT

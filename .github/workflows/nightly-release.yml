@@ -1,0 +1,468 @@
+name: RegistryStack Nightly Release
+run-name: Nightly from ${{ github.sha }}
+
+on:
+  schedule:
+    - cron: "19 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-stack-nightly-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RELEASE_BUILDER_IMAGE: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
+  RELEASE_BUILDX_VERSION: v0.33.0
+  RELEASE_BUILDKIT_IMAGE: ghcr.io/registrystack/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+jobs:
+  select:
+    name: Select exact main source and nightly destinations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+      base_version: ${{ steps.plan.outputs.base_version }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      image_names: ${{ steps.plan.outputs.image_names }}
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - name: Plan nightly or skip an already published source
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release/scripts/nightly_release.py plan --output nightly-plan.json
+      - name: Retain exact nightly plan
+        if: steps.plan.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: nightly-plan.json
+          retention-days: 7
+          if-no-files-found: error
+
+  protected-ci:
+    name: Require successful push CI on selected main
+    needs: select
+    if: needs.select.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Wait for exact protected-main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+        run: release/scripts/registry-release wait-for-ci --source-sha "${SOURCE_SHA}" --repository "${GITHUB_REPOSITORY}"
+
+  linux:
+    name: Build canonical Linux ${{ matrix.group }} nightly shard
+    needs: [select, protected-ci]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, breg, casework, scheduling, messaging]
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Restore canonical build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            target
+          key: nightly-linux-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            nightly-linux-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
+      - name: Build locked nightly shard
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          BASE_VERSION: ${{ needs.select.outputs.base_version }}
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+          BUILD_GROUP: ${{ matrix.group }}
+        run: |
+          release/scripts/build-release-binaries.sh --group "${BUILD_GROUP}" --nightly-tag "${NIGHTLY_TAG}" "${BASE_VERSION}"
+          mkdir shard
+          cp -R dist/bin shard/bin
+          cp dist/RELEASE_BINARY_SHARD dist/RELEASE_BUILDER_IMAGE shard/
+      - name: Retain exact Linux shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-linux-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: shard
+          retention-days: 7
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS arm64 ${{ matrix.group }} nightly shard
+    needs: [select, protected-ci]
+    runs-on: macos-14
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, breg, bregctl, casework, scheduling]
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Install Go for AWS-LC-FIPS
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.24.4
+          cache: false
+      - name: Restore native build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: nightly-macos-${{ matrix.group }}-${{ hashFiles('release/scripts/build-release-native-platform.sh', 'release/scripts/macos_fips_packaging.py', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            nightly-macos-${{ matrix.group }}-${{ hashFiles('release/scripts/build-release-native-platform.sh', 'release/scripts/macos_fips_packaging.py', 'rust-toolchain.toml') }}-
+      - name: Build and smoke relocated native bundles
+        env:
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          BASE_VERSION: ${{ needs.select.outputs.base_version }}
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+          BUILD_GROUP: ${{ matrix.group }}
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin
+          release/scripts/build-release-native-platform.sh \
+            --group "${BUILD_GROUP}" --purpose review_only --source-sha "${SOURCE_SHA}" \
+            --version "${BASE_VERSION}" --nightly-tag "${NIGHTLY_TAG}" --output shard
+      - name: Retain exact macOS shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-macos-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: shard
+          retention-days: 7
+          if-no-files-found: error
+
+  arm64:
+    name: Build and smoke native Linux arm64 nightly binaries
+    needs: [select, protected-ci]
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Install Go for AWS-LC-FIPS
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.24.4
+          cache: false
+      - name: Restore native arm64 build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: nightly-arm64-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-nightly-linux-arm64.sh') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            nightly-arm64-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-nightly-linux-arm64.sh') }}-
+      - name: Build locked native binaries
+        env:
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          BASE_VERSION: ${{ needs.select.outputs.base_version }}
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+        run: bash release/scripts/build-nightly-linux-arm64.sh "${BASE_VERSION}" "${NIGHTLY_TAG}" "${SOURCE_SHA}"
+      - name: Retain exact arm64 binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: platform
+          retention-days: 7
+          if-no-files-found: error
+
+  images:
+    name: Merge Linux shards and build exact nightly image layouts
+    needs: [select, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      canonical_artifact: ${{ format('nightly-canonical-{0}-{1}', github.run_id, github.run_attempt) }}
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Download exact Linux shards
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: nightly-linux-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: shards
+      - name: Merge source-bound Linux shards
+        env:
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          BASE_VERSION: ${{ needs.select.outputs.base_version }}
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+        run: |
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          release/scripts/merge-release-binary-shards.py \
+            --version "${BASE_VERSION}" --nightly-tag "${NIGHTLY_TAG}" --source-sha "${SOURCE_SHA}" \
+            --core "shards/nightly-linux-core-${suffix}" --breg "shards/nightly-linux-breg-${suffix}" \
+            --casework "shards/nightly-linux-casework-${suffix}" --scheduling "shards/nightly-linux-scheduling-${suffix}" \
+            --messaging "shards/nightly-linux-messaging-${suffix}" --output dist --builder-image "${RELEASE_BUILDER_IMAGE}"
+      - name: Set up pinned Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: ${{ env.RELEASE_BUILDX_VERSION }}
+          driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
+      - name: Build canonical image layouts without publication credentials
+        env:
+          IMAGE_NAMES: ${{ needs.select.outputs.image_names }}
+          NIGHTLY_VERSION: ${{ needs.select.outputs.version }}
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          RELEASE_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: |
+          mkdir -p dist/images
+          for name in ${IMAGE_NAMES}; do
+            reference="ghcr.io/registrystack/${name}-candidate:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            RELEASE_IMAGE_OCI_LAYOUT="${GITHUB_WORKSPACE}/dist/images/${name}.oci" \
+              release/scripts/build-release-image.sh "${name}" "${reference}" \
+                "https://github.com/${GITHUB_REPOSITORY}" "${SOURCE_SHA}" "${NIGHTLY_VERSION}" "dist/images/${name}.metadata.json"
+            digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "dist/images/${name}.metadata.json")"
+            printf 'ghcr.io/registrystack/%s-candidate@%s\n' "${name}" "${digest}" > "dist/images/${name}.digest"
+          done
+      - name: Retain canonical binaries and layouts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-canonical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+          retention-days: 7
+          if-no-files-found: error
+
+  scan:
+    name: Inspect private staging images and apply nightly advisory policy
+    needs: [select, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout selected verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Download canonical images
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nightly-canonical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+      - name: Install pinned inspection tools
+        run: bash release/scripts/install-nightly-inspection-tools.sh
+      - name: Inspect, stage privately, smoke and scan every image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAMES: ${{ needs.select.outputs.image_names }}
+          NIGHTLY_VERSION: ${{ needs.select.outputs.version }}
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          printf '%s' "${GH_TOKEN}" | crane auth login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          grype db update
+          mkdir reports
+          for name in ${IMAGE_NAMES}; do
+            gh api "orgs/registrystack/packages/container/${name}-candidate" \
+              | jq -e --arg package "${name}-candidate" '.name == $package and .visibility == "private"' >/dev/null
+            layout="${GITHUB_WORKSPACE}/dist/images/${name}.oci"
+            reference="$(cat "dist/images/${name}.digest")"
+            digest="${reference##*@}"
+            python3 release/scripts/check-release-image-oci-labels.py "oci-layout://${layout}" \
+              --source "https://github.com/${GITHUB_REPOSITORY}" --revision "${SOURCE_SHA}" --version "${NIGHTLY_VERSION}"
+            oras cp --from-oci-layout "${layout}@${digest}" \
+              "ghcr.io/registrystack/${name}-candidate:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            test "$(crane digest "${reference}")" = "${digest}"
+            observed="$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "${reference}" --version)"
+            expected="${name} ${NIGHTLY_VERSION}"
+            if [[ "${name}" == registry-render ]]; then
+              typst_pin="$(sed -n 's/^pub const TYPST_PIN: &str = "\([^" ]*\)";$/\1/p' crates/registry-render/src/lib.rs)"
+              test -n "${typst_pin}"
+              expected="${expected} (typst ${typst_pin})"
+            fi
+            test "${observed}" = "${expected}"
+            SYFT_FILE_METADATA_SELECTION=all SYFT_FILE_METADATA_DIGESTS=sha256 \
+              syft "${reference}" -o "spdx-json=reports/${name}.sbom.spdx.json"
+            grype "${reference}" -o json > "reports/${name}.grype.json"
+            python3 release/scripts/nightly_release.py check-scan "reports/${name}.grype.json"
+            cp "dist/images/${name}.digest" "reports/${name}.digest"
+          done
+      - name: Retain available scan evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-scans-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports
+          retention-days: 7
+          if-no-files-found: warn
+
+  prepare:
+    name: Assemble and smoke the complete nightly payload
+    needs: [select, macos, arm64, images, scan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      public_artifact: ${{ format('nightly-public-{0}-{1}', github.run_id, github.run_attempt) }}
+    steps:
+      - name: Checkout selected publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Download exact nightly inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: nightly-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: inputs
+      - name: Merge exact macOS shards
+        env:
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          BASE_VERSION: ${{ needs.select.outputs.base_version }}
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+        run: |
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          release/scripts/merge-release-native-platform-shards.py \
+            --version "${BASE_VERSION}" --nightly-tag "${NIGHTLY_TAG}" --source-sha "${SOURCE_SHA}" --purpose review_only \
+            --core "inputs/nightly-macos-core-${suffix}" --breg "inputs/nightly-macos-breg-${suffix}" \
+            --bregctl "inputs/nightly-macos-bregctl-${suffix}" --casework "inputs/nightly-macos-casework-${suffix}" \
+            --scheduling "inputs/nightly-macos-scheduling-${suffix}" --output macos
+      - name: Assemble and smoke complete nightly installers
+        run: |
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 release/scripts/nightly_release.py assemble \
+            --plan "inputs/nightly-plan-${suffix}/nightly-plan.json" \
+            --binaries "inputs/nightly-canonical-${suffix}/bin" "inputs/nightly-arm64-${suffix}" macos/platform \
+            --images "inputs/nightly-scans-${suffix}" --output public
+          python3 release/scripts/nightly_release.py smoke public
+      - name: Retain exact public payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-public-${{ github.run_id }}-${{ github.run_attempt }}
+          path: public
+          retention-days: 7
+          if-no-files-found: error
+
+  attest:
+    name: Attest the checked payload without publication credentials
+    needs: [select, prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      public_artifact: ${{ needs.prepare.outputs.public_artifact }}
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Download exact public payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ needs.prepare.outputs.public_artifact }}
+          path: public
+      - name: Attest the exact public payload and image manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: public/*
+
+  publish:
+    name: Authenticate and publish immutable nightly, then advance channel
+    needs: [select, images, attest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      attestations: read
+    steps:
+      - name: Checkout selected publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Download exact public payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ needs.attest.outputs.public_artifact }}
+          path: public
+      - name: Download canonical layouts for exact promotion
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ needs.images.outputs.canonical_artifact }}
+          path: canonical
+      - name: Authenticate payload before any public writes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+        run: |
+          for subject in public/*; do
+            gh attestation verify "${subject}" --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/nightly-release.yml" \
+              --signer-digest "${SOURCE_SHA}" --source-ref refs/heads/main --source-digest "${SOURCE_SHA}" \
+              --deny-self-hosted-runners
+          done
+      - name: Install pinned image promotion tools
+        run: bash release/scripts/install-nightly-inspection-tools.sh
+      - name: Promote matching bytes and advance the auditable channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          printf '%s' "${GH_TOKEN}" | crane auth login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          python3 release/scripts/nightly_release.py publish public \
+            --layouts canonical/images
+      - name: Summarize published nightly
+        env:
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+        run: printf 'Published nightly [%s](https://github.com/%s/releases/tag/%s).\n' "${NIGHTLY_TAG}" "${GITHUB_REPOSITORY}" "${NIGHTLY_TAG}" >> "${GITHUB_STEP_SUMMARY}"

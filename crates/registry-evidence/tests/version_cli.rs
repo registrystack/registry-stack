@@ -28,9 +28,15 @@ fn version_output_uses_user_facing_command_name() {
 }
 
 #[test]
-fn version_output_marks_a_build_that_is_not_a_release() {
+fn version_output_distinguishes_the_build_identity() {
     let expected = if registry_platform_buildinfo::IS_RELEASE_BUILD {
         env!("CARGO_PKG_VERSION").to_owned()
+    } else if registry_platform_buildinfo::IS_NIGHTLY_BUILD {
+        option_env!("REGISTRY_NIGHTLY_TAG")
+            .expect("nightly build marker")
+            .strip_prefix('v')
+            .expect("nightly tag starts with v")
+            .to_owned()
     } else {
         format!("{}-dev", env!("CARGO_PKG_VERSION"))
     };

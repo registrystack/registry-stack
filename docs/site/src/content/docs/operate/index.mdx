@@ -59,6 +59,23 @@ pointing at the verified directory.
 `RELAY_INSTALL_DIR` selects the install directory; the default is
 `~/.local/bin`.
 
+To evaluate the latest successfully published build from protected `main`, use
+the source installer and select the nightly channel:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-relay-v2/install.sh | bash -s -- --channel nightly
+```
+
+Pin a known nightly build by replacing the channel selection with
+`--build '<tag>'`. A failed nightly build leaves the channel on its last
+successful build, and an unsupported platform makes the installer exit without
+changing the install directory. The [nightly release channel](https://github.com/registrystack/registry-stack/blob/main/release/NIGHTLY.md)
+lists the supported toolsets and platforms, explains the build tag, and gives
+the provenance verification procedure.
+
+{/* Evidence: crates/registry-relay-v2/install.sh; release/NIGHTLY.md;
+    .github/workflows/nightly-release.yml. */}
+
 Each release publishes the container image `ghcr.io/registrystack/relay:<tag>`, built on
 distroless nonroot. It exposes port 8080, runs `relay serve --runtime-config
 /etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
