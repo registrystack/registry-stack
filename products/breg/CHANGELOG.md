@@ -95,6 +95,13 @@
   `history.rebaseline.unavailable`, and
   `field_encryption.erase_history.unavailable`. Automation that retries those
   unavailable codes on contention must match the `in_progress` codes.
+- A configured active package that `package.expectedDigest` does not pin is
+  refused with the sentence `verify` already gives, naming the pinned and the
+  found package digests, by `apply`, `plan`, `migration reconcile`,
+  `history erase`, `history rebaseline`, `field-encryption preflight`, and
+  `field-encryption erase-history`. Each keeps its code, for example
+  `apply.package.refused` at `package.root`; the message named neither
+  digest before.
 
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
