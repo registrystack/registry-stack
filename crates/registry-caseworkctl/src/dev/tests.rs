@@ -4419,3 +4419,18 @@ fn a_first_bridged_source_start_checks_the_audit_before_the_bridge_writes_its_co
         "{refusal:#}"
     );
 }
+
+#[test]
+fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
+    let refused = bind_failure(8092, std::io::ErrorKind::PermissionDenied.into());
+    let occupied = bind_failure(8092, std::io::ErrorKind::AddrInUse.into());
+
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refused);
+
+    assert_eq!(exit, 3);
+    assert_eq!(diagnostic["code"], "caseworkctl.io-failure", "{diagnostic}");
+    assert_eq!(
+        crate::classify_failure(crate::CommandKind::Operational, &occupied).1["code"],
+        "caseworkctl.dev.port-occupied"
+    );
+}
