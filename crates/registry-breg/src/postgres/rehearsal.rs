@@ -28,7 +28,7 @@ use super::{
     failure::PostgresFailure,
     interlock::{
         compiler_statement_runs_after_reviewed_steps, drop_managed_read_view_set,
-        set_force_row_security, PackageDdlStatement,
+        set_force_row_security, set_local_migration_timeouts, PackageDdlStatement,
     },
     migration_ledger::statement_checksum,
     schema::{
@@ -39,15 +39,23 @@ use super::{
     verify_migration_role, ConnectionConfig, SqlIdentifier,
 };
 
+/// The lock timeout, in milliseconds, for the predecessor install and the
+/// compiler statements. Activation runs those under the operator's apply
+/// timeouts, which a rehearsal does not know, so it bounds them itself.
+const COMPILER_LOCK_TIMEOUT_MS: u64 = 5_000;
+/// The statement timeout, in milliseconds, paired with
+/// [`COMPILER_LOCK_TIMEOUT_MS`].
+const COMPILER_STATEMENT_TIMEOUT_MS: u64 = 300_000;
+
 /// The verified predecessor and the prepared candidate one rehearsal binds.
 pub struct SuccessorMigrationRehearsal<'a> {
-    /// The predecessor registry compiled from its signed sources. The
+    /// The predecessor registry compiled from its package's sources. The
     /// rehearsal installs it with the schema of the baseline the candidate's
     /// migration plan binds.
     pub predecessor: &'a CompiledRegistry,
-    /// The schema fingerprint the signed predecessor manifest binds.
+    /// The schema fingerprint the predecessor package manifest binds.
     pub predecessor_schema_fingerprint: &'a str,
-    /// The prepared successor candidate, before any signature.
+    /// The prepared successor candidate, before it is written as a package.
     pub candidate: &'a PreparedPackage,
 }
 
@@ -55,9 +63,9 @@ pub struct SuccessorMigrationRehearsal<'a> {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RehearsalOutcome {
     /// The predecessor schema this compiler installs does not measure to the
-    /// fingerprint its signed manifest binds. The manifest does not record
+    /// fingerprint its package manifest binds. The manifest does not record
     /// which engine release built it, and the managed catalog includes
-    /// engine-owned tables, so a predecessor signed by an earlier release
+    /// engine-owned tables, so a predecessor built by an earlier release
     /// always drifts. The comparison is advisory: the rehearsal still
     /// installs the predecessor, runs the successor migration, and holds the
     /// result to the candidate fingerprint, and apply checks the live database.
@@ -67,7 +75,7 @@ pub struct RehearsalOutcome {
 /// The two predecessor schema fingerprints a drifted rehearsal compared.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BaselineFingerprintDrift {
-    /// The fingerprint the signed predecessor manifest binds.
+    /// The fingerprint the predecessor package manifest binds.
     pub signed: String,
     /// The fingerprint of the predecessor schema this compiler installed.
     pub measured: String,
@@ -232,10 +240,7 @@ async fn rehearse_in_transaction(
     plan: Option<&ValidatedReviewedMigrationPlan>,
     statements: &[RehearsedStatement<'_>],
 ) -> RehearsalResult<RehearsalOutcome> {
-    transaction
-        .batch_execute("SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '300s'")
-        .await
-        .map_err(|_| MigrationRehearsalError::Database)?;
+    set_compiler_timeouts(transaction).await?;
     refuse_existing_managed_objects(transaction)
         .await
         .map_err(|_| MigrationRehearsalError::Database)?;
@@ -345,6 +350,28 @@ async fn rehearse_in_transaction(
     Ok(outcome)
 }
 
+/// Sets the bound for statements that are not part of a reviewed migration.
+async fn set_compiler_timeouts(transaction: &impl GenericClient) -> RehearsalResult<()> {
+    set_timeouts(
+        transaction,
+        COMPILER_LOCK_TIMEOUT_MS,
+        COMPILER_STATEMENT_TIMEOUT_MS,
+    )
+    .await
+}
+
+/// Sets the lock and statement timeouts for the statements that follow, as
+/// activation sets them from a reviewed migration's descriptor or step.
+async fn set_timeouts(
+    transaction: &impl GenericClient,
+    lock_timeout_ms: u64,
+    statement_timeout_ms: u64,
+) -> RehearsalResult<()> {
+    set_local_migration_timeouts(transaction, lock_timeout_ms, statement_timeout_ms)
+        .await
+        .map_err(|_| MigrationRehearsalError::Database)
+}
+
 fn entity_tables(registry: &CompiledRegistry) -> Vec<String> {
     registry
         .entities()
@@ -391,6 +418,14 @@ async fn rehearse_assertions(
         .await
         .map_err(|_| MigrationRehearsalError::Database)?;
     for migration in plan.migrations() {
+        // Activation runs each migration's assertions under the timeouts its
+        // descriptor declares.
+        set_timeouts(
+            transaction,
+            migration.descriptor.lock_timeout_ms,
+            migration.descriptor.statement_timeout_ms,
+        )
+        .await?;
         let assertions = match phase {
             RehearsalAssertionPhase::Pre => &migration.pre_assertions,
             RehearsalAssertionPhase::Post => &migration.post_assertions,
@@ -427,7 +462,8 @@ async fn rehearse_assertions(
     }
     set_force_row_security(transaction, tables, true)
         .await
-        .map_err(|_| MigrationRehearsalError::Database)
+        .map_err(|_| MigrationRehearsalError::Database)?;
+    set_compiler_timeouts(transaction).await
 }
 
 async fn rehearse_reviewed_steps(
@@ -444,6 +480,25 @@ async fn rehearse_reviewed_steps(
                     id, objects, ..
                 } => (id, objects),
             };
+            // Activation runs a transactional step under its migration's
+            // timeouts and a backfill under the step's own.
+            let (lock_timeout_ms, statement_timeout_ms) = match &step.descriptor {
+                ReviewedMigrationStepDescriptor::TransactionalSql { .. } => (
+                    migration.descriptor.lock_timeout_ms,
+                    migration.descriptor.statement_timeout_ms,
+                ),
+                ReviewedMigrationStepDescriptor::ChunkedBackfill {
+                    lock_timeout_ms,
+                    statement_timeout_ms,
+                    ..
+                }
+                | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                    lock_timeout_ms,
+                    statement_timeout_ms,
+                    ..
+                } => (*lock_timeout_ms, *statement_timeout_ms),
+            };
+            set_timeouts(transaction, lock_timeout_ms, statement_timeout_ms).await?;
             let failed = |error: tokio_postgres::Error| MigrationRehearsalError::Step {
                 migration_id: migration.descriptor.id.clone(),
                 step_id: step_id.clone(),
@@ -525,5 +580,5 @@ async fn rehearse_reviewed_steps(
             }
         }
     }
-    Ok(())
+    set_compiler_timeouts(transaction).await
 }
