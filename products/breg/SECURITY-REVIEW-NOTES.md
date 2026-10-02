@@ -1114,11 +1114,13 @@ which covers every stop code and the review and metrics events.
 `a_failed_review_worker_iteration_emits_closed_value_free_operational_events`,
 `an_idle_review_worker_iteration_records_its_last_success`,
 `a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited`,
+`a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_work`,
 and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event`.
 `crates/registry-breg/tests/postgres_webhook_delivery.rs`:
 `real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.
 `crates/registry-breg/tests/postgres_change_requests.rs`:
-`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`.
+`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`
+and `real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting`.
 `crates/registry-breg/tests/postgres_access_log.rs`:
 `a_retention_tick_without_failure_records_its_last_success`.
 `crates/registry-breg/tests/postgres_startup.rs`:
