@@ -5347,7 +5347,14 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             registry_breg::migration::MigrationError::DatabaseUnavailable => (
                 "apply.database.unavailable",
                 "database",
-                "the migration database could not be reached, or another apply held the migration lock past the lock timeout, before maintenance began. Nothing was changed. Retry the same apply once the database is reachable and accepts the migration role",
+                "the migration database could not be reached before maintenance began. Nothing was changed. Retry the same apply once the database is reachable and accepts the migration role",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_breg::migration::MigrationError::MigrationLockHeld => (
+                "apply.database.unavailable",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout before maintenance began, so an apply, an adoption, or a migration reconcile is in progress. Nothing was changed. Retry the same apply once it releases",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
@@ -5872,6 +5879,13 @@ fn active_registry_failure(
             "unavailable",
             "database",
             "the database could not be read to find its active registry; check that database.migrationUrlRef reaches PostgreSQL as the migration role, then rerun the command",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ActiveRegistryError::InProgress => (
+            "in_progress",
+            "database",
+            "another session holds the exclusive migration lock, so an apply, an adoption, or a migration reconcile is in progress; rerun the command once it releases",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
         ),
@@ -16058,6 +16072,70 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
         "{}",
         diagnostic.message
     );
+}
+
+/// A held migration lock keeps the documented `apply.database.unavailable`
+/// code, but its sentence names the session holding the lock and never sends
+/// the operator to check that the database is reachable.
+#[cfg(test)]
+#[test]
+fn apply_reports_a_held_migration_lock_as_an_activation_in_progress() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::MigrationLockHeld,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.database.unavailable");
+    assert_eq!(diagnostic.path, "database");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+    for fragment in [
+        "another session held the exclusive migration lock",
+        "before maintenance began",
+        "Nothing was changed",
+        "Retry the same apply once it releases",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+    for fragment in ["reachable", "migrationUrlRef", "reconciliation"] {
+        assert!(
+            !diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn an_active_registry_read_reports_a_held_migration_lock_as_in_progress() {
+    for (command, prefix) in [
+        ("history erase", "history.erase"),
+        ("history rebaseline", "history.rebaseline"),
+        ("migration reconcile", "migration.reconcile"),
+    ] {
+        let report = active_registry_failure(command, prefix, ActiveRegistryError::InProgress);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            format!("{prefix}.active_registry.in_progress")
+        );
+        assert_eq!(diagnostic.path, "database");
+        assert!(
+            diagnostic
+                .message
+                .contains("another session holds the exclusive migration lock"),
+            "{}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("migrationUrlRef"),
+            "{}",
+            diagnostic.message
+        );
+    }
 }
 
 #[cfg(test)]

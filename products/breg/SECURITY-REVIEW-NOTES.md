@@ -1165,3 +1165,88 @@ added codes.
 - **Retention failures.** A failed subject access log retention pass still
   writes a raw error record without a closed `code`; only its last-success
   age and its stop code are closed.
+
+## Migration lock contention and lock-free reconcile assessment
+
+The change keeps a migration lock another session holds distinct from an
+unreachable database (`MigrationLockHeld` in
+`crates/registry-breg/src/postgres/mod.rs` and
+`crates/registry-breg/src/migration.rs`, raised by `acquire_inner` in
+`crates/registry-breg/src/postgres/interlock.rs`), reads the active identity
+for a `migration reconcile` assessment without the lock
+(`observed_active_identity` in
+`crates/registry-bregctl/src/active_registry.rs`), and opens the audit writer
+only under `--execute` (`ReconcileAudit` in
+`crates/registry-breg/src/migration_reconcile.rs`). It touches the activation
+interlock and audit integrity. Its invariant row is BREG-SEC-147.
+
+### Threat
+
+The bregctl preflight that bound the configured active package took the
+exclusive lock and folded every failure into one unavailable refusal, so a
+lock held by an apply, an adoption, or another reconcile sent the operator
+to check `database.migrationUrlRef`, and `in_progress` could not be
+reported. A lock-free read could instead let a reconciliation act on an
+identity an apply is changing, and an assessment that writes nothing could
+still be refused by an audit destination it never uses.
+
+### Enforcement and defaults
+
+- The lock statement alone maps PostgreSQL's lock timeout (`55P03`) and a
+  shorter statement timeout (`57014`) to `MigrationLockHeld`; every other
+  failure keeps its existing refusal. `refusal_before_maintenance` keeps it
+  apart from `DatabaseUnavailable`, so `apply` and `plan` still change
+  nothing and report `apply.database.unavailable` with a sentence that names
+  the held lock.
+- The lock-free assessment preflight is safe because it authorizes nothing.
+  It reads one committed snapshot of the state row and binds the configured
+  package and database id to it exactly as the locked read did.
+  `reconcile_failed_migration` then takes the exclusive lock, re-reads the
+  maintenance snapshot under it, and refuses a snapshot whose identity
+  differs from the one the preflight read before it assesses anything. The
+  locked preflight released its lock before that step too, so the re-read
+  under the lock was already the only fence.
+- `--execute` keeps the locked preflight unchanged. A lock held there, or at
+  the reconciliation's own acquisition, refuses as
+  `migration.reconcile.outcome.in_progress` and changes nothing; an
+  assessment reports `in_progress` as its outcome.
+- An assessment holds only the keyed audit profile it validates the operator
+  reference under. `--execute` opens the companion audit writer after the
+  locked preflight and before any database change, and refuses as
+  `migration.reconcile.audit.unavailable` when it cannot.
+- `history erase`, `history rebaseline`, `field-encryption preflight`, and
+  `field-encryption erase-history` keep the locked preflight and report a
+  held lock as `<prefix>.active_registry.in_progress`.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_migration.rs`:
+`real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progress`
+and `real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged`.
+`crates/registry-breg/src/postgres/interlock.rs`: the competing lock
+assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
+`crates/registry-bregctl/src/lib.rs`:
+`apply_reports_a_held_migration_lock_as_an_activation_in_progress` and
+`an_active_registry_read_reports_a_held_migration_lock_as_in_progress`.
+`crates/registry-bregctl/src/active_registry.rs`:
+`a_held_migration_lock_reads_as_in_progress_not_as_unavailable`.
+`crates/registry-bregctl/src/reconcile_lifecycle.rs`:
+`execution_refuses_a_held_migration_lock_as_in_progress`.
+`products/breg/scripts/test-adopter-workflow.sh` holds the advisory lock from
+a second session and proves assessment answers `in_progress` while
+`--execute` and `apply` refuse, then proves assessment answers with a
+read-only audit directory while `--execute` refuses. Each test the change
+adds was written first and failed, or did not compile, against the code
+before it.
+
+### Accepted residuals
+
+- **The assessment snapshot can be stale.** An apply may start or finish
+  between the lock-free read and the locked assessment; the assessment then
+  refuses the changed identity or reports what the lock-time snapshot holds.
+- **A statement timeout is read as contention.** On the lock statement only,
+  a statement timeout shorter than the lock timeout ends the wait first, so
+  it is reported as a held lock. That statement waits for nothing else.
+- **Execution outcomes without a transition.** `--execute` on a registry
+  assessed as `ready`, or one whose identity changed under the lock, still
+  answers with `executed: false` rather than a refusal.
