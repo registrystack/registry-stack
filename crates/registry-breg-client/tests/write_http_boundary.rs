@@ -1589,7 +1589,7 @@ async fn action_request_paths_are_closed_bounded_and_discarded() {
 }
 
 #[tokio::test]
-async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
+async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_rendering() {
     let request_invalid = problem_response(BRegProblemCode::RequestInvalid);
     let request_document: Value = serde_json::from_slice(&request_invalid.body).unwrap();
     let query_invalid = problem_response(BRegProblemCode::QueryInvalid);
@@ -1624,7 +1624,12 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
         "If-Match",
     ]
     .iter()
-    .map(|path| response_for(&request_invalid, request_document.clone(), json!(path)))
+    .map(|path| {
+        (
+            response_for(&request_invalid, request_document.clone(), json!(path)),
+            (*path).to_owned(),
+        )
+    })
     .collect::<Vec<_>>();
     for parameter in [
         "$select",
@@ -1640,10 +1645,9 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
         "validAt",
         "requestHistoryAfterProposalVersion",
     ] {
-        accepted.push(response_for(
-            &query_invalid,
-            query_document.clone(),
-            json!(parameter),
+        accepted.push((
+            response_for(&query_invalid, query_document.clone(), json!(parameter)),
+            parameter.to_owned(),
         ));
     }
 
@@ -1691,10 +1695,14 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
     }
 
     let accepted_count = accepted.len();
+    let accepted_paths = accepted
+        .iter()
+        .map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
     let total = accepted_count + refused.len();
     let fixture = test_client(
         std::iter::once(metadata_response())
-            .chain(accepted)
+            .chain(accepted.into_iter().map(|(response, _)| response))
             .chain(refused)
             .collect(),
     )
@@ -1724,7 +1732,12 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
             ));
             assert_eq!(error.status(), Some(400));
             assert_eq!(error.trace_id().unwrap().as_str(), TRACE_ID);
+            assert_eq!(
+                error.field_path().map(BRegProblemFieldPath::as_str),
+                Some(accepted_paths[index].as_str())
+            );
         } else {
+            assert_eq!(error.field_path(), None);
             assert!(matches!(
                 error,
                 BaseRegistryClientError::Protocol {
@@ -1738,6 +1751,9 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_discarded() {
         assert!(!rendered.contains("/data"));
         assert!(!rendered.contains("/items"));
         assert!(!rendered.contains("$select"));
+        if let Some(path) = accepted_paths.get(index) {
+            assert!(!rendered.contains(path));
+        }
     }
     assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
 }
