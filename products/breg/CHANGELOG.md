@@ -74,6 +74,17 @@
   action or effect, or changes the effect's operation, that revision's detail
   read and any list page that includes it answer `503 source.unavailable`.
 
+- A record, list, lookup, relationship, attachment, access-log, revision, or
+  snapshot read abandoned at the request deadline (`504 request.timeout`) now
+  cancels its in-flight PostgreSQL statement and discards its session, as
+  governed request actions already did. Previously the abandoned backend kept
+  running while the pool opened a replacement, so under overload the number of
+  runtime sessions rose past the pool's `maxSize`. The cancelled session now
+  keeps its pool slot until PostgreSQL has stopped the statement, so the
+  session count stays within `maxSize`. The read's audit attempt is still
+  answered by exactly one `unfinished` response, and nothing the read
+  collected is released.
+
 ## v0.38.0 - 2026-10-01
 
 - Automatic review executors can renew credentials with `privateKeyJwt`.
