@@ -5640,6 +5640,61 @@ fn runtime_bound_package_refusals_are_exact_and_value_free_for_both_commands() {
 }
 
 #[test]
+fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let pinned = format!("sha256:{}", "0".repeat(64));
+    let wrong_pin = fixture.variant(
+        "wrong-pin",
+        &format!("  root: {}", path(&fixture.package)),
+        &format!(
+            "  root: {}\n  expectedDigest: {pinned}",
+            path(&fixture.package)
+        ),
+    );
+    let successor = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        String::from_utf8(package_module_bytes())
+            .unwrap()
+            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .into_bytes(),
+    );
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&wrong_pin),
+        "--package",
+        path(&successor.package),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "apply.package.refused");
+    assert_eq!(diagnostic["path"], "package.root");
+    assert_eq!(diagnostic["suggestedAction"], "verify_package_integrity");
+    assert_eq!(
+        diagnostic["message"],
+        format!(
+            "package.expectedDigest is {pinned} but the package at package.root is {}; deploy the pinned package or update package.expectedDigest",
+            fixture.package_digest
+        )
+    );
+    let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
+    for forbidden in [
+        path(&wrong_pin),
+        path(&fixture.package),
+        path(&successor.package),
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+    ] {
+        assert!(!rendered.contains(forbidden));
+    }
+}
+
+#[test]
 fn canonical_package_tampering_is_refused_without_rendering_package_values() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
     let manifest = fixture.package.join("package.json");

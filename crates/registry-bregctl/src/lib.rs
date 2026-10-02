@@ -34,6 +34,7 @@ use registry_breg::{
     GeneratedArtifacts, RegistryModule, RegistryProject,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::HookHandlerSource;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -3085,6 +3086,14 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
         HistoryErasureLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history erase", "history.erase", error);
         }
+        HistoryErasureLifecycleError::Package(PackageError::ExpectedDigestMismatch(mismatch)) => {
+            return package_pin_failure(
+                "history erase",
+                "history.erase.package.refused",
+                "package",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -3221,6 +3230,16 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
         }
         HistoryRebaselineLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history rebaseline", "history.rebaseline", error);
+        }
+        HistoryRebaselineLifecycleError::Package(PackageError::ExpectedDigestMismatch(
+            mismatch,
+        )) => {
+            return package_pin_failure(
+                "history rebaseline",
+                "history.rebaseline.package.refused",
+                "package",
+                &mismatch,
+            );
         }
         error => error,
     };
@@ -3436,6 +3455,16 @@ fn field_encryption_preflight_failure(
                 error,
             );
         }
+        FieldEncryptionPreflightLifecycleError::PredecessorPackage(
+            PackageError::ExpectedDigestMismatch(mismatch),
+        ) => {
+            return package_pin_failure(
+                "field-encryption preflight",
+                "field_encryption.preflight.predecessor_package.refused",
+                "package",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -3575,6 +3604,16 @@ fn field_encryption_erase_history_failure(
                 "field-encryption erase-history",
                 "field_encryption.erase_history",
                 error,
+            );
+        }
+        FieldEncryptionEraseHistoryLifecycleError::ActivePackage(
+            PackageError::ExpectedDigestMismatch(mismatch),
+        ) => {
+            return package_pin_failure(
+                "field-encryption erase-history",
+                "field_encryption.erase_history.package.refused",
+                "package",
+                &mismatch,
             );
         }
         error => error,
@@ -5136,6 +5175,14 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure(command, "apply", error);
         }
+        ApplyLifecycleError::CurrentPackage(PackageError::ExpectedDigestMismatch(mismatch)) => {
+            return package_pin_failure(
+                command,
+                "apply.package.refused",
+                "package.root",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5157,9 +5204,9 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::TargetPackage(error) => (
             "apply.package.refused",
             "package",
-            package_refusal_message(error, "the activation package was refused"),
+            package_refusal_message(&error, "the activation package was refused"),
             DiagnosticArtifact::VerifiedPackage,
-            package_refusal_action(error),
+            package_refusal_action(&error),
         ),
         // The configured active package is refused apart from the target, so
         // the operator reads which of the two directories to fix.
@@ -5175,7 +5222,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 }
             },
             DiagnosticArtifact::VerifiedPackage,
-            package_refusal_action(error),
+            package_refusal_action(&error),
         ),
         ApplyLifecycleError::Uninitialized => (
             "apply.database.uninitialized",
@@ -5668,6 +5715,14 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
         ReconcileLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("migration reconcile", "migration.reconcile", error);
         }
+        ReconcileLifecycleError::ActivePackage(PackageError::ExpectedDigestMismatch(mismatch)) => {
+            return package_pin_failure(
+                "migration reconcile",
+                "migration.reconcile.package.refused",
+                "package",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5838,11 +5893,11 @@ fn inspection_failure(
         RuntimePackageInspectionError::RuntimeConfig(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::SharedPackage(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::Package(error) => {
-            let (suffix, action) = package_refusal(error);
+            let (suffix, action) = package_refusal(&error);
             (
                 format!("{prefix}.package.{suffix}"),
                 "package",
-                package_refusal_message(error, "the configured package was refused"),
+                package_refusal_message(&error, "the configured package was refused"),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
             )
@@ -5861,7 +5916,7 @@ fn inspection_failure(
 
 /// The diagnostic code suffix and next action for a refused package, shared
 /// by every command that reads one.
-fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
+fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
     match error {
         PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),
         PackageError::Permissions => (
@@ -5871,6 +5926,7 @@ fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
         PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
         PackageError::LegacyFormat => ("legacy_format", SuggestedAction::CorrectPackageBuild),
         PackageError::Envelope
+        | PackageError::ExpectedDigestMismatch(_)
         | PackageError::Closure
         | PackageError::Integrity
         | PackageError::CanonicalJson
@@ -5885,7 +5941,7 @@ fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
     }
 }
 
-fn package_refusal_action(error: PackageError) -> SuggestedAction {
+fn package_refusal_action(error: &PackageError) -> SuggestedAction {
     match error {
         PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
         PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
@@ -5896,10 +5952,31 @@ fn package_refusal_action(error: PackageError) -> SuggestedAction {
 
 /// A package in the retired format is refused with the command that rebuilds
 /// it; every other refusal keeps the caller's value-free sentence.
-fn package_refusal_message(error: PackageError, message: &'static str) -> &'static str {
+fn package_refusal_message(error: &PackageError, message: &'static str) -> &'static str {
     match error {
         PackageError::LegacyFormat => registry_breg::package::LEGACY_PACKAGE_FORMAT,
         _ => message,
+    }
+}
+
+/// The configured active package does not match the runtime file's
+/// `package.expectedDigest` pin. The refusal keeps the command's own package
+/// code and path and names both digests, which are package identities and not
+/// secrets.
+fn package_pin_failure(
+    command: &'static str,
+    code: &str,
+    path: &str,
+    mismatch: &PackageDigestMismatch,
+) -> FailureReport {
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, &mismatch.to_string()),
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackageIntegrity,
+        )],
     }
 }
 
@@ -5967,13 +6044,13 @@ fn active_registry_failure(
 
 /// A `--baseline-package` directory that `test` or `package` refused.
 fn baseline_package_failure(command: &'static str, error: PackageError) -> FailureReport {
-    let (suffix, action) = package_refusal(error);
+    let (suffix, action) = package_refusal(&error);
     candidate_failure(
         command,
         &format!("package.baseline.{suffix}"),
         "baselinePackage",
         package_refusal_message(
-            error,
+            &error,
             "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
         ),
         DiagnosticArtifact::BaselinePackage,
@@ -6019,11 +6096,11 @@ fn runtime_config_failure(
 }
 
 fn package_diff_failure(error: PackageError) -> FailureReport {
-    let (suffix, action) = package_refusal(error);
+    let (suffix, action) = package_refusal(&error);
     diff_failure_with_action(
         &format!("diff.baseline.{suffix}"),
         "baseline",
-        package_refusal_message(error, "the baseline package was refused"),
+        package_refusal_message(&error, "the baseline package was refused"),
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -6442,7 +6519,7 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
 /// revision, with no database, runtime configuration, or test receipt.
 fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
     let inspected = inspect_package_integrity(package_root).map_err(|error| {
-        let (suffix, action) = package_refusal(error);
+        let (suffix, action) = package_refusal(&error);
         FailureReport {
             ok: false,
             command: "check",
@@ -6450,7 +6527,7 @@ fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
                 diagnostic(
                     &format!("check.package.{suffix}"),
                     "package",
-                    package_refusal_message(error, "the package was refused"),
+                    package_refusal_message(&error, "the package was refused"),
                 ),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
@@ -15912,6 +15989,80 @@ fn an_instance_claim_package_refusal_keeps_the_pin_sentence_it_names() {
     assert_eq!(diagnostic.code, "instance_claim.package.refused");
     assert_eq!(diagnostic.path, "package");
     assert_eq!(diagnostic.message, sentence);
+}
+
+#[cfg(test)]
+#[test]
+fn an_active_package_pin_mismatch_names_both_digests() {
+    let pin = || {
+        PackageError::ExpectedDigestMismatch(PackageDigestMismatch {
+            expected: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                .to_owned(),
+            found: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                .to_owned(),
+        })
+    };
+    let sentence = "package.expectedDigest is sha256:1111111111111111111111111111111111111111111111111111111111111111 but the package at package.root is sha256:2222222222222222222222222222222222222222222222222222222222222222; deploy the pinned package or update package.expectedDigest";
+    for (report, command, code, path) in [
+        (
+            lifecycle_failure("apply", ApplyLifecycleError::CurrentPackage(pin())),
+            "apply",
+            "apply.package.refused",
+            "package.root",
+        ),
+        (
+            lifecycle_failure("plan", ApplyLifecycleError::CurrentPackage(pin())),
+            "plan",
+            "apply.package.refused",
+            "package.root",
+        ),
+        (
+            reconcile_lifecycle_failure(ReconcileLifecycleError::ActivePackage(pin())),
+            "migration reconcile",
+            "migration.reconcile.package.refused",
+            "package",
+        ),
+        (
+            history_erasure_lifecycle_failure(HistoryErasureLifecycleError::Package(pin())),
+            "history erase",
+            "history.erase.package.refused",
+            "package",
+        ),
+        (
+            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Package(pin())),
+            "history rebaseline",
+            "history.rebaseline.package.refused",
+            "package",
+        ),
+        (
+            field_encryption_preflight_failure(
+                FieldEncryptionPreflightLifecycleError::PredecessorPackage(pin()),
+            ),
+            "field-encryption preflight",
+            "field_encryption.preflight.predecessor_package.refused",
+            "package",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::ActivePackage(pin()),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.package.refused",
+            "package",
+        ),
+    ] {
+        assert!(!report.ok);
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, path);
+        assert_eq!(diagnostic.message, sentence, "{command}");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::VerifiedPackage);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::VerifyPackageIntegrity
+        );
+    }
 }
 
 #[cfg(test)]

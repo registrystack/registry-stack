@@ -623,8 +623,8 @@ mod tests {
             PackageError::LegacyFormat,
         ];
         let mut messages = HashSet::new();
-        for cause in causes {
-            let diagnostic = startup_diagnostic(StartupError::PackageRefused(cause));
+        for cause in &causes {
+            let diagnostic = startup_diagnostic(StartupError::PackageRefused(cause.clone()));
             assert_eq!(diagnostic.code, "startup.package.refused");
             assert_eq!(diagnostic.path, "package");
             assert!(
