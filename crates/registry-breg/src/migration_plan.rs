@@ -249,7 +249,6 @@ pub struct MigrationRehearsalReceipt {
     pub postgres_major: u16,
     pub row_assertions: Vec<RehearsalRowAssertion>,
     pub final_schema_fingerprint: String,
-    pub proofs: RehearsalProofs,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -273,14 +272,6 @@ pub struct RehearsalFixture {
 pub struct RehearsalRowAssertion {
     pub step_id: String,
     pub affected_rows: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RehearsalProofs {
-    pub lock_timeout: bool,
-    pub chunk_resume: bool,
-    pub destructive_resume: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1151,7 +1142,6 @@ fn validate_receipt(
                 .iter()
                 .map(|fixture| fixture.id.as_str()),
         )
-        || !receipt.proofs.lock_timeout
     {
         return Err(ReviewedMigrationError::Evidence);
     }
@@ -1174,19 +1164,6 @@ fn validate_receipt(
         {
             return Err(ReviewedMigrationError::Evidence);
         }
-    }
-    let has_chunks = steps.iter().any(|step| {
-        matches!(
-            step.descriptor,
-            ReviewedMigrationStepDescriptor::ChunkedBackfill { .. }
-                | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
-        )
-    });
-    let destructive =
-        descriptor.change_class == CompiledRegistryChangeClass::DestructiveOrIrreversible;
-    if receipt.proofs.chunk_resume != has_chunks || receipt.proofs.destructive_resume != destructive
-    {
-        return Err(ReviewedMigrationError::Evidence);
     }
     let expected_row_steps = steps
         .iter()

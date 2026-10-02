@@ -116,11 +116,12 @@ reviewed-migrations/
 
 The descriptor names the change class, the exact change codes and targets from `diff --format
 json`, timeouts, recovery mode, and its evidence paths. The rehearsal receipt binds the prior
-package digest and schema, the descriptor and SQL hashes, the measured target schema, and the timeout
-and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
-the command line validates it and does not generate it. Two worked examples build the exact
-descriptor and rehearsal receipt fields, both at the release tag you operate. The review
-construction in `products/breg/scripts/test-adopter-workflow.sh` builds both documents for a
+package digest and schema, the descriptor and SQL hashes, the fixture inventory, the PostgreSQL
+major version, the affected row counts, and the measured target schema. Your rehearsal process
+produces that evidence against the exact candidate; the command line validates it and does not
+generate it. Two worked examples build the exact descriptor and rehearsal receipt fields, both at
+the release tag you operate. The review construction in
+`products/breg/scripts/test-adopter-workflow.sh` builds both documents for a
 metadata-only access change and passes them to `test`. The one in
 `products/breg/scripts/test-promotion.sh` builds a destructive field removal with a
 `transactional_sql` step, a pre-assertion and a post-assertion, a fixture, and a backup binding for
@@ -182,7 +183,9 @@ reviewed directory root, starting with `modules/<module-id>/migrations/<migratio
   every step, and activation stops on a false result.
 - `rehearsal.json` binds the prior package digest and schema fingerprint, the descriptor and SQL
   digests, the fixture inventory, the PostgreSQL major version, the affected row counts your
-  rehearsal observed, the final schema fingerprint, and the lock-timeout and resume proofs.
+  rehearsal observed, and the final schema fingerprint. A receipt that still carries the retired
+  `proofs` member is refused with `migration.review.receipt_proofs_retired`; remove it and
+  regenerate the receipt.
 A destructive descriptor's `backupBindingPath` is `modules/<module-id>/migrations/<migration-id>/backup.json`,
 but that file is not part of the reviewed directory or the package. It names the backup binding
 each environment supplies at activation, because every environment takes its own backup of its

@@ -40,6 +40,19 @@
   `401 authentication.refused` problem and its catalogue type, title, and
   detail instead of the undocumented
   `review_completion.authentication_refused` code.
+- BREAKING: a reviewed migration's `rehearsal.json` no longer carries
+  `proofs`. Its `lockTimeout`, `chunkResume`, and `destructiveResume`
+  booleans were written by the author and accepted only when they equalled
+  values the descriptor already fixed, so they proved no lock-timeout or
+  resume behavior. `test` and `package` refuse a receipt that still carries
+  the member with `migration.review.receipt_proofs_retired`; remove it and
+  regenerate the receipt. A package built with such a receipt no longer
+  loads; rebuild it with `bregctl package`.
+- `test` rehearses a reviewed migration's assertions and transactional steps
+  under the lock and statement timeouts its descriptor declares, and a
+  backfill step under its own, as activation does. The rehearsal used a
+  fixed 5 second lock and 300 second statement timeout for every reviewed
+  statement, so a migration activation would cancel could pass it.
 - BREAKING: a background worker (webhook delivery, attachment verification,
   review, or subject access log retention) or the metrics listener that
   panics or returns before shutdown is requested ends `breg`: the process

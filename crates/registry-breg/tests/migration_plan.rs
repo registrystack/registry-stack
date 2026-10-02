@@ -9,11 +9,10 @@ use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
-    RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
-    ReviewedMigrationDescriptor, ReviewedMigrationError, ReviewedMigrationFile,
-    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
-    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
+    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationError,
+    ReviewedMigrationFile, ReviewedMigrationObject, ReviewedMigrationObjectKind,
+    ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, inspect_package_integrity, prepare_package,
@@ -964,14 +963,10 @@ fn backfill_artifacts(
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
-        receipt: receipt(
-            false,
-            true,
-            vec![RehearsalRowAssertion {
-                step_id: "backfill".to_owned(),
-                affected_rows: 10,
-            }],
-        ),
+        receipt: receipt(vec![RehearsalRowAssertion {
+            step_id: "backfill".to_owned(),
+            affected_rows: 10,
+        }]),
         step_sql,
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
@@ -1037,7 +1032,7 @@ fn destructive_artifacts(
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
-        receipt: receipt(true, false, Vec::new()),
+        receipt: receipt(Vec::new()),
         step_sql: format!(
             "ALTER TABLE registry_data.{} DROP COLUMN {}",
             entity.physical_table, field.physical_name
@@ -1130,14 +1125,10 @@ fn encryption_flip_artifacts(
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
-        receipt: receipt(
-            false,
-            true,
-            vec![RehearsalRowAssertion {
-                step_id: "backfill".to_owned(),
-                affected_rows: 10,
-            }],
-        ),
+        receipt: receipt(vec![RehearsalRowAssertion {
+            step_id: "backfill".to_owned(),
+            affected_rows: 10,
+        }]),
         step_sql: Vec::new(),
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
@@ -1147,11 +1138,7 @@ fn encryption_flip_artifacts(
     artifacts
 }
 
-fn receipt(
-    destructive_resume: bool,
-    chunk_resume: bool,
-    row_assertions: Vec<RehearsalRowAssertion>,
-) -> MigrationRehearsalReceipt {
+fn receipt(row_assertions: Vec<RehearsalRowAssertion>) -> MigrationRehearsalReceipt {
     MigrationRehearsalReceipt {
         prior_package_digest: PRIOR_REVISION.to_owned(),
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
@@ -1167,11 +1154,6 @@ fn receipt(
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume,
-            destructive_resume,
-        },
     }
 }
 
