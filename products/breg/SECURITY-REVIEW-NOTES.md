@@ -1088,7 +1088,10 @@ scrape exhaust the runtime pool or hold locks the workers need.
   authority, warn only on a transition, and name the configured authority
   identifier.
 - `breg_worker_last_success_age_seconds` carries only a closed `worker`
-  label and an age; it is absent until the worker first succeeds.
+  label and an age; it is absent until the worker first succeeds. The
+  attachment verification worker notes a success only for a pass that found
+  no due job or reached a verdict, never for one whose content read or
+  verifier request failed and left its job pending for a retry.
 - `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
   label (`webhook_delivery`, `review_submission`, `review_application`) and
   an age. Each scrape takes one runtime pool connection, serialized across
@@ -1119,7 +1122,8 @@ and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_eve
 `crates/registry-breg/tests/postgres_webhook_delivery.rs`:
 `real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.
 `crates/registry-breg/tests/postgres_change_requests.rs`:
-`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`
+`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`,
+`real_postgres_attachment_verification_worker_records_no_success_while_the_verifier_fails`,
 and `real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting`.
 `crates/registry-breg/tests/postgres_access_log.rs`:
 `a_retention_tick_without_failure_records_its_last_success`.
