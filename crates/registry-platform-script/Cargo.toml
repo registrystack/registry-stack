@@ -25,4 +25,4 @@ serde_json = { workspace = true, optional = true }
 # Pinned LTS Wasmtime release (line 48, EOL 2028-08-20). The non-default
 # `pulley` feature is required to select the pulley64 compilation target on a
 # host with a Cranelift backend; it rides along whenever the runtime is on.
-wasmtime = { version = "=48.0.3", features = ["pulley"], optional = true }
+wasmtime = { version = "=48.0.5", features = ["pulley"], optional = true }
