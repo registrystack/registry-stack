@@ -4473,6 +4473,31 @@ fn a_retained_audit_refusal_permissions_cannot_repair_names_moving_the_directory
 }
 
 #[test]
+fn an_interrupted_start_the_supervisor_did_not_record_is_reported_directly() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let mut state = retained_session(&project);
+    state.status = Status::Starting;
+    state.save().unwrap();
+    // A supervisor that ends on the signal without recording a cause.
+    let mut supervisor = Command::new("sleep").arg("60").spawn().unwrap();
+
+    let error = interrupted_start(&state.root(), &mut supervisor).unwrap_err();
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
+
+    assert_eq!(exit, 3);
+    assert_eq!(diagnostic["code"], "caseworkctl.dev.start-failed");
+    let rendered = diagnostic.to_string();
+    assert!(rendered.contains("interrupted"), "{rendered}");
+    // The interruption is this terminal's own record, never the supervisor's.
+    assert!(!rendered.contains("supervisor.log"), "{rendered}");
+    assert!(
+        !rendered.contains(root.path().to_str().unwrap()),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
     let refused = bind_failure(8092, std::io::ErrorKind::PermissionDenied.into());
     let occupied = bind_failure(8092, std::io::ErrorKind::AddrInUse.into());
