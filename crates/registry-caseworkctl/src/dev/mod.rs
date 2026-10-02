@@ -3513,8 +3513,8 @@ impl DevFailure {
             Self::StartFailed { .. } => (
                 "caseworkctl.dev.start-failed",
                 ".casework/dev/logs".to_owned(),
-                "The local development session did not start; its cause is recorded in .casework/dev/logs/casework.log and .casework/dev/logs/supervisor.log.".to_owned(),
-                "Read .casework/dev/logs/casework.log, correct the cause, then retry caseworkctl dev start; retained data is preserved.".to_owned(),
+                "The local development session did not start; its cause is recorded in .casework/dev/logs/supervisor.log, and the Casework runtime's own output, when the runtime started, in .casework/dev/logs/casework.log.".to_owned(),
+                "Read .casework/dev/logs/supervisor.log, and .casework/dev/logs/casework.log when the runtime started, correct the cause, then retry caseworkctl dev start; retained data is preserved.".to_owned(),
             ),
         }
     }
