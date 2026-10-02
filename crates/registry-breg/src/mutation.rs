@@ -463,6 +463,32 @@ pub async fn install_mutation_schema(
     Ok(())
 }
 
+/// Installs, with the migration role, the index that finds an immediate
+/// action's stored result by the record revision it wrote, or removes it. The
+/// revision-history reader uses it to bind a revision journaled under an
+/// effect identifier to the action whose stored result names that revision.
+///
+/// The index exists exactly when the compiled Registry declares an immediate
+/// action, because only then does that reader look results up by target. A
+/// Registry that declares none keeps the catalog, and so the schema
+/// fingerprint, it had before the index existed. The managed schema
+/// fingerprint measures the index, so every path that reconciles a compiled
+/// Registry's catalog runs this and the recorded fingerprint pins the result.
+pub(crate) async fn reconcile_action_result_target_index(
+    migration: &impl GenericClient,
+    declares_immediate_actions: bool,
+) -> Result<(), tokio_postgres::Error> {
+    migration
+        .batch_execute(if declares_immediate_actions {
+            "CREATE INDEX IF NOT EXISTS registry_immediate_action_results_target_idx
+                 ON registry_internal.registry_immediate_action_results
+                 (target_entity_id, target_record_id, target_record_revision)"
+        } else {
+            "DROP INDEX IF EXISTS registry_internal.registry_immediate_action_results_target_idx"
+        })
+        .await
+}
+
 #[derive(Clone)]
 pub struct MutationPlan {
     registry_id: String,
