@@ -4420,6 +4420,51 @@ fn a_first_bridged_source_start_checks_the_audit_before_the_bridge_writes_its_co
     );
 }
 
+/// The suggested action for a retained audit stream the writer refuses for
+/// a reason other than its format, after `arrange` prepares the stream.
+fn audit_unavailable_action(arrange: impl FnOnce(&Path)) -> String {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let state = retained_session(&project);
+    arrange(&state.root().join("audit"));
+    let missing = project.join("missing-casework");
+
+    let (exit, report, text) =
+        json_dev_start(&project, &["--casework-bin", missing.to_str().unwrap()]);
+
+    assert_eq!(exit, std::process::ExitCode::from(3), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["code"], "caseworkctl.dev.audit-unavailable",
+        "{report}"
+    );
+    assert!(!text.contains(root.path().to_str().unwrap()), "{text}");
+    diagnostic["suggestedAction"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_retained_audit_refusal_permissions_cannot_repair_names_moving_the_directory() {
+    // A torn final line whose side file already holds other bytes.
+    let conflicting_side_file = audit_unavailable_action(|audit| {
+        private::create(&audit.join("casework.ndjson"), b"{").unwrap();
+        private::create(&audit.join("casework.ndjson.torn"), b"other").unwrap();
+    });
+    // An audit stream that is a symbolic link.
+    let symlinked_stream = audit_unavailable_action(|audit| {
+        let outside = audit.parent().unwrap().parent().unwrap().join("elsewhere");
+        private::create(&outside, b"").unwrap();
+        std::os::unix::fs::symlink(&outside, audit.join("casework.ndjson")).unwrap();
+    });
+
+    for action in [conflicting_side_file, symlinked_stream] {
+        assert!(action.contains("regular files"), "{action}");
+        assert!(
+            action.contains("move .casework/dev/audit out of the project"),
+            "{action}"
+        );
+    }
+}
+
 #[test]
 fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
     let refused = bind_failure(8092, std::io::ErrorKind::PermissionDenied.into());
