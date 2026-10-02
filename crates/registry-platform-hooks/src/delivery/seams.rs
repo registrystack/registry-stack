@@ -173,6 +173,11 @@ pub trait DeliverySeams: Send + Sync + 'static {
 
     /// Report one operational event through the product's vocabulary.
     fn operational_event(&self, event: DeliveryOperationalEvent);
+
+    /// Note that one worker poll iteration completed without failure, idle
+    /// or not, so a product can report how recently its worker made
+    /// progress. The default notes nothing.
+    fn iteration_succeeded(&self) {}
 }
 
 /// One activated delivery destination, resolved by the product for a
