@@ -762,6 +762,33 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         );
         assert_eq!(refused.body["code"], "source.unavailable", "{why}");
     }
+
+    // A request lifecycle revision never takes the effect-identifier path,
+    // even when the effect is declared against this entity and operation.
+    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
+    database
+        .admin
+        .batch_execute(&format!(
+            "INSERT INTO registry_internal.registry_request_state
+                 (request_entity_id, request_id, owner_reference, state,
+                  proposal_version, workflow_revision)
+             VALUES ('person', '{person_id}', 'owner', 'draft', 1, 1);
+             INSERT INTO registry_internal.registry_request_revision_links
+                 (entity_id, record_id, record_revision, request_entity_id,
+                  request_id, proposal_version, link_kind)
+             VALUES ('person', '{person_id}', 1, 'person', '{person_id}', 1,
+                     'request_lifecycle');"
+        ))
+        .await
+        .expect("administrator marks the fixture revision as request lifecycle");
+    let refused = history_read(&app, &person_detail).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        refused.body
+    );
+    assert_eq!(refused.body["code"], "source.unavailable");
     database.cleanup().await;
 }
 
