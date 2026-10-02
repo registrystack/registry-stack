@@ -610,7 +610,7 @@ identifiable and reclaimable once the container is gone.
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |
-| Authored package, clients or ports changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart, or create a fresh project at package sequence 1 for a separate experiment. |
+| Authored package, clients, ports or issuer image changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart with the records, run `dev stop --remove` to discard them and start again from the edited inputs, or copy the authored files to a new project directory, at package sequence 1, to keep the records. |
 | Authored package, clients or ports changed after `--remove` | At sequence 1, replace the session from the edited inputs, keeping previous ports and clients file and generating new keys. A successor still requires retained predecessor records. |
 
 Reclamation is explicit: only `dev stop --remove` discards records, only a start

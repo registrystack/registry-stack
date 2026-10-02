@@ -214,6 +214,12 @@
   `BReg review result feeds are temporarily unavailable` was logged, about
   once a second.
 
+- Correction to the v0.36.0 notes: `bregctl dev` does keep a package
+  sequence, in that release and since. Its state starts the sequence at 1 for
+  the first package and advances it by one each time
+  `bregctl dev prepare-source` prepares a successor, and its reports carry it
+  as `packageSequence` beside `packageDigest`.
+
 ## v0.38.0 - 2026-10-01
 
 - Automatic review executors can renew credentials with `privateKeyJwt`.
