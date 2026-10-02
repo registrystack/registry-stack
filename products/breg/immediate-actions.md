@@ -69,16 +69,18 @@ Effects run inside the action's single transaction in ascending effect `id`
 order, compared byte by byte, not in the order they are declared. Two rules
 adjust that order: an effect that reads `{fromEffect: ...}` runs after the
 create it names, and patches that resolve to the same stored record apply
-together as one write, at the position of the first. A Rhai handler's emitted
-effects follow the same rule by slot `id`. When the database must see writes in
-a particular order, choose identifiers that sort in that order. For example, an
-action that replaces a temporal role under a `temporal-non-overlap` constraint
-names the patch that ends the outgoing period `a-end-outgoing` and the create
-that starts the incoming one `b-start-incoming`; with the names reversed, the
-create runs first, overlaps the open period, and the action fails with
-`409 mutation.conflict`. Effect identifiers are part of the compiled action
-contract and name the receipt's `results`, so renaming one is a reviewed action
-change.
+together as one write, at the position of the first. That combined write waits
+for every create any of its patches reads, so when a later patch in the group
+reads `{fromEffect: ...}`, the named create runs first, and the earlier patch
+moves with the group to after it. A Rhai handler's emitted effects follow the
+same rule by slot `id`. When the database must see writes in a particular order,
+choose identifiers that sort in that order. For example, an action that replaces
+a temporal role under a `temporal-non-overlap` constraint names the patch that
+ends the outgoing period `a-end-outgoing` and the create that starts the
+incoming one `b-start-incoming`; with the names reversed, the create runs first,
+overlaps the open period, and the action fails with `409 mutation.conflict`.
+Effect identifiers are part of the compiled action contract and name the
+receipt's `results`, so renaming one is a reviewed action change.
 
 To rename a public action input, edit its `apiName` under
 `actions[].inputs` in the module, then update that action's caller input keys in
