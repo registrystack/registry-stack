@@ -34,7 +34,7 @@
 
 - A hook proposal whose action commits effects at different revisions, such
   as a create beside a patch, records the same resulting revision on its
-  delivery row on every database collation. The revision comes from the
+  delivery row on every database collation (#1836). The revision comes from the
   effect whose identifier sorts first under the `"C"` collation, so effect
   identifiers that a locale collation orders differently from byte order,
   such as `followup` and `follow-up-tally` under `en_US.utf8`, no longer
