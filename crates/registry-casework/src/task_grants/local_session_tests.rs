@@ -105,6 +105,9 @@ impl Drop for LocalSession {
             .arg("--remove")
             .output()
             .unwrap();
+        if !output.status.success() {
+            eprintln!("{}", super::dev_session_logs::diagnostics(&self.root()));
+        }
         if !std::thread::panicking() {
             assert!(output.status.success(), "owned dev cleanup failed");
         }

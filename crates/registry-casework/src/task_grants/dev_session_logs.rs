@@ -19,21 +19,31 @@ use std::{
 const TAIL_BYTES: u64 = 4 * 1024;
 const SERVICE_LOGS: [&str; 2] = ["supervisor.log", "casework.log"];
 const MAX_PREREQUISITE_TAILS: usize = 12;
-/// Directories under the session root whose files hold secret material.
-const SECRET_DIRS: [&str; 7] = [
-    "secrets",
-    "credentials",
-    "database",
-    "tls",
+/// Directories under the project's `.casework` whose files hold secret
+/// material: the session's own, and the grant headers `caseworkctl dev
+/// token` keeps beside the session.
+const SECRET_DIRS: [&str; 8] = [
+    "dev/secrets",
+    "dev/credentials",
+    "dev/database",
+    "dev/tls",
+    "dev/grants",
+    "dev/task-authority",
+    "dev/issuer/secrets",
     "grants",
-    "task-authority",
-    "issuer/secrets",
 ];
 /// Largest secret file read for redaction, and the shortest run of its
 /// characters treated as secret. Generated passwords, keys, and tokens are
 /// all longer; shorter runs are field names and fixed labels.
 const MAX_SECRET_FILE: u64 = 64 * 1024;
 const MIN_SECRET: usize = 12;
+/// The directory holding operator-supplied secret files, whose values may be
+/// any shape and are redacted whole. Generated credentials elsewhere are long
+/// token runs, and their files also hold identifiers that are not secret.
+const WHOLE_VALUE_DIR: &str = "dev/secrets";
+/// The shortest whole line or assigned value treated as secret, so a line
+/// holding only JSON punctuation does not redact that punctuation everywhere.
+const MIN_WHOLE_SECRET: usize = 4;
 const REDACTED: &str = "[redacted]";
 
 /// Describe the session under `root` (a project's `.casework/dev`).
@@ -147,11 +157,12 @@ fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
 /// error naming that path, and the caller then prints nothing it would have
 /// redacted. Only a secret directory the session never created is skipped.
 fn secret_values(root: &Path) -> Result<Vec<String>, String> {
-    let mut files = SECRET_DIRS.map(|dir| root.join(dir)).to_vec();
+    let base = root.parent().unwrap_or(root);
+    let mut files = SECRET_DIRS.map(|dir| base.join(dir)).to_vec();
     let mut values = Vec::new();
     while let Some(path) = files.pop() {
         let unreadable = |reason: String| {
-            let shown = path.strip_prefix(root).unwrap_or(&path);
+            let shown = path.strip_prefix(base).unwrap_or(&path);
             format!("cannot read {} for redaction ({reason})", shown.display())
         };
         let metadata = match fs::symlink_metadata(&path) {
@@ -169,12 +180,29 @@ fn secret_values(root: &Path) -> Result<Vec<String>, String> {
             return Err(unreadable(format!("larger than {MAX_SECRET_FILE} bytes")));
         } else {
             let bytes = fs::read(&path).map_err(|error| unreadable(error.to_string()))?;
-            values.extend(secret_runs(&String::from_utf8_lossy(&bytes)));
+            let text = String::from_utf8_lossy(&bytes);
+            if path.starts_with(base.join(WHOLE_VALUE_DIR)) {
+                values.extend(whole_values(&text));
+            }
+            values.extend(secret_runs(&text));
         }
     }
     values.sort_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
     values.dedup();
     Ok(values)
+}
+
+/// Each trimmed line, and the trimmed value after a line's first `=` or `:`,
+/// so a secret file's value is redacted whole whatever characters it holds.
+fn whole_values(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.lines()
+        .flat_map(|line| {
+            let assigned = line.split_once(['=', ':']).map(|(_, value)| value);
+            std::iter::once(line).chain(assigned)
+        })
+        .map(str::trim)
+        .filter(|value| value.len() >= MIN_WHOLE_SECRET)
+        .map(str::to_owned)
 }
 
 /// Runs of base64, base64url, hex, and identifier characters long enough to
@@ -206,7 +234,7 @@ mod tests {
     #[test]
     fn diagnostics_show_state_cause_and_log_tails_without_session_secrets() {
         let root = tempfile::tempdir().unwrap();
-        let root = root.path();
+        let root = &root.path().join("dev");
         let password = "0123456789abcdef0123456789abcdef";
         let key = "kq3Zp1rL8vN2xW5yB7cD9eF0gH4jK6mQ";
         let token =
@@ -253,9 +281,51 @@ mod tests {
     }
 
     #[test]
+    fn whole_secret_values_and_retained_grant_headers_are_redacted() {
+        let root = tempfile::tempdir().unwrap();
+        let root = &root.path().join("dev");
+        let short_parts = "alpha-bravo-charlie";
+        let spaced = "correct horse battery";
+        let grant = "eyJhbGciOiJFUzI1NiJ9.eyJncmFudCI6InRhc2sifQ.Z3JhbnQtc2lnbmF0dXJl";
+        write(
+            &root.join("secrets/integration-token"),
+            short_parts.as_bytes(),
+        );
+        write(
+            &root.join("secrets/integration.env"),
+            format!("PASSPHRASE = {spaced}\n").as_bytes(),
+        );
+        write(
+            &root.join("credentials/supervisor/client-id"),
+            b"supervisor",
+        );
+        write(
+            &root.join("../grants/staff-review.header"),
+            format!("Authorization: Bearer {grant}\n").as_bytes(),
+        );
+        write(
+            &root.join("logs/casework.log"),
+            format!("echo {short_parts}; phrase {spaced}; grant {grant}\nready\n").as_bytes(),
+        );
+        write(&root.join("logs/supervisor.log"), b"");
+
+        let out = diagnostics(root);
+
+        assert!(out.contains("ready"), "{out}");
+        // A generated credential's identifier is not redacted as a whole value.
+        assert!(out.contains("--- logs/supervisor.log"), "{out}");
+        for secret in [short_parts, spaced, grant] {
+            assert!(!out.contains(secret), "{secret} leaked:\n{out}");
+        }
+        for segment in grant.split('.') {
+            assert!(!out.contains(segment), "{segment} leaked:\n{out}");
+        }
+    }
+
+    #[test]
     fn a_secret_the_tail_boundary_cuts_through_is_not_printed_in_part() {
         let root = tempfile::tempdir().unwrap();
-        let root = root.path();
+        let root = &root.path().join("dev");
         let password = "0123456789abcdef0123456789abcdef";
         write(
             &root.join("database/postgres.env"),
@@ -281,7 +351,7 @@ mod tests {
     #[test]
     fn diagnostics_are_withheld_when_a_secret_file_cannot_be_read_for_redaction() {
         let root = tempfile::tempdir().unwrap();
-        let root = root.path();
+        let root = &root.path().join("dev");
         let password = "0123456789abcdef0123456789abcdef";
         let mut oversized = format!("POSTGRES_PASSWORD={password}\n");
         oversized.push_str(&"#".repeat(MAX_SECRET_FILE as usize));
@@ -305,7 +375,7 @@ mod tests {
     #[test]
     fn diagnostics_bound_each_tail_and_the_number_of_tails() {
         let root = tempfile::tempdir().unwrap();
-        let root = root.path();
+        let root = &root.path().join("dev");
         let mut long = "early-line\n".repeat(1024);
         long.push_str("latest-line\n");
         write(&root.join("logs/casework.log"), long.as_bytes());
