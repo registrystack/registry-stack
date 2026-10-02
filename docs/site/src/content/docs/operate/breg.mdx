@@ -1129,9 +1129,26 @@ directory. Make the image's non-root user, UID 65532, the owner of every secret 
 serving container, because the resolver refuses a file owned by anyone else. `apply` appends its
 audit entries to a file of its own beside `audit.path`, so the audit volume is mounted writable
 here too. A `--backup` binding file is read inside the container: mount it read-only and name its
-container path. In Kubernetes, run the same
-command as a Job whose container sets `command: ["/usr/local/bin/bregctl"]` and puts the
-subcommand and its flags in `args`.
+container path.
+
+Kubernetes is outside the verified deployment profile, and no release check exercises a
+Kubernetes manifest. A manifest that runs the
+image, for `breg` or for a `bregctl` Job whose container sets
+`command: ["/usr/local/bin/bregctl"]` and puts the subcommand and its flags in `args`, has to
+satisfy the same two loader rules. No component of the runtime document's path may be a symbolic
+link, and every `secret:file/<name>` file must be a regular file, not a symbolic link, with
+exactly one link, owned by the user the container runs as (UID 65532 unless the manifest
+overrides it), with mode `0400` or `0600`. A ConfigMap or Secret volume
+mounted the default way presents each key as a symbolic link, so it fails the symbolic-link rule:
+the runtime document refuses to load, and a secret file refuses to resolve. A secret can come from
+the environment instead: declare `secretProviders.environment` and reference it as
+`secret:env/<NAME>`, as [Write the runtime configuration](#write-the-runtime-configuration)
+describes.
+
+{/* Evidence: release/READINESS.md, the deployment profile item;
+    crates/registry-platform-config/src/loader.rs, reject_symlink_components();
+    crates/registry-platform-config/src/secrets.rs, validate_file_metadata() and read_environment();
+    crates/registry-breg/src/runtime_config.rs, runtime_config_loader(). */}
 
 {/* Evidence: release/docker/Dockerfile.breg, the bregctl install line and the breg ENTRYPOINT;
     release/scripts/check-debian13-images.py, HTTP_PROBE_DOCKERFILES and check_repository();

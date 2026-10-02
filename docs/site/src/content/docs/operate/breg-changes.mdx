@@ -82,9 +82,17 @@ replaces the column check under an exclusive table lock and validates every stor
 so raising it is `field_type_changed` and needs a reviewed migration, as does lowering any
 `maxLength`, raising a `minLength`, or widening a `decimal`. An action that sets or requires the
 entity is reported as `action_target_fields_widened` when a relaxed length bound is its only
-change, and stays additive. A widened grant is an access change: the
-planner accepts it as metadata-only, but it still needs a reviewed migration descriptor and
-rehearsal evidence, as the metadata-only case below describes.
+change, and stays additive.
+
+A widened grant is an access change, and the planner applies an access change without a reviewed
+migration: `test` and `package` accept it with no `--reviewed-migrations`. Two kinds of access
+change still need one: a change to an action, and a query inventory change other than a query that
+appears or disappears only because its route's grant gained or lost the profile. For every other
+access change, no reviewed evidence stands between the package and `apply`. The review gate is the
+holder of the migration credential, who reads the `diff` before running `apply`. `diff` names each
+change by code and target, with the direction of each access detail (`widening`, `narrowing`, or
+`review_required`); `plan` counts access and disclosure changes
+(`migration.changeCounts.accessOrDisclosureChange` in its JSON report) without naming them.
 
 An action input that starts accepting more codes is additive (`action_vocabulary_codes_added`)
 only when every code it gained was added to its vocabulary in the same successor. An input that
@@ -110,13 +118,16 @@ The descriptor names the change class, the exact change codes and targets from `
 json`, timeouts, recovery mode, and its evidence paths. The rehearsal receipt binds the prior
 package digest and schema, the descriptor and SQL hashes, the measured target schema, and the timeout
 and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
-the command line validates it and does not generate it. The only worked example of the exact
-descriptor and rehearsal receipt fields is the review construction in
-`products/breg/scripts/test-adopter-workflow.sh` at the release tag you operate,
-which builds both documents for a metadata-only access change and passes them to `test`. JSON
+the command line validates it and does not generate it. Two worked examples build the exact
+descriptor and rehearsal receipt fields, both at the release tag you operate. The review
+construction in `products/breg/scripts/test-adopter-workflow.sh` builds both documents for a
+metadata-only access change and passes them to `test`. The one in
+`products/breg/scripts/test-promotion.sh` builds a destructive field removal with a
+`transactional_sql` step, a pre-assertion and a post-assertion, a fixture, and a backup binding for
+each environment, then takes it through `test`, `package`, `plan`, and `apply`. JSON
 artifacts use canonical JSON: sorted keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
-unrelated files are refused. A metadata-only change can declare empty steps and assertions and
-still needs rehearsal evidence. A field added as required is created without its constraint, your
+unrelated files are refused. A metadata-only change that needs review can declare empty steps and
+assertions and still needs rehearsal evidence. A field added as required is created without its constraint, your
 reviewed steps backfill it, and the plan constrains the column afterwards.
 
 ```sh
@@ -136,15 +147,24 @@ reviewed directory root, starting with `modules/<module-id>/migrations/<migratio
 - `descriptor.json` holds `id`, `changeClass`, `covers` (each change `code` and `target`
   from `diff --format json` that is not compatible additive), `recovery` (`exact_target_resume`),
   `lockTimeoutMs`, `statementTimeoutMs`, `steps`, `preAssertions`, `postAssertions`,
-  `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`.
-- A step is one of three kinds. `transactional_sql` runs one statement from `sqlPath` in its own
+  `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`. A descriptor that
+  turns field encryption on, through a `field_encryption_changed` cover or a
+  `field_encryption_backfill` step, also holds `history` (`erase-and-rebaseline` or
+  `retain-plaintext-history`); any other descriptor that holds `history` is refused.
+- A step is one of three kinds, named by `kind`, and each has an `id`. Step keys are snake_case,
+  unlike the camelCase keys of the descriptor, its objects, and its assertions.
+  `transactional_sql` runs one statement from `sql_path` in its own
   transaction, which also records the step's ledger progress, so a later step or post-assertion
-  that fails does not roll it back and `apply` resumes after it; DML must declare `affectedRows`
-  bounds, and every row it changes gets a history revision. `chunked_backfill` runs one `UPDATE` of its declared entity once per chunk of
-  record identifiers, bound as a UUID array, within `chunkSize` (at most 1,000) and
-  `maxTotalRows`; each chunk commits on its own and appends one history revision for every row it
+  that fails does not roll it back and `apply` resumes after it; DML must declare `affected_rows`
+  bounds (`min` and `max`), and every row it changes gets a history revision. `chunked_backfill`
+  runs one `UPDATE` from `sql_path` of its declared entity (`entity_id`) once per chunk of
+  record identifiers, bound as a UUID array (`cursor`: `record_id_uuid_array`), within
+  `chunk_size` (at most 1,000) and `max_total_rows`, under its own `lock_timeout_ms` and
+  `statement_timeout_ms` no greater than the descriptor's, and with `exact_affected_rows` set to
+  `true`; each chunk commits on its own and appends one history revision for every row it
   changed, in one history commit, so snapshot and as-of reads agree with the backfilled rows.
-  `field_encryption_backfill` carries no SQL; the engine seals the covered fields chunk by chunk
+  `field_encryption_backfill` takes the same keys without `sql_path` and `exact_affected_rows`,
+  and carries no SQL; the engine seals the covered fields chunk by chunk
   and journals each chunk the same way. A journaled step is one `UPDATE`, after any leading
   comments, and may not name a record metadata column (`record_revision`, `record_lifecycle`,
   `active_package_revision`, `created_at`, `updated_at`) anywhere in the statement, even to read
@@ -154,7 +174,8 @@ reviewed directory root, starting with `modules/<module-id>/migrations/<migratio
   statement word inside it refuses the step. A Unicode-escape identifier or string (`U&"..."`,
   `U&'...'`, with or without `UESCAPE`) refuses the step wherever it appears. The journal also
   refuses a step that changed any record metadata column.
-  Each step lists the `objects` (schema, table, entity, kind, member, physical name) its SQL may
+  Each step lists the `objects` (`schema`, `table`, `entityId`, `kind`, `memberId` for a member,
+  and `physicalName`) its SQL may
   touch.
 - An assertion is one `SELECT` returning exactly one boolean column. Pre-assertions run against
   the predecessor tables before any step, post-assertions against the successor tables after
@@ -199,7 +220,7 @@ message, because those can quote row values.
 
 The rehearsal runs over empty tables, so it proves that the SQL is valid, ordered, and reaches
 the target schema. It does not prove that your data satisfies a step or an assertion: a duplicate
-key, a row count outside `affectedRows`, or an assertion that is false over real rows is found
+key, a row count outside `affected_rows`, or an assertion that is false over real rows is found
 only by your own rehearsal on a restored copy of production and by `apply` itself. Field-encryption
 backfill steps are skipped, because they need key material and rows. Reviewed fixture files are
 bound by digest only; the rehearsal does not load them.
@@ -215,7 +236,12 @@ Reviewed artifacts cannot authorize a change the planner classifies as unsupport
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
     crates/registry-bregctl/src/reviewed_migrations.rs;
-    crates/registry-breg/src/migration_plan.rs;
+    crates/registry-breg/src/migration_plan.rs, ReviewedMigrationStepDescriptor, ReviewedFieldEncryptionHistory, and validate_fixture_jsonl();
+    crates/registry-breg/src/package.rs, compiler_applicable_without_review() and automatic_query_inventory_change();
+    crates/registry-breg/tests/package_change_plan.rs, metadata_only_access_or_disclosure_changes_create_empty_applicable_plans;
+    crates/registry-breg/src/tooling.rs, AccessChangeDetail and AccessChangeDirection;
+    crates/registry-bregctl/src/lib.rs, PlanSuccessReport;
+    products/breg/scripts/test-promotion.sh;
     crates/registry-breg/src/immediate_actions.rs, contract_only_widens();
     crates/registry-breg/src/contract.rs, FieldTypeSource::widens_text_length_of();
     crates/registry-breg/tests/postgres_compiled_schema.rs, text_length_widening_replaces_the_length_check_and_keeps_existing_rows;
@@ -368,8 +394,10 @@ is sound, build a successor that reverts the change:
    stays as it is.
 2. Run `diff` against the active runtime file. The planner classifies the revert like any other
    change: undoing an added field is a field removal, which is destructive and needs a reviewed
-   migration and its backup artifact; undoing a widened grant is an access change that needs
-   reviewed evidence.
+   migration and its backup artifact; undoing a widened grant is an access change, which applies
+   without reviewed evidence unless it changes an action or the query inventory, as
+   [Test and package the successor](#test-and-package-the-successor) describes. Read its `diff`
+   before you apply it.
 3. Test, package, and apply the successor with the active package as `--baseline-package`, as the
    sections above describe, then update the runtime file and restart.
 
@@ -538,9 +566,10 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `diff` reports the baseline as `integrity_only` | You passed `--package`. That is the reviewer's view; pass `--runtime-config` for the comparison against the activated package. |
 | `test` or `package` reports `migration.review.required` | The planner classified a change as needing review. Rehearse it, write the reviewed migration directory, and pass `--reviewed-migrations` to both commands. |
 | `test` or `package` reports `migration.review.descriptor_refused` | A descriptor is malformed, for example an empty or duplicate `covers` entry, a missing or unknown field-encryption history choice, a chunk size beyond the commit budget, or a plaintext drop ordered before its sealing backfill. Fix the descriptor, then repeat test and package. |
-| `test` or `package` reports `migration.review.coverage_refused` | The directory does not cover exactly the reviewed changes: a change is uncovered, a cover names a change the candidate does not make or the wrong change class, a fixture is not bound to any step, or the change is one reviewed artifacts cannot authorize. |
+| `test` or `package` reports `migration.review.coverage_refused` | The directory does not cover exactly the reviewed changes: a change is uncovered, a cover names a change the candidate does not make or the wrong change class, the directory holds a fixture the rehearsal receipt does not list, or the change is one reviewed artifacts cannot authorize. |
 | `test` or `package` reports `migration.review.sql_refused` | A step or assertion uses SQL outside the reviewed subset, for example more than one statement, transaction or role control, an unqualified or undeclared object, or DML without affected-row bounds. |
 | `test` or `package` reports `migration.review.evidence_refused` | The rehearsal receipt, external backup binding, or fixture bytes do not match this candidate, baseline, and database. Rehearse again and copy the new receipt. |
+| `test` or `package` reports `migration.review.evidence_refused` for a fixture | A migration with steps lists no fixture in `fixtureInventory`, or a listed fixture breaks a rule: its ids are not in ascending order, its `path` is not `fixtures/<id>.jsonl` in the migration directory, the file is missing, empty, over 16 MiB, or lacks a final newline, a line is blank, ends in a carriage return, or is not canonical JSON, the line count differs from `rowCount`, or the bytes differ from `sha256`. No command loads a fixture's rows, so these checks accept any canonical JSON value on each line. Correct the file or its inventory entry, then repeat test and package. |
 | `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior package digest or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
