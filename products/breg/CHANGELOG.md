@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- An immediate action whose selected effects write fields that a locale
+  collation orders differently from byte order, such as `award-number` and
+  `awarded-by` under `en_US.utf8`, no longer answers
+  `503 service.unavailable` (#1820). The generated row policy orders the
+  written-field set with the `"C"` collation, so it matches the set the
+  runtime binds on every database collation. The set of fields an action may
+  write is unchanged.
+- BREAKING: the policy is part of the compiled DDL, so a project that declares
+  immediate actions compiles to a new `registryRevision`, and a package an
+  earlier release built for it no longer loads. Action contract fingerprints
+  are unchanged, so retained idempotent retries still match. Rebuild the
+  package unchanged with this `bregctl package --baseline-package <deployed
+  package>` and apply it; activation replaces the policy. A Registry Casework
+  BReg source pins the old `registryRevision` and Casework startup refuses
+  it: repin with `caseworkctl source add BREG_PROJECT --project PROJECT
+  --source-id ID --apply`, then package, plan, and apply the Casework project
+  once.
+
 ## v0.38.0 - 2026-10-01
 
 - Automatic review executors can renew credentials with `privateKeyJwt`.

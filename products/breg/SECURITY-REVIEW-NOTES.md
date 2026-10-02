@@ -972,3 +972,60 @@ not audited.
 The shared destination policy refuses `localhost` and `*.localhost`
 (case-insensitive, trailing dot included) early. This only narrows what a
 configuration may name.
+
+## Immediate-action field sets under a locale collation
+
+The change orders the written-field set in the generated immediate-action
+row policy with the `"C"` collation
+(`immediate_action_effect_group_expression` in
+`crates/registry-breg/src/generated_ddl.rs`). The runtime binds each write to
+the exact set of fields its selected effects may write, as a byte-ordered
+array in the `registry.immediate_action_target_context` setting
+(`action_target_group_context` in `crates/registry-breg/src/mutation/action.rs`),
+and the policy compares it with jsonb array equality, which is
+order-sensitive. The policy rebuilt the array ordered by the database's
+default collation, so under a locale such as `en_US.utf8`, which ignores
+hyphens at the first comparison level, `awarded-by` sorted before
+`award-number` on one side and after it on the other, and PostgreSQL refused
+the write with `503 service.unavailable` (#1820). It changes a row-level
+security policy.
+
+### Threat
+
+The change widens what an immediate action may write: a context naming a
+field outside the selected effects, omitting one, or repeating one passes the
+policy.
+
+### Enforcement and defaults
+
+- Only the ordering used to build the comparison array changes. The policy
+  still requires `fields` to equal exactly the distinct fields declared by the
+  compatible selected effects; a context with an extra, missing, or
+  duplicated field yields a different array and is refused. The effect ids,
+  action id, contract fingerprint, profile, principal, purpose, target
+  entity, operation, package revision, and target record predicates are
+  unchanged.
+- Before the change the two arrays held the same elements and could differ
+  only in order, so the defect could refuse a write that should be accepted
+  but never accept one that should be refused. `"C"` compares bytes, which is
+  Rust's `String` order for UTF-8, so both sides now agree on every database
+  collation.
+- The Rust enforcement point, the context built from the compiled ceiling, is
+  unchanged.
+- An existing database keeps the old policy text until a package compiled by
+  this release is activated; activation re-creates every compiled policy.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_immediate_action_requirements.rs`:
+`action_effect_fields_are_authorized_under_a_locale_collation` creates its
+database with `en_US.utf8` collation, first asserts that the database orders
+`awarded-by` before `award-number`, then expects the action to answer `200`
+and store both fields. It answered `503` before the change. The existing
+immediate-action PostgreSQL suites still pass on an `en_US.utf8` server.
+
+### Accepted residuals
+
+- The policy's refusal of a mismatched field set is pinned through the
+  runtime's own contexts; no test sets a hand-built context with an extra
+  field as the runtime role. That backstop predates this change.
