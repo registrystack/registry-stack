@@ -738,12 +738,19 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
+    let raw = fs::read_to_string(&config_path).expect("runtime config reads");
+    fs::write(
+        &config_path,
+        format!("{raw}metricsListener:\n  bind: {}\n", reserve_address()),
+    )
+    .expect("metrics listener runtime config writes");
     let prepared =
         prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
             .await
             .expect("prepared server verifies package, database, audit, and OIDC");
     assert_ready(&prepared, StatusCode::OK).await;
     assert_unknown_static_kid_refuses_value_free(&prepared).await;
+    assert_metrics_publish_the_verified_package_and_every_queue(&prepared, &verified).await;
 
     let wrong_role_path = fixture.write_static_jwks_config(
         &package,
@@ -2394,6 +2401,54 @@ async fn wait_for_maintenance_without_sleep(client: &impl GenericClient, expecte
     })
     .await
     .expect("maintenance reaches its durable state without timing sleeps");
+}
+
+/// The registry the verified startup path builds names the package it
+/// verified, and the runtime role can read every queue the scrape samples.
+async fn assert_metrics_publish_the_verified_package_and_every_queue(
+    prepared: &PreparedServer,
+    verified: &VerifiedPackage,
+) {
+    let response = prepared
+        .metrics_app_for_test()
+        .expect("the runtime file configures a metrics listener")
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("metrics router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("metrics body reads");
+    let body = String::from_utf8(body.to_vec()).expect("metrics body is UTF-8");
+    let packages = body
+        .lines()
+        .filter(|line| line.starts_with("breg_active_package_info{"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        packages,
+        [format!(
+            "breg_active_package_info{{package_digest=\"{}\"}} 1",
+            verified.package_digest()
+        )],
+        "the scrape names the verified package once:\n{body}"
+    );
+    for queue in [
+        "webhook_delivery",
+        "review_submission",
+        "review_application",
+    ] {
+        assert!(
+            body.contains(&format!(
+                "breg_queue_oldest_pending_age_seconds{{queue=\"{queue}\"}} 0\n"
+            )),
+            "the {queue} queue is sampled and empty:\n{body}"
+        );
+    }
 }
 
 async fn assert_ready(prepared: &PreparedServer, expected: StatusCode) {
