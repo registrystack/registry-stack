@@ -604,6 +604,20 @@ fn expected_operational_event(
             None,
             Some("attachment_verification.retry_pending"),
         ),
+        OperationalEvent::ReviewWorkerIterationFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::review",
+            "review worker iteration failed",
+            None,
+            Some("review.worker.iteration_failed"),
+        ),
+        OperationalEvent::ReviewResultLookupsUnavailable => (
+            OperationalLogLevel::Warn,
+            "registry_breg::review",
+            "BReg review result lookups are temporarily unavailable",
+            None,
+            Some("review.result_lookups.unavailable"),
+        ),
         OperationalEvent::WebhookStateTransitionFailed(code) => (
             OperationalLogLevel::Warn,
             "registry_breg::webhook",
@@ -815,6 +829,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
+    events.push(OperationalEvent::ReviewWorkerIterationFailed);
+    events.push(OperationalEvent::ReviewResultLookupsUnavailable);
     for task in BackgroundTask::ALL {
         events.extend(
             BackgroundTaskStop::ALL
@@ -926,6 +942,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             "registry_breg::startup"
                 | "registry_breg::webhook"
                 | "registry_breg::attachment_verification"
+                | "registry_breg::review"
                 | "registry_breg::postgres"
         ));
     }

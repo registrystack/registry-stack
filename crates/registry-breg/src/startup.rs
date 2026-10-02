@@ -335,6 +335,10 @@ pub enum OperationalEvent {
     WebhookWorkerIterationFailed,
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
+    ReviewWorkerIterationFailed,
+    /// At least one due review result lookup could not reach its authority on
+    /// this pass.
+    ReviewResultLookupsUnavailable,
     WebhookStateTransitionFailed(WebhookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
@@ -416,6 +420,20 @@ impl OperationalEvent {
                 error: None,
                 code: Some("attachment_verification.retry_pending"),
             },
+            Self::ReviewWorkerIterationFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::review",
+                message: "review worker iteration failed",
+                error: None,
+                code: Some("review.worker.iteration_failed"),
+            },
+            Self::ReviewResultLookupsUnavailable => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::review",
+                message: "BReg review result lookups are temporarily unavailable",
+                error: None,
+                code: Some("review.result_lookups.unavailable"),
+            },
             Self::WebhookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::webhook",
@@ -494,6 +512,10 @@ impl OperationalEvent {
                     .code
                     .expect("verification warning records have a code");
                 tracing::warn!(target: "registry_breg::attachment_verification", code, message = record.message);
+            }
+            Self::ReviewWorkerIterationFailed | Self::ReviewResultLookupsUnavailable => {
+                let code = record.code.expect("review warning records have a code");
+                tracing::warn!(target: "registry_breg::review", code, message = record.message);
             }
             Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
                 let code = record.code.expect("webhook warning records have a code");

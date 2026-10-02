@@ -964,10 +964,7 @@ impl ReviewAuthorityRegistry {
             match outcome {
                 Ok(true) => {
                     if unavailable_lookups > 0 {
-                        tracing::warn!(
-                            unavailable = unavailable_lookups,
-                            "BReg review result lookups are temporarily unavailable"
-                        );
+                        crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
                     }
                     return Ok(true);
                 }
@@ -1001,10 +998,7 @@ impl ReviewAuthorityRegistry {
             }
         }
         if unavailable_lookups > 0 {
-            tracing::warn!(
-                unavailable = unavailable_lookups,
-                "BReg review result lookups are temporarily unavailable"
-            );
+            crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
         }
         if authority_unavailable {
             Err(MutationError::Unavailable)
@@ -1250,12 +1244,17 @@ impl ReviewWorker {
             if *shutdown.borrow() {
                 return;
             }
+            let mut failed = false;
             let worked = match self.pool.get().await {
                 Ok(mut client) => {
-                    let housekeeping_worked = erase_expired_review_completions(&**client)
-                        .await
-                        .unwrap_or(0)
-                        > 0;
+                    let housekeeping_worked =
+                        match erase_expired_review_completions(&**client).await {
+                            Ok(erased) => erased > 0,
+                            Err(_) => {
+                                failed = true;
+                                false
+                            }
+                        };
                     // A source apply whose response was lost is retried against
                     // BReg before another Casework exchange. The source's
                     // idempotency receipt is the application authority.
@@ -1263,9 +1262,13 @@ impl ReviewWorker {
                         false
                     } else {
                         match &self.executors {
-                            Some(executors) => {
-                                executors.run_one(&mut client).await.unwrap_or(false)
-                            }
+                            Some(executors) => match executors.run_one(&mut client).await {
+                                Ok(worked) => worked,
+                                Err(_) => {
+                                    failed = true;
+                                    false
+                                }
+                            },
                             None => false,
                         }
                     };
@@ -1276,22 +1279,34 @@ impl ReviewWorker {
                         false
                     } else {
                         match &self.authorities {
-                            Some(authorities) => {
-                                authorities.run_one(&mut client).await.unwrap_or(false)
-                            }
+                            Some(authorities) => match authorities.run_one(&mut client).await {
+                                Ok(worked) => worked,
+                                Err(_) => {
+                                    failed = true;
+                                    false
+                                }
+                            },
                             None => false,
                         }
                     };
                     housekeeping_worked || application_worked || authority_worked
                 }
-                Err(_) => false,
+                Err(_) => {
+                    failed = true;
+                    false
+                }
             };
+            if failed {
+                crate::startup::OperationalEvent::ReviewWorkerIterationFailed.emit();
+            }
             if worked {
                 continue;
             }
             tokio::select! {
-                _ = shutdown.changed() => {},
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { return; }
+                }
+                () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
             }
         }
     }
