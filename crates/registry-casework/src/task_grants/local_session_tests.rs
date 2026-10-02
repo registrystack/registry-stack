@@ -103,10 +103,18 @@ impl Drop for LocalSession {
             .args(["--format", "json", "dev", "stop"])
             .arg(&self.project)
             .arg("--remove")
+            .env("REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS", "1")
             .output()
             .unwrap();
         if !output.status.success() {
             eprintln!("{}", super::dev_session_logs::diagnostics(&self.root()));
+            // Teardown failures such as container removal are reported only
+            // on this command's own output, never in the session logs.
+            eprintln!(
+                "owned dev cleanup: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         if !std::thread::panicking() {
             assert!(output.status.success(), "owned dev cleanup failed");
