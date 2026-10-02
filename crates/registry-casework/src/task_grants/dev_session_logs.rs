@@ -134,7 +134,9 @@ pub(super) fn diagnostics(root: &Path) -> String {
 /// earlier bytes were dropped. A line the cut falls inside is dropped whole:
 /// a secret value never spans a line, so one the cut splits lies in that
 /// line, where redaction could no longer match it. The byte before the cut
-/// is read too, so a cut on a line boundary keeps its first line.
+/// is read too, so a cut on a line boundary keeps its first line. An
+/// unterminated final line is dropped the same way, since capture may have
+/// stopped partway through a secret.
 fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let mut start = file.metadata()?.len().saturating_sub(limit + 1);
@@ -149,12 +151,22 @@ fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
         bytes.drain(..partial);
         start += partial as u64;
     }
-    let text = String::from_utf8_lossy(&bytes).into_owned();
-    Ok(if start > 0 {
-        format!("[... {start} earlier bytes omitted]\n{text}")
-    } else {
-        text
-    })
+    let complete = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |newline| newline + 1);
+    let unterminated = bytes.len() - complete;
+    bytes.truncate(complete);
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if start > 0 {
+        text.insert_str(0, &format!("[... {start} earlier bytes omitted]\n"));
+    }
+    if unterminated > 0 {
+        text.push_str(&format!(
+            "[unterminated final line of {unterminated} bytes omitted]\n"
+        ));
+    }
+    Ok(text)
 }
 
 /// Every run of token characters in the session's secret files, longest
@@ -351,6 +363,34 @@ mod tests {
         assert!(
             !out.contains(&password[16..]),
             "password suffix leaked:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_secret_a_capped_log_ends_inside_is_not_printed_in_part() {
+        let root = tempfile::tempdir().unwrap();
+        let root = &root.path().join("dev");
+        let password = "synthetic-database-password";
+        write(
+            &root.join("database/postgres.env"),
+            format!("POSTGRES_PASSWORD={password}\n").as_bytes(),
+        );
+        // Capture stopped halfway through the echoed password.
+        write(
+            &root.join("logs/prerequisite.log"),
+            format!("latest-line\nconnecting with {}", &password[..16]).as_bytes(),
+        );
+
+        let out = diagnostics(root);
+
+        assert!(out.contains("latest-line"), "{out}");
+        assert!(
+            out.contains("[unterminated final line of 32 bytes omitted]"),
+            "{out}"
+        );
+        assert!(
+            !out.contains(&password[..16]),
+            "password prefix leaked:\n{out}"
         );
     }
 
