@@ -73,6 +73,7 @@ use crate::model::{
     MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
+use crate::problem::ProblemCode;
 use crate::problem_location::{BatchItemMember, RequestLocation};
 use crate::query as strict_query;
 use crate::query_binding::CursorBindingQuery;
@@ -321,11 +322,7 @@ mod review_completion_tests {
 }
 
 fn review_completion_refused() -> Response {
-    fixed_problem(
-        StatusCode::UNAUTHORIZED,
-        "review_completion.authentication_refused",
-        "The review completion sender was refused.",
-    )
+    fixed_problem(ProblemCode::AuthenticationRefused)
 }
 
 async fn health() -> Response {
@@ -336,11 +333,7 @@ async fn ready(State(service): State<Arc<HttpService>>) -> Response {
     if service.readiness.is_ready().await {
         Json(json!({"status": "ready"})).into_response()
     } else {
-        fixed_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime.not_ready",
-            "Registry runtime is not ready.",
-        )
+        fixed_problem(ProblemCode::RuntimeNotReady)
     }
 }
 
@@ -4965,35 +4958,19 @@ fn anonymous_refusal(mut response: Response, reason: AnonymousRefusalReason) -> 
 }
 
 fn concealed() -> Response {
-    fixed_problem(
-        StatusCode::NOT_FOUND,
-        "resource.not_found",
-        "The requested resource was not found.",
-    )
+    fixed_problem(ProblemCode::ResourceNotFound)
 }
 
 fn unavailable() -> Response {
-    fixed_problem(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "source.unavailable",
-        "The Registry data service is unavailable.",
-    )
+    fixed_problem(ProblemCode::SourceUnavailable)
 }
 
 fn field_encryption_unavailable() -> Response {
-    fixed_problem(
-        StatusCode::SERVICE_UNAVAILABLE,
-        crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
-        crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
-    )
+    fixed_problem(ProblemCode::RuntimeFieldEncryptionUnavailable)
 }
 
 fn invalid_query() -> Response {
-    fixed_problem(
-        StatusCode::BAD_REQUEST,
-        "query.invalid",
-        "The query request is invalid.",
-    )
+    fixed_problem(ProblemCode::QueryInvalid)
 }
 
 /// The registered `query.invalid` refusal naming the fixed query parameter at
@@ -5013,19 +4990,11 @@ fn invalid_query_at(parameter: &'static str) -> Response {
 }
 
 fn cursor_invalid() -> Response {
-    fixed_problem(
-        StatusCode::BAD_REQUEST,
-        "query.cursor_invalid",
-        "The query cursor is invalid.",
-    )
+    fixed_problem(ProblemCode::QueryCursorInvalid)
 }
 
 fn lookup_unresolved() -> Response {
-    fixed_problem(
-        StatusCode::NOT_FOUND,
-        "lookup.unresolved",
-        "The lookup did not resolve exactly one record.",
-    )
+    fixed_problem(ProblemCode::LookupUnresolved)
 }
 
 fn public_deployment_prefix(service: &HttpService) -> &str {
@@ -5591,11 +5560,7 @@ fn valid_if_match(value: &str) -> bool {
 }
 
 fn invalid_request() -> Response {
-    fixed_problem(
-        StatusCode::BAD_REQUEST,
-        "request.invalid",
-        "The request is invalid.",
-    )
+    fixed_problem(ProblemCode::RequestInvalid)
 }
 
 /// The registered `request.invalid` refusal located at one closed write-body
@@ -5643,27 +5608,15 @@ fn unexpected_batch_if_match() -> Response {
 }
 
 fn unsupported_media_type() -> Response {
-    fixed_problem(
-        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        "unsupported.media_type",
-        "The request media type is not supported.",
-    )
+    fixed_problem(ProblemCode::UnsupportedMediaType)
 }
 
 fn precondition_required() -> Response {
-    fixed_problem(
-        StatusCode::PRECONDITION_REQUIRED,
-        "precondition.required",
-        "The mutation precondition is required.",
-    )
+    fixed_problem(ProblemCode::PreconditionRequired)
 }
 
 fn precondition_failed() -> Response {
-    fixed_problem(
-        StatusCode::PRECONDITION_FAILED,
-        "precondition.failed",
-        "The mutation precondition failed.",
-    )
+    fixed_problem(ProblemCode::PreconditionFailed)
 }
 
 fn mutation_problem(error: MutationError) -> Response {
@@ -5673,16 +5626,8 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::AuthorizationRefused | MutationError::PreconditionFailed => {
             precondition_failed()
         }
-        MutationError::Conflict => fixed_problem(
-            StatusCode::CONFLICT,
-            "mutation.conflict",
-            "The mutation conflicts with current state.",
-        ),
-        MutationError::IdempotencyConflict => fixed_problem(
-            StatusCode::CONFLICT,
-            "idempotency.conflict",
-            "The idempotency key is bound to another request.",
-        ),
+        MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
+        MutationError::IdempotencyConflict => fixed_problem(ProblemCode::IdempotencyConflict),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
         // Only a schema install still carrying pre-migration review data or
         // retired audit rows can produce these two causes; request handling
@@ -5692,11 +5637,7 @@ fn mutation_problem(error: MutationError) -> Response {
         | MutationError::RetryableConflict
         | MutationError::CommitUnresolved
         | MutationError::LegacyReviewDataPresent
-        | MutationError::RetiredAuditRowsPresent => fixed_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "service.unavailable",
-            "The Registry mutation service is unavailable.",
-        ),
+        | MutationError::RetiredAuditRowsPresent => fixed_problem(ProblemCode::ServiceUnavailable),
         MutationError::ActionRefusal(refusal) => {
             crate::correlation::action_refusal_response(refusal)
         }
@@ -5705,34 +5646,24 @@ fn mutation_problem(error: MutationError) -> Response {
         }
         MutationError::ActionHandlerFailure(error) => match error {
             crate::action_handler::ActionHandlerError::Input => invalid_request(),
-            crate::action_handler::ActionHandlerError::Evidence => fixed_problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "action.evidence_failed",
-                "The declared Evidence dependency could not be accepted.",
-            ),
-            crate::action_handler::ActionHandlerError::Deadline => fixed_problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "service.unavailable",
-                "The Registry mutation service is unavailable.",
-            ),
-            _ => fixed_problem(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "action.handler_failed",
-                "The action handler could not produce an accepted result.",
-            ),
+            crate::action_handler::ActionHandlerError::Evidence => {
+                fixed_problem(ProblemCode::ActionEvidenceFailed)
+            }
+            crate::action_handler::ActionHandlerError::Deadline => {
+                fixed_problem(ProblemCode::ServiceUnavailable)
+            }
+            _ => fixed_problem(ProblemCode::ActionHandlerFailed),
         },
         MutationError::FieldPatternViolation {
             entity_id,
             field_id,
         } => crate::correlation::field_pattern_response(entity_id, field_id),
-        MutationError::FieldEncryptionUnavailable => fixed_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
-            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
-        ),
+        MutationError::FieldEncryptionUnavailable => {
+            fixed_problem(ProblemCode::RuntimeFieldEncryptionUnavailable)
+        }
         MutationError::PlannerFailure(error) => {
-            let (status, code, detail) = planner_failure_problem(error);
-            fixed_problem(status, code, detail)
+            let (code, detail) = planner_failure_problem(error);
+            problem_with_detail(code, detail)
         }
     }
 }
@@ -5745,30 +5676,22 @@ fn mutation_problem(error: MutationError) -> Response {
 /// every other timeout carries.
 const fn planner_failure_problem(
     error: crate::rhai_planner::ChangeRequestPlannerError,
-) -> (StatusCode, &'static str, &'static str) {
+) -> (ProblemCode, &'static str) {
     use crate::rhai_planner::ChangeRequestPlannerError as Kind;
 
     match error {
-        Kind::Deadline => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "service.unavailable",
-            error.problem_detail(),
-        ),
-        _ => (
-            StatusCode::BAD_REQUEST,
-            "request.plan_refused",
-            error.problem_detail(),
-        ),
+        Kind::Deadline => (ProblemCode::ServiceUnavailable, error.problem_detail()),
+        _ => (ProblemCode::RequestPlanRefused, error.problem_detail()),
     }
 }
 
-fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -> Response {
-    crate::correlation::problem_response(
-        status,
-        status.canonical_reason().unwrap_or("Request failed"),
-        detail,
-        code,
-    )
+fn fixed_problem(code: ProblemCode) -> Response {
+    problem_with_detail(code, code.description())
+}
+
+fn problem_with_detail(code: ProblemCode, detail: &'static str) -> Response {
+    let status = StatusCode::from_u16(code.status()).expect("problem catalogue status is valid");
+    crate::correlation::problem_response(status, code.title(), detail, code.code())
 }
 
 /// Per-entity field-encryption admission. A route that reaches an entity with
@@ -6191,15 +6114,14 @@ mod held_body_encryption_tests {
 #[cfg(test)]
 mod planner_failure_problem_tests {
     use super::planner_failure_problem;
+    use crate::problem::ProblemCode;
     use crate::rhai_planner::ChangeRequestPlannerError;
-    use axum::http::StatusCode;
 
     #[test]
     fn every_planner_refusal_names_its_kind_and_nothing_else() {
         for error in ChangeRequestPlannerError::PLAN_REFUSALS {
-            let (status, code, detail) = planner_failure_problem(error);
-            assert_eq!(status, StatusCode::BAD_REQUEST);
-            assert_eq!(code, "request.plan_refused");
+            let (code, detail) = planner_failure_problem(error);
+            assert_eq!(code, ProblemCode::RequestPlanRefused);
             assert!(
                 detail.ends_with(&format!("{}.", error.code())),
                 "the detail must end with the closed planner vocabulary: {detail}"
@@ -6209,8 +6131,7 @@ mod planner_failure_problem_tests {
 
     #[test]
     fn a_planner_deadline_stays_the_unavailable_refusal() {
-        let (status, code, _) = planner_failure_problem(ChangeRequestPlannerError::Deadline);
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(code, "service.unavailable");
+        let (code, _) = planner_failure_problem(ChangeRequestPlannerError::Deadline);
+        assert_eq!(code, ProblemCode::ServiceUnavailable);
     }
 }

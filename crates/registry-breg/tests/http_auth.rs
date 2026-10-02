@@ -13,6 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::{to_bytes, Body};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderValue, Request, StatusCode};
+#[cfg(feature = "postgres-test")]
+use jsonwebtoken::jwk::JwkSet;
+#[cfg(feature = "postgres-test")]
+use jsonwebtoken::Algorithm;
 use registry_breg::api::{
     authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
     ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture, VerifiedClaimValue,
@@ -22,6 +26,14 @@ use registry_breg::auth::{
     AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
 };
 use registry_breg::cursor::CursorCodec;
+#[cfg(feature = "postgres-test")]
+use registry_breg::postgres::{ConnectionConfig, PoolBounds};
+#[cfg(feature = "postgres-test")]
+use registry_breg::problem::ProblemCode;
+#[cfg(feature = "postgres-test")]
+use registry_breg::review_store::{
+    ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewCompletionReceiver,
+};
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
@@ -32,6 +44,8 @@ use registry_platform_oidc::{
 use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
+#[cfg(feature = "postgres-test")]
+use registry_review_client::{ReviewClient, ReviewClientConfig};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
@@ -366,6 +380,182 @@ async fn token_without_actor_kind_is_refused_before_profile_authorization() {
         .remove("registry_actor_kind");
 
     assert_refused_without_record_call(&harness, &harness.idp.mint_token(claims)).await;
+}
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn review_completion_authentication_refusals_use_the_registered_problem() {
+    let project = parse_project_yaml(PROJECT.as_bytes()).expect("project parses");
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
+    );
+    let authenticator = Arc::new(
+        RegistryAuthenticator::new(
+            &registry,
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example.test",
+                vec![AUDIENCE.to_owned()],
+                vec![Algorithm::EdDSA],
+                vec!["at+jwt".to_owned()],
+            ),
+            Arc::new(JwksFetcher::new_static(
+                JwkSet { keys: Vec::new() },
+                JwksFetcherConfig::defaults(),
+            )),
+            authority_claims(),
+        )
+        .expect("authentication config is valid"),
+    );
+    let bounds = PoolBounds::new(
+        1,
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(50),
+    )
+    .expect("pool bounds are valid");
+    let pool = ConnectionConfig::test_only_plaintext(
+        "postgresql://registry_runtime@127.0.0.1:9/registry",
+        bounds,
+    )
+    .expect("test connection configuration is valid")
+    .build_pool()
+    .expect("test pool builds");
+    let review_client = ReviewClient::new(ReviewClientConfig::new(
+        "http://127.0.0.1:9/".parse().expect("loopback URL"),
+    ))
+    .expect("review client builds");
+    let authority = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-a".to_owned(),
+            review_client,
+            Arc::new(
+                registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                    .expect("outgoing token is valid"),
+            ),
+            "producer-profile".to_owned(),
+            "producer-a".to_owned(),
+            7,
+            Some(Zeroizing::new("completion-secret".to_owned())),
+            Some("registry-a".to_owned()),
+        )
+        .expect("review authority is valid"),
+    );
+    let authorities = Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), authority)]))
+            .expect("review authority registry is valid"),
+    );
+    let receiver = Arc::new(ReviewCompletionReceiver::new(pool.clone(), authorities));
+    let service = Arc::new(
+        HttpService::new(
+            registry,
+            read_identity(),
+            Arc::new(RecordingReadService::default()),
+            Arc::new(Ready),
+            cursor_codec(),
+        )
+        .with_review_completions(receiver),
+    );
+    let app = authenticated_router(service, authenticator);
+
+    let mut missing = Request::builder()
+        .method("POST")
+        .uri("/v1/review-completions")
+        .body(Body::empty())
+        .expect("missing-credential request");
+    missing.headers_mut().insert(
+        "registry-recipient-binding",
+        HeaderValue::from_static("registry-a"),
+    );
+    let mut malformed = Request::builder()
+        .method("POST")
+        .uri("/v1/review-completions")
+        .body(Body::empty())
+        .expect("malformed-credential request");
+    malformed.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Basic malformed-canary"),
+    );
+    malformed.headers_mut().insert(
+        "registry-recipient-binding",
+        HeaderValue::from_static("registry-a"),
+    );
+    let mut invalid = Request::builder()
+        .method("POST")
+        .uri("/v1/review-completions")
+        .body(Body::empty())
+        .expect("invalid-credential request");
+    invalid.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer invalid-credential-canary"),
+    );
+    invalid.headers_mut().insert(
+        "registry-recipient-binding",
+        HeaderValue::from_static("registry-a"),
+    );
+    let mut wrong_recipient = Request::builder()
+        .method("POST")
+        .uri("/v1/review-completions")
+        .body(Body::empty())
+        .expect("wrong-recipient request");
+    wrong_recipient.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer completion-secret"),
+    );
+    wrong_recipient.headers_mut().insert(
+        "registry-recipient-binding",
+        HeaderValue::from_static("wrong-recipient-canary"),
+    );
+    let mut admitted = Request::builder()
+        .method("POST")
+        .uri("/v1/review-completions")
+        .body(Body::empty())
+        .expect("admitted-credential request");
+    admitted.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer completion-secret"),
+    );
+    admitted.headers_mut().insert(
+        "registry-recipient-binding",
+        HeaderValue::from_static("registry-a"),
+    );
+
+    let code = ProblemCode::AuthenticationRefused;
+    assert!(ProblemCode::ALL.contains(&code));
+    for request in [missing, malformed, invalid, wrong_recipient] {
+        let response = app.clone().oneshot(request).await.expect("router responds");
+        assert_eq!(response.status().as_u16(), code.status());
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], code.code());
+        assert_eq!(problem["type"], code.type_uri());
+        assert_eq!(problem["title"], code.title());
+        assert_eq!(problem["status"], code.status());
+        assert_eq!(problem["detail"], code.description());
+        let rendered = problem.to_string();
+        for canary in [
+            "malformed-canary",
+            "invalid-credential-canary",
+            "wrong-recipient-canary",
+        ] {
+            assert!(!rendered.contains(canary));
+        }
+    }
+    let admitted = app
+        .oneshot(admitted)
+        .await
+        .expect("router admits the configured callback credential");
+    let unsupported = ProblemCode::UnsupportedMediaType;
+    assert_eq!(admitted.status().as_u16(), unsupported.status());
+    let problem = body_json(admitted).await;
+    assert_eq!(problem["code"], unsupported.code());
+    assert_eq!(problem["type"], unsupported.type_uri());
+    assert_eq!(problem["title"], unsupported.title());
+    assert_eq!(problem["status"], unsupported.status());
+    assert_eq!(problem["detail"], unsupported.description());
+    assert_eq!(
+        pool.status().size,
+        0,
+        "review-completion admission opened PostgreSQL"
+    );
 }
 
 #[tokio::test]
