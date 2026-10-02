@@ -84,6 +84,13 @@
   session count stays within `maxSize`. The read's audit attempt is still
   answered by exactly one `unfinished` response, and nothing the read
   collected is released.
+- The review worker backs off a review authority's result feed after a failed
+  fetch, waiting 1 second and doubling up to 60 seconds, and fetches it on
+  every pass again after the first successful page. It warns once when a feed
+  becomes unavailable and once when it recovers, and logs repeated failures at
+  debug. Previously an unavailable authority was asked for its feed, and
+  `BReg review result feeds are temporarily unavailable` was logged, about
+  once a second.
 
 ## v0.38.0 - 2026-10-01
 

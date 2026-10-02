@@ -493,6 +493,37 @@ impl ReviewAuthorityClient {
 
 pub struct ReviewAuthorityRegistry {
     authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>,
+    /// Result-feed backoff by authority. An authority with no entry is
+    /// available and its feed is fetched on every worker pass.
+    feed_backoff: std::sync::Mutex<BTreeMap<String, FeedBackoff>>,
+    feed_clock: FeedClock,
+}
+
+/// The time result-feed backoff is measured against: the runtime clock, or
+/// one a test drives.
+type FeedClock = Arc<dyn Fn() -> tokio::time::Instant + Send + Sync>;
+
+/// The first wait after a result feed fetch fails. Each further consecutive
+/// failure doubles it, up to [`FEED_BACKOFF_CEILING`].
+const FEED_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+/// The longest wait between fetches of an unavailable result feed, the same
+/// ceiling `next_result_poll_at` applies to result polls.
+const FEED_BACKOFF_CEILING: Duration = Duration::from_secs(60);
+
+/// The consecutive failures of one authority's result feed and when it may
+/// be fetched again.
+struct FeedBackoff {
+    failures: u32,
+    retry_at: tokio::time::Instant,
+}
+
+/// The wait after `failures` consecutive failed fetches: 1, 2, 4, ... seconds,
+/// capped at the ceiling.
+fn feed_backoff_delay(failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(6);
+    FEED_BACKOFF_INITIAL
+        .saturating_mul(1 << doublings)
+        .min(FEED_BACKOFF_CEILING)
 }
 
 impl ReviewAuthorityRegistry {
@@ -512,7 +543,82 @@ impl ReviewAuthorityRegistry {
         {
             return Err(ReviewConfigurationError);
         }
-        Ok(Self { authorities })
+        Ok(Self {
+            authorities,
+            feed_backoff: std::sync::Mutex::new(BTreeMap::new()),
+            feed_clock: Arc::new(tokio::time::Instant::now),
+        })
+    }
+
+    fn feed_backoff(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, FeedBackoff>> {
+        self.feed_backoff
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether `authority`'s result feed may be fetched on this pass: always
+    /// while it is available, and once its backoff has elapsed after failures.
+    fn feed_due(&self, authority: &str) -> bool {
+        let now = (self.feed_clock)();
+        self.feed_backoff()
+            .get(authority)
+            .is_none_or(|backoff| now >= backoff.retry_at)
+    }
+
+    /// Record the outcome of one result feed fetch. A failure schedules the
+    /// next fetch on a doubling backoff; a successful page ends the backoff.
+    /// Only the transitions warn, so an authority that stays unavailable is
+    /// logged once instead of on every pass.
+    fn record_feed_outcome(&self, authority: &str, available: bool) {
+        let mut backoff = self.feed_backoff();
+        if available {
+            if let Some(ended) = backoff.remove(authority) {
+                tracing::warn!(
+                    authority,
+                    failed_fetches = ended.failures,
+                    "BReg review result feed is available again"
+                );
+            }
+            return;
+        }
+        let failures = backoff
+            .get(authority)
+            .map_or(1, |backoff| backoff.failures.saturating_add(1));
+        let delay = feed_backoff_delay(failures);
+        backoff.insert(
+            authority.to_owned(),
+            FeedBackoff {
+                failures,
+                retry_at: (self.feed_clock)() + delay,
+            },
+        );
+        if failures == 1 {
+            tracing::warn!(
+                authority,
+                retry_in_seconds = delay.as_secs(),
+                "BReg review result feed is unavailable; retrying with backoff"
+            );
+        } else {
+            tracing::debug!(
+                authority,
+                failures,
+                retry_in_seconds = delay.as_secs(),
+                "BReg review result feed is still unavailable"
+            );
+        }
+    }
+
+    /// Measure result-feed backoff against `clock` instead of the runtime
+    /// clock, so a test can drive many worker passes without waiting.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_feed_clock_for_test(
+        mut self,
+        clock: Arc<dyn Fn() -> tokio::time::Instant + Send + Sync>,
+    ) -> Self {
+        self.feed_clock = clock;
+        self
     }
 
     pub fn contains(&self, authority: &str) -> bool {
@@ -802,24 +908,21 @@ impl ReviewAuthorityRegistry {
                 return Ok(true);
             }
         }
-        let mut unavailable_feeds = 0usize;
         let mut unavailable_lookups = 0usize;
+        // The feed also carries completions for submissions in every other
+        // state, including ones not yet bound or already given up, so it is
+        // read even for an authority with no accepted or cancelling review.
+        // A failing feed backs off on its own schedule instead.
         for authority in self.authorities.values() {
-            match consume_result_feed(client, authority).await {
-                Ok(true) => {
-                    if unavailable_feeds > 0 {
-                        tracing::warn!(
-                            unavailable = unavailable_feeds,
-                            "BReg review result feeds are temporarily unavailable"
-                        );
-                    }
-                    return Ok(true);
-                }
+            if !self.feed_due(&authority.authority) {
+                continue;
+            }
+            let outcome = consume_result_feed(client, authority).await;
+            self.record_feed_outcome(&authority.authority, outcome.is_ok());
+            match outcome {
+                Ok(true) => return Ok(true),
                 Ok(false) => {}
-                Err(_) => {
-                    authority_unavailable = true;
-                    unavailable_feeds += 1;
-                }
+                Err(_) => authority_unavailable = true,
             }
         }
         let rows = client
@@ -860,12 +963,6 @@ impl ReviewAuthorityRegistry {
             };
             match outcome {
                 Ok(true) => {
-                    if unavailable_feeds > 0 {
-                        tracing::warn!(
-                            unavailable = unavailable_feeds,
-                            "BReg review result feeds are temporarily unavailable"
-                        );
-                    }
                     if unavailable_lookups > 0 {
                         tracing::warn!(
                             unavailable = unavailable_lookups,
@@ -902,12 +999,6 @@ impl ReviewAuthorityRegistry {
                         .map_err(|_| MutationError::Unavailable)?;
                 }
             }
-        }
-        if unavailable_feeds > 0 {
-            tracing::warn!(
-                unavailable = unavailable_feeds,
-                "BReg review result feeds are temporarily unavailable"
-            );
         }
         if unavailable_lookups > 0 {
             tracing::warn!(
