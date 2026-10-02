@@ -1393,7 +1393,7 @@ jobs:
         run: cargo test --locked -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
 
       - name: Base Registry Engine WASM refusal suite
-        run: cargo test --locked -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler
+        run: cargo test --locked -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler --test hook_declaration
 
       - name: Base Registry Engine tooling WASM suites
         run: cargo test --locked -p registry-bregctl --features wasm

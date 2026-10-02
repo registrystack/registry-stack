@@ -15,8 +15,10 @@ use registry_breg::diagnostics::CompileFailure;
 use registry_breg::model::CompiledHookHandlerKind;
 use registry_platform_hooks::{HookDeclaration, HookHandlerKind, HookHandlerSource, HookPhase};
 use serde_json::{json, Value};
+#[cfg(feature = "wasm")]
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "wasm")]
 fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -233,7 +235,8 @@ fn an_after_phase_rhai_hook_refuses_a_handler_abi_version_one_does_not_define() 
 }
 
 /// A structurally valid handler guest: the platform byte ABI's exact export
-/// set, so the module also passes admission in a wasm-enabled build.
+/// set, so the module passes admission in a wasm-enabled build and a
+/// refusal in a build without the feature can only be about the build.
 fn wasm_guest_module() -> Vec<u8> {
     wat::parse_str(
         r#"(module
@@ -249,6 +252,7 @@ fn wasm_guest_module() -> Vec<u8> {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn an_after_phase_wasm_hook_compiles_into_a_local_delivery() {
     let mut hook = url_hook();
     hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
@@ -278,6 +282,7 @@ fn an_after_phase_wasm_hook_compiles_into_a_local_delivery() {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn an_after_phase_wasm_hook_requires_its_module_asset() {
     let mut hook = url_hook();
     hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
@@ -291,6 +296,7 @@ fn an_after_phase_wasm_hook_requires_its_module_asset() {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn an_after_phase_wasm_hook_refuses_module_text() {
     let mut hook = url_hook();
     hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
@@ -309,6 +315,48 @@ fn an_after_phase_wasm_hook_refuses_module_text() {
         &failure,
         "hook.handler.module_invalid",
         "WebAssembly binary",
+    );
+}
+
+/// A build without the `wasm` feature carries no WASM executor, so a WASM
+/// hook handler is refused at compile time with a diagnostic that names the
+/// build, before its module is looked up. Package loading rederives through
+/// the same compiler, so such a build also refuses to load a package a
+/// wasm-enabled build produced, rather than activating a hook that could only
+/// fail when it fires.
+#[test]
+#[cfg(not(feature = "wasm"))]
+fn a_wasm_hook_is_refused_by_a_build_without_wasm_support() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+                             "abi": "registry.hook-handler/v1"});
+    let failure = compile_with_assets(
+        &project_with_hooks(json!([hook])),
+        &[ModuleAssetSource {
+            module: None,
+            path: "hooks/case.wasm".to_owned(),
+            bytes: wasm_guest_module(),
+        }],
+    )
+    .expect_err("a WASM hook is refused without WASM support in the build");
+    assert_diagnostic(
+        &failure,
+        "hook.handler.wasm_build_unsupported",
+        "WASM hook handlers",
+    );
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "hook.handler.wasm_build_unsupported")
+        .expect("the build refusal is reported");
+    assert_eq!("entities[].hooks[].handler.kind", refusal.path);
+    assert!(
+        !failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code.starts_with("hook.handler.module")),
+        "the declared backend is refused before its module is checked: {:?}",
+        failure.diagnostics()
     );
 }
 

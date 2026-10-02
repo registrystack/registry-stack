@@ -265,6 +265,14 @@
   before. Rebuild a guest that needs one of those proposals without it.
   Release binaries no longer link `wasmtime-internal-cache`, whose build
   script embedded the source commit.
+- BREAKING: a build without the `wasm` feature refuses a WASM hook handler
+  at compile time with `hook.handler.wasm_build_unsupported` at
+  `entities[].hooks[].handler.kind`, as it already refuses a WASM action
+  handler. Such a build compiled the hook and loaded its package, and the
+  hook failed each time it fired. Package loading rederives through the
+  compiler, so the build now refuses that package at load. Deploy a package
+  with WASM hooks only on a build with the `wasm` feature, which default
+  builds carry.
 
 ## v0.38.0 - 2026-10-01
 

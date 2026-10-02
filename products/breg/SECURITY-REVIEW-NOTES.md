@@ -1478,3 +1478,43 @@ those proposals on the native backend).
 - **The handler SDK workspace is separate.** `products/breg/wasm-handler-sdk`
   has its own lock and builds Wasmtime with its default features for guest
   preinitialization; it ships in no release binary.
+
+## WASM hook handlers in a build without WASM support
+
+The change makes a build of `registry-breg` without the `wasm` feature refuse
+a WASM hook handler at compile time, the way it already refuses a WASM action
+handler (`validate_hook_assets` in `crates/registry-breg/src/compiler.rs`).
+It changes which packages such a build activates, a deployment default.
+
+### Threat
+
+1. A feature-off build compiles a project, or loads a package, that declares a
+   WASM hook. The hook is activated with no executor to run it, and each event
+   it handles fails late with a source failure instead of the package being
+   refused before it serves (BREG-SEC-149).
+
+### Enforcement and defaults
+
+- Without the `wasm` feature, every WASM hook handler yields
+  `hook.handler.wasm_build_unsupported` at `entities[].hooks[].handler.kind`
+  before its module is looked up, so the refusal names the build rather than
+  the module and no module diagnostic is reported.
+- Package loading rederives the package through the same compiler, so the
+  build refuses to load a package a wasm-enabled build produced.
+- Default builds carry the `wasm` feature and are unchanged. The runtime's
+  late refusal of a WASM hook in `hook_handler.rs` stays as a second line.
+
+### Tests
+
+`crates/registry-breg/tests/hook_declaration.rs`:
+`a_wasm_hook_is_refused_by_a_build_without_wasm_support`, run under
+`--no-default-features --features runtime,tooling` in the CI WASM refusal
+suite. It was written first and failed against the code before the change,
+which compiled the hook. The wasm-enabled hook admission tests in the same
+file run only in builds with the feature.
+
+### Accepted residuals
+
+- **Refusal at load, not at the hook.** A deployment that switches to a
+  feature-off build with a WASM-hook package active cannot load that package;
+  the operator replaces it or deploys a build with the feature.
