@@ -62,6 +62,19 @@
   at startup. A scrape that cannot read the queues omits every queue sample
   and writes `metrics.queue_sample.failed`. Anyone who reaches the metrics
   listener can read the package digest.
+- A migration lock another session holds is reported as an activation in
+  progress, never as an unreachable database. `migration reconcile` reads the
+  active identity without the lock, so its assessment reports `in_progress`
+  where it refused with `migration.reconcile.active_registry.unavailable`, and
+  `--execute` refuses with `migration.reconcile.outcome.in_progress`. `apply`
+  keeps `apply.database.unavailable` with a sentence that names the held lock
+  instead of `database.migrationUrlRef`. `history erase`,
+  `history rebaseline`, `field-encryption preflight`, and
+  `field-encryption erase-history` report a lock held while they read the
+  active identity as `<prefix>.active_registry.in_progress`, for example
+  `history.erase.active_registry.in_progress`. An assessment opens no audit
+  writer, so it answers when the audit destination cannot be written;
+  `--execute` still refuses with `migration.reconcile.audit.unavailable`.
 
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
