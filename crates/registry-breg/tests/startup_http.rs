@@ -618,6 +618,13 @@ fn expected_operational_event(
             None,
             Some("review.result_lookups.unavailable"),
         ),
+        OperationalEvent::MetricsQueueSampleFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::metrics",
+            "queue ages could not be sampled for this metrics scrape",
+            None,
+            Some("metrics.queue_sample.failed"),
+        ),
         OperationalEvent::WebhookStateTransitionFailed(code) => (
             OperationalLogLevel::Warn,
             "registry_breg::webhook",
@@ -831,6 +838,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
     events.push(OperationalEvent::ReviewWorkerIterationFailed);
     events.push(OperationalEvent::ReviewResultLookupsUnavailable);
+    events.push(OperationalEvent::MetricsQueueSampleFailed);
     for task in BackgroundTask::ALL {
         events.extend(
             BackgroundTaskStop::ALL
@@ -943,6 +951,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
                 | "registry_breg::webhook"
                 | "registry_breg::attachment_verification"
                 | "registry_breg::review"
+                | "registry_breg::metrics"
                 | "registry_breg::postgres"
         ));
     }

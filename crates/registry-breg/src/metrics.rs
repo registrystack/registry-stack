@@ -47,6 +47,9 @@ pub(crate) const UNMATCHED_ROUTE: &str = "unmatched";
 
 const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
 
+/// The bound on the one statement that samples the queue ages.
+const QUEUE_SAMPLE_STATEMENT_TIMEOUT: &str = "5s";
+
 /// Upper bounds, in seconds, of the request duration histogram.
 const DURATION_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0];
 
@@ -66,6 +69,10 @@ pub struct Metrics {
     /// The background workers this process runs, each with the handle its
     /// loop notes a completed iteration on.
     workers: Vec<(ProgressWorker, Arc<LastSuccess>)>,
+    /// Held while one scrape samples the queue ages, so concurrent scrapes
+    /// wait for each other and the metrics listener never holds more than
+    /// one pool connection.
+    queue_sample: tokio::sync::Mutex<()>,
 }
 
 /// A background worker reported by `breg_worker_last_success_age_seconds`.
@@ -95,6 +102,34 @@ impl ProgressWorker {
             Self::AttachmentVerification => "attachment_verification",
             Self::Review => "review",
             Self::SubjectAccessLogRetention => "subject_access_log_retention",
+        }
+    }
+}
+
+/// A durable work queue reported by `breg_queue_oldest_pending_age_seconds`.
+///
+/// The queue label is one of these fixed values, so the series count is
+/// bounded by the queues the schema holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum PendingQueue {
+    WebhookDelivery,
+    ReviewSubmission,
+    ReviewApplication,
+}
+
+impl PendingQueue {
+    pub const ALL: [Self; 3] = [
+        Self::WebhookDelivery,
+        Self::ReviewSubmission,
+        Self::ReviewApplication,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::WebhookDelivery => "webhook_delivery",
+            Self::ReviewSubmission => "review_submission",
+            Self::ReviewApplication => "review_application",
         }
     }
 }
@@ -215,6 +250,13 @@ impl Metrics {
         Self::default()
     }
 
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_pool_for_test(pool: RuntimePool) -> Self {
+        Self::new(pool)
+    }
+
     /// Report `worker`'s progress from the handle its loop notes successes
     /// on.
     #[must_use]
@@ -276,8 +318,9 @@ impl Metrics {
         *refusals.entry(key).or_default() += 1;
     }
 
-    /// Render the Prometheus text exposition of the current registry.
-    pub(crate) fn render(&self) -> String {
+    /// Render the Prometheus text exposition of the current registry, with
+    /// the queue ages when they were sampled for this scrape.
+    pub(crate) fn render(&self, queue_ages: Option<&[(PendingQueue, f64)]>) -> String {
         let series = self
             .series
             .lock()
@@ -366,8 +409,93 @@ impl Metrics {
                 ));
             }
         }
+        body.push_str(
+            "# HELP breg_queue_oldest_pending_age_seconds Seconds the oldest due item in each queue has waited to be claimed, sampled at scrape; zero when none is due.\n",
+        );
+        body.push_str("# TYPE breg_queue_oldest_pending_age_seconds gauge\n");
+        for (queue, seconds) in queue_ages.unwrap_or_default() {
+            body.push_str(&format!(
+                "breg_queue_oldest_pending_age_seconds{{queue=\"{}\"}} {seconds}\n",
+                queue.label()
+            ));
+        }
         body
     }
+
+    /// Sample how long the oldest due item in each queue has waited, at one
+    /// database instant. `None` when this registry has no pool, or when the
+    /// sample could not be read: that scrape then publishes no queue age,
+    /// so the series goes stale rather than reporting an empty queue, and a
+    /// failure emits a closed operational event.
+    pub(crate) async fn sample_queue_ages(&self) -> Option<Vec<(PendingQueue, f64)>> {
+        let pool = self.pool.as_ref()?;
+        let _sampling = self.queue_sample.lock().await;
+        match read_queue_ages(pool).await {
+            Ok(ages) => Some(ages),
+            Err(()) => {
+                crate::startup::OperationalEvent::MetricsQueueSampleFailed.emit();
+                None
+            }
+        }
+    }
+}
+
+/// Read every queue age in one bounded, read-only statement. The due
+/// predicates follow each worker's claim, so work scheduled for a later
+/// retry does not count as waiting.
+async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>, ()> {
+    let mut client = pool.get().await.map_err(|_| ())?;
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|_| ())?;
+    transaction
+        .execute(
+            "SELECT set_config('statement_timeout', $1, true)",
+            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
+        )
+        .await
+        .map_err(|_| ())?;
+    let row = transaction
+        .query_one(
+            &format!(
+                "SELECT
+                    COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
+                                      - MIN(state.next_attempt_at))::float8
+                                FROM {schema}.registry_webhook_delivery_state state
+                               WHERE state.state = 'pending'
+                                 AND state.next_attempt_at <= transaction_timestamp()), 0),
+                    COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
+                                      - MIN(s.next_attempt_at))::float8
+                                FROM registry_internal.registry_request_review_submissions s
+                               WHERE s.state IN ('pending','submitting','uncertain')
+                                 AND s.next_attempt_at <= transaction_timestamp()
+                                 AND (s.state <> 'submitting'
+                                      OR s.lease_until < transaction_timestamp())), 0),
+                    COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
+                                      - MIN(q.next_attempt_at))::float8
+                                FROM registry_internal.registry_request_application_jobs q
+                               WHERE q.state IN ('queued','applying')
+                                 AND q.attempt_count < $1
+                                 AND q.next_attempt_at <= transaction_timestamp()
+                                 AND {claimable}), 0)",
+                schema = crate::webhook::DELIVERY_SCHEMA,
+                claimable = crate::review_store::APPLICATION_JOB_CLAIMABLE,
+            ),
+            &[&crate::review_store::MAX_APPLICATION_ATTEMPTS],
+        )
+        .await
+        .map_err(|_| ())?;
+    let ages = PendingQueue::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(column, queue)| Ok((queue, row.try_get::<_, f64>(column)?)))
+        .collect::<Result<Vec<_>, tokio_postgres::Error>>()
+        .map_err(|_| ())?;
+    transaction.commit().await.map_err(|_| ())?;
+    Ok(ages)
 }
 
 fn labels(key: &HttpSeriesKey) -> String {
@@ -405,7 +533,8 @@ pub fn metrics_app(metrics: Arc<Metrics>) -> Router {
 }
 
 async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
-    let mut response = (StatusCode::OK, metrics.render()).into_response();
+    let queue_ages = metrics.sample_queue_ages().await;
+    let mut response = (StatusCode::OK, metrics.render(queue_ages.as_deref())).into_response();
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static(METRICS_MEDIA_TYPE));
@@ -428,7 +557,7 @@ mod tests {
     fn duration_buckets_are_cumulative_and_carry_an_infinite_bound() {
         let metrics = Metrics::default();
         metrics.record_http("/health", "GET", "success", Duration::from_millis(30));
-        let rendered = metrics.render();
+        let rendered = metrics.render(None);
         assert!(rendered.contains("le=\"0.025\"} 0\n"));
         assert!(rendered.contains("le=\"0.05\"} 1\n"));
         assert!(rendered.contains("le=\"+Inf\"} 1\n"));
@@ -454,7 +583,7 @@ mod tests {
             "client_error",
             Duration::from_millis(2),
         );
-        let rendered = metrics.render();
+        let rendered = metrics.render(None);
         assert_eq!(
             rendered
                 .matches("breg_http_requests_total{route=\"unmatched\"")
@@ -482,7 +611,7 @@ mod tests {
             "GET",
             AnonymousRefusalReason::ReadRequestInvalid,
         );
-        let rendered = metrics.render();
+        let rendered = metrics.render(None);
         assert!(rendered.contains(
             "breg_anonymous_refusals_total{route=\"/v1/records/cases\",method=\"GET\",reason=\"read_concealed\"} 2\n"
         ));
@@ -530,7 +659,7 @@ mod tests {
     fn pool_gauges_are_four_fixed_state_series() {
         let metrics = Metrics::default();
         metrics.record_http("/v1/records", "GET", "success", Duration::from_millis(1));
-        let rendered = metrics.render();
+        let rendered = metrics.render(None);
         for state in ["max_size", "size", "available", "waiting"] {
             assert_eq!(
                 rendered
@@ -553,7 +682,7 @@ mod tests {
         let metrics = Metrics::default()
             .with_worker_progress(ProgressWorker::Review, Arc::clone(&review))
             .with_worker_progress(ProgressWorker::Webhook, Arc::clone(&webhook));
-        let rendered = metrics.render();
+        let rendered = metrics.render(None);
         assert!(rendered.contains("# TYPE breg_worker_last_success_age_seconds gauge\n"));
         assert!(
             !rendered.contains("breg_worker_last_success_age_seconds{"),
@@ -561,7 +690,7 @@ mod tests {
         );
 
         review.record();
-        let rendered = metrics.render();
+        let rendered = metrics.render(None);
         let ages = rendered
             .lines()
             .filter_map(|line| line.strip_prefix("breg_worker_last_success_age_seconds{"))
@@ -583,6 +712,48 @@ mod tests {
         let labels: Vec<&str> = ProgressWorker::ALL
             .into_iter()
             .map(ProgressWorker::label)
+            .collect();
+        let unique: BTreeSet<&str> = labels.iter().copied().collect();
+        assert_eq!(unique.len(), labels.len(), "labels are distinct");
+        for label in labels {
+            assert!(
+                label
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character == '_'),
+                "{label} is a fixed snake_case token"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_ages_are_published_only_for_a_sampled_scrape() {
+        let metrics = Metrics::default();
+        let unsampled = metrics.render(None);
+        assert!(unsampled.contains("# TYPE breg_queue_oldest_pending_age_seconds gauge\n"));
+        assert!(
+            !unsampled.contains("breg_queue_oldest_pending_age_seconds{"),
+            "an unsampled scrape publishes no queue age:\n{unsampled}"
+        );
+
+        let sampled = metrics.render(Some(&[
+            (PendingQueue::WebhookDelivery, 0.0),
+            (PendingQueue::ReviewSubmission, 90.5),
+            (PendingQueue::ReviewApplication, 0.0),
+        ]));
+        for expected in [
+            "breg_queue_oldest_pending_age_seconds{queue=\"webhook_delivery\"} 0\n",
+            "breg_queue_oldest_pending_age_seconds{queue=\"review_submission\"} 90.5\n",
+            "breg_queue_oldest_pending_age_seconds{queue=\"review_application\"} 0\n",
+        ] {
+            assert!(sampled.contains(expected), "{expected} in:\n{sampled}");
+        }
+    }
+
+    #[test]
+    fn every_pending_queue_carries_a_distinct_snake_case_label() {
+        let labels: Vec<&str> = PendingQueue::ALL
+            .into_iter()
+            .map(PendingQueue::label)
             .collect();
         let unique: BTreeSet<&str> = labels.iter().copied().collect();
         assert_eq!(unique.len(), labels.len(), "labels are distinct");
