@@ -4339,23 +4339,34 @@ fn validate_read_path_permission_fields(
             }
         }
     }
+    let grant_path = format!(
+        "entities[id={}].accessProfiles[id={}].readPaths[path={}]",
+        source.id, access.id, grant.path
+    );
+    for (member, referenced) in [
+        ("readableFields", &grant.readable_fields),
+        ("filterableFields", &grant.filterable_fields),
+        ("sortableFields", &grant.sortable_fields),
+    ] {
+        for field in referenced {
+            if field != "id"
+                && !target_stored.contains_key(field.as_str())
+                && !target_derived.contains_key(field.as_str())
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.read_path.field_unknown",
+                    format!("{grant_path}.{member}[field={field}]"),
+                    "a read-path permission refers to an unknown target field",
+                ));
+            }
+        }
+    }
     let processed = grant
         .readable_fields
         .iter()
         .chain(&grant.filterable_fields)
         .chain(&grant.sortable_fields)
         .collect::<BTreeSet<_>>();
-    if processed.iter().any(|field| {
-        field.as_str() != "id"
-            && !target_stored.contains_key(field.as_str())
-            && !target_derived.contains_key(field.as_str())
-    }) {
-        errors.push(Diagnostic::error(
-            "access_profile.read_path.field_unknown",
-            "entities[].accessProfiles[].readPaths[]",
-            "a read-path permission refers to an unknown target field",
-        ));
-    }
     if access.anonymous {
         let mut causes: Vec<String> = Vec::new();
         for field in &processed {

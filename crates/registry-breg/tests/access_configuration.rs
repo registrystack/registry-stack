@@ -944,6 +944,45 @@ fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
 }
 
 #[test]
+fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
+    let mut value = source();
+    value["entities"][0]["readPaths"] =
+        json!([{"id":"children","through":"link","to":"child","route":"children"}]);
+    value["accessProfiles"][0]["permissions"][0]["readPaths"] = json!([{
+        "path":"children",
+        "readableFields":["missing-readable"],
+        "filterableFields":["missing-filterable"],
+        "sortableFields":["missing-sortable"]
+    }]);
+    value["entities"].as_array_mut().unwrap().extend([
+        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]}),
+        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
+    ]);
+
+    let failure = compile(&value).expect_err("unresolved read-path fields fail compilation");
+    let paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "access_profile.read_path.field_unknown")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "entities[id=entry].accessProfiles[id=reader].readPaths[path=children].filterableFields[field=missing-filterable]",
+            "entities[id=entry].accessProfiles[id=reader].readPaths[path=children].readableFields[field=missing-readable]",
+            "entities[id=entry].accessProfiles[id=reader].readPaths[path=children].sortableFields[field=missing-sortable]",
+        ]
+    );
+
+    let grant = &mut value["accessProfiles"][0]["permissions"][0]["readPaths"][0];
+    grant["readableFields"] = json!(["id", "code"]);
+    grant["filterableFields"] = json!(["code"]);
+    grant["sortableFields"] = json!(["code"]);
+    compile(&value).expect("known stored and engine-managed read-path fields compile");
+}
+
+#[test]
 fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
     let mut value = source();
     value["entities"][0]["constraints"] = json!([
