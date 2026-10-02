@@ -591,8 +591,16 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `apply` reports `apply.package.active_mismatch` | The runtime file's `package.root` names a package the database does not record as active and ready. Run `bregctl status` to read the active digest, set `package.root` to that package directory, and apply again. If the database has never been activated, apply with `--initial`. If the database is pinned in maintenance, run `migration reconcile`. Nothing was changed. |
 | `apply` reports `apply.history.coverage_incomplete` | Retained history coverage does not admit a successor: a `field-encryption erase-history` run has not finished, or an erasure reached the coverage baseline or left a gap the dedicated history-erasure coverage table does not record. Finish the erase-history run, or run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure), then apply the same package again. Maintenance state was not changed, so there is nothing to reconcile. |
 | `breg` refuses to start, or `doctor` reports `startup.instance_claim.mismatch` | The database is not the one the registry's instance claim names, as after a logical restore or a `pg_upgrade`. Stop the database the claim names for good, then run `instance-claim adopt` as [back up and restore the database](#back-up-and-restore-the-database) describes. |
+| `instance-claim adopt` reports `instance_claim.in_progress` | Another session held the migration lock past the lock timeout: an apply, another adoption, a `migration reconcile`, or other registry maintenance is running. Nothing was adopted and no authority was superseded. Wait for it to finish, then run the same adoption again. |
 | `migration reconcile` reports `in_progress`, or `--execute` refuses with `migration.reconcile.outcome.in_progress` | Another session holds the migration lock: an apply, an adoption, or another reconcile is running. Nothing was changed. Wait for it to finish, then assess again. |
 | The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
+
+{/* Evidence: crates/registry-breg/src/instance_claim.rs, adopt_in_transaction();
+    crates/registry-breg/src/history_maintenance.rs, lock_registry;
+    crates/registry-breg/tests/postgres_import_authority.rs,
+    adopting_under_a_held_migration_lock_is_reported_and_supersedes_nothing;
+    crates/registry-bregctl/src/lib.rs, instance_claim_failure(),
+    operator_maintenance_reports_a_held_migration_lock_as_in_progress. */}
 
 ## Next
 

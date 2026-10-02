@@ -24,6 +24,9 @@ pub(crate) enum RequestRetentionCliError {
     AttachmentStorageBindingMismatch,
     /// The erasure committed without its audit entry.
     ErasureUnaudited,
+    /// Another session held the exclusive migration lock past the lock
+    /// timeout.
+    MigrationLockHeld,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -154,6 +157,7 @@ fn map_error(error: RequestRetentionError) -> RequestRetentionCliError {
             RequestRetentionCliError::AttachmentStorageBindingMismatch
         }
         RequestRetentionError::ErasureUnaudited => RequestRetentionCliError::ErasureUnaudited,
+        RequestRetentionError::MigrationLockHeld => RequestRetentionCliError::MigrationLockHeld,
         RequestRetentionError::ActiveProposalRequiresRebase
         | RequestRetentionError::Unavailable => RequestRetentionCliError::Operator,
     }
@@ -174,6 +178,14 @@ mod tests {
         assert_eq!(
             map_error(RequestRetentionError::ErasureUnaudited),
             RequestRetentionCliError::ErasureUnaudited
+        );
+    }
+
+    #[test]
+    fn a_held_migration_lock_stays_distinct_from_a_refused_operation() {
+        assert_eq!(
+            map_error(RequestRetentionError::MigrationLockHeld),
+            RequestRetentionCliError::MigrationLockHeld
         );
     }
 

@@ -18,6 +18,7 @@ use crate::history_commit::{
     allocate_revision_commit, CommitAllocation, HistoryCommitError, RevisionCommitMember,
 };
 use crate::history_context::CommitOrigin;
+use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::model::{
     CompiledChangeRequestRetentionMode, CompiledEntity, CompiledRegistry, HttpMethod,
 };
@@ -47,6 +48,8 @@ pub enum RequestRetentionError {
     RetainMode,
     #[error("attachment storage or verification binding differs from the registry pin; restore the original configuration")]
     AttachmentStorageBindingMismatch,
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
     #[error("request retention state is unavailable")]
     Unavailable,
     /// The erasure committed, but the audit destination refused the entry
@@ -507,7 +510,10 @@ impl RequestRetentionOperatorService {
                 // The erasure failed before its commit, so nothing
                 // committed: answer the request with the refusal or the
                 // failure.
-                let outcome = if error == RequestRetentionError::Unavailable {
+                let outcome = if matches!(
+                    error,
+                    RequestRetentionError::Unavailable | RequestRetentionError::MigrationLockHeld
+                ) {
                     "failed"
                 } else {
                     "refused"
@@ -826,13 +832,14 @@ impl RequestRetentionOperatorService {
             .map_err(|_| RequestRetentionError::Unavailable)?;
         set_local_timeout(&transaction, "lock_timeout", self.lock_timeout).await?;
         set_local_timeout(&transaction, "statement_timeout", self.statement_timeout).await?;
-        transaction
-            .execute(
-                "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-                &[&self.lock_key.get()],
-            )
+        lock_registry(&transaction, self.lock_key)
             .await
-            .map_err(map_retention_error)?;
+            .map_err(|error| match error {
+                HistoryMaintenanceError::MigrationLockHeld => {
+                    RequestRetentionError::MigrationLockHeld
+                }
+                _ => RequestRetentionError::Unavailable,
+            })?;
         verify_catalog_identity_for_catalog(
             &transaction,
             &self.expected,

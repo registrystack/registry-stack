@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
+use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::mutation::{erase_expired_action_evidence, MutationError};
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
@@ -231,13 +232,12 @@ impl ActionEvidenceRetentionOperatorService {
             "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
             &[&format!("{}ms", self.lock_timeout.as_millis()), &format!("{}ms", self.statement_timeout.as_millis())],
         ).await.map_err(|_| MutationError::Unavailable)?;
-        transaction
-            .execute(
-                "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-                &[&self.lock_key.get()],
-            )
+        lock_registry(&transaction, self.lock_key)
             .await
-            .map_err(|_| MutationError::Unavailable)?;
+            .map_err(|error| match error {
+                HistoryMaintenanceError::MigrationLockHeld => MutationError::MigrationLockHeld,
+                _ => MutationError::Unavailable,
+            })?;
         verify_catalog_identity_for_catalog(
             &transaction,
             &self.expected,

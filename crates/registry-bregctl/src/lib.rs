@@ -2400,14 +2400,12 @@ where
             let outcome = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| ())
+                .map_err(|_| registry_breg::mutation::MutationError::Unavailable)
                 .and_then(|runtime| {
-                    runtime
-                        .block_on(registry_breg::action_evidence_maintenance::erase_expired(
-                            &args.runtime_config,
-                            &args.before,
-                        ))
-                        .map_err(|_| ())
+                    runtime.block_on(registry_breg::action_evidence_maintenance::erase_expired(
+                        &args.runtime_config,
+                        &args.before,
+                    ))
                 });
             return match outcome {
                 Ok(erased) => {
@@ -2415,13 +2413,17 @@ where
                         serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
                             .map_err(io::Error::other).and_then(|()| writeln!(stdout))
                     } else {
-                        render_report("Erased expired action Evidence.", &[("erased", erased.to_string())], stdout)
+                        render_report(
+                            "Erased expired action Evidence.",
+                            &[("erased", erased.to_string())],
+                            stdout,
+                        )
                     };
                     write_result(result, stderr)
                 }
-                Err(()) => write_failure(&source_failure("evidence-retention erase-expired",
-                    diagnostic("evidence_retention.unavailable", "evidenceRetention", "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff."),
-                    DiagnosticArtifact::EvidenceRetentionOperation, SuggestedAction::VerifyEvidenceRetentionOperation), format, stdout, stderr),
+                Err(error) => {
+                    write_failure(&evidence_retention_failure(error), format, stdout, stderr)
+                }
             };
         }
         Command::ReviewRecovery(args) => {
@@ -2689,39 +2691,87 @@ fn request_retention_erase(
     })
 }
 
+fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> FailureReport {
+    let command = "evidence-retention erase-expired";
+    match error {
+        registry_breg::mutation::MutationError::MigrationLockHeld => source_failure(
+            command,
+            diagnostic(
+                "evidence_retention.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was erased. Retry the same erasure once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+        ),
+        _ => source_failure(
+            command,
+            diagnostic(
+                "evidence_retention.unavailable",
+                "evidenceRetention",
+                "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff.",
+            ),
+            DiagnosticArtifact::EvidenceRetentionOperation,
+            SuggestedAction::VerifyEvidenceRetentionOperation,
+        ),
+    }
+}
+
 fn request_retention_failure(
     command: &'static str,
     error: RequestRetentionCliError,
 ) -> FailureReport {
-    let (code, message) = match error {
+    let (code, path, message, artifact, action) = match error {
+        RequestRetentionCliError::MigrationLockHeld => (
+            "request_retention.in_progress",
+            "database",
+            "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. A detail erasure that committed before the wait stays erased, which `request-retention dry-run` shows. Retry the same operation once it releases",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+        ),
         RequestRetentionCliError::Operator => (
             "request_retention.operation.refused",
+            "requestRetention",
             "the request retention operation was refused",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::ActiveDetailPinned => (
             "request_retention.detail.pinned",
+            "requestRetention",
             "active request detail is still pinned",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::RetainMode => (
             "request_retention.mode.retain",
+            "requestRetention",
             "the request retention policy does not permit operator erasure",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::ErasureUnaudited => (
             "request_retention.erasure.unaudited",
+            "requestRetention",
             "the erasure committed but its audit entry was not recorded; restore the audit destination, then reconcile the erased request against the database",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::AttachmentStorageBindingMismatch => (
             "request_retention.attachment_storage.binding_mismatch",
+            "requestRetention",
             "restore the original attachment storage binding and verification policy before retrying; the registry pin, retained content, or deletion tombstones still require them",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
     };
     FailureReport {
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
-            diagnostic(code, "requestRetention", message),
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+            diagnostic(code, path, message),
+            artifact,
+            action,
         )],
     }
 }
@@ -2768,13 +2818,14 @@ fn import_authority_failure(
     error: ImportAuthorityCliError,
 ) -> FailureReport {
     use registry_breg::import_authority::ImportAuthorityError;
-    let (failure_diagnostic, action) = match error {
+    let (failure_diagnostic, artifact, action) = match error {
         ImportAuthorityCliError::RuntimeConfigPath => (
             diagnostic(
                 "import_authority.runtime_config.invalid",
                 "runtimeConfig",
                 "the runtime configuration must be an absolute path",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectCommandUsage,
         ),
         ImportAuthorityCliError::ExpiresIn => (
@@ -2783,6 +2834,7 @@ fn import_authority_failure(
                 "expiresIn",
                 "the authority window must be a whole number of minutes, hours, or days (for example 90m, 12h, or 7d), from one minute to at most 30 days",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::AuthorityId => (
@@ -2791,6 +2843,7 @@ fn import_authority_failure(
                 "authorityId",
                 "the authority identifier must be the UUID `import-authority open` or `import-authority list` reported",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::InvalidInput) => (
@@ -2799,6 +2852,7 @@ fn import_authority_failure(
                 "importAuthority",
                 "the request is out of bounds: the entity, profile, operator reference, and reason must be present and free of control characters, the volume at least one, and each pinned input digest 64 lowercase hexadecimal characters, named once, at most 16",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotImportable) => (
@@ -2807,6 +2861,7 @@ fn import_authority_failure(
                 "entity",
                 "the entity and profile do not name an `import` grant of the active package; check them with `bregctl explain access`",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen) => (
@@ -2815,6 +2870,7 @@ fn import_authority_failure(
                 "entity",
                 "an import authority is already open for this entity; close it with `bregctl import-authority close` before opening another",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotFound) => (
@@ -2823,6 +2879,7 @@ fn import_authority_failure(
                 "authorityId",
                 "no import authority has this identifier; `bregctl import-authority list` names the recorded ones",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotReady) => (
@@ -2831,7 +2888,17 @@ fn import_authority_failure(
                 "importAuthority",
                 "the registry is not ready for import authority maintenance; apply the configured package first",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld) => (
+            diagnostic(
+                "import_authority.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. No authority changed. Retry the same command once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable) => (
             diagnostic(
@@ -2839,17 +2906,14 @@ fn import_authority_failure(
                 "importAuthority",
                 "the import authority store is unavailable; verify the runtime configuration, the migration authority, the active package binding, and a keyed audit profile",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
     };
     FailureReport {
         ok: false,
         command,
-        diagnostics: vec![tool_diagnostic(
-            failure_diagnostic,
-            DiagnosticArtifact::ImportAuthority,
-            action,
-        )],
+        diagnostics: vec![tool_diagnostic(failure_diagnostic, artifact, action)],
     }
 }
 
@@ -2889,6 +2953,15 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             ),
             DiagnosticArtifact::InstanceClaim,
             SuggestedAction::VerifyInstanceClaim,
+        ),
+        InstanceClaimCliError::Claim(InstanceClaimError::MigrationLockHeld) => (
+            diagnostic(
+                "instance_claim.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was adopted and no authority was superseded. Retry the same adoption once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(message)) => (
             diagnostic("instance_claim.package.refused", "package", &message),
@@ -16375,6 +16448,79 @@ fn an_active_registry_read_reports_a_held_migration_lock_as_in_progress() {
             diagnostic.message
         );
     }
+}
+
+/// A migration lock held when an operator maintenance transaction takes it
+/// has its own `in_progress` code for each command, with the wait-and-retry
+/// action, and is never reported as unavailable storage.
+#[cfg(test)]
+#[test]
+fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
+    use registry_breg::import_authority::ImportAuthorityError;
+    use registry_breg::instance_claim::InstanceClaimError;
+    use registry_breg::mutation::MutationError;
+
+    for (report, command, code) in [
+        (
+            evidence_retention_failure(MutationError::MigrationLockHeld),
+            "evidence-retention erase-expired",
+            "evidence_retention.in_progress",
+        ),
+        (
+            request_retention_failure(
+                "request-retention erase",
+                RequestRetentionCliError::MigrationLockHeld,
+            ),
+            "request-retention erase",
+            "request_retention.in_progress",
+        ),
+        (
+            import_authority_failure(
+                "import-authority open",
+                ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld),
+            ),
+            "import-authority open",
+            "import_authority.in_progress",
+        ),
+        (
+            instance_claim_failure(
+                "instance-claim adopt",
+                InstanceClaimCliError::Claim(InstanceClaimError::MigrationLockHeld),
+            ),
+            "instance-claim adopt",
+            "instance_claim.in_progress",
+        ),
+    ] {
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+            "{code}"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("another session held the exclusive migration lock"),
+            "{code}: {}",
+            diagnostic.message
+        );
+        for fragment in ["unavailable", "migrationUrlRef"] {
+            assert!(
+                !diagnostic.message.contains(fragment),
+                "{code} {fragment}: {}",
+                diagnostic.message
+            );
+        }
+    }
+    let unavailable = evidence_retention_failure(MutationError::Unavailable);
+    assert_eq!(
+        unavailable.diagnostics[0].code,
+        "evidence_retention.unavailable"
+    );
 }
 
 /// A migration lock held when a history maintenance transaction takes it has

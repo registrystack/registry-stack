@@ -93,8 +93,16 @@
   `field_encryption.erase_history.in_progress`, with the same suggested
   action, where they reported `history.erase.unavailable`,
   `history.rebaseline.unavailable`, and
-  `field_encryption.erase_history.unavailable`. Automation that retries those
-  unavailable codes on contention must match the `in_progress` codes.
+  `field_encryption.erase_history.unavailable`. `evidence-retention
+  erase-expired`, the `request-retention` commands, `import-authority open`,
+  `close`, and `close-expired`, and `instance-claim adopt` report the same
+  held lock as `evidence_retention.in_progress`,
+  `request_retention.in_progress`, `import_authority.in_progress`, and
+  `instance_claim.in_progress`, where they reported
+  `evidence_retention.unavailable`, `request_retention.operation.refused`,
+  `import_authority.unavailable`, and `instance_claim.unavailable`.
+  Automation that retries those unavailable codes on contention must match
+  the `in_progress` codes.
 - `bregctl apply` and `bregctl plan` take `--expected-digest`, the
   `sha256:` package digest `plan` and `package` print. A package at
   `--package` with another digest is refused with
