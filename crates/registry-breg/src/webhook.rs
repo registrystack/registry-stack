@@ -50,6 +50,7 @@ use crate::field_encryption::FieldEncryptionService;
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
+use crate::package::PackageError;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
 use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
@@ -77,8 +78,13 @@ const _: () = assert!(
         == registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
 );
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum WebhookOperatorError {
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them.
+    #[error("{0}")]
+    PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
     #[error("webhook operator request is unavailable")]
     Unavailable,
 }
@@ -97,9 +103,12 @@ pub struct WebhookOperatorService {
 impl WebhookOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
         let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
-        let package = config
-            .load_active_package()
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let package = config.load_active_package().map_err(|error| match error {
+            PackageError::ExpectedDigestMismatch(mismatch) => {
+                WebhookOperatorError::PackagePinMismatch(mismatch)
+            }
+            _ => WebhookOperatorError::Unavailable,
+        })?;
         let connection = config
             .runtime_database_connection_config()
             .map_err(|_| WebhookOperatorError::Unavailable)?;

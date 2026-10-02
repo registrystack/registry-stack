@@ -2656,6 +2656,12 @@ pub enum MutationError {
     /// that lock and can produce this cause.
     #[error("another session held the exclusive migration lock past the lock timeout")]
     MigrationLockHeld,
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them. Only operator maintenance
+    /// loads the configured package through this error and can produce it.
+    #[error("{0}")]
+    PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
 }
 
 #[cfg(feature = "postgres-test")]

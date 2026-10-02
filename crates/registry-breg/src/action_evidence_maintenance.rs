@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::audit::RegistryAudit;
 use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::mutation::{erase_expired_action_evidence, MutationError};
+use crate::package::PackageError;
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
@@ -41,9 +42,12 @@ impl ActionEvidenceRetentionOperatorService {
             return Err(MutationError::InvalidRequest);
         }
         let config = load_runtime_config(path).map_err(|_| MutationError::Unavailable)?;
-        let package = config
-            .load_active_package()
-            .map_err(|_| MutationError::Unavailable)?;
+        let package = config.load_active_package().map_err(|error| match error {
+            PackageError::ExpectedDigestMismatch(mismatch) => {
+                MutationError::PackagePinMismatch(mismatch)
+            }
+            _ => MutationError::Unavailable,
+        })?;
         let pool = config
             .runtime_database_connection_config()
             .map_err(|_| MutationError::Unavailable)?

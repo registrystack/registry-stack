@@ -11,9 +11,10 @@ use std::path::Path;
 use registry_breg::contract::{Crs84BboxSource, EventTrigger, FieldTypeSource};
 use registry_breg::model::CompiledRegistry;
 use registry_breg::webhook::{
-    WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookOperatorService,
+    WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookOperatorError, WebhookOperatorService,
     MAX_WEBHOOK_STATUS_RESULTS,
 };
+use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use serde::Serialize;
 use serde_json::{json, Map, Number, Value};
@@ -32,11 +33,14 @@ const SAMPLE_REQUEST_TARGET: &str = "<configured-webhook-request-target>";
 const SAMPLE_SIGNATURE: &str = "v1=<computed-at-delivery>";
 const MAX_SCHEMA_SYNTHESIS_DEPTH: usize = 16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WebhookLifecycleError {
     Event,
     Sample,
     Operator,
+    /// The configured active package does not match the runtime file's
+    /// `package.expectedDigest` pin.
+    PackagePinMismatch(PackageDigestMismatch),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -202,16 +206,15 @@ pub(crate) fn list(
     })
 }
 
-fn list_with<E>(
+fn list_with(
     runtime_config: &Path,
     limit: u16,
-    operation: impl FnOnce(&Path, u16) -> Result<Vec<WebhookDeliveryStatus>, E>,
+    operation: impl FnOnce(&Path, u16) -> Result<Vec<WebhookDeliveryStatus>, WebhookOperatorError>,
 ) -> Result<WebhookListOutcome, WebhookLifecycleError> {
     if !runtime_config.is_absolute() || limit == 0 || limit > MAX_WEBHOOK_STATUS_RESULTS {
         return Err(WebhookLifecycleError::Operator);
     }
-    let deliveries =
-        operation(runtime_config, limit).map_err(|_| WebhookLifecycleError::Operator)?;
+    let deliveries = operation(runtime_config, limit).map_err(operator_failure)?;
     Ok(WebhookListOutcome {
         deliveries: deliveries.into_iter().map(list_item).collect(),
     })
@@ -240,12 +243,12 @@ pub(crate) fn replay(
     )
 }
 
-fn replay_with<E>(
+fn replay_with(
     runtime_config: &Path,
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, E>,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, WebhookOperatorError>,
 ) -> Result<WebhookReplayOutcome, WebhookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
@@ -256,7 +259,7 @@ fn replay_with<E>(
     }
     let event_id = Uuid::parse_str(event_id).map_err(|_| WebhookLifecycleError::Operator)?;
     let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
-        .map_err(|_| WebhookLifecycleError::Operator)?;
+        .map_err(operator_failure)?;
     Ok(WebhookReplayOutcome {
         event_id: event_id.to_string(),
         delivery_id: delivery_id.to_owned(),
@@ -287,12 +290,12 @@ pub(crate) fn discard(
     )
 }
 
-fn discard_with<E>(
+fn discard_with(
     runtime_config: &Path,
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, E>,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, WebhookOperatorError>,
 ) -> Result<WebhookDiscardOutcome, WebhookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
@@ -303,13 +306,24 @@ fn discard_with<E>(
     }
     let event_id = Uuid::parse_str(event_id).map_err(|_| WebhookLifecycleError::Operator)?;
     let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
-        .map_err(|_| WebhookLifecycleError::Operator)?;
+        .map_err(operator_failure)?;
     Ok(WebhookDiscardOutcome {
         event_id: event_id.to_string(),
         delivery_id: delivery_id.to_owned(),
         generation,
         state: "discarded",
     })
+}
+
+/// A package pin mismatch keeps both digests; every other operator failure
+/// stays the one value-free refusal.
+fn operator_failure(error: WebhookOperatorError) -> WebhookLifecycleError {
+    match error {
+        WebhookOperatorError::PackagePinMismatch(mismatch) => {
+            WebhookLifecycleError::PackagePinMismatch(mismatch)
+        }
+        WebhookOperatorError::Unavailable => WebhookLifecycleError::Operator,
+    }
 }
 
 fn operator_runtime() -> Result<tokio::runtime::Runtime, WebhookLifecycleError> {
@@ -614,7 +628,7 @@ mod tests {
                 called.set(true);
                 assert_eq!(runtime_config, Path::new("/operator/runtime.yaml"));
                 assert_eq!(limit, 17);
-                Ok::<_, ()>(vec![WebhookDeliveryStatus {
+                Ok::<_, WebhookOperatorError>(vec![WebhookDeliveryStatus {
                     event_id,
                     compiled_delivery_id: "record.record-created-v1.webhook".to_owned(),
                     generation: 2,
@@ -655,7 +669,7 @@ mod tests {
                 assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
                 assert_eq!(delivery_id, "record.record-created-v1.webhook");
                 assert_eq!(expected_generation, 7);
-                Ok::<_, ()>(8)
+                Ok::<_, WebhookOperatorError>(8)
             },
         )
         .expect("delegated replay succeeds");
@@ -678,7 +692,7 @@ mod tests {
                 assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
                 assert_eq!(delivery_id, "record.record-created-v1.webhook");
                 assert_eq!(expected_generation, 7);
-                Ok::<_, ()>(8)
+                Ok::<_, WebhookOperatorError>(8)
             },
         )
         .expect("delegated discard succeeds");
@@ -720,7 +734,7 @@ mod tests {
                     generation,
                     |_, _, _, _| {
                         called.set(true);
-                        Ok::<_, ()>(2)
+                        Ok::<_, WebhookOperatorError>(2)
                     },
                 ),
                 Err(WebhookLifecycleError::Operator)
@@ -738,7 +752,7 @@ mod tests {
                 1,
                 |_, _, _, _| {
                     called.set(true);
-                    Ok::<_, ()>(2)
+                    Ok::<_, WebhookOperatorError>(2)
                 },
             ),
             Err(WebhookLifecycleError::Operator)
