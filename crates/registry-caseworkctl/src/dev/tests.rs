@@ -4306,7 +4306,7 @@ fn dev_stop_remove_clears_the_retained_audit_directory() {
     // directory is what the next start appends a fresh stream to.
     private::check(&audit, true).unwrap();
     assert_eq!(fs::read_dir(&audit).unwrap().count(), 0);
-    retained_audit(&state.root()).unwrap();
+    retained_audit(&state).unwrap();
 }
 
 #[test]
@@ -4375,4 +4375,47 @@ fn a_failed_supervised_start_names_the_log_directory_without_its_cause() {
     for leaked in ["hunter2", "secret-token", root.path().to_str().unwrap()] {
         assert!(!rendered.contains(leaked), "{leaked} leaked: {rendered}");
     }
+}
+
+#[test]
+fn a_first_bridged_source_start_checks_the_audit_before_the_bridge_writes_its_configuration() {
+    let workspace = crate::canonical_tempdir();
+    let project = workspace.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    let project = fs::canonicalize(project).unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let description = project.join(&policy.sources[0].description);
+    fs::create_dir_all(description.parent().unwrap()).unwrap();
+    fs::write(&description, b"synthetic source description").unwrap();
+    let registry = RegistrySession::new();
+    // A directory is refused by name as the casework executable, the first
+    // prerequisite the start locates after its audit check.
+    let not_executable = workspace.path().join("casework");
+    fs::create_dir(&not_executable).unwrap();
+
+    let refusal = start(StartArgs {
+        project: project.clone(),
+        clients_file: None,
+        casework_port: Some(free_port()),
+        issuer_port: None,
+        issuer_project: None,
+        database_port: Some(free_port()),
+        source_project: vec![format!(
+            "professional-licences={}",
+            registry.project.display()
+        )],
+        casework_bin: Some(not_executable),
+        docker_bin: None,
+        bregctl_bin: Some(registry.executable.clone()),
+    })
+    .unwrap_err();
+
+    // The bridge writes the operator configuration only after the start has
+    // located its prerequisites, so the audit check must not need that file:
+    // this start gets past it to the casework prerequisite.
+    assert!(!project.join(".casework/dev/operator.yaml").exists());
+    assert!(
+        format!("{refusal:#}").contains("installed executable must be a regular file"),
+        "{refusal:#}"
+    );
 }

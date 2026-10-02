@@ -1418,7 +1418,7 @@ fn start(args: StartArgs) -> Result<Value> {
         initialize(&root, &state, &clients)?;
         read_state(&root)?
     };
-    retained_audit(&root)?;
+    retained_audit(&state)?;
     if clients.integrations.is_some() {
         integrations::validate_bindings(&root, &project)?;
     }
@@ -3402,11 +3402,13 @@ fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
 /// the start locates its prerequisites or launches the supervisor. The
 /// supervisor's own refusal reaches this terminal only as a bounded string,
 /// so its cause could not be named from there.
-fn retained_audit(root: &Path) -> Result<()> {
-    let operator: Value =
-        serde_norway::from_slice(&private::read(&root.join("operator.yaml"), MAX_BYTES)?)?;
+///
+/// The audit section is derived from the session state, as every writer of
+/// `operator.yaml` derives it, because the source bridge writes that file only
+/// after the start has located its prerequisites.
+fn retained_audit(state: &State) -> Result<()> {
     let audit: registry_casework::AuditConfig =
-        serde_json::from_value(operator["audit"].clone())
+        serde_json::from_value(config::operator(state)["audit"].clone())
             .context("the development operator configuration has no valid audit section")?;
     let service = audit.destination()?;
     let operator = service.for_process("caseworkctl")?;
