@@ -45,7 +45,7 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts,
+    erase_record_history, HistoryErasureError, HistoryErasureRequest, HistoryErasureTimeouts,
     RecordHistoryErasureTarget, HISTORY_ERASURE_AUDIT_SCHEMA,
 };
 use registry_breg::history_rebaseline::{
@@ -265,6 +265,115 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
         .expect("the refused rebaseline's answer");
     assert_eq!(answer["record"]["outcome"], "unfinished");
 
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+/// A migration lock another session holds when an erasure or a rebaseline
+/// takes it is reported as a held lock, never as unavailable storage, and
+/// changes nothing: each answers its request entry as unfinished, and the
+/// same erasure and a rebaseline both succeed once the lock releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x88; 32].into())
+        .expect("test owns a keyed audit profile");
+    let kept = Uuid::parse_str(KEPT_RECORD).unwrap();
+    let erased = Uuid::parse_str(ERASED_RECORD).unwrap();
+    seed_two_records(&database.admin, &mut migration, &registry, kept, erased).await;
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("a second session takes the migration lock");
+    let erasure_audit = database.audit(audit_profile.clone());
+    let erasure = |lock: Duration| HistoryErasureRequest {
+        expected: &expected,
+        migration_role: &database.migration_role,
+        lock_key,
+        timeouts: HistoryErasureTimeouts::new(lock, Duration::from_secs(5)).unwrap(),
+        audit: &erasure_audit,
+        operator_reference: "operator-run-1",
+        reason: "approved retention request",
+        target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
+    };
+
+    assert_eq!(
+        erase_record_history(&mut migration, erasure(Duration::from_millis(200)))
+            .await
+            .err(),
+        Some(HistoryErasureError::MigrationLockHeld),
+        "an erasure that cannot take the held lock reports it as held"
+    );
+    assert_eq!(
+        rebaseline_history_coverage(
+            &mut migration,
+            HistoryRebaselineRequest {
+                expected: &expected,
+                migration_role: &database.migration_role,
+                lock_key,
+                timeouts: HistoryRebaselineTimeouts::new(
+                    Duration::from_millis(200),
+                    Duration::from_secs(5),
+                )
+                .unwrap(),
+                audit: &database.audit(audit_profile.clone()),
+                operator_reference: OPERATOR_CANARY,
+                registry: &registry,
+            },
+        )
+        .await
+        .err(),
+        Some(HistoryRebaselineError::MigrationLockHeld),
+        "a rebaseline that cannot take the held lock reports it as held"
+    );
+    for schema in [
+        HISTORY_ERASURE_AUDIT_SCHEMA,
+        HISTORY_REBASELINE_AUDIT_SCHEMA,
+    ] {
+        let entries = database
+            .audit_entries()
+            .into_iter()
+            .filter(|entry| entry["schema"] == schema)
+            .collect::<Vec<_>>();
+        let phases = entries
+            .iter()
+            .map(|entry| entry["phase"].as_str().expect("phase"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phases,
+            ["request", "response"],
+            "{schema}: a refused run answers its request without a committed response"
+        );
+        assert_eq!(entries[1]["record"]["outcome"], "unfinished", "{schema}");
+    }
+
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the second session releases the migration lock");
+    erase_record_history(&mut migration, erasure(Duration::from_secs(5)))
+        .await
+        .expect("the same erasure succeeds once the lock releases");
+    rebaseline(
+        &mut migration,
+        &database,
+        &expected,
+        lock_key,
+        &audit_profile,
+        &registry,
+    )
+    .await
+    .expect("a rebaseline succeeds once the lock releases");
+
+    holder_task.abort();
     migration_task.abort();
     database.cleanup().await;
 }

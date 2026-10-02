@@ -85,7 +85,15 @@
   `apply.database.unavailable`. Automation that matches
   `apply.database.unavailable` to detect contention must match
   `apply.database.in_progress`. A database that cannot be reached keeps
-  `apply.database.unavailable`.
+  `apply.database.unavailable`. `history erase`, `history rebaseline`, and
+  `field-encryption erase-history` report a lock held when their maintenance
+  transaction takes it as `history.erase.in_progress`,
+  `history.rebaseline.in_progress`, and
+  `field_encryption.erase_history.in_progress`, with the same suggested
+  action, where they reported `history.erase.unavailable`,
+  `history.rebaseline.unavailable`, and
+  `field_encryption.erase_history.unavailable`. Automation that retries those
+  unavailable codes on contention must match the `in_progress` codes.
 
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
