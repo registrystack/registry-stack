@@ -32,6 +32,16 @@
   the earlier catalog. A project that declares no immediate actions is unchanged, and
   removing a project's last immediate action removes the index.
 
+- A hook proposal whose action commits effects at different revisions, such
+  as a create beside a patch, records the same resulting revision on its
+  delivery row on every database collation. The revision comes from the
+  effect whose identifier sorts first under the `"C"` collation, so effect
+  identifiers that a locale collation orders differently from byte order,
+  such as `followup` and `follow-up-tally` under `en_US.utf8`, no longer
+  change it, on the first application or on receipt recovery. Stored action
+  results, the compiled DDL, and the managed catalog are unchanged, so no
+  package rebuild is needed.
+
 - `manifestProjection.vocabularies[].concepts` may label every code that any
   visible field of the vocabulary admits. Previously the compiler checked
   labels against only the last visible field it visited, so a field narrowed
