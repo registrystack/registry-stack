@@ -173,6 +173,12 @@ fn outcome_guest(document: &[u8]) -> String {
     )
 }
 
+/// Assemble a wat fixture into the WebAssembly binary the executor admits;
+/// the executor does not parse the text format.
+fn assemble(text: &str) -> Vec<u8> {
+    wat::parse_str(text).expect("the wat fixture assembles")
+}
+
 /// Run `document` through the platform executor and the shared decode and
 /// validation layers, exactly as a WASM handler's outcome bytes would flow.
 fn wasm_outcome(
@@ -186,7 +192,7 @@ fn wasm_outcome(
         .expect("fixture actions declare a handler");
     let executor = executor(backend);
     let prepared = executor
-        .prepare(outcome_guest(document.as_bytes()).as_bytes())
+        .prepare(&assemble(&outcome_guest(document.as_bytes())))
         .expect("outcome guest passes ABI validation");
     let invoked = executor
         .invoke(&prepared, br#"{"inputs":{}}"#)
@@ -644,7 +650,7 @@ fn oversized_outcome_is_rejected_before_decoding() {
     for backend in backends() {
         let executor = executor(backend);
         let prepared = executor
-            .prepare(wat.as_bytes())
+            .prepare(&assemble(wat))
             .expect("guest passes ABI validation");
         match executor.invoke(&prepared, b"x").unwrap_err() {
             InvokeError::OutputTooLarge { len, max } => {

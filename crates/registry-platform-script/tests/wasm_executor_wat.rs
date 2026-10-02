@@ -2,9 +2,10 @@
 //! Integration tests for the WASM executor, written against inline wat
 //! modules that implement (or deliberately break) the guest byte ABI.
 //!
-//! `Module::new` accepts wat text because the wasmtime `wat` feature is on by
-//! default; the `wat_text_is_accepted` test pins that fact (a binary-only
-//! decoder would reject these strings before export validation could run).
+//! The executor admits only WebAssembly binaries: Wasmtime is built without
+//! its `wat` feature, so each fixture is assembled with the `wat` crate before
+//! it is prepared, and the `wat_text_is_refused` test pins that text never
+//! reaches export validation.
 //!
 //! Every test that prepares or invokes a module runs under both execution
 //! backends: `prepare` compiles through the engine, so even validation-only
@@ -83,6 +84,11 @@ fn backends() -> [Backend; 2] {
     [Backend::Native, Backend::Pulley]
 }
 
+/// Assemble a wat fixture into the binary the executor admits.
+fn wasm(text: &str) -> Vec<u8> {
+    wat::parse_str(text).expect("the wat fixture assembles")
+}
+
 fn err_of<T>(result: Result<T, InvokeError>) -> InvokeError {
     match result {
         Ok(_) => panic!("expected an error, got a success"),
@@ -91,12 +97,59 @@ fn err_of<T>(result: Result<T, InvokeError>) -> InvokeError {
 }
 
 #[test]
-fn wat_text_is_accepted() {
+fn wat_text_is_refused() {
     for backend in backends() {
-        // "(module)" is valid wat and an invalid binary; reaching export
-        // validation (MissingExport) proves the text path compiled it.
+        // "(module)" is valid wat and an invalid binary; refusing it before
+        // export validation (InvalidModule, not MissingExport) proves the
+        // engine carries no text decoder.
         let err = err_of(executor(backend).prepare(b"(module)"));
-        assert!(matches!(err, InvokeError::MissingExport { .. }), "{err}");
+        assert!(matches!(err, InvokeError::InvalidModule { .. }), "{err}");
+    }
+}
+
+/// A module implementing the byte ABI with `fields` added beside its exports.
+fn abi_module_with(fields: &str) -> Vec<u8> {
+    wasm(&format!(
+        r#"(module {fields}
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 4096))
+  (func (export "handle") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "result_ptr") (result i32) (i32.const 1024))
+  (func (export "result_len") (result i32) (i32.const 0)))"#
+    ))
+}
+
+#[test]
+fn gc_exceptions_and_externref_are_refused() {
+    // Wasmtime is built without its `gc` feature, so the proposals that need
+    // a collector are not admitted on either backend.
+    let refused = [
+        ("gc types", "(type (struct (field i32)))"),
+        ("exception handling", "(tag $t) (func (throw $t))"),
+        ("externref", "(func (param externref))"),
+    ];
+    for backend in backends() {
+        for (proposal, fields) in refused {
+            let err = err_of(executor(backend).prepare(&abi_module_with(fields)));
+            assert!(
+                matches!(err, InvokeError::InvalidModule { .. }),
+                "{proposal} on {backend:?}: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn funcref_tables_and_indirect_calls_are_admitted() {
+    // The reference-types encoding an ordinary compiled guest emits (indirect
+    // calls through more than one funcref table) stays admitted without `gc`.
+    let fields = "(type $v (func)) (table 1 funcref) (table $b 1 funcref) (func $n) \
+                  (elem (table $b) (i32.const 0) func $n) \
+                  (func (call_indirect $b (type $v) (i32.const 0)))";
+    for backend in backends() {
+        executor(backend)
+            .prepare(&abi_module_with(fields))
+            .unwrap_or_else(|err| panic!("{backend:?}: {err}"));
     }
 }
 
@@ -105,7 +158,7 @@ fn happy_path_roundtrip_and_stats() {
     for backend in backends() {
         let exec = executor(backend);
         let prepared = exec
-            .prepare(guest_wat(ECHO_HANDLE, ECHO_LEN).as_bytes())
+            .prepare(&wasm(&guest_wat(ECHO_HANDLE, ECHO_LEN)))
             .expect("wat guest passes validation");
         let ok = exec.invoke(&prepared, b"hello registry").expect("echo");
         assert_eq!(ok.output, b"hello registry");
@@ -121,7 +174,7 @@ fn fuel_exhaustion() {
         let exec = Executor::new(backend, budgets(|b| b.fuel = 5_000))
             .expect("fixed engine config is valid");
         let prepared = exec
-            .prepare(guest_wat(SPIN_HANDLE, "(i32.const 0)").as_bytes())
+            .prepare(&wasm(&guest_wat(SPIN_HANDLE, "(i32.const 0)")))
             .expect("wat guest passes validation");
         let err = err_of(exec.invoke(&prepared, b"x"));
         assert!(matches!(err, InvokeError::FuelExhausted), "{err}");
@@ -136,7 +189,7 @@ fn epoch_deadline_with_host_driven_ticks() {
         let exec = Executor::new(backend, budgets(|b| b.epoch_deadline_ticks = 3))
             .expect("fixed engine config is valid");
         let prepared = exec
-            .prepare(guest_wat(SPIN_HANDLE, "(i32.const 0)").as_bytes())
+            .prepare(&wasm(&guest_wat(SPIN_HANDLE, "(i32.const 0)")))
             .expect("wat guest passes validation");
 
         let done = AtomicBool::new(false);
@@ -170,7 +223,7 @@ fn epoch_deadline_with_ticker() {
     for backend in backends() {
         let exec = executor(backend);
         let prepared = exec
-            .prepare(guest_wat(SPIN_HANDLE, "(i32.const 0)").as_bytes())
+            .prepare(&wasm(&guest_wat(SPIN_HANDLE, "(i32.const 0)")))
             .expect("wat guest passes validation");
         let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
             .expect("the epoch ticker starts");
@@ -189,7 +242,7 @@ fn per_call_epoch_deadline_replaces_a_larger_budget_default() {
     // the deadline-replacement semantics, not backend speed.
     let exec = executor(Backend::Native);
     let prepared = exec
-        .prepare(guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)").as_bytes())
+        .prepare(&wasm(&guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)")))
         .expect("wat guest passes validation");
     let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
         .expect("the epoch ticker starts");
@@ -211,7 +264,7 @@ fn per_call_epoch_deadline_replaces_a_smaller_budget_default() {
         let exec = Executor::new(backend, budgets(|b| b.epoch_deadline_ticks = 1))
             .expect("fixed engine config is valid");
         let prepared = exec
-            .prepare(guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)").as_bytes())
+            .prepare(&wasm(&guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)")))
             .expect("wat guest passes validation");
         let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
             .expect("the epoch ticker starts");
@@ -250,7 +303,7 @@ fn huge_initial_memory_is_denied() {
             1,
         );
         let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
+        match err_of(exec.prepare(&wasm(&wat))) {
             InvokeError::MemoryLimitExceeded { requested, max } => {
                 assert_eq!(requested, 600 * 64 * 1024);
                 assert_eq!(max, 32 * MIB);
@@ -272,7 +325,7 @@ fn declared_memory_minimum_at_the_ceiling_is_allowed() {
         );
         let exec = executor(backend);
         let prepared = exec
-            .prepare(wat.as_bytes())
+            .prepare(&wasm(&wat))
             .expect("a minimum at the ceiling is within the budget");
         let ok = exec.invoke(&prepared, b"x").expect("echo");
         assert_eq!(ok.output, b"x");
@@ -294,7 +347,7 @@ fn growth_denial_is_recorded_and_guest_visible() {
   (i32.const 0)"#;
         let exec = executor(backend);
         let prepared = exec
-            .prepare(guest_wat(handle, "(i32.const 1)").as_bytes())
+            .prepare(&wasm(&guest_wat(handle, "(i32.const 1)")))
             .expect("wat guest passes validation");
         let ok = exec.invoke(&prepared, b"x").expect("denial is not a trap");
         assert_eq!(ok.output, b"1");
@@ -309,7 +362,10 @@ fn oversized_output_is_rejected_before_allocation() {
     for backend in backends() {
         let exec = executor(backend);
         let prepared = exec
-            .prepare(guest_wat("(i32.const 0)", "(i32.const 999_999_999)").as_bytes())
+            .prepare(&wasm(&guest_wat(
+                "(i32.const 0)",
+                "(i32.const 999_999_999)",
+            )))
             .expect("wat guest passes validation");
         match err_of(exec.invoke(&prepared, b"x")) {
             InvokeError::OutputTooLarge { len, max } => {
@@ -331,7 +387,7 @@ fn alloc_returning_zero_is_rejected() {
         );
         let exec = executor(backend);
         let prepared = exec
-            .prepare(wat.as_bytes())
+            .prepare(&wasm(&wat))
             .expect("wat guest passes validation");
         let err = err_of(exec.invoke(&prepared, b"payload"));
         assert!(
@@ -351,7 +407,7 @@ fn alloc_returning_out_of_bounds_pointer_is_rejected() {
         );
         let exec = executor(backend);
         let prepared = exec
-            .prepare(wat.as_bytes())
+            .prepare(&wasm(&wat))
             .expect("wat guest passes validation");
         let err = err_of(exec.invoke(&prepared, b"payload"));
         assert!(
@@ -370,7 +426,7 @@ fn imports_are_rejected() {
             1,
         );
         let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
+        match err_of(exec.prepare(&wasm(&wat))) {
             InvokeError::UnsupportedImport { module, name } => {
                 assert_eq!(module.as_str(), "env");
                 assert_eq!(name.as_str(), "log");
@@ -390,7 +446,7 @@ fn missing_export_is_rejected() {
 )"#;
     for backend in backends() {
         let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
+        match err_of(exec.prepare(&wasm(wat))) {
             InvokeError::MissingExport { name } => assert_eq!(name, "result_len"),
             err => panic!("wrong error: {err}"),
         }
@@ -459,7 +515,7 @@ fn wrong_signature_is_rejected() {
         let wat = wat_with_export(broken, replacement);
         for backend in backends() {
             let exec = executor(backend);
-            match err_of(exec.prepare(wat.as_bytes())) {
+            match err_of(exec.prepare(&wasm(&wat))) {
                 InvokeError::ExportTypeMismatch { name } => assert_eq!(name, broken, "{wat}"),
                 err => panic!("{broken}: wrong error: {err}"),
             }
@@ -476,7 +532,7 @@ fn wrong_export_kind_is_rejected() {
         let wat = wat_with_export(broken, &replacement);
         for backend in backends() {
             let exec = executor(backend);
-            match err_of(exec.prepare(wat.as_bytes())) {
+            match err_of(exec.prepare(&wasm(&wat))) {
                 InvokeError::ExportTypeMismatch { name } => assert_eq!(name, broken, "{wat}"),
                 err => panic!("{broken}: wrong error: {err}"),
             }
@@ -491,7 +547,7 @@ fn unknown_extra_export_is_rejected() {
     let wat = format!("{}  (func (export \"extra\"))\n)", &base[..base.len() - 1]);
     for backend in backends() {
         let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
+        match err_of(exec.prepare(&wasm(&wat))) {
             InvokeError::UnexpectedExport { name } => assert_eq!(name.as_str(), "extra"),
             err => panic!("wrong error: {err}"),
         }
@@ -506,7 +562,7 @@ fn optional_init_export_is_accepted() {
     );
     for backend in backends() {
         let exec = executor(backend);
-        assert!(exec.prepare(wat.as_bytes()).is_ok());
+        assert!(exec.prepare(&wasm(&wat)).is_ok());
     }
 }
 
@@ -518,7 +574,7 @@ fn init_export_with_wrong_signature_is_rejected() {
     );
     for backend in backends() {
         let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
+        match err_of(exec.prepare(&wasm(&wat))) {
             InvokeError::ExportTypeMismatch { name } => assert_eq!(name, "init"),
             err => panic!("wrong error: {err}"),
         }
@@ -530,8 +586,8 @@ fn oversized_module_is_rejected_before_compiling() {
     for backend in backends() {
         let exec = Executor::new(backend, budgets(|b| b.max_module_bytes = 8))
             .expect("fixed engine config is valid");
-        let bytes = guest_wat("(i32.const 0)", "(i32.const 0)");
-        match err_of(exec.prepare(bytes.as_bytes())) {
+        let bytes = wasm(&guest_wat("(i32.const 0)", "(i32.const 0)"));
+        match err_of(exec.prepare(&bytes)) {
             InvokeError::ModuleTooLarge { size, max } => {
                 assert_eq!(max, 8);
                 assert_eq!(size, bytes.len());
@@ -550,7 +606,7 @@ fn shared_memory_fails_validation() {
             1,
         );
         let exec = executor(backend);
-        let err = err_of(exec.prepare(wat.as_bytes()));
+        let err = err_of(exec.prepare(&wasm(&wat)));
         assert!(matches!(err, InvokeError::InvalidModule { .. }), "{err}");
     }
 }
@@ -566,7 +622,7 @@ fn relaxed_simd_fails_validation() {
       (v128.const i32x4 0 0 0 0))))"#;
     for backend in backends() {
         let exec = executor(backend);
-        let err = err_of(exec.prepare(wat.as_bytes()));
+        let err = err_of(exec.prepare(&wasm(wat)));
         assert!(matches!(err, InvokeError::InvalidModule { .. }), "{err}");
     }
 }
@@ -576,7 +632,7 @@ fn memory64_fails_validation() {
     let wat = r#"(module (memory i64 1))"#;
     for backend in backends() {
         let exec = executor(backend);
-        let err = err_of(exec.prepare(wat.as_bytes()));
+        let err = err_of(exec.prepare(&wasm(wat)));
         assert!(matches!(err, InvokeError::InvalidModule { .. }), "{err}");
     }
 }
@@ -596,7 +652,7 @@ fn instances_do_not_leak_state_across_calls() {
         );
         let exec = executor(backend);
         let prepared = exec
-            .prepare(wat.as_bytes())
+            .prepare(&wasm(&wat))
             .expect("wat guest passes validation");
         let first = exec.invoke(&prepared, b"x").expect("first call");
         let second = exec.invoke(&prepared, b"x").expect("second call");
@@ -611,7 +667,7 @@ fn oversized_input_is_rejected() {
         let exec = Executor::new(backend, budgets(|b| b.max_input_bytes = 4))
             .expect("fixed engine config is valid");
         let prepared = exec
-            .prepare(guest_wat(ECHO_HANDLE, ECHO_LEN).as_bytes())
+            .prepare(&wasm(&guest_wat(ECHO_HANDLE, ECHO_LEN)))
             .expect("wat guest passes validation");
         match err_of(exec.invoke(&prepared, b"12345")) {
             InvokeError::InputTooLarge { size, max } => {
@@ -628,7 +684,10 @@ fn guest_status_codes_map_to_distinct_errors() {
         let exec = executor(backend);
         for (status, expect_malformed) in [(1i32, true), (2, false), (7, false)] {
             let prepared = exec
-                .prepare(guest_wat(&format!("(i32.const {status})"), "(i32.const 0)").as_bytes())
+                .prepare(&wasm(&guest_wat(
+                    &format!("(i32.const {status})"),
+                    "(i32.const 0)",
+                )))
                 .expect("wat guest passes validation");
             match err_of(exec.invoke(&prepared, b"x")) {
                 InvokeError::GuestMalformedRequest => assert!(expect_malformed),
@@ -651,7 +710,7 @@ fn out_of_bounds_result_pointer_is_rejected() {
         );
         let exec = executor(backend);
         let prepared = exec
-            .prepare(wat.as_bytes())
+            .prepare(&wasm(&wat))
             .expect("wat guest passes validation");
         let err = err_of(exec.invoke(&prepared, b"x"));
         assert!(
@@ -666,7 +725,7 @@ fn negative_result_len_is_rejected() {
     for backend in backends() {
         let exec = executor(backend);
         let prepared = exec
-            .prepare(guest_wat("(i32.const 0)", "(i32.const -1)").as_bytes())
+            .prepare(&wasm(&guest_wat("(i32.const 0)", "(i32.const -1)")))
             .expect("wat guest passes validation");
         match err_of(exec.invoke(&prepared, b"x")) {
             InvokeError::OutputLengthNegative(len) => assert_eq!(len, -1),
@@ -685,42 +744,10 @@ fn negative_result_ptr_is_rejected() {
         );
         let exec = executor(backend);
         let prepared = exec
-            .prepare(wat.as_bytes())
+            .prepare(&wasm(&wat))
             .expect("wat guest passes validation");
         match err_of(exec.invoke(&prepared, b"x")) {
             InvokeError::OutputPointerNegative(ptr) => assert_eq!(ptr, -16),
-            err => panic!("wrong error: {err}"),
-        }
-    }
-}
-
-#[test]
-fn module_rejection_summary_keeps_the_summary_limit_not_the_name_limit() {
-    // The compile error's host-generated text (the unknown-local report with
-    // the full name) is far longer than the 64-byte name limit; summaries
-    // are bounded by their own 256-byte limit, so the text must survive
-    // past 64 bytes at the error surface.
-    let long_name = "a".repeat(180);
-    let wat = format!(
-        r#"(module
-  (memory (export "memory") 1)
-  (func (export "alloc") (param i32) (result i32) (local.get ${long_name}))
-  (func (export "handle") (param i32 i32) (result i32) (i32.const 0))
-  (func (export "result_ptr") (result i32) (i32.const 0))
-  (func (export "result_len") (result i32) (i32.const 0))
-)"#
-    );
-    for backend in backends() {
-        let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
-            InvokeError::InvalidModule { summary } => {
-                assert!(
-                    summary.as_str().len() > 64,
-                    "summary was cut at the name limit: {:?}",
-                    summary.as_str()
-                );
-                assert!(summary.as_str().len() <= 256);
-            }
             err => panic!("wrong error: {err}"),
         }
     }
@@ -731,7 +758,7 @@ fn guest_trap_is_surfaced_with_bounded_description() {
     for backend in backends() {
         let exec = executor(backend);
         let prepared = exec
-            .prepare(guest_wat("(unreachable)", "(i32.const 0)").as_bytes())
+            .prepare(&wasm(&guest_wat("(unreachable)", "(i32.const 0)")))
             .expect("wat guest passes validation");
         match err_of(exec.invoke(&prepared, b"x")) {
             InvokeError::Trap { description } => {

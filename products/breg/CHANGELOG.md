@@ -257,6 +257,14 @@
   the first package and advances it by one each time
   `bregctl dev prepare-source` prepares a successor, and its reports carry it
   as `packageSequence` beside `packageDigest`.
+- BREAKING: the WebAssembly executor builds Wasmtime without its default
+  features, so a WASM action or hook handler module that uses GC types,
+  exception handling, or `externref` is refused at compile time with
+  `action.handler.module_invalid` or `hook.handler.module_invalid`. Modules
+  that use linear memory, funcref tables, and indirect calls are admitted as
+  before. Rebuild a guest that needs one of those proposals without it.
+  Release binaries no longer link `wasmtime-internal-cache`, whose build
+  script embedded the source commit.
 
 ## v0.38.0 - 2026-10-01
 
