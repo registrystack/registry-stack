@@ -812,3 +812,34 @@ fn check_against_a_breg_package_carries_the_bregctl_refusal_and_its_release() {
         "{message}"
     );
 }
+
+#[test]
+fn source_add_refuses_a_casework_endpoint_without_echoing_it() {
+    let root = crate::canonical_tempdir();
+    let registry = root.path().join("registry");
+    let project = root.path().join("project");
+    std::fs::create_dir(&registry).unwrap();
+    crate::project::init(&project, "professional-review").unwrap();
+
+    let (exit, report) = invoke(arguments(&[
+        "source",
+        "add",
+        registry.to_str().unwrap(),
+        "--project",
+        project.to_str().unwrap(),
+        "--source-id",
+        "professional-licences",
+        "--casework-endpoint",
+        "http://reader:hunter2@127.0.0.1:18095",
+        "--bregctl-bin",
+        root.path().join("absent-bregctl").to_str().unwrap(),
+    ]));
+
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    let text = report.to_string();
+    assert!(!text.contains("hunter2"), "{text}");
+    assert!(!text.contains("reader:"), "{text}");
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("--casework-endpoint"), "{message}");
+    assert_matches_contract("casework endpoint refusal", "SourceAddReport", &report);
+}

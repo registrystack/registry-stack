@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `caseworkctl source add --casework-endpoint URL` sets the Casework endpoint
+  of the local BReg review authority it writes, for a Casework session on a
+  port other than the default 8092. Without the option the output is
+  unchanged. The option accepts only an exact loopback HTTP URL and refuses
+  anything else without repeating the value; an existing authority that
+  differs only in its endpoint is refused with a message naming the option
+  (#1435).
+
 ## v0.38.0 - 2026-10-01
 
 - BREAKING: package activation (`caseworkctl plan`, `apply`, and `status`) and

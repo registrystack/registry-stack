@@ -37,8 +37,29 @@ const PURPOSE_CLAIM: &str = "registry_purpose";
 const LEGACY_LIFECYCLE_HOOK_ID: &str = "casework-lifecycle-v1";
 /// BReg's identifier limit, which a lifecycle hook identifier must fit.
 const BREG_IDENTIFIER_MAXIMUM_BYTES: usize = 64;
+/// The local Casework endpoint a generated BReg review authority calls when
+/// `--casework-endpoint` is not given: the default `caseworkctl dev` port.
+pub(crate) const DEFAULT_CASEWORK_ENDPOINT: &str = "http://127.0.0.1:8092";
+
+/// Accept the `--casework-endpoint` value only in the exact loopback HTTP
+/// shape `bregctl dev` admits for a local review authority, and return it
+/// unchanged so the written endpoint is the one the caller named. The
+/// refusal never repeats the value, which may carry credentials.
+fn local_casework_endpoint(raw: &str) -> Result<&str> {
+    let accepted = reqwest::Url::parse(raw).is_ok_and(|endpoint| {
+        endpoint.scheme() == "http"
+            && endpoint.host_str() == Some("127.0.0.1")
+            && endpoint.port().is_some_and(|port| port != 0)
+            && registry_platform_httputil::client::ServiceBaseUrl::new(endpoint).is_ok()
+    });
+    if !accepted {
+        bail!("--casework-endpoint must be the local Casework session's exact loopback HTTP URL, http://127.0.0.1:PORT with an explicit nonzero port and an optional path, without credentials, query, or fragment; nothing was read or written");
+    }
+    Ok(raw)
+}
 
 pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
+    let casework_endpoint = local_casework_endpoint(&args.casework_endpoint)?;
     validate_id(&args.source_id)?;
     let registry = canonical_dir(&args.registry, "BReg project")?;
     let project = canonical_dir(&args.project, "Casework project")?;
@@ -103,8 +124,13 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         &registry_id,
         &candidate_explanation,
     )?;
-    let dev_clients_plan =
-        plan_breg_dev_clients(&registry, &project, &authored, &candidate_requests)?;
+    let dev_clients_plan = plan_breg_dev_clients(
+        &registry,
+        &project,
+        &authored,
+        &candidate_requests,
+        casework_endpoint,
+    )?;
     findings.extend(dev_clients_plan.findings.iter().cloned());
     let description =
         source_description(&args.source_id, &candidate_requests, &candidate_explanation)?;
@@ -140,7 +166,13 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         report["candidateRuntimeBinding"] = serde_norway::from_str(&binding)?;
         return Ok(report);
     }
-    let retry = retry_command(&registry, &project, &args.source_id, &args.bregctl_bin);
+    let retry = retry_command(
+        &registry,
+        &project,
+        &args.source_id,
+        &args.bregctl_bin,
+        casework_endpoint,
+    );
     require_outputs_absent_or_exact(
         &description_path,
         &description,
@@ -1784,6 +1816,7 @@ fn plan_breg_dev_clients(
     project: &Path,
     authored: &Value,
     requests: &[SelectedRequest<'_>],
+    casework_endpoint: &str,
 ) -> Result<DevClientsPlan> {
     let casework_dev_clients_path = project.join("dev-clients.yaml");
     let dev_clients_path = registry.join("dev-clients.yaml");
@@ -1953,7 +1986,7 @@ fn plan_breg_dev_clients(
                 "the Casework project's dev-clients.yaml must bind the admitted producer profile",
             )?;
         let local_review_authority = json!({
-            "endpoint":"http://127.0.0.1:8092",
+            "endpoint":casework_endpoint,
             "profile":request.producer_profile,
             "producerId":request.producer_id,
             "recoveryDays":request.recovery_days,
@@ -2035,6 +2068,15 @@ fn apply_local_review_authority_candidate(
         .as_object_mut()
         .context("BReg dev-clients.yaml reviewAuthorities must be an object")?;
     match authorities.get(authority_id) {
+        Some(existing)
+            if existing != authority
+                && existing.get("endpoint") != authority.get("endpoint")
+                && without_endpoint(existing) == without_endpoint(authority) =>
+        {
+            bail!(
+                "BReg local review authority {authority_id} in dev-clients.yaml already calls another Casework endpoint, and nothing was written. Repeat source add with --casework-endpoint set to the endpoint that authority names, the URL the local Casework session serves"
+            )
+        }
         Some(existing) if existing != authority => {
             bail!(
                 "BReg local review authority {authority_id} already exists with different content"
@@ -2050,6 +2092,16 @@ fn apply_local_review_authority_candidate(
         .expect("dev-client changes are an array")
         .push(json!({"file":"dev-clients.yaml","path":format!("/reviewAuthorities/{authority_id}"),"operation":"ensure_exact"}));
     Ok(())
+}
+
+/// A planned or authored review authority without its endpoint, so a
+/// conflict that differs only in the endpoint can name the option that sets it.
+fn without_endpoint(authority: &Value) -> Value {
+    let mut authority = authority.clone();
+    if let Some(object) = authority.as_object_mut() {
+        object.remove("endpoint");
+    }
+    authority
 }
 
 fn apply_local_review_executor_candidates(
@@ -2655,8 +2707,16 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
 /// The exact `caseworkctl source add --apply` invocation printed as recovery
 /// after a move-aside. It carries `--bregctl-bin` only when the caller chose
 /// a bregctl other than the default, so the retry picks up the same binary
-/// this run checked and verified against.
-fn retry_command(registry: &Path, project: &Path, source_id: &str, bregctl_bin: &Path) -> String {
+/// this run checked and verified against. It carries `--casework-endpoint`
+/// only when the caller named an endpoint other than the default, so the
+/// retry writes the same local review authority.
+fn retry_command(
+    registry: &Path,
+    project: &Path,
+    source_id: &str,
+    bregctl_bin: &Path,
+    casework_endpoint: &str,
+) -> String {
     let mut retry = format!(
         "caseworkctl source add {} --project {} --source-id {} --apply",
         shell_word(&registry.display().to_string()),
@@ -2666,6 +2726,10 @@ fn retry_command(registry: &Path, project: &Path, source_id: &str, bregctl_bin: 
     if bregctl_bin != Path::new("bregctl") {
         retry.push_str(" --bregctl-bin ");
         retry.push_str(&shell_word(&bregctl_bin.display().to_string()));
+    }
+    if casework_endpoint != DEFAULT_CASEWORK_ENDPOINT {
+        retry.push_str(" --casework-endpoint ");
+        retry.push_str(&shell_word(casework_endpoint));
     }
     retry
 }
@@ -3246,6 +3310,7 @@ mod tests {
             Path::new("/casework"),
             "professional-licences",
             Path::new("bregctl"),
+            DEFAULT_CASEWORK_ENDPOINT,
         );
         assert_eq!(retry, RETRY);
     }
@@ -3257,8 +3322,68 @@ mod tests {
             Path::new("/casework"),
             "professional-licences",
             Path::new("/opt/my bregctl"),
+            DEFAULT_CASEWORK_ENDPOINT,
         );
         assert_eq!(retry, format!("{RETRY} --bregctl-bin '/opt/my bregctl'"));
+    }
+
+    #[test]
+    fn source_apply_retry_keeps_a_non_default_casework_endpoint() {
+        let retry = retry_command(
+            Path::new("/registry"),
+            Path::new("/casework"),
+            "professional-licences",
+            Path::new("bregctl"),
+            "http://127.0.0.1:18095",
+        );
+        assert_eq!(
+            retry,
+            format!("{RETRY} --casework-endpoint http://127.0.0.1:18095")
+        );
+    }
+
+    #[test]
+    fn casework_endpoint_defaults_to_the_casework_dev_port() {
+        assert_eq!(DEFAULT_CASEWORK_ENDPOINT, "http://127.0.0.1:8092");
+    }
+
+    #[test]
+    fn casework_endpoint_accepts_exact_loopback_http_urls_unchanged() {
+        for endpoint in [
+            DEFAULT_CASEWORK_ENDPOINT,
+            "http://127.0.0.1:18095",
+            "http://127.0.0.1:18095/",
+            "http://127.0.0.1:18095/reviews/",
+        ] {
+            assert_eq!(local_casework_endpoint(endpoint).unwrap(), endpoint);
+        }
+    }
+
+    #[test]
+    fn casework_endpoint_refuses_other_urls_without_echoing_them() {
+        for endpoint in [
+            "",
+            "not a url",
+            "https://127.0.0.1:18095",
+            "http://localhost:18095",
+            "http://10.0.0.5:18095",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://reader:hunter2@127.0.0.1:18095",
+            "http://hunter2@127.0.0.1:18095",
+            "http://127.0.0.1:18095/?token=hunter2",
+            "http://127.0.0.1:18095/#hunter2",
+            "http://127.0.0.1:18095//hunter2/",
+        ] {
+            let error = local_casework_endpoint(endpoint)
+                .expect_err("only an exact loopback HTTP endpoint is accepted");
+            let message = format!("{error:#}");
+            assert!(message.contains("--casework-endpoint"), "{message}");
+            assert!(message.contains("127.0.0.1"), "{message}");
+            assert!(!message.contains("hunter2"), "{message}");
+            assert!(!message.contains("reader"), "{message}");
+            assert!(!message.contains("18095"), "{message}");
+        }
     }
 
     #[test]
@@ -4031,6 +4156,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
 
@@ -4166,6 +4292,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
 
@@ -4236,6 +4363,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .expect_err("the merged local client count must be bounded");
         assert!(format!("{error:#}").contains("32-client bound"));
@@ -4267,6 +4395,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .expect_err("one BReg access profile cannot bind two local clients");
         assert!(format!("{error:#}").contains(READER_CLIENT_ID));
@@ -4321,6 +4450,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         let requester = plan
@@ -4353,6 +4483,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         let clients = plan.patch.as_array().unwrap().clone();
@@ -4394,6 +4525,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         let write = plan.write.unwrap();
@@ -4421,6 +4553,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         let write = first.write.unwrap();
@@ -4430,6 +4563,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         let rewrite = second.write.unwrap();
@@ -4460,6 +4594,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap_err();
         let message = format!("{error:#}");
@@ -4469,6 +4604,101 @@ mod tests {
             fs::read(registry.path().join("dev-clients.yaml")).unwrap(),
             original
         );
+    }
+
+    #[test]
+    fn dev_clients_plan_writes_the_requested_casework_endpoint() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            "version: 1\nclients: []\n",
+        )
+        .unwrap();
+        let (authored, request) = reviewer_fixture();
+        let plan = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            "http://127.0.0.1:18095",
+        )
+        .unwrap();
+        let write = plan.write.unwrap();
+        assert!(
+            write
+                .proposed
+                .contains("    endpoint: \"http://127.0.0.1:18095\"\n"),
+            "{}",
+            write.proposed
+        );
+        assert!(!write.proposed.contains("8092"), "{}", write.proposed);
+        let parsed: Value = serde_norway::from_str(&write.proposed).unwrap();
+        assert_eq!(
+            parsed["reviewAuthorities"]["casework"],
+            json!({
+                "endpoint":"http://127.0.0.1:18095",
+                "profile":"integration-requester",
+                "producerId":"registry-breg",
+                "recoveryDays":7,
+                "client":"integration-requester"
+            })
+        );
+    }
+
+    #[test]
+    fn dev_clients_refuses_an_authority_on_another_endpoint_naming_the_option() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            "version: 1\nclients: []\n",
+        )
+        .unwrap();
+        let (authored, request) = reviewer_fixture();
+        let first = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .unwrap();
+        let write = first.write.unwrap();
+        // A side-by-side adopter moves the generated authority to the port
+        // its Casework session serves.
+        let moved = write.proposed.replace(
+            "endpoint: \"http://127.0.0.1:8092\"",
+            "endpoint: \"http://127.0.0.1:18095\"",
+        );
+        assert_ne!(moved, write.proposed);
+        write_atomic(&write.path, moved.as_bytes()).unwrap();
+
+        let error = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("casework"), "{message}");
+        assert!(message.contains("--casework-endpoint"), "{message}");
+
+        let repeated = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            "http://127.0.0.1:18095",
+        )
+        .unwrap();
+        assert_eq!(repeated.write.unwrap().proposed, moved);
     }
 
     #[test]
@@ -4485,6 +4715,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         assert!(
@@ -4510,6 +4741,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         assert_eq!(plan.patch, json!("absent"));
@@ -4535,6 +4767,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         assert_eq!(plan.patch, json!("absent"));
@@ -4581,7 +4814,14 @@ mod tests {
             access_profile: "automatic-applier".to_owned(),
         };
         let before = authored.clone();
-        let plan = plan_breg_dev_clients(registry.path(), &project, &authored, &[request]).unwrap();
+        let plan = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[request],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .unwrap();
         assert_eq!(authored, before, "source grants are not broadened");
         for client in plan
             .patch
@@ -4615,9 +4855,14 @@ mod tests {
             executor: "applier".to_owned(),
             access_profile: "automatic-applier".to_owned(),
         };
-        let repeated =
-            plan_breg_dev_clients(registry.path(), &project, &authored, &[repeated_request])
-                .unwrap();
+        let repeated = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[repeated_request],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .unwrap();
         assert_eq!(repeated.write.unwrap().proposed, write.proposed);
 
         fs::write(
@@ -4635,6 +4880,7 @@ mod tests {
             &project,
             &authored,
             &[missing_client_request],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
         assert!(missing_client
@@ -4659,9 +4905,14 @@ mod tests {
             executor: "applier".to_owned(),
             access_profile: "automatic-applier".to_owned(),
         };
-        let error =
-            plan_breg_dev_clients(registry.path(), &project, &ambiguous, &[ambiguous_request])
-                .unwrap_err();
+        let error = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &ambiguous,
+            &[ambiguous_request],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("ambiguous human get profiles"));
 
         let mut request = selected_request(&metadata);
@@ -4670,8 +4921,14 @@ mod tests {
             access_profile: "automatic-applier".to_owned(),
         };
         authored["accessProfiles"][0]["permissions"] = json!([]);
-        let error =
-            plan_breg_dev_clients(registry.path(), &project, &authored, &[request]).unwrap_err();
+        let error = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[request],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("human get profile"));
         // A manual apply profile still has to admit the actual human reviewers.
         let error = plan_breg_dev_clients(
@@ -4679,6 +4936,7 @@ mod tests {
             &project,
             &before,
             &[selected_request(&metadata)],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap_err();
         assert!(error.to_string().contains("principal") || error.to_string().contains("human"));
@@ -5288,6 +5546,7 @@ mod tests {
             &project,
             &authored,
             &[selected_request(&correction), renewal_request],
+            DEFAULT_CASEWORK_ENDPOINT,
         )
         .unwrap();
 
