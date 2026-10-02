@@ -183,9 +183,11 @@ reviewed directory root, starting with `modules/<module-id>/migrations/<migratio
   every step, and activation stops on a false result.
 - `rehearsal.json` binds the prior package digest and schema fingerprint, the descriptor and SQL
   digests, the fixture inventory, the PostgreSQL major version, the affected row counts your
-  rehearsal observed, and the final schema fingerprint. A receipt that still carries the retired
-  `proofs` member is refused with `migration.review.receipt_proofs_retired`; remove it and
-  regenerate the receipt.
+  rehearsal observed, and the final schema fingerprint. Measure that fingerprint with
+  `bregctl test <project> --fingerprint-only --runtime-config <absolute file>`: it installs the
+  candidate on the disposable database, reports `schemaFingerprint`, and rolls back, without
+  running fixtures or writing a receipt. A receipt that still carries the retired `proofs` member
+  is refused with `migration.review.receipt_proofs_retired`; remove it and regenerate the receipt.
 A destructive descriptor's `backupBindingPath` is `modules/<module-id>/migrations/<migration-id>/backup.json`,
 but that file is not part of the reviewed directory or the package. It names the backup binding
 each environment supplies at activation, because every environment takes its own backup of its
@@ -234,10 +236,12 @@ afterwards, repeat the test and the package.
 A refusal names its cause. A code ending in `_refused` names the part of the reviewed directory
 that failed (the troubleshooting table below lists each); `migration.review.refused` means a
 precondition such as the prior package digest or the baseline binding failed first; for
-`migration.review.fingerprint_mismatch`, rehearse the exact candidate again.
+`migration.review.fingerprint_mismatch`, which names the declared and the measured fingerprint,
+measure the exact candidate again with `--fingerprint-only`.
 Reviewed artifacts cannot authorize a change the planner classifies as unsupported.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
+    crates/registry-bregctl/src/test_lifecycle.rs, measure();
     crates/registry-bregctl/src/reviewed_migrations.rs;
     crates/registry-breg/src/migration_plan.rs, ReviewedMigrationStepDescriptor, ReviewedFieldEncryptionHistory, and validate_fixture_jsonl();
     crates/registry-breg/src/package.rs, compiler_applicable_without_review() and automatic_query_inventory_change();
@@ -575,7 +579,7 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.evidence_refused` for a fixture | A migration with steps lists no fixture in `fixtureInventory`, or a listed fixture breaks a rule: its ids are not in ascending order, its `path` is not `fixtures/<id>.jsonl` in the migration directory, the file is missing, empty, over 16 MiB, or lacks a final newline, a line is blank, ends in a carriage return, or is not canonical JSON, the line count differs from `rowCount`, or the bytes differ from `sha256`. No command loads a fixture's rows, so these checks accept any canonical JSON value on each line. Correct the file or its inventory entry, then repeat test and package. |
 | `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior package digest or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
-| `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
+| `test` reports `migration.review.fingerprint_mismatch` | The receipt's `finalSchemaFingerprint` was measured for a different candidate. The message names the declared and the measured fingerprint; measure the exact candidate with `test --fingerprint-only` and regenerate the receipt. |
 | `test` reports `migration.rehearsal.step_failed`, `migration.rehearsal.assertion_failed`, or `migration.rehearsal.compiler_statement_failed` | PostgreSQL refused the named step, assertion, or generated statement when `test` rehearsed the successor over the predecessor schema, so `apply` would refuse it too. The message names the SQLSTATE, its class, and the object. Correct the reviewed SQL or the project, then repeat test and package. |
 | `test` reports `migration.rehearsal.history_step_refused` | The named step changes rows, and `apply` journals every row it changes, but the step's SQL is not an update the journal can record: it does not start with `UPDATE` once leading comments are set aside, it holds a second statement or a semicolon before its end, it names a record metadata column (`record_revision`, `record_lifecycle`, `active_package_revision`, `created_at`, `updated_at`) anywhere, even in a read, it uses a Unicode-escape identifier or string (`U&"..."` or `U&'...'`), a transactional step names `record_id`, it uses a refused statement word (`insert`, `delete`, `truncate`, `alter`, `drop`, `create`, `merge`) outside a comment or plain string literal, or inside a dollar-quoted body or a literal holding a backslash, or its objects span more than the step's entity. Correct the reviewed SQL, then repeat test and package. |
 | `test` reports `migration.rehearsal.schema_mismatch` | The rehearsed migration does not reach the candidate schema, for example a required field the reviewed steps never constrain. Activation would refuse it. |

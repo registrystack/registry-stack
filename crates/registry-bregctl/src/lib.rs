@@ -645,13 +645,28 @@ struct TestArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Absolute schema-test credential binding document.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    credentials: PathBuf,
+    /// Absolute schema-test credential binding document. Required unless --fingerprint-only is given.
+    #[arg(
+        long,
+        value_name = "ABSOLUTE_FILE",
+        required_unless_present = "fingerprint_only"
+    )]
+    credentials: Option<PathBuf>,
 
-    /// New canonical schema-test receipt file.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    output: PathBuf,
+    /// New canonical schema-test receipt file. Required unless --fingerprint-only is given.
+    #[arg(
+        long,
+        value_name = "ABSOLUTE_FILE",
+        required_unless_present = "fingerprint_only"
+    )]
+    output: Option<PathBuf>,
+
+    /// Only measure the schema fingerprint a fresh install of the candidate produces, the target a reviewed migration declares. Runs no fixtures and writes no receipt.
+    #[arg(
+        long,
+        conflicts_with_all = ["baseline_package", "reviewed_migrations", "credentials", "output"]
+    )]
+    fingerprint_only: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1717,6 +1732,16 @@ struct SchemaTestSuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SchemaFingerprintReport {
+    ok: bool,
+    command: &'static str,
+    profile: ProfileArg,
+    registry_revision: String,
+    schema_fingerprint: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ApplySuccessReport {
     ok: bool,
     command: &'static str,
@@ -2257,6 +2282,12 @@ where
         Command::Package(args) => {
             return match package(&args) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
+                Err(failure) => write_failure(&failure, format, stdout, stderr),
+            };
+        }
+        Command::Test(args) if args.fingerprint_only => {
+            return match measure_schema_fingerprint(&args) {
+                Ok(report) => write_schema_fingerprint(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
@@ -4455,12 +4486,15 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
 }
 
 fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
-    let output = test_lifecycle::preflight_output(&args.output).map_err(test_lifecycle_failure)?;
+    let (Some(credentials), Some(output)) = (&args.credentials, &args.output) else {
+        unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
+    };
+    let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
     let candidate = capture_candidate(&args.candidate, "test", true)?;
     let outcome = test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
-        credentials: &args.credentials,
+        credentials,
         output,
     })
     .map_err(test_lifecycle_failure)?;
@@ -4482,6 +4516,21 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
             .iter()
             .map(baseline_fingerprint_drift_finding)
             .collect(),
+    })
+}
+
+/// Measure the fresh-install schema fingerprint a reviewed migration declares
+/// as its target, without the fixture run or receipt of a full schema test.
+fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, FailureReport> {
+    let candidate = capture_candidate(&args.candidate, "test", false)?;
+    let measurement =
+        test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
+    Ok(SchemaFingerprintReport {
+        ok: true,
+        command: "test",
+        profile: ProfileArg::Production,
+        registry_revision: measurement.registry_revision,
+        schema_fingerprint: measurement.schema_fingerprint,
     })
 }
 
@@ -5110,6 +5159,25 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             };
         }
         TestLifecycleError::Rehearsal(error) => return migration_rehearsal_failure(*error),
+        // Both values are schema digests, not secrets: naming them lets the
+        // author tell a stale review from a candidate that changed since.
+        TestLifecycleError::ReviewFingerprint { declared, measured } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "migration.review.fingerprint_mismatch",
+                        "reviewedMigrations",
+                        &format!(
+                            "the reviewed target fingerprint {declared} does not match the schema measured on the disposable database, {measured}; measure the exact candidate with test --fingerprint-only, then correct the review evidence before retrying"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectPackageBuild,
+                )],
+            };
+        }
         TestLifecycleError::Credentials { path, message } => {
             return FailureReport {
                 ok: false,
@@ -5145,13 +5213,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestCandidate,
             SuggestedAction::CorrectSchemaTestCandidate,
         ),
-        TestLifecycleError::ReviewFingerprint => (
-            "migration.review.fingerprint_mismatch",
-            "reviewedMigrations",
-            "the reviewed target fingerprint does not match the schema measured on the disposable database; rehearse the exact candidate and correct the review evidence before retrying",
-            DiagnosticArtifact::DatabaseMigration,
-            SuggestedAction::CorrectPackageBuild,
-        ),
+        TestLifecycleError::ReviewFingerprint { .. } => unreachable!("handled before match"),
         TestLifecycleError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::Database => (
             "test.database.unavailable",
@@ -12536,6 +12598,30 @@ fn write_schema_test_success(
     write_result(result, stderr)
 }
 
+fn write_schema_fingerprint(
+    report: &SchemaFingerprintReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            "Measured the schema a fresh install of the candidate produces. No fixtures ran and no receipt was written.",
+            &[
+                ("profile", "production".to_owned()),
+                ("registry revision", report.registry_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+            ],
+            stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_apply_success(
     report: &ApplySuccessReport,
     format: OutputFormat,
@@ -16684,6 +16770,29 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     );
     assert!(!diagnostic.message.contains("registry_data"));
     assert!(diagnostic.message.contains("PostgreSQL ARE syntax"));
+}
+
+#[cfg(test)]
+#[test]
+fn review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint() {
+    let declared = format!("sha256:{}", "a".repeat(64));
+    let measured = format!("sha256:{}", "b".repeat(64));
+    let report = test_lifecycle_failure(TestLifecycleError::ReviewFingerprint {
+        declared: declared.clone(),
+        measured: measured.clone(),
+    });
+    assert_eq!(report.diagnostics.len(), 1);
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "migration.review.fingerprint_mismatch");
+    assert_eq!(diagnostic.path, "reviewedMigrations");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectPackageBuild
+    );
+    assert!(diagnostic.message.contains(&declared));
+    assert!(diagnostic.message.contains(&measured));
+    assert!(diagnostic.message.contains("--fingerprint-only"));
 }
 
 #[cfg(test)]

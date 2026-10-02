@@ -540,10 +540,9 @@ printf '%s' 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789' >
 adopter_suffix="rsadopter$(date +%s)$$"
 adopter_schema_test_v1_database="breg_test_v1_${adopter_suffix}"
 adopter_schema_test_v2_database="breg_test_v2_${adopter_suffix}"
-adopter_measure_v3_database="breg_measure_v3_${adopter_suffix}"
 adopter_schema_test_v3_database="breg_test_v3_${adopter_suffix}"
 adopter_production_database="breg_prod_${adopter_suffix}"
-adopter_databases=("$adopter_schema_test_v1_database" "$adopter_schema_test_v2_database" "$adopter_measure_v3_database" "$adopter_schema_test_v3_database" "$adopter_production_database")
+adopter_databases=("$adopter_schema_test_v1_database" "$adopter_schema_test_v2_database" "$adopter_schema_test_v3_database" "$adopter_production_database")
 adopter_migration_role="breg_migration_${adopter_suffix}"
 adopter_runtime_role="breg_runtime_${adopter_suffix}"
 adopter_author_role="breg_author_${adopter_suffix}"
@@ -571,7 +570,6 @@ printf '%s' "$adopter_runtime_url" >"$temporary_root/secrets/production-runtime-
 printf '%s' "$adopter_migration_url" >"$temporary_root/secrets/production-migration-url"
 write_database_url_secrets "$adopter_schema_test_v1_database" schema-test-v1-runtime-url schema-test-v1-migration-url
 write_database_url_secrets "$adopter_schema_test_v2_database" schema-test-v2-runtime-url schema-test-v2-migration-url
-write_database_url_secrets "$adopter_measure_v3_database" measure-v3-runtime-url measure-v3-migration-url
 write_database_url_secrets "$adopter_schema_test_v3_database" schema-test-v3-runtime-url schema-test-v3-migration-url
 
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
@@ -1050,14 +1048,12 @@ assert_json_failure "$temporary_root/missing-review-v3.json" migration.review.re
 run_json "$temporary_root/diff-v3.json" diff "$temporary_root/project-v3" --runtime-config "$temporary_root/runtime-server-v2.yaml"
 assert_json_ok "$temporary_root/diff-v3.json" diff
 
-# Measure the exact target catalog through the public schema-test command on a
-# separate disposable database: the same project without a baseline. This is
-# not upgrade evidence; the in-place apply and record/disclosure checks follow.
-render_runtime_config "$temporary_root/runtime-measure-v3.yaml" "$temporary_root/empty-package-root" 60000 \
-  "secret:file/measure-v3-runtime-url" "secret:file/measure-v3-migration-url" "127.0.0.1:0"
-run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-v3" \
-  --runtime-config "$temporary_root/runtime-measure-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
-  --output "$temporary_root/measure-receipt-v3.json"
+# Measure the exact target catalog through the public schema-test command: a
+# fresh install of the same project, rolled back, so the schema test below
+# reuses its database. This is not upgrade evidence; the in-place apply and
+# record/disclosure checks follow.
+run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-v3" --fingerprint-only \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml"
 assert_json_ok "$temporary_root/measure-v3.json" test
 schema_fingerprint_v3=$(json_field "$temporary_root/measure-v3.json" schemaFingerprint)
 postgres_major=$(psql "$adopter_production_admin_url" -Atqc 'SELECT current_setting('\''server_version_num'\'')::integer / 10000')
@@ -1117,6 +1113,14 @@ if run_json "$temporary_root/mismatched-review-v3.json" test "${reviewed_candida
   exit 1
 fi
 assert_json_failure "$temporary_root/mismatched-review-v3.json" migration.review.fingerprint_mismatch
+python3 - "$temporary_root/mismatched-review-v3.json" "sha256:$(printf '0%.0s' {1..64})" "$schema_fingerprint_v3" <<'PY'
+import json
+import sys
+message = json.load(open(sys.argv[1], encoding="utf-8"))["diagnostics"][0]["message"]
+for fingerprint in sys.argv[2:]:
+    if fingerprint not in message:
+        raise SystemExit(f"the fingerprint refusal does not name {fingerprint}")
+PY
 [[ ! -e "$temporary_root/schema-test-receipt-v3.json" ]]
 cp "$temporary_root/review-receipt-v3.original.json" "$review_receipt"
 run_json "$temporary_root/schema-test-v3.json" test "${reviewed_candidate_args[@]}" \
@@ -1133,7 +1137,7 @@ assert_json_ok "$temporary_root/plan-v3.json" plan
 assert_plan "$temporary_root/plan-v3.json" successor "$package_digest_v3" fresh
 if ! run_json "$temporary_root/apply-v3.json" apply --runtime-config "$temporary_root/runtime-server-v2.yaml" --package "$temporary_root/build-v3/package"; then
   # Compare catalog metadata only. Never print runtime URLs or stored records.
-  measure_admin_url=$(derive_admin_database_url "$adopter_measure_v3_database")
+  measure_admin_url=$(derive_admin_database_url "$adopter_schema_test_v3_database")
   column_order_sql="SELECT string_agg(a.attname, ',' ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = 'registry_data.\"$asset_table\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped"
   if [[ "$(psql "$adopter_production_admin_url" -Atqc "$column_order_sql")" != "$(psql "$measure_admin_url" -Atqc "$column_order_sql")" ]]; then
     printf '%s\n' 'reviewed activation failed: installed column order differs from the fresh target rehearsal.' >&2
