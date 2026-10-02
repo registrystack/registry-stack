@@ -55,6 +55,10 @@
   pass. The review result lookup outage warning carries the closed code
   `review.result_lookups.unavailable` and no longer carries an unavailable
   count.
+- The attachment verification worker claims the next due job as soon as it
+  finishes one, rather than waiting a second after every job, so a backlog
+  drains at the verifier's pace. It still waits a second after a pass that
+  found no due job or failed.
 - The metrics listener publishes `breg_worker_last_success_age_seconds` by
   `worker`, `breg_queue_oldest_pending_age_seconds` by `queue` for webhook
   deliveries, review submissions, and application jobs, and

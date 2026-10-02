@@ -79,9 +79,20 @@ impl AttachmentVerificationWorker {
                     if changed.is_err() || *shutdown.borrow() { return; }
                 }
                 result = self.run_once() => {
-                    match result {
-                        Ok(_) => self.last_success.record(),
-                        Err(_) => crate::startup::OperationalEvent::AttachmentVerificationIterationFailed.emit(),
+                    let worked = match result {
+                        Ok(worked) => {
+                            self.last_success.record();
+                            worked
+                        }
+                        Err(_) => {
+                            crate::startup::OperationalEvent::AttachmentVerificationIterationFailed.emit();
+                            false
+                        }
+                    };
+                    // A job just finished, so another may be due: claim it
+                    // without waiting. Only an idle or failed pass waits.
+                    if worked {
+                        continue;
                     }
                 }
             }
