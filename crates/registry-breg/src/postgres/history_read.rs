@@ -14,10 +14,10 @@ use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
 use crate::api::{
-    AuthorizedRequestContext, HeldReadResponse, ReadFilterExpr, ReadFilterOperator,
-    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadServiceError,
-    RecordReadRefusal, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
-    SnapshotReadRequest, SnapshotReadService,
+    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, ReadFilterExpr,
+    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
+    ReadServiceError, RecordReadRefusal, RowBoundaryOperator as ApiRowBoundaryOperator,
+    ServiceFuture, SnapshotReadRequest, SnapshotReadService,
 };
 use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
@@ -1690,11 +1690,16 @@ fn validate_filter_predicate(
         | ReadFilterOperator::Lt
         | ReadFilterOperator::Le
         | ReadFilterOperator::Gt
-        | ReadFilterOperator::Ge
-        | ReadFilterOperator::StartsWith
-        | ReadFilterOperator::Contains => {
+        | ReadFilterOperator::Ge => {
             if predicate.values.len() != 1
                 || validate_field_value(&predicate.values[0], field_type).is_err()
+            {
+                return Err(());
+            }
+        }
+        ReadFilterOperator::StartsWith | ReadFilterOperator::Contains => {
+            if predicate.values.len() != 1
+                || !valid_text_search_term(&predicate.values[0], field_type)
             {
                 return Err(());
             }
