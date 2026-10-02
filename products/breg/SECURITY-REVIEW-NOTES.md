@@ -1196,8 +1196,9 @@ still be refused by an audit destination it never uses.
   shorter statement timeout (`57014`) to `MigrationLockHeld`; every other
   failure keeps its existing refusal. `refusal_before_maintenance` keeps it
   apart from `DatabaseUnavailable`, so `apply` and `plan` still change
-  nothing and report `apply.database.unavailable` with a sentence that names
-  the held lock.
+  nothing and report `apply.database.in_progress`, with a sentence that names
+  the held lock and the `retry_after_migration_lock_releases` suggested
+  action. An unreachable database keeps `apply.database.unavailable`.
 - The lock-free assessment preflight is safe because it authorizes nothing.
   It reads one committed snapshot of the state row and binds the configured
   package and database id to it exactly as the locked read did.
@@ -1234,7 +1235,8 @@ assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
 `execution_refuses_a_held_migration_lock_as_in_progress`.
 `products/breg/scripts/test-adopter-workflow.sh` holds the advisory lock from
 a second session and proves assessment answers `in_progress` while
-`--execute` and `apply` refuse, then proves assessment answers with a
+`--execute` refuses and `apply` refuses with `apply.database.in_progress`
+and the wait-and-retry action, then proves assessment answers with a
 read-only audit directory while `--execute` refuses. Each test the change
 adds was written first and failed, or did not compile, against the code
 before it.
