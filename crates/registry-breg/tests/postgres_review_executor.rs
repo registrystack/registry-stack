@@ -6248,6 +6248,79 @@ async fn a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited(
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_work() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    // A cancellation nobody holds is claimable, so it has been waiting.
+    let unclaimed = Uuid::from_u128(0xb3);
+    seed_submission(
+        &database.admin,
+        unclaimed,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding='{}'::jsonb,
+                    lease_until=NULL,
+                    next_attempt_at=transaction_timestamp()-interval '120 seconds'
+              WHERE request_id=$1",
+            &[&unclaimed],
+        )
+        .await
+        .expect("an unclaimed cancellation has been due for two minutes");
+    // A cancellation under a live lease is in flight, not waiting.
+    let in_flight = Uuid::from_u128(0xb4);
+    seed_submission(
+        &database.admin,
+        in_flight,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding='{}'::jsonb,
+                    lease_until=transaction_timestamp()+interval '30 seconds',
+                    next_attempt_at=transaction_timestamp()-interval '1 hour'
+              WHERE request_id=$1",
+            &[&in_flight],
+        )
+        .await
+        .expect("a claimed cancellation has been due for an hour");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let submission = queue_age(&scrape, "review_submission")
+        .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
+    assert!(
+        (120.0..3600.0).contains(&submission),
+        "the unclaimed cancellation has waited about two minutes: {submission}"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event() {
     // No webhook delivery state is installed, so the sample cannot be read.

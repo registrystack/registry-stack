@@ -62,6 +62,19 @@ pub(crate) const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT 
                =(q.request_entity_id,q.request_id,q.proposal_version)
            AND r.status='approved' AND r.available_until <= transaction_timestamp()))";
 
+/// A review submission is claimable once it is due and no live lease holds
+/// it: a `submitting` claim stays with its holder until its lease expires,
+/// and a `cancelling` row is free when it has no lease or an expired one.
+/// The worker selects its authorities and backs off token failures with this
+/// predicate, and the metrics queue-age sample shares it, so a submission
+/// the worker would claim always ages the review submission queue. Column
+/// names are unqualified: every query this is spliced into reads only the
+/// submissions table.
+pub(crate) const REVIEW_SUBMISSION_CLAIMABLE: &str = "next_attempt_at <= transaction_timestamp()
+        AND (state<>'submitting' OR lease_until < transaction_timestamp())
+        AND (state<>'cancelling' OR lease_until IS NULL
+             OR lease_until < transaction_timestamp())";
+
 fn outbound_lease_seconds(request_timeout: Duration) -> i64 {
     // The claim lease must outlive the outbound call it guards: an expiry
     // inside the request timeout lets another instance treat the job as
@@ -691,13 +704,12 @@ impl ReviewAuthorityRegistry {
             .collect::<Vec<_>>();
         let rows = client
             .query(
-                "SELECT authority,min(next_attempt_at) AS ready_at
-                   FROM registry_internal.registry_request_review_submissions
-                  WHERE state=ANY($1) AND next_attempt_at <= transaction_timestamp()
-                    AND (state<>'submitting' OR lease_until < transaction_timestamp())
-                    AND (state<>'cancelling' OR lease_until IS NULL
-                         OR lease_until < transaction_timestamp())
-                  GROUP BY authority ORDER BY ready_at,authority",
+                &format!(
+                    "SELECT authority,min(next_attempt_at) AS ready_at
+                       FROM registry_internal.registry_request_review_submissions
+                      WHERE state=ANY($1) AND {REVIEW_SUBMISSION_CLAIMABLE}
+                      GROUP BY authority ORDER BY ready_at,authority"
+                ),
                 &[&states],
             )
             .await
@@ -723,16 +735,14 @@ impl ReviewAuthorityRegistry {
             .collect::<Vec<_>>();
         client
             .execute(
-                "UPDATE registry_internal.registry_request_review_submissions
-                    SET state=CASE WHEN state='submitting' THEN 'uncertain' ELSE state END,
-                        lease_until=NULL,last_error_code='token-unavailable',
-                        next_attempt_at=transaction_timestamp()+interval '5 seconds',
-                        updated_at=transaction_timestamp()
-                  WHERE authority=$1 AND state=ANY($2)
-                    AND next_attempt_at <= transaction_timestamp()
-                    AND (state<>'submitting' OR lease_until < transaction_timestamp())
-                    AND (state<>'cancelling' OR lease_until IS NULL
-                         OR lease_until < transaction_timestamp())",
+                &format!(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state=CASE WHEN state='submitting' THEN 'uncertain' ELSE state END,
+                            lease_until=NULL,last_error_code='token-unavailable',
+                            next_attempt_at=transaction_timestamp()+interval '5 seconds',
+                            updated_at=transaction_timestamp()
+                      WHERE authority=$1 AND state=ANY($2) AND {REVIEW_SUBMISSION_CLAIMABLE}"
+                ),
                 &[&authority, &states],
             )
             .await
