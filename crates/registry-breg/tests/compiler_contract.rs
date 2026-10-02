@@ -3278,6 +3278,120 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
     assert!(codes.contains("manifest_projection.entity.not_visible"));
 }
 
+/// A project whose `authorization-status` vocabulary is used by
+/// `authorization.status` for every code but `revoked`, narrowed to one code
+/// by `authorization-request.status`, which the compiler visits last, and used
+/// in full only by `authorization.archived-status`, which sits above the
+/// projection's classification ceiling.
+fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::RegistryProject {
+    let project = json!({
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"narrowed-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://narrowed-codes.example.test"},
+      "manifestProjection":{
+        "accessProfile":"reader",
+        "classificationCeiling":"public",
+        "catalog":{"baseUrl":"https://narrowed-codes.example.test","title":"Narrowed Codes","publisher":{"id":"publisher","name":"Publisher"}},
+        "publicService":{"id":"narrowed-codes-service","title":"Narrowed Codes"},
+        "datasets":[{"id":"narrowed-codes","title":"Narrowed Codes Dataset"}],
+        "dataServices":[{"id":"narrowed-codes-api","title":"Narrowed Codes API","endpointUrl":"https://narrowed-codes.example.test/v1","servesDatasets":["narrowed-codes"]}],
+        "vocabularies":[{"id":"authorization-status","schemeIri":"https://narrowed-codes.example.test/vocab/authorization-status","concepts":concepts}]
+      },
+      "vocabularies":[{"id":"authorization-status","values":["pending","active","suspended","cancelled","revoked"]}],
+      "entities":[
+        {"id":"authorization","primaryDataset":"narrowed-codes","route":"authorizations","mutationMode":"create_only","classification":"public",
+         "fields":[
+           {"id":"status","type":"vocabulary-code","vocabulary":"authorization-status","values":["pending","active","suspended","cancelled"],"classification":"public"},
+           {"id":"archived-status","type":"vocabulary-code","vocabulary":"authorization-status","classification":"restricted"}
+         ]},
+        {"id":"authorization-request","primaryDataset":"narrowed-codes","route":"authorization-requests","mutationMode":"create_only","classification":"public",
+         "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"authorization-status","values":["pending"],"classification":"public"}]}
+      ],
+      "accessProfiles":[{
+        "id":"reader","principalClaim":"principal","permissions":[
+          {"entity":"authorization","operations":["get"],"readableFields":["status","archived-status"],"rowBoundaries":[]},
+          {"entity":"authorization-request","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}
+        ]
+      }]
+    });
+    parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
+        .expect("project parses")
+}
+
+#[test]
+fn manifest_projection_labels_every_code_a_visible_field_uses() {
+    let compiled = compile_project(
+        &narrowed_vocabulary_project(json!([
+            {"code":"pending","label":{"en":"Pending"}},
+            {"code":"active","label":{"en":"Active"}},
+            {"code":"suspended","label":{"en":"Suspended"}},
+            {"code":"cancelled","label":{"en":"Cancelled"}}
+        ])),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .unwrap_or_else(|failure| {
+        panic!(
+            "a narrowed field does not hide the codes another field uses: {:?}",
+            failure.diagnostics()
+        )
+    });
+    let artifact = compiled
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .expect("Manifest projection is generated");
+    let manifest: MetadataManifest =
+        serde_json::from_slice(&artifact.bytes).expect("generated Manifest projection parses");
+    let projected = compile_manifest(&manifest).expect("generated Manifest projection compiles");
+    let codelist = projected
+        .codelist("authorization-status")
+        .expect("the labelled vocabulary is projected as a codelist");
+    let labelled = codelist
+        .concepts
+        .iter()
+        .map(|concept| {
+            (
+                concept.code.as_str(),
+                concept.label.as_ref().map(|label| label.text()),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labelled,
+        [
+            ("pending", Some("Pending".to_owned())),
+            ("active", Some("Active".to_owned())),
+            ("suspended", Some("Suspended".to_owned())),
+            ("cancelled", Some("Cancelled".to_owned())),
+        ]
+    );
+}
+
+#[test]
+fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses() {
+    let failure = compile_project(
+        &narrowed_vocabulary_project(json!([
+            {"code":"active","label":{"en":"Active"}},
+            {"code":"revoked","label":{"en":"Revoked"}}
+        ])),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .expect_err("a label for a code only a hidden field uses is refused");
+    let refused = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        refused,
+        [(
+            "manifest_projection.vocabulary.concept_invalid",
+            "project.manifestProjection.vocabularies[authorization-status].concepts[revoked]",
+        )]
+    );
+}
+
 #[test]
 fn manifest_projection_omits_physical_runtime_and_security_terms() {
     let compiled = compile_project(&asset_project(), &[], CompileProfile::Authoring)

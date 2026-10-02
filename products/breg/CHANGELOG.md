@@ -20,6 +20,16 @@
   --source-id ID --apply`, then package, plan, and apply the Casework project
   once.
 
+- `manifestProjection.vocabularies[].concepts` may label every code that any
+  visible field of the vocabulary admits. Previously the compiler checked
+  labels against only the last visible field it visited, so a field narrowed
+  to fewer codes, such as a change-request field, refused labels for the
+  vocabulary's other codes with
+  `manifest_projection.vocabulary.concept_invalid`. The generated Registry
+  Manifest codelist likewise carries the union of the codes its projected
+  fields admit, in first-seen order, instead of the last field's codes. A
+  label for a code that no visible field admits is still refused.
+
 ## v0.38.0 - 2026-10-01
 
 - Automatic review executors can renew credentials with `privateKeyJwt`.
