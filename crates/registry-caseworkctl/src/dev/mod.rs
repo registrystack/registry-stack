@@ -2484,6 +2484,9 @@ fn interrupted_start(root: &Path, supervisor: &mut Child) -> Result<Value> {
         state.status = Status::Failed;
         state.failure = Some("local start interrupted before it became ready".to_owned());
         state.save()?;
+        // The supervisor ended without recording a cause, so no log holds
+        // this one; report it directly.
+        return Err(DevFailure::StartInterrupted.into());
     }
     if matches!(state.status, Status::Failed) {
         return Err(start_failure(
@@ -3453,6 +3456,9 @@ pub(crate) enum DevFailure {
     },
     /// The supervised start failed after launch; its cause is in the logs.
     StartFailed { detail: String },
+    /// This terminal interrupted the start before the supervisor recorded a
+    /// cause, so no log holds it.
+    StartInterrupted,
 }
 
 /// The report location of the retained audit directory.
@@ -3516,6 +3522,12 @@ impl DevFailure {
                 "The local development session did not start; its cause is recorded in .casework/dev/logs/supervisor.log, and the Casework runtime's own output, when the runtime started, in .casework/dev/logs/casework.log.".to_owned(),
                 "Read .casework/dev/logs/supervisor.log, and .casework/dev/logs/casework.log when the runtime started, correct the cause, then retry caseworkctl dev start; retained data is preserved.".to_owned(),
             ),
+            Self::StartInterrupted => (
+                "caseworkctl.dev.start-failed",
+                ".casework/dev".to_owned(),
+                "The local development session start was interrupted before it became ready, and its supervisor stopped.".to_owned(),
+                "Run caseworkctl dev start again; retained data is preserved.".to_owned(),
+            ),
         }
     }
 }
@@ -3539,6 +3551,9 @@ impl std::fmt::Display for DevFailure {
                 f.write_str("the retained development audit destination cannot be opened")
             }
             Self::StartFailed { detail } => f.write_str(detail),
+            Self::StartInterrupted => f.write_str(
+                "local start interrupted before it became ready; the owned supervisor stopped and retained data is preserved",
+            ),
         }
     }
 }
@@ -3550,7 +3565,7 @@ impl std::error::Error for DevFailure {
             Self::AuditFormatUnsupported { source } | Self::AuditUnavailable { source } => {
                 Some(source.as_ref())
             }
-            Self::InputsChanged { .. } | Self::StartFailed { .. } => None,
+            Self::InputsChanged { .. } | Self::StartFailed { .. } | Self::StartInterrupted => None,
         }
     }
 }
