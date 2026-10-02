@@ -2503,7 +2503,8 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         || (extensions.declared_field && code != BRegProblemCode::MutationConflict)
         || extensions
             .field_path
-            .is_some_and(|path| !path.permits(code))
+            .as_ref()
+            .is_some_and(|(path, _)| !path.permits(code))
         || extensions.refusal_code.is_some() != (code == BRegProblemCode::ActionRefused)
     {
         return problem_failure(status, trace_id);
@@ -2512,6 +2513,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         status: status.as_u16(),
         code,
         trace_id,
+        field_path: extensions.field_path.map(|(_, path)| path),
         refusal_code: extensions.refusal_code,
     }
 }
@@ -2547,18 +2549,18 @@ impl BRegProblemPath {
     }
 }
 
-/// The BReg-owned members of one problem document, checked before the platform
-/// parser reads the exact six common members.
+/// The BReg-owned members of one problem document, checked around the shared
+/// parsing of its common members.
 struct BRegProblemExtensions {
     declared_field: bool,
-    field_path: Option<BRegProblemPath>,
+    field_path: Option<(BRegProblemPath, BRegProblemFieldPath)>,
     refusal_code: Option<BRegRefusalCode>,
 }
 
 /// BReg owns paired field locations, problem locations, and the declared code an
-/// immediate-action refusal names; the platform parser continues to own the
-/// exact six common members. Locations are checked and discarded, never
-/// retained as response-authored error text.
+/// immediate-action refusal names. The platform parser owns the six required
+/// common members and bounded optional `fieldPath`; BReg pins each retained
+/// location to its closed product grammar and compatible problem code.
 fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtensions), ()> {
     if body.is_empty() || body.len() > MAXIMUM_PROBLEM_BYTES {
         return Err(());
@@ -2577,18 +2579,21 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
         }
         _ => return Err(()),
     };
-    let field_path = match object.remove("fieldPath") {
-        None => None,
-        Some(serde_json::Value::String(path)) => Some(breg_problem_path(&path).ok_or(())?),
-        _ => return Err(()),
-    };
     let refusal_code = match object.remove("refusalCode") {
         None => None,
         Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
         _ => return Err(()),
     };
     let common = serde_json::to_vec(&object).map_err(|_| ())?;
-    let document = ProblemDocument::parse_exact(&common, MAXIMUM_PROBLEM_BYTES).map_err(|_| ())?;
+    let (document, common_field_path) =
+        ProblemDocument::parse_with_field_path(&common, MAXIMUM_PROBLEM_BYTES).map_err(|_| ())?;
+    let field_path = match common_field_path.as_deref() {
+        Some(path) => Some((
+            breg_problem_path(path).ok_or(())?,
+            BRegProblemFieldPath::from_validated(path),
+        )),
+        None => None,
+    };
     Ok((
         document,
         BRegProblemExtensions {

@@ -68,6 +68,7 @@ test('a declared refusal reaches the caller with its reason', async () => {
     assert.equal(error.status, 422);
     assert.equal(error.code, 'action.refused');
     assert.equal(error.refusalCode, problem.refusalCode);
+    assert.equal(error.fieldPath, problem.fieldPath);
     assert.equal(error.traceId, TRACE_ID);
     assert.equal(error.planRefusal, undefined);
   }
@@ -98,5 +99,6 @@ test('a refusal outside the published bounds fails closed with no reason', async
     assert.equal(error.kind, 'protocol');
     assert.equal(error.code, 'problem');
     assert.equal(error.refusalCode, undefined);
+    assert.equal(error.fieldPath, undefined);
   }
 });

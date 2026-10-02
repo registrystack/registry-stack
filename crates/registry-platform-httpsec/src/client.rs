@@ -92,6 +92,33 @@ impl ProblemDocument {
         Ok(problem)
     }
 
+    /// Parse the six required members and one optional bounded `fieldPath`.
+    ///
+    /// Products that define `fieldPath` must still validate which problem codes
+    /// may carry it and the product's closed location grammar. Other products
+    /// continue to use [`Self::parse_exact`] and reject the extension.
+    pub fn parse_with_field_path(
+        body: &[u8],
+        max_bytes: usize,
+    ) -> Result<(Self, Option<String>), ProblemDocumentError> {
+        if body.is_empty() || body.len() > max_bytes {
+            return Err(ProblemDocumentError);
+        }
+        let problem: ProblemDocumentWithFieldPath =
+            serde_json::from_slice(body).map_err(|_| ProblemDocumentError)?;
+        Ok((
+            Self {
+                type_uri: problem.type_uri,
+                title: problem.title,
+                status: problem.status,
+                detail: problem.detail,
+                code: problem.code,
+                trace_id: problem.trace_id,
+            },
+            problem.field_path,
+        ))
+    }
+
     /// Match every product-owned public member against one closed definition.
     #[must_use]
     pub fn matches(&self, definition: &ProblemDefinition<'_>) -> bool {
@@ -112,6 +139,33 @@ impl ProblemDocument {
         let (index, _) = matches.next()?;
         matches.next().is_none().then_some(index)
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProblemDocumentWithFieldPath {
+    #[serde(rename = "type")]
+    type_uri: String,
+    title: String,
+    status: u16,
+    detail: String,
+    code: String,
+    trace_id: TraceId,
+    #[serde(default, deserialize_with = "deserialize_field_path")]
+    field_path: Option<String>,
+}
+
+fn deserialize_field_path<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.chars().count() > 256 {
+        return Err(serde::de::Error::custom(
+            "fieldPath exceeds its character bound",
+        ));
+    }
+    Ok(Some(value))
 }
 
 /// A product-owned closed Problem definition. The shared crate owns no catalog.
@@ -215,5 +269,35 @@ mod tests {
         }))
         .unwrap();
         assert!(ProblemDocument::parse_exact(&with_extra, 4096).is_err());
+
+        let located = serde_json::to_vec(&json!({
+            "type": DEFINITION.type_uri, "title": DEFINITION.title,
+            "status": DEFINITION.status, "detail": DEFINITION.detail,
+            "code": DEFINITION.code, "traceId": TRACE_ID,
+            "fieldPath": "/input/declaredField",
+        }))
+        .unwrap();
+        assert!(ProblemDocument::parse_exact(&located, 4096).is_err());
+        let (document, field_path) =
+            ProblemDocument::parse_with_field_path(&located, 4096).unwrap();
+        assert_eq!(document.definition_index(&[DEFINITION]), Some(0));
+        assert_eq!(field_path.as_deref(), Some("/input/declaredField"));
+        for refused in [
+            json!({
+                "type": DEFINITION.type_uri, "title": DEFINITION.title,
+                "status": DEFINITION.status, "detail": DEFINITION.detail,
+                "code": DEFINITION.code, "traceId": TRACE_ID,
+                "fieldPath": null,
+            }),
+            json!({
+                "type": DEFINITION.type_uri, "title": DEFINITION.title,
+                "status": DEFINITION.status, "detail": DEFINITION.detail,
+                "code": DEFINITION.code, "traceId": TRACE_ID,
+                "fieldPath": "x".repeat(257),
+            }),
+        ] {
+            let refused = serde_json::to_vec(&refused).unwrap();
+            assert!(ProblemDocument::parse_with_field_path(&refused, 4096).is_err());
+        }
     }
 }

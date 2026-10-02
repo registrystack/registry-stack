@@ -19,8 +19,10 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 - `ProblemBody`, the fixed value-free Registry Stack problem envelope with
   `type`, `title`, `status`, `detail`, `code`, and `traceId` members.
 - `response_trace_id` for exact-one canonical W3C v0 response correlation.
-- `ProblemDocument` for bounded exact-six-member received problems. Products
-  retain their own closed `ProblemDefinition` catalogs.
+- `ProblemDocument::parse_exact` for exact-six-member received problems, and
+  `parse_with_field_path` for products that define the one optional bounded
+  `fieldPath`. Products retain their own closed `ProblemDefinition` catalogs
+  and location grammars.
 
 ## Typical Use
 
