@@ -29,9 +29,10 @@ use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
-    ClaimContext, ExpectedManagedCatalog, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    begin_record_transaction, initialize_compiled_registry_state_for_test,
+    initialize_registry_state_for_catalog_test, install_compiled_schema, ClaimContext,
+    ExpectedManagedCatalog, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
@@ -571,6 +572,241 @@ async fn create_only_action_requires_no_condition_and_replays_without_crud_grant
     assert_eq!(entity_count(&database, &registry, "person").await, 1);
     assert_eq!(immediate_action_receipt_count(&database).await, 1);
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn action_written_revisions_are_readable_through_revision_history() {
+    let (database, registry, identity) =
+        install_action_registry_with_history(history_registry(), true).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    let app = action_router(&database, registry.clone(), identity);
+
+    let created = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/create-local-person",
+            Some(action_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "history-create-key"),
+            ],
+            serde_json::to_vec(&json!({
+                "input": {
+                    "personCode": "P-HISTORY",
+                    "legalName": "Harper History",
+                    "jurisdiction": "zone-a"
+                }
+            }))
+            .expect("create body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let person_id = created.body["results"]["person-only"]["recordId"]
+        .as_str()
+        .expect("granted create result names the record")
+        .to_owned();
+
+    // The action's create is journaled as the canonical entity operation, so
+    // both the list and the detail of revision 1 read it.
+    let list = history_read(
+        &app,
+        &format!("/v1/records/people/{person_id}/revisions?accessProfile=record-history"),
+    )
+    .await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.body);
+    let items = list.body["items"].as_array().expect("list returns items");
+    assert_eq!(items.len(), 1, "{}", list.body);
+    assert_eq!(items[0]["operationIdentifier"], "records.person.create");
+    assert_eq!(items[0]["mutationKind"], "create");
+    assert_eq!(items[0]["domainData"], json!({"personCode": "P-HISTORY"}));
+    let person_detail =
+        format!("/v1/records/people/{person_id}/revisions/1?accessProfile=record-history");
+    let detail = history_read(&app, &person_detail).await;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    assert_eq!(
+        detail.body["data"]["operationIdentifier"],
+        "records.person.create"
+    );
+
+    // Folded patch effects share one revision journaled as the entity patch.
+    let condition = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/rename-household-local/target-conditions",
+            Some(action_claims()),
+            &[("content-type", "application/json")],
+            serde_json::to_vec(&json!({"input":{"householdId":HOUSEHOLD_ID}}))
+                .expect("condition body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let renamed = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/rename-household-local",
+            Some(action_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "history-patch-key"),
+            ],
+            serde_json::to_vec(&json!({
+                "input": {
+                    "householdId": HOUSEHOLD_ID,
+                    "householdCode": "H-HISTORY",
+                    "statusNote": "renamed by action"
+                },
+                "preconditions": condition.body["preconditions"].clone()
+            }))
+            .expect("patch body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.body);
+    let household_detail =
+        format!("/v1/records/households/{HOUSEHOLD_ID}/revisions/2?accessProfile=record-history");
+    let detail = history_read(&app, &household_detail).await;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    assert_eq!(
+        detail.body["data"]["operationIdentifier"],
+        "records.household.patch"
+    );
+    assert_eq!(detail.body["data"]["mutationKind"], "patch");
+    assert_eq!(
+        detail.body["data"]["domainData"],
+        json!({"householdCode": "H-HISTORY", "statusNote": "renamed by action"})
+    );
+
+    // A journal written before actions recorded the canonical operation holds
+    // the compiled effect identifier instead. It stays readable only when the
+    // compiled package declares that effect against the same entity with the
+    // same operation.
+    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
+    let detail = history_read(&app, &person_detail).await;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    assert_eq!(detail.body["data"]["operationIdentifier"], "person-only");
+    set_journal_operation(
+        &database,
+        "household",
+        HOUSEHOLD_ID,
+        2,
+        "household-code-update",
+        "patch",
+    )
+    .await;
+    let detail = history_read(&app, &household_detail).await;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    assert_eq!(
+        detail.body["data"]["operationIdentifier"],
+        "household-code-update"
+    );
+
+    for (operation_id, mutation_kind, why) in [
+        (
+            "undeclared-effect",
+            "create",
+            "an undeclared effect identifier",
+        ),
+        (
+            "membership",
+            "create",
+            "an effect that writes another entity",
+        ),
+        (
+            "household-code-update",
+            "patch",
+            "a patch effect of another entity",
+        ),
+        (
+            "person-only",
+            "patch",
+            "an effect declared with another operation",
+        ),
+        ("create-local-person", "create", "an action identifier"),
+        (
+            "records.household.create",
+            "create",
+            "another entity's record operation",
+        ),
+    ] {
+        set_journal_operation(
+            &database,
+            "person",
+            &person_id,
+            1,
+            operation_id,
+            mutation_kind,
+        )
+        .await;
+        let refused = history_read(&app, &person_detail).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{why} is corrupt provenance: {}",
+            refused.body
+        );
+        assert_eq!(refused.body["code"], "source.unavailable", "{why}");
+    }
+    database.cleanup().await;
+}
+
+async fn history_read(app: &axum::Router, uri: &str) -> ResponseParts {
+    response_parts(
+        send(
+            app,
+            Method::GET,
+            uri,
+            Some(action_claims_for("registry:history:read", "zone-a")),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await
+}
+
+async fn set_journal_operation(
+    database: &TestDatabase,
+    entity_id: &str,
+    record_id: &str,
+    revision: i64,
+    operation_id: &str,
+    mutation_kind: &str,
+) {
+    let changed = database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_revisions
+                SET operation_id = $4, mutation_kind = $5
+              WHERE entity_id = $1
+                AND record_id = $2::text::uuid
+                AND record_revision = $3",
+            &[
+                &entity_id,
+                &record_id,
+                &revision,
+                &operation_id,
+                &mutation_kind,
+            ],
+        )
+        .await
+        .expect("administrator rewrites the journal provenance fixture");
+    assert_eq!(changed, 1, "the journal fixture revision exists");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1676,24 +1912,47 @@ async fn install_action_registry(
     Arc<registry_breg::CompiledRegistry>,
     registry_breg::postgres::ExpectedRegistryIdentity,
 ) {
+    install_action_registry_with_history(registry, false).await
+}
+
+async fn install_action_registry_with_history(
+    registry: registry_breg::CompiledRegistry,
+    retain_history: bool,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    registry_breg::postgres::ExpectedRegistryIdentity,
+) {
     let database = TestDatabase::create(10).await;
     let (migration, migration_task) = database.connect_migration().await;
     let registry = Arc::new(registry);
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs action RLS with compiled schema");
-    let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
-        &migration,
-        &database.runtime_role,
-        &catalog,
-        RegistryStateTestIdentity {
-            package_id: PACKAGE_ID,
-            database_id: DATABASE_ID,
-            label: "package-action-1",
-        },
-    )
-    .await
+    let state_identity = RegistryStateTestIdentity {
+        package_id: PACKAGE_ID,
+        database_id: DATABASE_ID,
+        label: "package-action-1",
+    };
+    let identity = if retain_history {
+        // Revision reads need the package-bound history descriptor and the
+        // empty baseline an activation retains.
+        initialize_compiled_registry_state_for_test(
+            &migration,
+            &database.runtime_role,
+            &registry,
+            state_identity,
+        )
+        .await
+    } else {
+        initialize_registry_state_for_catalog_test(
+            &migration,
+            &database.runtime_role,
+            &ExpectedManagedCatalog::compiled(&registry),
+            state_identity,
+        )
+        .await
+    }
     .expect("migration initializes registry identity");
     drop(migration);
     migration_task.abort();
@@ -2165,6 +2424,14 @@ fn action_router_with_fault_and_timeout(
         profile.clone(),
         cursors.clone(),
     ));
+    let revisions = Arc::new(PostgresRevisionReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        profile.clone(),
+    ));
     let read_identity = ReadRuntimeIdentity {
         package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
@@ -2194,6 +2461,7 @@ fn action_router_with_fault_and_timeout(
             Arc::new(AlwaysReady),
             cursors,
         )
+        .with_postgres_revisions(revisions)
         .with_postgres_mutations(Arc::new(mutations)),
     ))
 }
@@ -2392,9 +2660,7 @@ fn action_claims_for(scope: &str, jurisdiction: &str) -> VerifiedRequestClaims {
     .expect("authenticated action claims are valid")
 }
 
-fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(
-        br#"{
+const ACTION_PROJECT: &[u8] = br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{"id":"immediate-action-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2563,8 +2829,40 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           }]
-        }"#,
-    )
-    .expect("action project parses");
+        }"#;
+
+fn compiled_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(ACTION_PROJECT).expect("action project parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("action project compiles")
+}
+
+/// The action project plus a profile that reads revision history of the
+/// records the actions write, and nothing else.
+fn history_registry() -> registry_breg::CompiledRegistry {
+    let mut source: Value = serde_json::from_slice(ACTION_PROJECT).expect("action project is JSON");
+    let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
+    source["accessProfiles"]
+        .as_array_mut()
+        .expect("action project declares access profiles")
+        .push(json!({
+            "id":"record-history",
+            "principalClaim":"registry_principal",
+            "requiredScopes":["registry:history:read"],
+            "requiredPurposes":["contact-registration"],
+            "permissions":[{
+                "entity":"person",
+                "operations":["revisions"],"revisionAccess":true,
+                "readableFields":["person-code"],
+                "rowBoundaries":boundary.clone()
+            },{
+                "entity":"household",
+                "operations":["revisions"],"revisionAccess":true,
+                "readableFields":["household-code","status-note"],
+                "rowBoundaries":boundary
+            }]
+        }));
+    let project =
+        parse_project_json(&serde_json::to_vec(&source).expect("history project serializes"))
+            .expect("history project parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("history project compiles")
 }

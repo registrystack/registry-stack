@@ -38,6 +38,14 @@
   `caseworkctl source add BREG_PROJECT --project PROJECT --source-id ID
   --apply`, then package, plan, and apply the Casework project once.
 
+- Authorized revision-history list and detail reads no longer answer
+  `503 source.unavailable` for a record an immediate action created or
+  changed. An action's revision is journaled under the entity's canonical
+  operation identifier, such as `records.person.create`. A revision an earlier
+  release journaled under the action's effect identifier stays readable, and
+  keeps reporting that identifier, while the active package declares that
+  effect against the same entity with the same operation.
+
 ## v0.38.0 - 2026-10-01
 
 - Automatic review executors can renew credentials with `privateKeyJwt`.

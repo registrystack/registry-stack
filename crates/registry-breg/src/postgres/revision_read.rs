@@ -270,6 +270,7 @@ impl PostgresRevisionReadService {
             transaction.transaction(),
             &rows,
             &plan.entity,
+            &plan.action_effects,
             &request.context,
             &request.selected_fields,
             plan.provenance_fields.as_slice(),
@@ -412,7 +413,12 @@ struct RevisionReadPlan {
     kind: CompiledRevisionKind,
     entity: CompiledEntity,
     provenance_fields: Vec<ProvenanceFieldSource>,
+    action_effects: BTreeSet<ActionEffectOperation>,
 }
+
+/// One compiled action effect that writes the read entity, as the pair of its
+/// effect identifier and its mutation kind.
+type ActionEffectOperation = (String, &'static str);
 
 impl RevisionReadPlan {
     fn from_request(
@@ -461,6 +467,7 @@ impl RevisionReadPlan {
             kind,
             entity: entity.clone(),
             provenance_fields: profile.provenance_fields.clone(),
+            action_effects: action_effect_operations(registry, &entity.id),
         })
     }
 }
@@ -700,6 +707,7 @@ async fn revision_rows_from_rows(
     transaction: &tokio_postgres::Transaction<'_>,
     rows: &[tokio_postgres::Row],
     entity: &CompiledEntity,
+    action_effects: &BTreeSet<ActionEffectOperation>,
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
@@ -714,6 +722,7 @@ async fn revision_rows_from_rows(
             transaction,
             row,
             entity,
+            action_effects,
             context,
             selected_fields,
             provenance_fields,
@@ -735,6 +744,7 @@ async fn revision_from_row(
     transaction: &tokio_postgres::Transaction<'_>,
     row: &tokio_postgres::Row,
     entity: &CompiledEntity,
+    action_effects: &BTreeSet<ActionEffectOperation>,
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
@@ -774,6 +784,7 @@ async fn revision_from_row(
         || snapshot.len() > MAX_HISTORY_SNAPSHOT_BYTES
         || !valid_revision_provenance(
             entity,
+            action_effects,
             &operation_id,
             &mutation_kind,
             &actor_reference,
@@ -1139,8 +1150,30 @@ fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadS
     Ok(value)
 }
 
+/// Every effect a compiled action declares against `entity_id`, with the
+/// mutation kind it journals.
+fn action_effect_operations(
+    registry: &CompiledRegistry,
+    entity_id: &str,
+) -> BTreeSet<ActionEffectOperation> {
+    registry
+        .actions()
+        .actions
+        .iter()
+        .flat_map(|action| &action.effects)
+        .filter(|effect| effect.target.entity_id == entity_id)
+        .map(|effect| {
+            (
+                effect.id.clone(),
+                crate::compiler::operation_id(effect.operation),
+            )
+        })
+        .collect()
+}
+
 fn valid_revision_provenance(
     entity: &CompiledEntity,
+    action_effects: &BTreeSet<ActionEffectOperation>,
     operation_id: &str,
     mutation_kind: &str,
     actor_reference: &str,
@@ -1153,7 +1186,13 @@ fn valid_revision_provenance(
                 || (request_lifecycle_revision
                     && entity.change_request.is_some()
                     && mutation_kind == "patch"
-                    && valid_request_journal_operation(&entity.id, operation_id)))
+                    && valid_request_journal_operation(&entity.id, operation_id))
+                // Immediate actions once journaled the compiled effect
+                // identifier. Such a revision stays readable only while the
+                // active package declares that effect against this entity
+                // with the same mutation kind.
+                || (!request_lifecycle_revision
+                    && action_effects.contains(&(operation_id.to_owned(), mutation_kind))))
                 && valid_hmac_reference(actor_reference)
                 && valid_hmac_reference(request_reference)
         }
