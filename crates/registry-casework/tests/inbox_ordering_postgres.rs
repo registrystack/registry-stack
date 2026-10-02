@@ -18,6 +18,7 @@ use registry_casework_core::{
     SourceRequestPolicy, SubjectRef, TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
+use tokio::sync::Notify;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -29,6 +30,16 @@ const GENERATION: &str = "inbox-generation-1";
 #[derive(Clone, Default)]
 struct VisibleSource {
     discovery_unavailable: Arc<AtomicBool>,
+    caller_read_gate: Option<Arc<CallerReadGate>>,
+}
+
+/// Holds the next caller read open until the test releases it, so the test can
+/// change directory membership while that read is in flight.
+#[derive(Default)]
+struct CallerReadGate {
+    armed: AtomicBool,
+    entered: Notify,
+    release: Notify,
 }
 
 impl VisibleSource {
@@ -37,6 +48,7 @@ impl VisibleSource {
         (
             Self {
                 discovery_unavailable: Arc::clone(&discovery_unavailable),
+                caller_read_gate: None,
             },
             discovery_unavailable,
         )
@@ -91,6 +103,12 @@ impl SourceAdapter for VisibleSource {
         _source_profile_id: &str,
         _credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        if let Some(gate) = &self.caller_read_gate {
+            if gate.armed.swap(false, Ordering::SeqCst) {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+        }
         if subject.id.starts_with("concealed-") {
             return Err(SourceAdapterError::Concealed);
         }
@@ -1233,4 +1251,139 @@ async fn a_reconciled_source_stays_fresh_for_twice_its_reconciliation_interval()
         .source_has_pending(SOURCE_ID, GENERATION)
         .await
         .expect("pending subjects"));
+}
+
+/// Run one page with the caller's only membership removed while its first
+/// source read is in flight, then restore that membership.
+async fn with_membership_removed_mid_read<T: Send + 'static>(
+    database: &tokio_postgres::Client,
+    gate: &CallerReadGate,
+    member: &ActorContext,
+    membership_kind: &str,
+    read: impl std::future::Future<Output = T> + Send + 'static,
+) -> T {
+    gate.armed.store(true, Ordering::SeqCst);
+    let page = tokio::spawn(read);
+    gate.entered.notified().await;
+    database
+        .execute(
+            "DELETE FROM casework_memberships WHERE team_id='team' AND issuer=$1 AND subject=$2 AND membership_kind=$3",
+            &[&member.principal.issuer, &member.principal.subject, &membership_kind],
+        )
+        .await
+        .expect("remove the last membership");
+    gate.release.notify_one();
+    let page = page.await.expect("page task");
+    database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,$2,$3)",
+            &[&member.principal.issuer, &member.principal.subject, &membership_kind],
+        )
+        .await
+        .expect("restore the membership");
+    page
+}
+
+#[tokio::test]
+async fn a_caller_who_loses_its_last_queue_mid_read_receives_the_empty_complete_page() {
+    let gate = Arc::new(CallerReadGate::default());
+    let (store, database, service) = fixture_with_source(
+        project(),
+        VisibleSource {
+            caller_read_gate: Some(Arc::clone(&gate)),
+            ..VisibleSource::default()
+        },
+    )
+    .await;
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let supervisor = actor("supervisor", "supervisor", CaseworkRole::Supervisor);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: vec![supervisor.principal.clone()],
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap",
+        )
+        .await
+        .expect("bootstrap directory");
+    // Discovery is still running and there is more local work than one page,
+    // so a caller who still serves a queue sees `budget_exhausted` and a
+    // cursor.
+    store
+        .set_source_status(SOURCE_ID, GENERATION, false, false)
+        .await
+        .expect("source discovery is still running");
+    let now = Utc::now();
+    for (index, subject) in [(1, "first-held"), (2, "second-held"), (3, "third-held")] {
+        insert_item(
+            &database,
+            Uuid::from_u128(index),
+            subject,
+            now - TimeDelta::minutes(i64::try_from(index).expect("small index")),
+            Some(now + TimeDelta::days(1)),
+            &staff.principal,
+        )
+        .await;
+    }
+    let page = service
+        .inbox(&staff, "reader", "token", 1, None, None)
+        .await
+        .expect("page while the caller serves a queue");
+    assert_eq!(page.status, PageStatus::BudgetExhausted);
+    assert!(page.next_cursor.is_some());
+    let holdings = service
+        .caller_visible_holdings(&supervisor, "reader", "token", 1, None)
+        .await
+        .expect("holdings while the caller serves a queue");
+    assert_eq!(holdings.status, PageStatus::BudgetExhausted);
+    assert!(holdings.next_cursor.is_some());
+
+    let (list_service, list_staff) = (service.clone(), staff.clone());
+    let list = with_membership_removed_mid_read(&database, &gate, &staff, "staff", async move {
+        list_service
+            .inbox(&list_staff, "reader", "token", 1, None, None)
+            .await
+    })
+    .await
+    .expect("work-item page after the last membership is removed");
+    assert_eq!(list.status, PageStatus::Complete);
+    assert!(list.next_cursor.is_none());
+    assert!(list.items.is_empty());
+    assert!(list.served_queues.is_empty());
+
+    let (next_service, next_staff) = (service.clone(), staff.clone());
+    let next = with_membership_removed_mid_read(&database, &gate, &staff, "staff", async move {
+        next_service
+            .next_item(&next_staff, "reader", "token", None, None)
+            .await
+    })
+    .await
+    .expect("next item after the last membership is removed");
+    assert_eq!(next.status, PageStatus::Complete);
+    assert!(next.next_cursor.is_none());
+    assert!(next.items.is_empty());
+    assert!(next.served_queues.is_empty());
+
+    let (holdings_service, holdings_supervisor) = (service.clone(), supervisor.clone());
+    let holdings =
+        with_membership_removed_mid_read(&database, &gate, &supervisor, "supervisor", async move {
+            holdings_service
+                .caller_visible_holdings(&holdings_supervisor, "reader", "token", 1, None)
+                .await
+        })
+        .await
+        .expect("holdings after the last membership is removed");
+    assert_eq!(holdings.status, PageStatus::Complete);
+    assert!(holdings.next_cursor.is_none());
+    assert!(holdings.items.is_empty());
 }
