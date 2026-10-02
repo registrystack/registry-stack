@@ -13,9 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::{to_bytes, Body};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderValue, Request, StatusCode};
-#[cfg(feature = "postgres-test")]
 use jsonwebtoken::jwk::JwkSet;
-#[cfg(feature = "postgres-test")]
 use jsonwebtoken::Algorithm;
 use registry_breg::api::{
     authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
@@ -26,11 +24,8 @@ use registry_breg::auth::{
     AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
 };
 use registry_breg::cursor::CursorCodec;
-#[cfg(feature = "postgres-test")]
 use registry_breg::postgres::{ConnectionConfig, PoolBounds};
-#[cfg(feature = "postgres-test")]
 use registry_breg::problem::ProblemCode;
-#[cfg(feature = "postgres-test")]
 use registry_breg::review_store::{
     ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewCompletionReceiver,
 };
@@ -44,7 +39,6 @@ use registry_platform_oidc::{
 use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
-#[cfg(feature = "postgres-test")]
 use registry_review_client::{ReviewClient, ReviewClientConfig};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
@@ -382,7 +376,6 @@ async fn token_without_actor_kind_is_refused_before_profile_authorization() {
     assert_refused_without_record_call(&harness, &harness.idp.mint_token(claims)).await;
 }
 
-#[cfg(feature = "postgres-test")]
 #[tokio::test]
 async fn review_completion_authentication_refusals_use_the_registered_problem() {
     let project = parse_project_yaml(PROJECT.as_bytes()).expect("project parses");
@@ -413,15 +406,20 @@ async fn review_completion_authentication_refusals_use_the_registered_problem() 
         std::time::Duration::from_millis(50),
     )
     .expect("pool bounds are valid");
-    let pool = ConnectionConfig::test_only_plaintext(
-        "postgresql://registry_runtime@127.0.0.1:9/registry",
+    let certificate = rcgen::generate_simple_self_signed(vec!["db.example.invalid".to_owned()])
+        .expect("test CA is valid");
+    let pool = ConnectionConfig::require_tls_with_custom_ca(
+        "postgresql://registry_runtime@db.example.invalid/registry",
+        certificate.cert.der(),
         bounds,
     )
     .expect("test connection configuration is valid")
     .build_pool()
     .expect("test pool builds");
     let review_client = ReviewClient::new(ReviewClientConfig::new(
-        "http://127.0.0.1:9/".parse().expect("loopback URL"),
+        "https://review.example.invalid/"
+            .parse()
+            .expect("reserved HTTPS URL"),
     ))
     .expect("review client builds");
     let authority = Arc::new(
