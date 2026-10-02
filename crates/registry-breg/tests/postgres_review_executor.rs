@@ -6024,3 +6024,104 @@ async fn an_unreachable_result_feed_backs_off_and_warns_only_on_transitions() {
     drop(pool);
     database.cleanup().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_worker_returns_when_its_shutdown_sender_is_dropped() {
+    let database = prepare_review_database().await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(ReviewWorker::new(pool.clone(), None, None).run(shutdown_rx));
+    // An idle pass leaves the worker waiting on its shutdown signal.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(shutdown_tx);
+
+    let joined = tokio::time::timeout(Duration::from_secs(3), worker).await;
+    assert!(
+        matches!(joined, Ok(Ok(()))),
+        "a review worker whose shutdown sender is gone must return instead of spinning"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_events() {
+    let database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa9);
+    seed_accepted_submission(&database, request_id, Uuid::from_u128(0xaa)).await;
+    make_result_poll_due(&database.admin, request_id).await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry_with_token(
+        "casework-a",
+        "producer-a",
+        "sender",
+        "registry-a",
+        Arc::new(UnavailableToken),
+    );
+
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_writer(logs.clone())
+        .finish();
+    let capture = tracing::subscriber::set_default(subscriber);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let run = ReviewWorker::new(pool.clone(), Some(authorities), None).run(shutdown_rx);
+    tokio::pin!(run);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        tokio::select! {
+            () = &mut run => break,
+            () = tokio::time::sleep(Duration::from_millis(20)) => {
+                if logs.text().contains("review.worker.iteration_failed") {
+                    shutdown_tx.send(true).expect("signal worker shutdown");
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the failed iteration was never reported"
+                );
+            }
+        }
+    }
+    drop(capture);
+
+    // The operational events this worker emits. The result feed's own
+    // backoff lines name their authority under the review store's target.
+    let records = logs
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+        .filter(|record| record["target"] == "registry_breg::review")
+        .collect::<Vec<_>>();
+    let codes = records
+        .iter()
+        .filter_map(|record| record["fields"]["code"].as_str())
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"review.result_lookups.unavailable"));
+    assert!(codes.contains(&"review.worker.iteration_failed"));
+    for record in &records {
+        assert_eq!(record["level"], "WARN");
+        assert_eq!(
+            record["fields"]
+                .as_object()
+                .expect("fields are an object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["code", "message"]
+        );
+    }
+    let output = records
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!output.contains("casework-a"));
+    assert!(!logs.text().contains(&request_id.to_string()));
+
+    drop(pool);
+    database.cleanup().await;
+}
