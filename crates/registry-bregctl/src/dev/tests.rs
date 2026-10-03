@@ -1408,7 +1408,7 @@ fn state_refuses_changed_ownership_without_touching_paths() {
 }
 
 #[test]
-fn a_retained_mint_state_is_named_before_v2_deserialization_without_mutation() {
+fn a_retained_v1_state_is_invalid_without_mutation() {
     let (_temp, state, clients, files) = fixture();
     let root = state.root();
     initialize(&root, &state, &clients, &files).unwrap();
@@ -1423,15 +1423,10 @@ fn a_retained_mint_state_is_named_before_v2_deserialization_without_mutation() {
     private::replace(&state_file, &bytes).unwrap();
 
     let refusal = read_state(&root).unwrap_err().to_string();
-    assert!(
-        refusal.contains("Mint-based issuer (state v1)"),
-        "{refusal}"
+    assert_eq!(
+        refusal,
+        "retained dev state is invalid; preserve it for inspection"
     );
-    assert!(
-        refusal.contains("does not implement retained issuer migration"),
-        "{refusal}"
-    );
-    assert!(!refusal.contains("migrate-issuer PROJECT"), "{refusal}");
     assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
 }
 
@@ -1576,8 +1571,6 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
             issuer_image: None,
             database_port: Some(ports[2]),
             breg_bin: Some(prerequisites.join("breg")),
-            mint_port: None,
-            mint_bin: None,
             docker_bin: Some(prerequisites.join("docker")),
         })
         .expect_err("a breg from another release never starts a session")
@@ -2271,8 +2264,6 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
         issuer_image: None,
         database_port: None,
         breg_bin: Some(project.join("missing-breg")),
-        mint_port: None,
-        mint_bin: None,
         docker_bin: None,
     })
 }
