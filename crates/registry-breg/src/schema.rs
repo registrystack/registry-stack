@@ -734,7 +734,7 @@ mod tests {
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
-            "retired package trust anchor",
+            "unknown package member",
             |instance| {
                 instance["package"]["trustAnchorPath"] =
                     Value::from("/etc/breg/package-trust-anchor.json");

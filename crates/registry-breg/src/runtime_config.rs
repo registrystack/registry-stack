@@ -16,7 +16,7 @@ use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     redact_refused_values, AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader,
+    PackageConfig as SharedPackageConfig, RuntimeConfigErrorKind, RuntimeConfigLoader,
     RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
@@ -175,26 +175,6 @@ pub enum RuntimeConfigError {
     PackageRootUnavailable,
     #[error("the configured package root path contains a symbolic link")]
     UnsafePackageRoot,
-    #[error(
-        "package.trustAnchorPath was removed; remove it: `bregctl apply` with the migration \
-         credential authorizes an activation and records it in the database ledger"
-    )]
-    PackageTrustAnchorRemoved,
-    #[error(
-        "package.activeRevision was removed; remove it: the database ledger records the active \
-         package, see `bregctl status`"
-    )]
-    PackageActiveRevisionRemoved,
-    #[error(
-        "package.activeSequence was removed; remove it: the database ledger records the active \
-         package, see `bregctl status`"
-    )]
-    PackageActiveSequenceRemoved,
-    #[error(
-        "package.compilerSourceRevision was removed; remove it: the package manifest records \
-         its compiler identity"
-    )]
-    PackageCompilerSourceRevisionRemoved,
     #[error("runtime configuration contains an invalid OIDC binding")]
     InvalidOidc,
     #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
@@ -272,10 +252,6 @@ impl RuntimeConfigError {
             Self::InvalidPackage => "runtime_config.invalid_package",
             Self::PackageRootUnavailable => "runtime_config.package_root_unavailable",
             Self::UnsafePackageRoot => "runtime_config.unsafe_package_root",
-            Self::PackageTrustAnchorRemoved
-            | Self::PackageActiveRevisionRemoved
-            | Self::PackageActiveSequenceRemoved
-            | Self::PackageCompilerSourceRevisionRemoved => "runtime_config.package_key_removed",
             Self::InvalidOidc => "runtime_config.invalid_oidc",
             Self::InvalidOidcLeeway => "runtime_config.invalid_oidc_leeway",
             Self::InvalidAudit => "runtime_config.invalid_audit",
@@ -315,10 +291,6 @@ impl RuntimeConfigError {
             Self::InvalidDatabase => "/database",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
-            Self::PackageTrustAnchorRemoved => "/package/trustAnchorPath",
-            Self::PackageActiveRevisionRemoved => "/package/activeRevision",
-            Self::PackageActiveSequenceRemoved => "/package/activeSequence",
-            Self::PackageCompilerSourceRevisionRemoved => "/package/compilerSourceRevision",
             Self::InvalidOidc => "/authentication/oidc",
             Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
             Self::InvalidAudit => "/audit",
@@ -394,45 +366,8 @@ pub fn parse_runtime_config_with_env(
     runtime_config_from_substituted(substituted)
 }
 
-/// Package keys this runtime no longer reads, each with what replaces it. The
-/// shared loader refuses them before it substitutes any value.
-const REMOVED_KEYS: [RemovedKey; 4] = [
-    RemovedKey {
-        path: "package.trustAnchorPath",
-        replacement: "remove it: `bregctl apply` with the migration credential authorizes an \
-                      activation and records it in the database ledger",
-    },
-    RemovedKey {
-        path: "package.activeRevision",
-        replacement: "remove it: the database ledger records the active package, see \
-                      `bregctl status`",
-    },
-    RemovedKey {
-        path: "package.activeSequence",
-        replacement: "remove it: the database ledger records the active package, see \
-                      `bregctl status`",
-    },
-    RemovedKey {
-        path: "package.compilerSourceRevision",
-        replacement: "remove it: the package manifest records its compiler identity",
-    },
-];
-
-/// The refusal that names a removed key the shared loader found.
-fn removed_key_error(field: &str) -> Option<RuntimeConfigError> {
-    match field {
-        "package.trustAnchorPath" => Some(RuntimeConfigError::PackageTrustAnchorRemoved),
-        "package.activeRevision" => Some(RuntimeConfigError::PackageActiveRevisionRemoved),
-        "package.activeSequence" => Some(RuntimeConfigError::PackageActiveSequenceRemoved),
-        "package.compilerSourceRevision" => {
-            Some(RuntimeConfigError::PackageCompilerSourceRevisionRemoved)
-        }
-        _ => None,
-    }
-}
-
-/// The shared runtime configuration loader under BReg's envelope, bound, and
-/// removed keys. BReg reads the file through it: the loader holds the path,
+/// The shared runtime configuration loader under BReg's envelope and bound.
+/// BReg reads the file through it: the loader holds the path,
 /// symbolic link, regular file, and bounded read checks.
 const fn runtime_config_loader() -> RuntimeConfigLoader {
     RuntimeConfigLoader::new(RuntimeEnvelope {
@@ -440,7 +375,6 @@ const fn runtime_config_loader() -> RuntimeConfigLoader {
         kind: RUNTIME_CONFIG_KIND,
     })
     .max_bytes(MAX_RUNTIME_CONFIG_BYTES)
-    .removed_keys(&REMOVED_KEYS)
 }
 
 fn runtime_config_from_substituted(substituted: Value) -> Result<RuntimeConfig> {
@@ -489,9 +423,8 @@ fn runtime_config_error_from_loader(
             RuntimeConfigError::UnsafeFile
         }
         RuntimeConfigErrorKind::Unavailable => RuntimeConfigError::Unavailable,
-        RuntimeConfigErrorKind::RemovedKey => removed_key_error(error.field())
-            .unwrap_or_else(|| RuntimeConfigError::Document(error.message().to_owned())),
-        RuntimeConfigErrorKind::Syntax
+        RuntimeConfigErrorKind::RemovedKey
+        | RuntimeConfigErrorKind::Syntax
         | RuntimeConfigErrorKind::Encoding
         | RuntimeConfigErrorKind::InvalidValue
         | RuntimeConfigErrorKind::AuthoredExpression

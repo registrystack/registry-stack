@@ -948,65 +948,32 @@ fn wasm_execution_section_refuses_unknown_members() {
 }
 
 #[test]
-fn retired_package_keys_are_refused_before_parse_with_their_replacement() {
+fn unknown_package_keys_are_refused_as_document_errors_without_their_value() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    for (line, expected, replacement) in [
-        (
-            "  trustAnchorPath: /etc/breg/trust-anchor.json\n",
-            RuntimeConfigError::PackageTrustAnchorRemoved,
-            "bregctl apply",
-        ),
-        (
-            "  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-            RuntimeConfigError::PackageActiveRevisionRemoved,
-            "bregctl status",
-        ),
-        (
-            "  activeSequence: 1\n",
-            RuntimeConfigError::PackageActiveSequenceRemoved,
-            "bregctl status",
-        ),
-        (
-            "  compilerSourceRevision: source-revision-1\n",
-            RuntimeConfigError::PackageCompilerSourceRevisionRemoved,
-            "package manifest",
-        ),
+    for line in [
+        "  trustAnchorPath: /etc/breg/unread-trust-anchor.json\n",
+        "  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        "  activeSequence: 424242\n",
+        "  compilerSourceRevision: unread-source-revision\n",
     ] {
         let raw = base.replace(
             &format!("  root: {}\n", fixture.package_root.display()),
             &format!("  root: {}\n{line}", fixture.package_root.display()),
         );
         let error = parse_runtime_config_with_env(&raw, env_lookup)
-            .expect_err("a retired package key is refused");
-        assert_eq!(error, expected);
-        assert_eq!(error.code(), "runtime_config.package_key_removed");
+            .expect_err("an unknown package key is refused");
+        assert_eq!(refusal(error.clone()), DOCUMENT);
+        assert_eq!(error.code(), "runtime_config.document");
         let key = line.trim().split(':').next().expect("line names a key");
-        assert_eq!(error.path(), format!("/package/{key}"));
         let message = error.to_string();
-        assert!(message.contains(&format!("package.{key}")), "{message}");
-        assert!(message.contains("remove it"), "{message}");
-        assert!(message.contains(replacement), "{message}");
+        assert!(
+            message.contains(&format!("unknown field `{key}`")),
+            "{message}"
+        );
         let value = line.split_once(": ").expect("line holds a value").1.trim();
         assert!(!message.contains(value), "{message}");
     }
-}
-
-#[test]
-fn a_retired_package_key_is_refused_before_its_value_is_substituted() {
-    let fixture = RuntimeFixture::new();
-    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        &format!("  root: {}\n", fixture.package_root.display()),
-        &format!(
-            "  root: {}\n  trustAnchorPath: ${{BREG_RUNTIME_CONFIG_UNSET_ANCHOR}}\n",
-            fixture.package_root.display()
-        ),
-    );
-    assert_eq!(
-        parse_runtime_config_with_env(&raw, env_lookup)
-            .expect_err("a retired key is refused before its expression is substituted"),
-        RuntimeConfigError::PackageTrustAnchorRemoved
-    );
 }
 
 /// Every document refusal keeps the `runtime_config.document` code and says
