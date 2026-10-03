@@ -4,8 +4,8 @@
 
 Release label: pre-1.0 technical release for evaluation and integration pilots.
 
-Shared Rust security and operational primitives for Registry Relay, Evidence,
-and related registry services.
+Shared Rust security and operational primitives for Evidence and related
+registry services.
 
 The workspace is consumed by applications through a pinned git tag. It centralizes
 the pieces that should behave identically across services: outbound HTTP policy,
@@ -31,7 +31,7 @@ integration-test fixtures.
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
 | [`registry-platform-ratelimit`](crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
-| [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution shared by Relay and Evidence. |
+| [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution for Evidence source adapters. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
 
 ## Design Principles

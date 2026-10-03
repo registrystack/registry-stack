@@ -81,13 +81,13 @@ true:
   and exact artifact digest.
 - Product problem generation preserves each closed value-free problem inventory
   and adds no authentication or disclosure behavior.
-- Retired Relay V1, Registry Notary, Registry Platform operations, registryctl,
-  and release-lock identifiers are absent from the generated active catalog.
+- Retired Registry Relay, Registry Notary, Registry Platform operations,
+  registryctl, and release-lock identifiers are absent from the generated
+  active catalog.
   A path that was already published remains available as historical resolver
   output and cannot be reused.
-- Registry-owned Relay V2 vocabulary identifiers are published; Solmara demo
-  identifiers and legacy SHACL fixture identifiers remain outside the public
-  catalog because they are not Registry Stack contracts.
+- Solmara demo identifiers and legacy SHACL fixture identifiers remain outside
+  the public catalog because they are not Registry Stack contracts.
 - Registry Stack CI checks tracked identifier-reference closure on every
   change and selects the full identifier contract for every owning problem,
   schema, namespace, vocabulary, generator, and catalog input.

@@ -193,7 +193,7 @@ authority of its own.
   terms are equivalent, that claim belongs to the vocabularies that publish it,
   not to the manifest that references both.
 - **It grants no access and triggers no safeguard.** Concepts do not activate
-  Registry Relay authorization, redaction, filtering, purpose handling, or
+  service authorization, redaction, filtering, purpose handling, or
   privacy classification, and no Registry Stack service changes its disclosure
   decisions because a field names a particular concept. `concepts` is not a
   classification field.
@@ -398,7 +398,7 @@ Source:
 
 The following keys must not appear in a portable manifest.
 Their presence causes `validate`, `publish`, and `validate-profiles` to fail.
-They belong in a service's runtime configuration, such as Registry Relay's, not in a metadata manifest.
+They belong in a service's runtime configuration, not in a metadata manifest.
 
 `admin_bind`, `admin_listener`, `audit`, `auth`, `bind`, `bindings`, `capabilities`,
 `column`, `config_trust`, `file_path`, `listener`, `listeners`, `peer_allowlist`,

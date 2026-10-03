@@ -10,7 +10,7 @@ the original implementation phases.
 Evidence evaluates fixed requests against authoritative sources and returns
 minimum-disclosure assertions. One `registry-evidence` crate and `evidence`
 binary serve one operator-controlled trust domain. Evidence may consume a
-Relay or BReg HTTP route through its ordinary fixed source contract, or another
+protected registry HTTP route through its ordinary fixed source contract, or another
 Evidence service through that contract's signed Evidence protocol. Their
 authorization models remain separate. Signed sources reuse the Evidence
 client's offline request preparation and verifier with governed trust pins.

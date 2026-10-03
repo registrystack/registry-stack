@@ -108,32 +108,6 @@ class Row:
 
 ROWS: tuple[Row, ...] = (
     Row(
-        product="relay",
-        loader_sources=("crates/registry-relay-v2/src",),
-        runtime_schema="crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        shared_blocks=(
-            "EnvironmentSecretProviderConfig",
-            "FileSecretProviderConfig",
-            "JwksSource",
-            "ListenerBind",
-            "ListenerConfig",
-            "PackageConfig",
-            "SecretProvidersConfig",
-        ),
-        reference_refusal=TestRef(
-            "crates/registry-relay-v2/src/contract.rs",
-            "environment_substitution_never_reaches_a_secret_reference",
-        ),
-        authored_refusal=TestRef(
-            "crates/registry-relay-v2/src/contract.rs",
-            "an_authored_contract_carrying_an_environment_expression_is_refused",
-        ),
-        digest_mismatch=TestRef(
-            "crates/registry-relay-v2/tests/process_http.rs",
-            "built_relay_check_honors_a_package_digest_pin",
-        ),
-    ),
-    Row(
         product="render",
         loader_sources=("crates/registry-render/src",),
         runtime_schema=Exemption("Render publishes no generated runtime schema"),
@@ -532,7 +506,7 @@ ROWS: tuple[Row, ...] = (
 )
 
 EXPECTED_PRODUCTS = frozenset(
-    {"relay", "render", "discovery", "evidence", "breg", "casework", "scheduling",
+    {"render", "discovery", "evidence", "breg", "casework", "scheduling",
      "messaging", "breg-mcp", "breg-review"}
 )
 
