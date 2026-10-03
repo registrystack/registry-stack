@@ -1,9 +1,8 @@
 //! Misuse-resistant fixed-origin transport substrate.
 //!
-//! This is not a complete `BoundedHttpPlan` API. Until Relay has a reviewed
-//! plan compiler, structural operation constructors remain test-only. The
-//! eventual compiler will be the sole production path that can create the
-//! opaque request consumed by [`FixedDestinationPolicy::send`].
+//! Product tooling compiles reviewed operation templates that create the opaque
+//! requests consumed by [`FixedDestinationPolicy::send`]. Structural request
+//! constructors remain test-only; production callers use the template APIs.
 //!
 //! Sensitive buffers owned by this module are zeroized on drop. Reqwest,
 //! hyper, rustls, and the operating system necessarily create internal copies;
@@ -3340,8 +3339,8 @@ fn append_path_segment_component(
 ///
 /// The type is intentionally not `Clone`. Its custom `Debug` implementation
 /// reveals no target, header, authorization, or body value.
-/// Production dependents cannot mint this capability before the reviewed Relay
-/// plan compiler exists:
+/// Production dependents cannot construct this capability directly; reviewed
+/// request templates own its construction:
 ///
 /// ```compile_fail
 /// use registry_platform_httputil::destination::{
@@ -3394,7 +3393,7 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequest<S> {
 }
 
 impl<S: DestinationSlot> BoundedDestinationRequest<S> {
-    /// Return the complete non-credential request effect for Relay's keyed
+    /// Return the complete non-credential request effect for a keyed
     /// pre-dispatch commitment.
     ///
     /// Header and body octets are encoded losslessly. The separately retained
@@ -3406,14 +3405,14 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
     }
 
     /// Build an effect while excluding the final reviewed header slot, which
-    /// is reserved for an API-key credential by Relay's compiler.
+    /// is reserved for an API-key credential by the reviewed request template.
     #[must_use]
     pub fn effect_value_without_api_key_header(&self, destination_id: &str) -> serde_json::Value {
         self.effect_value(destination_id, true, false, false)
     }
 
     /// Build an effect while excluding the final reviewed query slot, which
-    /// is reserved for an API-key credential by Relay's compiler.
+    /// is reserved for an API-key credential by the reviewed request template.
     #[must_use]
     pub fn effect_value_without_api_key_query(&self, destination_id: &str) -> serde_json::Value {
         self.effect_value(destination_id, false, true, false)
@@ -4693,8 +4692,8 @@ fn is_forbidden_static_request_header(name: &HeaderName) -> bool {
 
 /// Whether a response header name is eligible for explicit script exposure.
 ///
-/// This is public so the Relay artifact compiler can reject an unsafe authored
-/// selection before activation. Runtime selection repeats the same check.
+/// Product tooling uses this to reject unsafe authored selections before
+/// activation. Runtime selection repeats the same check.
 pub fn is_script_visible_response_header_name(name: &str) -> bool {
     HeaderName::from_str(name).is_ok_and(|name| !is_forbidden_script_response_header(&name))
 }

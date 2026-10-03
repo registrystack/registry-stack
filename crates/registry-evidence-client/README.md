@@ -3,8 +3,7 @@
 Relying-party client for requesting and verifying signed Evidence Version 1
 responses.
 
-This is adopter tooling beside the Evidence runtime, like `relayctl` is for
-Relay V2. It sits outside the frozen Version 1 runtime contract and
+This is adopter tooling beside the Evidence runtime. It sits outside the frozen Version 1 runtime contract and
 it re-implements no part of evaluation, signing, or verification: every
 judgement about a response is made by `registry-evidence-verifier`.
 

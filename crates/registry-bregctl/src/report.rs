@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Styled plain-text rendering of the bregctl reports.
 //!
-//! This is the same rendering discipline `relayctl` applies in its own
-//! `report` module: a lead sentence carrying the counts, aligned `label
+//! Reports use a lead sentence carrying the counts, aligned `label
 //! value` detail, blank-line separated sections, and a closing count of what
 //! the reader has to act on. It differs in two ways that this tooling needs.
 //!

@@ -4,7 +4,6 @@
 mod evidence;
 mod products;
 mod refs;
-mod relay_v2;
 mod safety;
 mod server;
 mod workspace;
@@ -13,7 +12,7 @@ mod yaml;
 pub use products::ProductKind;
 pub use refs::{
     CompletionCandidate, EvidenceKind, HoverText, IndexedDiagnostic, IndexedLocation,
-    IndexedSymbol, ProjectIndex, RelayV2Kind, SymbolKind,
+    IndexedSymbol, ProjectIndex, SymbolKind,
 };
 pub use server::Backend;
 

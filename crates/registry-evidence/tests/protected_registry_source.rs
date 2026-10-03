@@ -1,14 +1,8 @@
-//! Evidence-over-Relay composition: one full signed Evidence assertion is
-//! evaluated over a mock HTTP source whose wire shape mirrors a Registry
-//! Relay protected read API, authenticated with OAuth client credentials.
+//! One full signed Evidence assertion over a synthetic protected registry HTTP read.
 //!
-//! The mock mirrors the Relay wire shape by hand: the templated protected
-//! fixed read path and the cursor-paginated response body of
-//! `GET /v2/resources/{resource}/records`. Evidence
-//! proves the composition without importing or depending on any Relay code,
-//! per the Evidence product boundary rules, so no Relay crate, type, or
-//! fixture appears here and the record content stays synthetic and
-//! domain-neutral.
+//! The fixed path and cursor-paginated JSON body are ordinary source data.
+//! OAuth client credentials authenticate the source request; bounded extraction
+//! feeds a minimum-disclosure assertion without a dependency on another runtime.
 
 #![cfg(unix)]
 
@@ -47,9 +41,9 @@ fn prepared_http_request(parts: &RequestParts) -> PreparedSourceRequest {
     PreparedSourceRequest::Http(parts.clone())
 }
 
-/// The Relay-shaped protected read for one synthetic record.
+/// The protected registry read for one synthetic record.
 const RECORD_PATH: &str = "/v2/resources/residence-record/records";
-/// Raw record material from the mirrored Relay response body. None of it may
+/// Raw record material from the mirrored registry response body. None of it may
 /// reach the signed assertion payload.
 const RAW_FIELD_NAME_CANARY: &str = "area_geometry";
 const RAW_FIELD_VALUE_CANARY: &str = "SYNTHETIC-AREA-GEOMETRY-CANARY";
@@ -57,7 +51,7 @@ const RECORD_KEY: &str = "REC-0001";
 const RAW_REGION_CODE: &str = "R-101";
 
 const AUDIENCE: &str = "https://relying.invalid/residence-procedure";
-const BINDING_KEY: &[u8] = b"relay-composition-binding-key-32-bytes-minimum";
+const BINDING_KEY: &[u8] = b"registry-composition-binding-key-32-bytes-minimum";
 const REQUIREMENT: &str = "urn:example:fixture:requirement:residence-region:v1";
 
 /// The reviewed bounded request preparation: the subject supplies only the
@@ -97,8 +91,8 @@ fn extract(source_response, parameters) {
 
 /// An Evidence source declared the way a deployment bundle would declare it:
 /// oauth2-client-credentials against the mock token endpoint and a fixed GET
-/// against the Relay-shaped record path.
-fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
+/// against the protected registry record path.
+fn protected_registry_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
     serde_json::from_value(json!({
         "transport": "http-json",
         "baseUrl": base_url,
@@ -106,8 +100,8 @@ fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
         "authentication": {
             "kind": "oauth2-client-credentials",
             "tokenEndpoint": token_endpoint,
-            "clientIdRef": "secret:file/relay-client-id",
-            "clientSecretRef": "secret:file/relay-client-secret",
+            "clientIdRef": "secret:file/registry-client-id",
+            "clientSecretRef": "secret:file/registry-client-secret",
             "scope": "registry.read",
             "credentialPlacement": "form-body",
             "maximumCacheSeconds": 60
@@ -141,7 +135,7 @@ fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
         "extractScript": "adapters/extract.rhai",
         "factSchema": "schemas/facts.schema.yaml"
     }))
-    .expect("Relay-shaped source config deserializes")
+    .expect("protected registry source config deserializes")
 }
 
 fn resolver(entries: &[(&str, &str)]) -> (TempDir, Arc<SecretResolver>) {
@@ -259,8 +253,8 @@ async fn fixture_signer() -> EvidenceSigner {
 }
 
 #[tokio::test]
-async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_assertion() {
-    // A mock OAuth token endpoint stands in for the Relay deployment's
+async fn a_protected_registry_read_backs_a_full_signed_minimum_disclosure_assertion() {
+    // A mock OAuth token endpoint stands in for the source deployment's
     // authorization server: it only answers a client-credentials grant and
     // issues one fresh bearer token.
     let token_server = MockServer::start().await;
@@ -281,8 +275,8 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         .mount(&token_server)
         .await;
 
-    // The record endpoint mirrors the Relay V2 wire shape by hand (hardcoded
-    // JSON, no Relay code): mandatory Registry Core fields stay non-selectable,
+    // The record endpoint mirrors the fixed registry wire shape by hand (hardcoded
+    // JSON, no product runtime code): mandatory Registry Core fields stay non-selectable,
     // selected values live in domainData, and the collection has items,
     // pageInfo, and meta.
     // Only a request carrying the exact issued bearer, the pinned Accept
@@ -317,7 +311,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         .expect(1)
         .mount(&records_server)
         .await;
-    // Any request that misses the exact bearer is rejected the way a Relay
+    // Any request that misses the exact bearer is rejected the way a protected registry
     // deployment rejects it, and must never happen.
     Mock::given(method("GET"))
         .and(path(RECORD_PATH))
@@ -332,10 +326,10 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
 
     // Deployment-shaped inputs: file-provider secrets and the declared source.
     let (_secret_root, secrets) = resolver(&[
-        ("relay-client-id", client_id.as_str()),
-        ("relay-client-secret", client_secret.as_str()),
+        ("registry-client-id", client_id.as_str()),
+        ("registry-client-secret", client_secret.as_str()),
     ]);
-    let source = relay_shaped_source(
+    let source = protected_registry_source(
         &records_server.uri(),
         &format!("{}/oauth/token", token_server.uri()),
     );
@@ -370,9 +364,9 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             &parameters,
             &request_limits(&source_request.preparation_limits),
         )
-        .expect("fixed Relay read preparation succeeds");
+        .expect("fixed registry read preparation succeeds");
 
-    // Production transport materialization pins the exact Relay-shaped read.
+    // Production transport materialization pins the exact protected registry read.
     let transport_selectors = vec![ResolvedSourceSelector {
         role: "subject".into(),
         profile: "residence-record-v1".into(),
@@ -381,10 +375,11 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             SelectorValue::String(RECORD_KEY.into()),
         )]),
     }];
-    let executor = SourceExecutor::new(&source, secrets).expect("Relay-shaped source compiles");
+    let executor =
+        SourceExecutor::new(&source, secrets).expect("protected registry source compiles");
     let materialized = executor
         .materialize_request(&transport_selectors, &prepared_http_request(&prepared))
-        .expect("Relay-shaped request materializes");
+        .expect("protected registry request materializes");
     assert_eq!(materialized.path(), Some(RECORD_PATH));
     assert_eq!(
         materialized.query(),
@@ -401,9 +396,9 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             Utc::now(),
         )
         .await
-        .expect("Relay-shaped source read succeeds")
+        .expect("protected registry source read succeeds")
         .into_data()
-        .expect("Relay-shaped source response carries data");
+        .expect("protected registry source response carries data");
     assert_eq!(
         projected,
         json!({
@@ -454,7 +449,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     .expect("response schema compiles");
     assert!(
         response_schema.is_valid(&projected),
-        "projected Relay-shaped response is outside the declared response schema"
+        "projected protected registry response is outside the declared response schema"
     );
 
     // Reviewed extraction produces exactly the one declared fact.
@@ -469,10 +464,10 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     .expect("fact schema compiles");
     let facts = match runtime
         .extract(&extraction, &projected, &parameters, &fact_schema)
-        .expect("Relay-shaped response extracts")
+        .expect("protected registry response extracts")
     {
         LookupResult::Match(facts) => facts,
-        _ => panic!("Relay-shaped match returned a non-match outcome"),
+        _ => panic!("protected registry match returned a non-match outcome"),
     };
     assert_eq!(
         serde_json::to_value(&facts).expect("facts serialize"),
@@ -548,7 +543,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         .expect("residence Evidence signs");
 
     // (d) The assertion payload carries only the derived answer: no raw
-    // record field name or value from the mirrored Relay response body.
+    // record field name or value from the mirrored registry response body.
     let payload = String::from_utf8(
         URL_SAFE_NO_PAD
             .decode(&jws.payload)
@@ -567,7 +562,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     ] {
         assert!(
             !payload.contains(canary),
-            "raw Relay record material reached the assertion payload: {canary}"
+            "raw registry record material reached the assertion payload: {canary}"
         );
     }
 

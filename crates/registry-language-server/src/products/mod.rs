@@ -31,6 +31,14 @@ use tower_lsp_server::ls_types::{Position, Range};
 
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const EXPLICIT_MARKER: &str = ".registry-stack-editor/project.json";
+const AUTHORING_EXTENSIONS: &[&str] = &["yaml", "yml", "json"];
+
+/// File changes in retained authoring formats refresh their owned project inputs.
+pub(crate) fn watched_globs() -> impl Iterator<Item = String> {
+    AUTHORING_EXTENSIONS
+        .iter()
+        .map(|extension| format!("**/*.{extension}"))
+}
 
 fn spec(product: ProductKind) -> ProductSpec {
     let specification = catalog::spec(product)
@@ -54,7 +62,7 @@ fn read_text(root: &Path, path: &Path) -> Option<String> {
 fn is_authoring_document(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension, "yaml" | "yml" | "json"))
+        .is_some_and(|extension| AUTHORING_EXTENSIONS.contains(&extension))
 }
 
 fn safe_relative(value: &str) -> Option<PathBuf> {
@@ -834,6 +842,26 @@ fn messaging_template_files(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn watchers_cover_retained_yaml_yml_and_json_authoring() {
+        let globs = watched_globs().collect::<Vec<_>>();
+        for path in [
+            "casework.yaml",
+            "mappings/other.yml",
+            "imports/source-description.json",
+            ".registry-stack-editor/project.json",
+        ] {
+            assert!(is_authoring_document(Path::new(path)));
+            assert!(
+                globs.iter().any(|glob| matches_pattern(glob, path)),
+                "{path}"
+            );
+        }
+        assert!(!globs
+            .iter()
+            .any(|glob| matches_pattern(glob, "signing.key")));
+    }
 
     fn project(files: &[(&str, &str)]) -> TempDir {
         let directory = TempDir::new().unwrap();

@@ -9,7 +9,7 @@
 //! It is deliberately not a general identity platform:
 //!
 //! - It opens no listener and ships no binary; only adopter CLIs and
-//!   integration tests depend on it. The BREG, Evidence, Relay, and OID4VCI
+//!   integration tests depend on it. The BREG, Evidence, and OID4VCI
 //!   runtime crates must not.
 //! - It renders what an owning CLI's validated [`description::IssuerDescription`]
 //!   states. It knows no product entity names, institutions, people, or
