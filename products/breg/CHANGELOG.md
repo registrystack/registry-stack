@@ -125,6 +125,24 @@
   action or effect, or changes the effect's operation, that revision's detail
   read and any list page that includes it answer `503 source.unavailable`.
 
+- A record, list, lookup, relationship, attachment, access-log, revision, or
+  snapshot read abandoned at the request deadline (`504 request.timeout`) now
+  cancels its in-flight PostgreSQL statement and discards its session, as
+  governed request actions already did. Previously the abandoned backend kept
+  running while the pool opened a replacement, so under overload the number of
+  runtime sessions rose past the pool's `maxSize`. The cancelled session now
+  keeps its pool slot until PostgreSQL has stopped the statement, so the
+  session count stays within `maxSize`. The read's audit attempt is still
+  answered by exactly one `unfinished` response, and nothing the read
+  collected is released.
+- The review worker backs off a review authority's result feed after a failed
+  fetch, waiting 1 second and doubling up to 60 seconds, and fetches it on
+  every pass again after the first successful page. It warns once when a feed
+  becomes unavailable and once when it recovers, and logs repeated failures at
+  debug. Previously an unavailable authority was asked for its feed, and
+  `BReg review result feeds are temporarily unavailable` was logged, about
+  once a second.
+
 ## v0.38.0 - 2026-10-01
 
 - Automatic review executors can renew credentials with `privateKeyJwt`.

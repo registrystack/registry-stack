@@ -47,6 +47,7 @@ use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
+use super::cancellation::QueryCancellationGuard;
 use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
@@ -121,7 +122,7 @@ impl PostgresSnapshotReadService {
         if !profile_is_keyed(self.audit.profile()) {
             return Err(ReadServiceError::Unavailable);
         }
-        let mut client = self
+        let client = self
             .pool
             .get()
             .await
@@ -170,7 +171,15 @@ impl PostgresSnapshotReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
 
-        let materialized = self.read_rows(&mut client, &request, &claims, &plan).await;
+        // A read abandoned at its deadline stops its statement and gives up
+        // the session rather than leaving the backend running. The guard is
+        // armed only once the read reaches its I/O: a read refused or failed
+        // before then hands its idle session back to the pool.
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
+        let materialized = self
+            .read_rows(session.client(), &request, &claims, &plan)
+            .await;
+        session.disarm();
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => {

@@ -27,13 +27,13 @@ use crate::mutation::{
     MutationRequest, PatchOperation,
 };
 
+use super::cancellation::QueryCancellationGuard;
 use super::{
     begin_record_transaction, ActionClaimContext, ClaimContext, ExpectedRegistryIdentity,
     RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
-const REQUEST_ACTION_CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct PostgresRecordMutationService {
@@ -240,7 +240,7 @@ impl PostgresRecordMutationService {
             .await
             .map_err(|_| MutationError::Unavailable)?
             .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         match tokio::time::timeout_at(
             deadline,
             self.coordinator.execute_immediate_action(
@@ -286,7 +286,7 @@ impl PostgresRecordMutationService {
                 .get()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
             let result = self
                 .coordinator
                 .preflight_evidence_action(
@@ -319,7 +319,7 @@ impl PostgresRecordMutationService {
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         // Receipt recovery is deliberately also performed for refusals and
         // dependency failures. A concurrent committed application takes priority.
         let result = self
@@ -352,7 +352,7 @@ impl PostgresRecordMutationService {
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         match tokio::time::timeout(
             self.action_timeout,
             self.coordinator.action_target_conditions(
@@ -420,7 +420,7 @@ impl PostgresRecordMutationService {
             MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
             _ => crate::mutation::FaultControl::Disabled,
         };
-        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         match tokio::time::timeout(
             REQUEST_ACTION_TIMEOUT,
             self.coordinator.execute_request_action(
@@ -474,7 +474,7 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?
                 .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
             let result = tokio::time::timeout_at(deadline, async {
                 let result = self
                     .coordinator
@@ -521,7 +521,7 @@ impl PostgresRecordMutationService {
             .await
             .map_err(|_| MutationError::Unavailable)?
             .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         // A concurrent committed receipt takes priority over a failed helper.
         let frozen = acquisitions
             .as_ref()
@@ -587,7 +587,7 @@ impl PostgresRecordMutationService {
                 .get()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
             let result = tokio::time::timeout_at(
                 deadline,
                 self.coordinator.preflight_request_action_receipt(
@@ -633,7 +633,7 @@ impl PostgresRecordMutationService {
                     .get()
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
-                let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+                let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
                 let result = tokio::time::timeout_at(
                     deadline,
                     self.coordinator.execute_request_action(
@@ -726,7 +726,7 @@ impl PostgresRecordMutationService {
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(
             deadline,
             self.coordinator.execute_request_action(
@@ -2436,66 +2436,6 @@ impl PostgresRecordMutationService {
         }
         let _ = self.fault;
         self.coordinator.execute(client, request).await
-    }
-}
-
-struct RequestActionCancellationGuard {
-    pool: RuntimePool,
-    client: Option<deadpool_postgres::Client>,
-    cancel_token: tokio_postgres::CancelToken,
-    armed: bool,
-}
-
-impl RequestActionCancellationGuard {
-    fn new(pool: RuntimePool, client: deadpool_postgres::Client) -> Self {
-        let cancel_token = client.cancel_token();
-        Self {
-            pool,
-            client: Some(client),
-            cancel_token,
-            armed: true,
-        }
-    }
-
-    fn client(&mut self) -> &mut deadpool_postgres::Client {
-        self.client
-            .as_mut()
-            .expect("request action client is present while guarded")
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-
-    async fn cancel_and_discard(&mut self) {
-        self.discard();
-        let _ = tokio::time::timeout(
-            REQUEST_ACTION_CANCEL_TIMEOUT,
-            self.pool.cancel_query(self.cancel_token.clone()),
-        )
-        .await;
-        self.armed = false;
-    }
-
-    fn discard(&mut self) {
-        if let Some(client) = self.client.take() {
-            self.pool.discard(client);
-        }
-    }
-}
-
-impl Drop for RequestActionCancellationGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            self.discard();
-            let pool = self.pool.clone();
-            let token = self.cancel_token.clone();
-            tokio::spawn(async move {
-                let _ =
-                    tokio::time::timeout(REQUEST_ACTION_CANCEL_TIMEOUT, pool.cancel_query(token))
-                        .await;
-            });
-        }
     }
 }
 
