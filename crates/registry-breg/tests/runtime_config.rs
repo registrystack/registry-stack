@@ -976,6 +976,59 @@ fn unknown_package_keys_are_refused_as_document_errors_without_their_value() {
     }
 }
 
+/// Substitution runs before the document is read, so an unknown key that
+/// holds a set variable is refused as a document error naming the key, and
+/// the refusal never repeats the substituted value.
+#[test]
+fn an_unknown_package_key_holding_a_set_variable_is_refused_without_the_substituted_value() {
+    let fixture = RuntimeFixture::new();
+    let lookup = |name: &str| match name {
+        "BREG_RUNTIME_CONFIG_CANARY" => Some(EXPANDED_CANARY.to_owned()),
+        other => env_lookup(other),
+    };
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        &format!("  root: {}\n", fixture.package_root.display()),
+        &format!(
+            "  root: {}\n  trustAnchorPath: ${{BREG_RUNTIME_CONFIG_CANARY}}\n",
+            fixture.package_root.display()
+        ),
+    );
+    let error = parse_runtime_config_with_env(&raw, lookup)
+        .expect_err("an unknown package key is refused after substitution");
+    assert_eq!(error.code(), "runtime_config.document");
+    let message = error.to_string();
+    assert!(
+        message.contains("unknown field `trustAnchorPath`"),
+        "{message}"
+    );
+    assert!(!message.contains(EXPANDED_CANARY), "{message}");
+}
+
+/// An unknown key that holds an unset variable never reaches the document
+/// check: substitution refuses first, and that refusal names neither the key
+/// nor the variable.
+#[test]
+fn an_unknown_package_key_holding_an_unset_variable_is_refused_as_an_expansion_error() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        &format!("  root: {}\n", fixture.package_root.display()),
+        &format!(
+            "  root: {}\n  trustAnchorPath: ${{BREG_RUNTIME_CONFIG_UNSET_ANCHOR}}\n",
+            fixture.package_root.display()
+        ),
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup)
+        .expect_err("an unset variable in an unknown package key is refused");
+    assert_eq!(error, RuntimeConfigError::EnvExpansion);
+    assert_eq!(error.code(), "runtime_config.env_expansion");
+    let message = error.to_string();
+    assert!(!message.contains("trustAnchorPath"), "{message}");
+    assert!(
+        !message.contains("BREG_RUNTIME_CONFIG_UNSET_ANCHOR"),
+        "{message}"
+    );
+}
+
 /// Every document refusal keeps the `runtime_config.document` code and says
 /// which field it is about, and none repeats the value it refused, not even
 /// one substituted from the environment.
