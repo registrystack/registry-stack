@@ -35,7 +35,7 @@ fn compile_with_profile(
 }
 
 #[test]
-fn legacy_grants_key_is_refused_with_permissions_migration_guidance() {
+fn a_grants_key_on_an_access_profile_is_refused_as_an_unknown_field() {
     let mut value = source();
     let permissions = value["accessProfiles"][0]
         .as_object_mut()
@@ -45,13 +45,15 @@ fn legacy_grants_key_is_refused_with_permissions_migration_guidance() {
     value["accessProfiles"][0]["grants"] = permissions;
 
     let failure = parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap_err();
-    let diagnostic = failure
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| diagnostic.code == "access_profile.grants.removed")
-        .expect("legacy key has a dedicated migration diagnostic");
-    assert_eq!(diagnostic.path, "project.accessProfiles[0].grants");
-    assert!(diagnostic.message.contains("permissions"));
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("the key is refused by one diagnostic: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert!(
+        diagnostic.message.contains("unknown field `grants`"),
+        "{}",
+        diagnostic.message
+    );
 }
 
 fn assert_refused(value: &Value, code: &str) {

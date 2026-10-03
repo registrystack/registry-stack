@@ -3309,150 +3309,19 @@ pub enum EventTrigger {
 }
 
 pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
-    match parse_json(bytes, "project") {
-        Ok(project) => Ok(project),
-        Err(failure) => Err(removed_project_field_diagnostics(
-            parse_json_strict(bytes).ok().as_ref(),
-        )
-        .unwrap_or(failure)),
-    }
+    parse_json(bytes, "project")
 }
 
 pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    match parse_json(bytes, "module") {
-        Ok(module) => Ok(module),
-        Err(failure) => Err(removed_module_field_diagnostics(
-            parse_json_strict(bytes).ok().as_ref(),
-        )
-        .unwrap_or(failure)),
-    }
+    parse_json(bytes, "module")
 }
 
 pub fn parse_project_yaml(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
-    match parse_yaml(bytes, "project") {
-        Ok(project) => Ok(project),
-        Err(failure) => {
-            let value = serde_norway::from_slice::<Value>(bytes).ok();
-            Err(removed_project_field_diagnostics(value.as_ref()).unwrap_or(failure))
-        }
-    }
-}
-
-fn removed_project_field_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
-    let project = value?.as_object()?;
-    let mut diagnostics = Vec::new();
-    if let Some(package) = project.get("package").and_then(Value::as_object) {
-        for (key, code, message) in [
-            (
-                "environment",
-                "package.environment.removed",
-                "package.environment was removed; delete it and set the deployment environment in the runtime file's identity.environment",
-            ),
-            (
-                "instanceId",
-                "package.instance_id.removed",
-                "package.instanceId was removed; delete it and set the deployment instance in the runtime file's identity.instanceId",
-            ),
-            (
-                "sequence",
-                "package.sequence.removed",
-                "package.sequence was removed; delete it: a package names its predecessor through migrationPlan.fromPackageDigest and the database ledger orders activations",
-            ),
-        ] {
-            if package.contains_key(key) {
-                diagnostics.push(Diagnostic::error(
-                    code,
-                    format!("project.package.{key}"),
-                    message,
-                ));
-            }
-        }
-    }
-    if let Some(projection) = project.get("manifestProjection").and_then(Value::as_object) {
-        if projection.contains_key("dataset") {
-            diagnostics.push(Diagnostic::error(
-                "manifest_projection.dataset.removed",
-                "project.manifestProjection.dataset",
-                "manifestProjection.dataset was removed; use manifestProjection.datasets[]",
-            ));
-        }
-        if projection.contains_key("dataService") {
-            diagnostics.push(Diagnostic::error(
-                "manifest_projection.data_service.removed",
-                "project.manifestProjection.dataService",
-                "manifestProjection.dataService was removed; use manifestProjection.dataServices[]",
-            ));
-        }
-    }
-    if let Some(profiles) = project.get("accessProfiles").and_then(Value::as_array) {
-        for (index, profile) in profiles.iter().enumerate() {
-            if profile
-                .as_object()
-                .is_some_and(|profile| profile.contains_key("grants"))
-            {
-                diagnostics.push(Diagnostic::error(
-                    "access_profile.grants.removed",
-                    format!("project.accessProfiles[{index}].grants"),
-                    "accessProfiles[].grants was replaced by accessProfiles[].permissions; rename the key to permissions",
-                ));
-            }
-        }
-    }
-    removed_entity_hook_diagnostics(project, "project", &["entities"], &mut diagnostics);
-    (!diagnostics.is_empty()).then(|| CompileFailure::from_errors(diagnostics))
-}
-
-fn removed_module_field_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
-    let module = value?.as_object()?;
-    let mut diagnostics = Vec::new();
-    removed_entity_hook_diagnostics(
-        module,
-        "module",
-        &["entities", "extendEntities"],
-        &mut diagnostics,
-    );
-    (!diagnostics.is_empty()).then(|| CompileFailure::from_errors(diagnostics))
-}
-
-/// Name the replacement when a document still declares the removed `events`
-/// member on an entity or an entity extension.
-///
-/// Without this the closed source shape refuses the member as an unknown
-/// field, which is a correct refusal that does not tell an adopter what to
-/// write instead.
-fn removed_entity_hook_diagnostics(
-    document: &serde_json::Map<String, Value>,
-    root: &str,
-    members: &[&str],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for member in members {
-        let Some(entities) = document.get(*member).and_then(Value::as_array) else {
-            continue;
-        };
-        for (index, entity) in entities.iter().enumerate() {
-            if entity
-                .as_object()
-                .is_some_and(|entity| entity.contains_key("events"))
-            {
-                diagnostics.push(Diagnostic::error(
-                    "entity.events.removed",
-                    format!("{root}.{member}[{index}].events"),
-                    "entities[].events was replaced by entities[].hooks; rename the key to hooks, declare phase: after on every hook, and replace webhook with handler {kind: url, destinationId}",
-                ));
-            }
-        }
-    }
+    parse_yaml(bytes, "project")
 }
 
 pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    match parse_yaml(bytes, "module") {
-        Ok(module) => Ok(module),
-        Err(failure) => {
-            let value = serde_norway::from_slice::<Value>(bytes).ok();
-            Err(removed_module_field_diagnostics(value.as_ref()).unwrap_or(failure))
-        }
-    }
+    parse_yaml(bytes, "module")
 }
 
 fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {

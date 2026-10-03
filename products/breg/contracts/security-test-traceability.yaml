@@ -1,7 +1,7 @@
 apiVersion: registry.registrystack.org/product-contract/v1
 product: breg
 traceability:
-  - {id: BREG-SEC-01, state: enforced, negativeId: BREG-NEG-01, negativeTest: {path: crates/registry-breg/tests/compiler_contract.rs, name: retired_package_identity_keys_are_refused_with_their_replacement}}
+  - {id: BREG-SEC-01, state: enforced, negativeId: BREG-NEG-01, negativeTest: {path: crates/registry-breg/tests/compiler_contract.rs, name: deployment_identity_keys_in_the_project_are_refused_as_unknown_fields}}
   - {id: BREG-SEC-02, state: enforced, negativeId: BREG-NEG-02, negativeTest: {path: crates/registry-breg/tests/postgres_package.rs, name: real_postgres_package_startup_apply_failure_and_old_process_are_closed}}
   - {id: BREG-SEC-03, state: enforced, negativeId: BREG-NEG-03, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
   - {id: BREG-SEC-04, state: enforced, negativeId: BREG-NEG-04, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}

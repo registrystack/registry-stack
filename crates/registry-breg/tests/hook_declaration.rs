@@ -133,26 +133,30 @@ fn a_hook_reads_as_a_shared_hook_declaration() {
 }
 
 #[test]
-fn the_replaced_events_member_is_refused_by_name_in_a_project() {
+fn an_events_member_is_refused_as_an_unknown_field_in_a_project() {
     let mut project = project_with_hooks(json!([]));
     let entity = project["entities"][0]
         .as_object_mut()
         .expect("entity object");
     entity.remove("hooks");
     entity.insert("events".to_owned(), json!([url_hook()]));
-    assert_diagnostic(&parse_failure(&project), "entity.events.removed", "hooks");
+    assert_diagnostic(
+        &parse_failure(&project),
+        "source.shape.invalid",
+        "unknown field `events`",
+    );
 }
 
 #[test]
-fn the_replaced_events_member_is_refused_by_name_in_a_module() {
+fn an_events_member_is_refused_as_an_unknown_field_in_a_module() {
     let module = json!({
         "id": "case-events",
         "version": "1",
         "extendEntities": [{"id": "case", "events": [url_hook()]}]
     });
     let failure = parse_module_json(&serde_json::to_vec(&module).expect("module serializes"))
-        .expect_err("the replaced key is refused");
-    assert_diagnostic(&failure, "entity.events.removed", "hooks");
+        .expect_err("the unknown key is refused");
+    assert_diagnostic(&failure, "source.shape.invalid", "unknown field `events`");
 }
 
 #[test]

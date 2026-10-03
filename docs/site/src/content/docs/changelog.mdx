@@ -357,7 +357,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-breg/src/migration.rs, package_ledger_entry(), adopt_verified_package(),
     and read_activation_status(); crates/registry-bregctl/src/apply_lifecycle.rs, plan() and status();
-    crates/registry-breg/src/contract.rs, removed_project_field_diagnostics(). */}
+    crates/registry-breg/src/contract.rs, PackageIdentitySource. */}
 
 - The shared audit writer recovers an active file whose final line a crash tore: the next start
   moves those bytes to the owner-only side file `<audit.path>.torn`, truncates to the last complete

@@ -80,9 +80,9 @@ and point every entity's `primaryDataset` at one of them.
 `entities[].hooks` and `extendEntities[].hooks`, which declare the shared
 Registry Stack hook shape from `registry-platform-hooks`. A hook adds a
 required `phase` and replaces the `webhook` member with a `handler` union
-tagged by `kind`. The old member is refused by name at compile time with
-`entity.events.removed`, so a project that still authors it fails to compile
-rather than silently losing its events.
+tagged by `kind`. The old member is refused at compile time as an unknown
+field, so a project that still authors it fails to compile rather than
+silently losing its events.
 
 Before:
 

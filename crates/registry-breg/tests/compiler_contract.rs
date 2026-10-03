@@ -490,25 +490,6 @@ fn assert_compile_diagnostic(project: registry_breg::contract::RegistryProject, 
     );
 }
 
-#[test]
-fn removed_singular_projection_keys_name_plural_replacements() {
-    let failure = parse_project_json(
-        br#"{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{"id":"legacy","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},"manifestProjection":{"accessProfile":"reader","classificationCeiling":"public","catalog":{"baseUrl":"https://registry.example.test","title":"Registry","publisher":{"name":"Authority"}},"dataset":{"title":"Dataset"},"dataService":{"id":"api","title":"API","endpointUrl":"https://registry.example.test"}}}"#,
-    )
-    .expect_err("singular projection is rejected");
-    let messages = failure
-        .diagnostics()
-        .iter()
-        .map(|diagnostic| diagnostic.message.as_str())
-        .collect::<Vec<_>>();
-    assert!(messages
-        .iter()
-        .any(|message| message.contains("datasets[]")));
-    assert!(messages
-        .iter()
-        .any(|message| message.contains("dataServices[]")));
-}
-
 fn derived_sql_asset(path: &str, sql: &str) -> ModuleAssetSource {
     ModuleAssetSource {
         module: None,
@@ -2509,26 +2490,14 @@ fn registry_revision_is_a_function_of_the_compiled_model_only() {
 }
 
 #[test]
-fn retired_package_identity_keys_are_refused_with_their_replacement() {
-    for (key, value, code, replacement) in [
-        (
-            "environment",
-            json!("local"),
-            "package.environment.removed",
-            "identity.environment",
-        ),
-        (
-            "instanceId",
-            json!("local-instance"),
-            "package.instance_id.removed",
-            "identity.instanceId",
-        ),
-        (
-            "sequence",
-            json!(1),
-            "package.sequence.removed",
-            "migrationPlan.fromPackageDigest",
-        ),
+fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
+    // The project is governed model bytes: a deployment-only value such as
+    // the environment, the instance, or an activation sequence has no member
+    // to land in, so the closed source shape refuses it without echoing it.
+    for (key, value) in [
+        ("environment", json!("deployment-environment-value")),
+        ("instanceId", json!("deployment-instance-value")),
+        ("sequence", json!(424242)),
     ] {
         let mut project = json!({
           "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -2537,20 +2506,32 @@ fn retired_package_identity_keys_are_refused_with_their_replacement() {
           "package":{"sourceRevision":"source"},
           "entities":[]
         });
-        project["package"][key] = value;
+        project["package"][key] = value.clone();
         let bytes = serde_json::to_vec(&project).expect("project serializes");
-        for failure in [
-            parse_project_json(&bytes).expect_err("a retired package key is refused"),
-            parse_project_yaml(&bytes).expect_err("a retired package key is refused in YAML"),
+        for (failure, code) in [
+            (
+                parse_project_json(&bytes).expect_err("a deployment key is refused"),
+                "source.shape.invalid",
+            ),
+            (
+                parse_project_yaml(&bytes).expect_err("a deployment key is refused in YAML"),
+                "source.yaml.invalid",
+            ),
         ] {
-            let diagnostic = failure
-                .diagnostics()
-                .iter()
-                .find(|diagnostic| diagnostic.code == code)
-                .unwrap_or_else(|| panic!("{key} has a removal diagnostic: {failure:?}"));
-            assert_eq!(diagnostic.path, format!("project.package.{key}"));
+            let [diagnostic] = failure.diagnostics() else {
+                panic!("{key} is refused by one diagnostic: {failure:?}");
+            };
+            assert_eq!(diagnostic.code, code, "{diagnostic:?}");
             assert!(
-                diagnostic.message.contains(replacement),
+                diagnostic
+                    .message
+                    .contains(&format!("unknown field `{key}`")),
+                "{}",
+                diagnostic.message
+            );
+            let echoed = value.to_string();
+            assert!(
+                !diagnostic.message.contains(echoed.trim_matches('"')),
                 "{}",
                 diagnostic.message
             );
