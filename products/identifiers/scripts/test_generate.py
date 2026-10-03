@@ -21,7 +21,7 @@ class CatalogGeneratorTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         (self.root / "schemas").mkdir()
         (self.root / "src").mkdir()
-        (self.root / "src" / "relay-problem.rs").write_text("relay problem source\n")
+        (self.root / "src" / "fixture-problem.rs").write_text("fixture problem source\n")
         (self.root / "src" / "evidence-problem.rs").write_text(
             "evidence problem source\n"
         )
@@ -30,13 +30,13 @@ class CatalogGeneratorTest(unittest.TestCase):
         (self.root / "schemas" / "v1.json").write_text(
             json.dumps({"$id": self.schema_uri, "title": "Example schema"})
         )
-        self.relay_problem_catalog = self.root / "relay-problems.json"
-        self.relay_problem_catalog.write_text(
+        self.fixture_problem_catalog = self.root / "fixture-problems.json"
+        self.fixture_problem_catalog.write_text(
             json.dumps(
                 {
                     "entries": [
                         {
-                            "uri": f"{generate.BASE_URL}/problems/registry-relay/example/failed",
+                            "uri": f"{generate.BASE_URL}/problems/registry-fixture/example/failed",
                             "code": "example.failed",
                             "title": "Example failed",
                             "description": "the example failed",
@@ -82,13 +82,13 @@ class CatalogGeneratorTest(unittest.TestCase):
                     if problem_sources is not None
                     else [
                         {
-                            "owner": "relay-v2",
+                            "owner": "fixture-product",
                             "status": "active",
                             "compatibilityLine": "v2",
-                            "uriPrefix": f"{generate.BASE_URL}/problems/registry-relay/",
-                            "sourcePath": "src/relay-problem.rs",
-                            "exporterPath": "examples/relay-problem-catalog.rs",
-                            "cargoPackage": "relay-example",
+                            "uriPrefix": f"{generate.BASE_URL}/problems/registry-fixture/",
+                            "sourcePath": "src/fixture-problem.rs",
+                            "exporterPath": "examples/fixture-problem-catalog.rs",
+                            "cargoPackage": "fixture-example",
                             "cargoExample": "problem-catalog",
                         }
                     ],
@@ -130,7 +130,7 @@ class CatalogGeneratorTest(unittest.TestCase):
         return generate.build_catalog(
             self.root,
             self.config,
-            {"src/relay-problem.rs": self.relay_problem_catalog},
+            {"src/fixture-problem.rs": self.fixture_problem_catalog},
         )
 
     def test_catalog_binds_problem_schema_and_vocabulary_sources(self) -> None:
@@ -230,9 +230,9 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.build()
 
     def test_problem_code_must_match_its_uri(self) -> None:
-        document = json.loads(self.relay_problem_catalog.read_text())
+        document = json.loads(self.fixture_problem_catalog.read_text())
         document["entries"][0]["uri"] = f"{generate.BASE_URL}/problems/wrong"
-        self.relay_problem_catalog.write_text(json.dumps(document))
+        self.fixture_problem_catalog.write_text(json.dumps(document))
         with self.assertRaisesRegex(generate.CatalogError, "URI and code disagree"):
             self.build()
 
@@ -256,25 +256,25 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.root,
             self.config,
             {
-                "src/relay-problem.rs": self.relay_problem_catalog,
+                "src/fixture-problem.rs": self.fixture_problem_catalog,
                 "src/evidence-problem.rs": self.evidence_problem_catalog,
             },
         )
         problems = [entry for entry in catalog["entries"] if entry["kind"] == "problem"]
-        self.assertEqual([entry["owner"] for entry in problems], ["evidence", "relay-v2"])
+        self.assertEqual([entry["owner"] for entry in problems], ["evidence", "fixture-product"])
 
     def test_problem_source_prefix_must_match_its_catalog(self) -> None:
-        document = json.loads(self.relay_problem_catalog.read_text())
+        document = json.loads(self.fixture_problem_catalog.read_text())
         document["entries"][0]["uri"] = (
             f"{generate.BASE_URL}/problems/registry-evidence/example/failed"
         )
-        self.relay_problem_catalog.write_text(json.dumps(document))
+        self.fixture_problem_catalog.write_text(json.dumps(document))
         with self.assertRaisesRegex(generate.CatalogError, "URI and code disagree"):
             self.build()
 
     def test_exact_problem_source_prefix_is_an_allowed_reference(self) -> None:
         (self.root / "src" / "prefix.rs").write_text(
-            f'const PREFIX: &str = "^{generate.BASE_URL}/problems/registry-relay/$";\n'
+            f'const PREFIX: &str = "^{generate.BASE_URL}/problems/registry-fixture/$";\n'
         )
         self.track("src/prefix.rs")
         self.build()
@@ -287,7 +287,7 @@ class CatalogGeneratorTest(unittest.TestCase):
                 "owner": "evidence",
                 "status": "active",
                 "compatibilityLine": "v1",
-                "uriPrefix": f"{generate.BASE_URL}/problems/registry-relay/",
+                "uriPrefix": f"{generate.BASE_URL}/problems/registry-fixture/",
                 "sourcePath": "src/evidence-problem.rs",
                 "exporterPath": "examples/evidence-problem-catalog.rs",
                 "cargoPackage": "evidence-example",
@@ -297,7 +297,7 @@ class CatalogGeneratorTest(unittest.TestCase):
         self.config.write_text(json.dumps(document))
         duplicate = json.loads(self.evidence_problem_catalog.read_text())
         duplicate["entries"][0]["uri"] = (
-            f"{generate.BASE_URL}/problems/registry-relay/example/failed"
+            f"{generate.BASE_URL}/problems/registry-fixture/example/failed"
         )
         self.evidence_problem_catalog.write_text(json.dumps(duplicate))
         with self.assertRaisesRegex(generate.CatalogError, "duplicated"):
@@ -305,7 +305,7 @@ class CatalogGeneratorTest(unittest.TestCase):
                 self.root,
                 self.config,
                 {
-                    "src/relay-problem.rs": self.relay_problem_catalog,
+                    "src/fixture-problem.rs": self.fixture_problem_catalog,
                     "src/evidence-problem.rs": self.evidence_problem_catalog,
                 },
             )
@@ -325,9 +325,9 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.build()
 
     def test_catalog_contract_rejects_invalid_problem_statuses(self) -> None:
-        document = json.loads(self.relay_problem_catalog.read_text())
+        document = json.loads(self.fixture_problem_catalog.read_text())
         document["entries"][0]["httpStatuses"] = [99, 99]
-        self.relay_problem_catalog.write_text(json.dumps(document))
+        self.fixture_problem_catalog.write_text(json.dumps(document))
         with self.assertRaisesRegex(generate.CatalogError, "invalid HTTP statuses"):
             self.build()
 

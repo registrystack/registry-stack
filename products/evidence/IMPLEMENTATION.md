@@ -55,7 +55,7 @@ crates/registry-evidence/
   tests/
     cli.rs
     deployment_projects.rs
-    relay_shaped_source.rs
+    protected_registry_source.rs
     source_contracts.rs
     selector_conformance.rs
     security_contract_traceability.rs

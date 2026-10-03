@@ -121,7 +121,7 @@ Common failure types:
 - **Runtime-only key present**: the fixture manifest contains a key that must not appear in a
   portable manifest (a manifest that carries only static metadata and no deployment-specific
   bindings). Examples: `source`, `table`, `scope`, `url_env`.
-  Remove the key; it belongs in Relay configuration, not in a portable fixture.
+  Remove the key; it belongs in service configuration, not in a portable fixture.
 
 The authoritative list of disallowed runtime keys is in [Registry Manifest reference](./reference.md).
 
@@ -182,7 +182,7 @@ after vocabulary prefix expansion.
 Remove keys such as `source`, `source_id`, `table`, `scope`, `url`, `url_env`, `file_path`,
 `query`, `required_filters`, `rows_scope`, `bindings`, `capabilities`, `column`, or
 `visibility` from the fixture manifest.
-These keys belong in Registry Relay runtime configuration, not in a portable metadata manifest.
+These keys belong in service runtime configuration, not in a portable metadata manifest.
 
 ### validate-profiles passes locally but fails in CI
 

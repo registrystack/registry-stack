@@ -55,11 +55,10 @@ Write one `metadata.yaml`, run `registry-manifest publish`, and get a static dir
 of all those artifacts ready to host anywhere.
 The published `index.json` includes a canonical digest of the source manifest, a package
 digest, and per-artifact digests so operators can compare or pin bundles without running
-Registry Relay.
+a service.
 
 If you need runtime metadata served over HTTP with per-caller scoping and authorization,
-that is Registry Relay's job.
-Relay uses Registry Manifest's renderers internally.
+publish the static output behind a service that provides those controls.
 Metadata manifests and pure renderers live in this workspace; HTTP publication, runtime
 source binding, authentication, authorization, and audit behavior live in the runtime that
 serves them.
