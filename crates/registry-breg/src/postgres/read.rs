@@ -19,10 +19,10 @@ use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::api::{
-    AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue, ReadFilterExpr,
-    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
-    ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest, RecordReadService,
-    RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
+    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue,
+    ReadFilterExpr, ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause,
+    ReadProjectionField, ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest,
+    RecordReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
@@ -46,6 +46,7 @@ use crate::mutation::{strong_record_etag_for_representation, BoundValue};
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 
+use super::cancellation::QueryCancellationGuard;
 use super::{
     begin_record_transaction, install_spatial_bbox_context, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool, SpatialBboxContext,
@@ -189,7 +190,7 @@ impl PostgresRecordReadService {
         }
         let operation = request_operation(&request.kind);
         let target_record = target_record(&request.kind);
-        let mut client = self
+        let client = self
             .pool
             .get()
             .await
@@ -256,7 +257,15 @@ impl PostgresRecordReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
 
-        let materialized = self.read_rows(&mut client, &request, &claims, &plan).await;
+        // A read abandoned at its deadline stops its statement and gives up
+        // the session rather than leaving the backend running. The guard is
+        // armed only once the read reaches its I/O: a read refused or failed
+        // before then hands its idle session back to the pool.
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
+        let materialized = self
+            .read_rows(session.client(), &request, &claims, &plan)
+            .await;
+        session.disarm();
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => return Err(self.refused_read(&request, &claims, &plan, error).await),
@@ -321,7 +330,7 @@ impl PostgresRecordReadService {
         if !profile_is_keyed(self.audit.profile()) {
             return Err(ReadServiceError::Unavailable);
         }
-        let mut client = self
+        let client = self
             .pool
             .get()
             .await
@@ -371,59 +380,70 @@ impl PostgresRecordReadService {
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         let plan = plan.map_err(|_| ReadServiceError::Unavailable)?;
-        let transaction = begin_record_transaction(
-            &mut client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            &claims,
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
-        let loaded = self
-            .load_authorized_attachment(
-                transaction.transaction(),
-                &request,
-                &claims,
-                &plan,
-                &slot_id,
-                proposal_version,
-            )
-            .await;
-        let (outcome, count, revision) = match &loaded {
-            Ok(Some((_, revision))) => (TerminalAuditOutcome::Returned, 1, Some(*revision)),
-            Ok(None) => (TerminalAuditOutcome::Empty, 0, None),
-            Err(_) => (TerminalAuditOutcome::Refused, 0, None),
-        };
-        if count > 0 {
-            let record_id = target_record(&request.kind)
-                .ok_or(ReadServiceError::Unavailable)?
-                .to_owned();
-            crate::subject_access_log::record_reads(
-                transaction.transaction(),
-                &plan.entity,
-                &request.entity_id,
-                &request.context,
-                &[record_id],
-                &request.operation_id,
+        // A read abandoned at its deadline stops its statement and gives up
+        // the session rather than leaving the backend running. The guard is
+        // armed only once the read reaches its I/O: a read refused or failed
+        // before then hands its idle session back to the pool.
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
+        let read = async {
+            let transaction = begin_record_transaction(
+                session.client(),
+                self.lock_key,
+                self.lock_timeout,
                 &self.expected,
-                &request.correlation,
-                &self.audit,
+                &claims,
             )
-            .await?;
-        }
-        let terminal = self.terminal(&request, &claims, &plan, outcome, count, revision)?;
-        let entry = crate::audit::attachment_terminal_entry(
-            self.audit.profile(),
-            terminal,
-            &slot_id,
-            i64::from(proposal_version),
-        )
-        .map_err(|_| ReadServiceError::Unavailable)?;
-        transaction
-            .commit()
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
+            let loaded = self
+                .load_authorized_attachment(
+                    transaction.transaction(),
+                    &request,
+                    &claims,
+                    &plan,
+                    &slot_id,
+                    proposal_version,
+                )
+                .await;
+            let (outcome, count, revision) = match &loaded {
+                Ok(Some((_, revision))) => (TerminalAuditOutcome::Returned, 1, Some(*revision)),
+                Ok(None) => (TerminalAuditOutcome::Empty, 0, None),
+                Err(_) => (TerminalAuditOutcome::Refused, 0, None),
+            };
+            if count > 0 {
+                let record_id = target_record(&request.kind)
+                    .ok_or(ReadServiceError::Unavailable)?
+                    .to_owned();
+                crate::subject_access_log::record_reads(
+                    transaction.transaction(),
+                    &plan.entity,
+                    &request.entity_id,
+                    &request.context,
+                    &[record_id],
+                    &request.operation_id,
+                    &self.expected,
+                    &request.correlation,
+                    &self.audit,
+                )
+                .await?;
+            }
+            let terminal = self.terminal(&request, &claims, &plan, outcome, count, revision)?;
+            let entry = crate::audit::attachment_terminal_entry(
+                self.audit.profile(),
+                terminal,
+                &slot_id,
+                i64::from(proposal_version),
+            )
+            .map_err(|_| ReadServiceError::Unavailable)?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ReadServiceError::Unavailable)?;
+            Ok::<_, ReadServiceError>((loaded, entry))
+        }
+        .await;
+        session.disarm();
+        let (loaded, entry) = read?;
         self.fault.fail_at(ReadFaultPoint::BeforeTerminalAudit)?;
         self.audit
             .append(entry)
@@ -536,6 +556,25 @@ impl PostgresRecordReadService {
         }
         let response = HeldReadResponse::from_attachment(bytes, stored.metadata.content_type)?;
         Ok(Some((response, revision)))
+    }
+
+    /// Hold the read transaction's backend in one statement far longer than
+    /// any request deadline, when the test asked for it.
+    #[cfg(feature = "postgres-test")]
+    async fn outrun_request_deadline_for_test(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+    ) -> Result<(), ReadServiceError> {
+        if matches!(
+            self.fault,
+            ReadFaultControl::At(ReadFaultPoint::OutrunRequestDeadline)
+        ) {
+            transaction
+                .execute("SELECT pg_sleep(30)", &[])
+                .await
+                .map_err(|_| ReadServiceError::Unavailable)?;
+        }
+        Ok(())
     }
 
     #[cfg(feature = "postgres-test")]
@@ -665,6 +704,9 @@ impl PostgresRecordReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
+        #[cfg(feature = "postgres-test")]
+        self.outrun_request_deadline_for_test(transaction.transaction())
+            .await?;
         crate::mutation::install_request_visibility_context(
             transaction.transaction(),
             &plan.entity,
@@ -2819,11 +2861,16 @@ fn validate_filter_predicate(
         | ReadFilterOperator::Lt
         | ReadFilterOperator::Le
         | ReadFilterOperator::Gt
-        | ReadFilterOperator::Ge
-        | ReadFilterOperator::StartsWith
-        | ReadFilterOperator::Contains => {
+        | ReadFilterOperator::Ge => {
             if predicate.values.len() != 1
                 || validate_field_value(&predicate.values[0], &field_type).is_err()
+            {
+                return Err(());
+            }
+        }
+        ReadFilterOperator::StartsWith | ReadFilterOperator::Contains => {
+            if predicate.values.len() != 1
+                || !valid_text_search_term(&predicate.values[0], &field_type)
             {
                 return Err(());
             }
@@ -3232,11 +3279,17 @@ fn predicate_sql(
         ReadFilterOperator::IsNotNull => Ok(format!("{} IS NOT NULL", field.sql)),
         ReadFilterOperator::StartsWith => {
             let parameter = push_value(values, &format!("{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+            Ok(format!(
+                "{} ILIKE ${parameter}::text ESCAPE '\\'",
+                field.sql
+            ))
         }
         ReadFilterOperator::Contains => {
             let parameter = push_value(values, &format!("%{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+            Ok(format!(
+                "{} ILIKE ${parameter}::text ESCAPE '\\'",
+                field.sql
+            ))
         }
     }
 }
@@ -4154,6 +4207,10 @@ pub enum ReadFaultPoint {
     /// The strong entity tag of a single-record read cannot be bound, after
     /// the rows were read.
     StrongEtag,
+    /// The read transaction runs a statement that outlasts any request
+    /// deadline before it reads rows, so the request is abandoned while its
+    /// backend is busy.
+    OutrunRequestDeadline,
 }
 
 #[cfg(not(feature = "postgres-test"))]

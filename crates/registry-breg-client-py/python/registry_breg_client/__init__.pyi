@@ -57,6 +57,7 @@ class BaseRegistryClientError(Exception):
     code: str | None
     plan_refusal: str | None
     refusal_code: str | None
+    field_path: str | None
     status: int | None
     trace_id: str | None
     transport_kind: str | None

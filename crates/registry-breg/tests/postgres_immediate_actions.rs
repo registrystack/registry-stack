@@ -281,6 +281,31 @@ async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_
         "conditions expose the public input name, not the logical action id"
     );
 
+    let missing_idempotency = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/register-household-contact",
+            Some(claims.clone()),
+            &[("content-type", "application/json")],
+            serde_json::to_vec(&json!({
+                "input": {
+                    "householdId": HOUSEHOLD_ID,
+                    "personCode": "P-MISSING-KEY",
+                    "legalName": "Missing Key",
+                    "jurisdiction": "zone-a"
+                },
+                "preconditions": returned_preconditions.clone()
+            }))
+            .expect("missing-key action body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(missing_idempotency.status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_idempotency.body["code"], "request.invalid");
+    assert_eq!(missing_idempotency.body["fieldPath"], "Idempotency-Key");
+
     let first = response_parts(
         send(
             &app,

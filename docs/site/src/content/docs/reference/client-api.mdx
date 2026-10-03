@@ -727,9 +727,10 @@ Node throws the same named class with camel-case attributes.
 | Token subcategory | `token_kind` | `tokenKind` |
 
 Optional error attributes are absent or `None` when the failure does not carry that fact. A Relay
-Problem is accepted only when its exact six-member document, registered code and status, response
-media type, and header and body trace agree. Only a registered `429` Problem can expose a numeric
-`Retry-After` from 1 through 60 seconds.
+Problem is accepted only when its document has the exact six common members, without BReg's
+optional `fieldPath`, and its registered code and status, response media type, and header and body
+trace agree. Only a registered `429` Problem can expose a numeric `Retry-After` from 1 through 60
+seconds.
 
 Errors retain fixed local reasons, public status and Problem codes, validated trace identifiers, and
 bounded retry guidance. They do not expose credentials, JWKs, selectors, filters, response bodies,
@@ -1078,8 +1079,8 @@ to send the same action again with the same idempotency key.
 
 `BaseRegistryClientError` is distinct from `RelayClientError`. Its public accessors expose only the
 fixed error kind, status, registered BReg Problem code, validated trace identifier, bounded
-transport or token category, and the bounded refusal code a declared immediate-action refusal
-names.
+transport or token category, the validated field path an accepted Problem names, and the bounded
+refusal code a declared immediate-action refusal names.
 
 A Problem is accepted only when its closed members, code, status, title, detail, type URI, and header
 and body trace match. Unknown Problem codes and malformed responses fail closed as
@@ -1087,10 +1088,11 @@ and body trace match. Unknown Problem codes and malformed responses fail closed 
 not retain response-controlled values.
 
 Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
-attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `status`, `trace_id`,
+attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `status`, `trace_id`,
 `transport_kind`, and `token_kind`; an absent member is `None`. Node rejects with
 `breg.BaseRegistryClientError`, an `Error` with `kind` and the optional `code`, `planRefusal`,
-`refusalCode`, `status`, `traceId`, `transportKind`, and `tokenKind`; an absent member is undefined.
+`refusalCode`, `fieldPath`, `status`, `traceId`, `transportKind`, and `tokenKind`; an absent member is
+undefined.
 
 `kind` is one of:
 
@@ -1100,7 +1102,7 @@ attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `status`, `trace_
 | `invalid_request` | An input was refused before any exchange | none |
 | `token` | The private-key JWT provider could not supply a bearer | `token_kind`, plus `transport_kind`, `code`, or `status` depending on how the token endpoint failed |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, `plan_refusal` when the code is a request-plan refusal, and `refusal_code` when the code is an immediate-action refusal |
+| `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, `field_path` when the Problem names a validated location, `plan_refusal` when the code is a request-plan refusal, and `refusal_code` when the code is an immediate-action refusal |
 | `protocol` | The response violated the contract | `status`, `code` (`header_bounds`, `trace_context`, `media_type`, `body`, `problem`, `entity_tag`, `profile_link`, `location`, `cache_policy`, `status`, or `protocol`), and `trace_id` when one was validated |
 | `metadata_selection` | A binding could not be selected from the metadata | `code` |
 | `lifecycle_promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |

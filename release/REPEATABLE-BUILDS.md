@@ -27,7 +27,11 @@ The workflow:
    release manifest.
 5. Rebuilds each release image without cache.
 6. Compares its image configuration and ordered root filesystem layers with
-   the published digest-bound image.
+   the published digest-bound image. The published side is pulled by the
+   digest the release manifest records, and the comparator refuses a layout
+   whose `index.json` does not name exactly that digest. It resolves an image
+   manifest directly and an image index one level down to its `linux/amd64`
+   manifest; it never rewrites the layout crane wrote.
 7. Records a compact result and retains it for 30 days.
 
 The proof excludes native macOS and Linux arm64 Relayctl binaries,

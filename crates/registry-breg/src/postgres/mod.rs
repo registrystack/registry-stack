@@ -3,6 +3,7 @@
 //! PostgreSQL-only runtime and migration safety kernel.
 
 mod baseline;
+mod cancellation;
 mod catalog;
 mod config;
 mod context;

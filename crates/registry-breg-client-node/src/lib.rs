@@ -477,6 +477,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             status,
             code,
             trace_id,
+            field_path,
             refusal_code,
         } => json!({
             // app-developer-22: a missing resource is its own kind, not_found,
@@ -494,6 +495,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             // The refusal catalogue belongs to the package, so the declared code
             // travels as the bounded string the Problem schema admits.
             "refusalCode": refusal_code.as_ref().map(|value| value.as_str()),
+            "fieldPath": field_path.as_ref().map(|value| value.as_str()),
             "traceId": trace_id.as_str(),
             "message": "Base Registry Engine refused the request",
         }),

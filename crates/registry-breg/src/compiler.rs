@@ -272,6 +272,7 @@ pub fn compile_project_with_assets(
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
+    findings.extend(create_required_field_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -2885,6 +2886,7 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     let mut ids = BTreeSet::new();
     for constraint in &entity.constraints {
         let id = derived_constraint_id(constraint);
+        let constraint_path = format!("entities[id={}].constraints[id={id}]", entity.id);
         if !ids.insert(id) {
             errors.push(Diagnostic::error(
                 "constraint.id.duplicate",
@@ -2893,10 +2895,15 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ));
         }
         let referenced = match constraint {
-            ConstraintSource::Unique { fields, .. } => fields.clone(),
-            ConstraintSource::Compare { left, right, .. } => vec![left.clone(), right.clone()],
+            ConstraintSource::Unique { fields, .. } => fields
+                .iter()
+                .map(|field| ("fields", field.as_str()))
+                .collect::<Vec<_>>(),
+            ConstraintSource::Compare { left, right, .. } => {
+                vec![("left", left.as_str()), ("right", right.as_str())]
+            }
             ConstraintSource::IntRange { field, .. }
-            | ConstraintSource::Vocabulary { field, .. } => vec![field.clone()],
+            | ConstraintSource::Vocabulary { field, .. } => vec![("field", field.as_str())],
             ConstraintSource::TemporalNonOverlap {
                 scope_fields,
                 start_field,
@@ -2904,27 +2911,42 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 ..
             } => scope_fields
                 .iter()
-                .cloned()
-                .chain(start_field.iter().cloned())
-                .chain(end_field.iter().cloned())
+                .map(|field| ("scopeFields", field.as_str()))
+                .chain(
+                    start_field
+                        .iter()
+                        .map(|field| ("startField", field.as_str())),
+                )
+                .chain(end_field.iter().map(|field| ("endField", field.as_str())))
                 .collect(),
         };
-        if referenced.is_empty()
-            || referenced
-                .iter()
-                .any(|field| !fields.contains_key(field.as_str()))
-        {
+        if referenced.is_empty() {
+            let member = match constraint {
+                ConstraintSource::TemporalNonOverlap { .. } => "scopeFields",
+                _ => "fields",
+            };
             errors.push(Diagnostic::error(
                 "constraint.field.unknown",
-                "entities[].constraints[]",
-                "a constraint has an empty or unresolved field set",
+                format!("{constraint_path}.{member}"),
+                "a constraint must name at least one field",
             ));
             continue;
         }
-        if referenced
-            .iter()
-            .any(|field| fields[field.as_str()].encrypted)
-        {
+        let mut unresolved = false;
+        for (member, field) in &referenced {
+            if !fields.contains_key(*field) {
+                errors.push(Diagnostic::error(
+                    "constraint.field.unknown",
+                    format!("{constraint_path}.{member}[field={field}]"),
+                    "a constraint refers to an unknown field",
+                ));
+                unresolved = true;
+            }
+        }
+        if unresolved {
+            continue;
+        }
+        if referenced.iter().any(|(_, field)| fields[*field].encrypted) {
             errors.push(Diagnostic::error(
                 "constraint.field.encrypted",
                 "entities[].constraints[]",
@@ -3787,20 +3809,49 @@ fn validate_profiles(
                 .iter()
                 .map(|boundary| boundary.field.clone()),
         );
-        if read_processed.iter().any(|field| {
-            !fields.contains_key(field.as_str())
-                && !derived.contains_key(field.as_str())
-                && !entity.attachments.iter().any(|slot| &slot.id == field)
-        }) || stored_processed.iter().any(|field| {
-            field != "id"
+        let profile_path = format!(
+            "entities[id={}].accessProfiles[id={}]",
+            entity.id, access.id
+        );
+        for (member, referenced) in [
+            ("readableFields", &access.readable_fields),
+            ("filterableFields", &access.filterable_fields),
+            ("sortableFields", &access.sortable_fields),
+        ] {
+            for field in referenced {
+                if !fields.contains_key(field.as_str())
+                    && !derived.contains_key(field.as_str())
+                    && !entity.attachments.iter().any(|slot| &slot.id == field)
+                {
+                    errors.push(Diagnostic::error(
+                        "access_profile.field.unknown",
+                        format!("{profile_path}.{member}[field={field}]"),
+                        "an access profile refers to an unknown field",
+                    ));
+                }
+            }
+        }
+        for (member, field) in access
+            .writable_fields
+            .iter()
+            .map(|field| ("writableFields", field))
+            .chain(
+                access
+                    .row_boundaries
+                    .iter()
+                    .map(|boundary| ("rowBoundaries", &boundary.field)),
+            )
+        {
+            if field != "id"
                 && !fields.contains_key(field.as_str())
                 && !entity.attachments.iter().any(|slot| &slot.id == field)
-        }) {
-            errors.push(Diagnostic::error(
-                "access_profile.field.unknown",
-                "entities[].accessProfiles[]",
-                "an access profile refers to an unknown field",
-            ));
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.field.unknown",
+                    format!("{profile_path}.{member}[field={field}]"),
+                    "an access profile refers to an unknown field",
+                ));
+            }
         }
         if !access.filterable_fields.is_subset(&access.readable_fields)
             || !access.sortable_fields.is_subset(&access.readable_fields)
@@ -3956,6 +4007,40 @@ fn validate_profiles(
             errors,
         );
     }
+}
+
+fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for entity in entities.values() {
+        for access in &entity.access_profiles {
+            let create_operation = match (
+                access.operations.contains(&Operation::Create),
+                access.operations.contains(&Operation::Import),
+            ) {
+                (true, true) => "`create` and `import`",
+                (true, false) => "`create`",
+                (false, true) => "`import`",
+                (false, false) => continue,
+            };
+            // Engine-managed record identity, revision, and lifecycle columns
+            // are not authored EntitySource fields and are therefore excluded.
+            for field in entity.fields.iter().filter(|field| {
+                field.required && !access.writable_fields.contains(field.id.as_str())
+            }) {
+                findings.push(Diagnostic::finding(
+                    "access.profile.create_required_field_not_writable",
+                    format!(
+                        "entities[id={}].accessProfiles[id={}].writableFields[field={}]",
+                        entity.id, access.id, field.id
+                    ),
+                    &format!(
+                        "this required stored field cannot be supplied through {create_operation}; add it to writableFields or remove the operation from this permission"
+                    ),
+                ));
+            }
+        }
+    }
+    findings
 }
 
 /// Refuse multiple defaults. With no default, an ambiguous route requires
@@ -4254,23 +4339,34 @@ fn validate_read_path_permission_fields(
             }
         }
     }
+    let grant_path = format!(
+        "entities[id={}].accessProfiles[id={}].readPaths[path={}]",
+        source.id, access.id, grant.path
+    );
+    for (member, referenced) in [
+        ("readableFields", &grant.readable_fields),
+        ("filterableFields", &grant.filterable_fields),
+        ("sortableFields", &grant.sortable_fields),
+    ] {
+        for field in referenced {
+            if field != "id"
+                && !target_stored.contains_key(field.as_str())
+                && !target_derived.contains_key(field.as_str())
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.read_path.field_unknown",
+                    format!("{grant_path}.{member}[field={field}]"),
+                    "a read-path permission refers to an unknown target field",
+                ));
+            }
+        }
+    }
     let processed = grant
         .readable_fields
         .iter()
         .chain(&grant.filterable_fields)
         .chain(&grant.sortable_fields)
         .collect::<BTreeSet<_>>();
-    if processed.iter().any(|field| {
-        field.as_str() != "id"
-            && !target_stored.contains_key(field.as_str())
-            && !target_derived.contains_key(field.as_str())
-    }) {
-        errors.push(Diagnostic::error(
-            "access_profile.read_path.field_unknown",
-            "entities[].accessProfiles[].readPaths[]",
-            "a read-path permission refers to an unknown target field",
-        ));
-    }
     if access.anonymous {
         let mut causes: Vec<String> = Vec::new();
         for field in &processed {
@@ -5320,11 +5416,20 @@ fn validate_derived_assets(
     assets: &[ModuleAssetSource],
     errors: &mut Vec<Diagnostic>,
 ) {
-    let known_relations = sources
+    let source_columns = sources
         .values()
-        .map(|entity| default_sql_name(&entity.id))
-        .collect::<Vec<_>>();
-    let known_relations = known_relations.iter().map(String::as_str).collect();
+        .map(|entity| {
+            let columns = std::iter::once("id".to_owned())
+                .chain(
+                    entity
+                        .fields
+                        .iter()
+                        .map(|field| default_sql_name(&field.id)),
+                )
+                .collect::<BTreeSet<_>>();
+            (default_sql_name(&entity.id), columns)
+        })
+        .collect::<BTreeMap<_, _>>();
     // Encrypted fields leave the registry_source layer, so derived SQL can
     // never resolve them; collect their logical column names per relation.
     let encrypted_columns = sources
@@ -5358,7 +5463,7 @@ fn validate_derived_assets(
             validate_derived_sql(
                 derived,
                 sql,
-                &known_relations,
+                &source_columns,
                 &encrypted_columns,
                 &path,
                 errors,

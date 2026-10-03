@@ -90,6 +90,11 @@ order; otherwise labels are humanized logical IDs/codes. `titleFields` chooses
 one readable authored string identifier or the first readable string field in
 logical-ID order. It may be empty. `identifier: {apiName: "id", location:
 "envelope"}` provides the stable UUID fallback. Render labels as plain text.
+Applications own their wording and localization, keyed by logical entity, field,
+and code IDs. Manifest labels remain hints from the selected projection profile;
+metadata does not use that projection as a shared wording catalog across profiles.
+Reference `labelFields` follows the target operation's readable `titleFields`
+selection, so apps can choose their own labels from those authorized fields.
 
 ## Attachment slot discovery
 
@@ -209,6 +214,17 @@ Collection `query` describes the selected compiled query plan:
 | `pagination` | `{parameter: "$skiptoken", responsePath: "pageInfo.nextCursor", exclusive: true}` |
 | `temporal` | null, `{mode: "current"}`, the required `asOf` parameter contract, or `{mode: "snapshot", snapshot: {...}, validAt: {...}}` with the optional opaque snapshot reference and typed validity parameter |
 | `spatialQueries` | Optional `bbox` descriptor with `geometryProperty`, `maximumLongitudeSpanDegrees`, `maximumLatitudeSpanDegrees`, `coordinateReferenceSystem: "CRS84"`, and `semantics: "inclusive_2d_non_crossing"` |
+
+`prefix` (`startswith` in `$filter`) and `contains` match text without regard to
+case, using PostgreSQL's locale rules, on string, text, and vocabulary-code fields.
+They treat `%`, `_`, and backslash literally; they do not fold accents or rank
+results. `equals` and `in` retain exact, case-sensitive matching.
+
+Prefix and contains operands are quoted text search terms, so they can be shorter
+than a string's `minLength` or contain only part of a vocabulary code. They keep
+the query literal size bound and string/text `maxLength`, and reject control
+characters. Empty terms are accepted and match every non-null value permitted by
+the caller's read profile.
 
 The temporal requirement applies to the first page; continuation is cursor-only
 apart from the selected access profile. Native direct lists can combine bbox

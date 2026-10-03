@@ -239,7 +239,7 @@ pub(super) async fn dispatch(
     let idempotency_key = if route.kind == ActionRouteKind::Invoke {
         match single_header(&headers, "idempotency-key").filter(|key| valid_idempotency_key(key)) {
             Some(key) => Some(key),
-            None => return refusal(invalid_request()).await,
+            None => return refusal(missing_idempotency_key()).await,
         }
     } else {
         None

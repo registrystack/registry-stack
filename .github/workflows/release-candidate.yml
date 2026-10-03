@@ -703,7 +703,7 @@ jobs:
   build-macos-platforms:
     name: Build native macOS ${{ matrix.group }} payload once
     needs: validate
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 35
     permissions:
       contents: read
@@ -801,7 +801,7 @@ jobs:
             wheel_tag: cp310-abi3-linux_aarch64
             registry_wheel_tag: cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
             napi_platform: linux-arm64-gnu
-          - runner: macos-14
+          - runner: macos-26
             asset: macos-arm64
             target: aarch64-apple-darwin
             wheel_tag: cp310-abi3-macosx_11_0_arm64
@@ -847,10 +847,10 @@ jobs:
             target/release-client-python
             target/release-client-node
           # AWS-LC does not track the deployment-target environment variable.
-          # Exclude caches configured before the macOS 11 compatibility pin.
-          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          # Exclude older runner images and builds without the macOS 11 pin.
+          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}
+            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}
 
       - name: Build Python client wheels
         shell: bash

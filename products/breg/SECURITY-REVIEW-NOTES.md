@@ -736,8 +736,14 @@ carries caller-controlled bytes into responses and logs.
   and lookup refusals keep the value-free equivalence BREG-SEC-20 pins.
 - `detail` and `code` are unchanged, so typed clients keep matching them,
   and the Rust client accepts the new forms only on `request.invalid` and
-  `query.invalid`, never exposes them, and still turns any other location
-  into a protocol failure.
+  `query.invalid`. It retains a location only after the shared 256-character
+  bound, BReg's closed location grammar, and the permitted problem-code pairing
+  all pass; any other location is a protocol failure. Rust exposes the validated
+  value only through the explicit `field_path` accessor, Node.js and Python copy
+  it to their explicit error attributes, and no binding renders it through
+  `Debug`, `Display`, or the exception message. The Node.js attribute is
+  non-enumerable, so default `util.inspect`, `console.error`, and JSON object
+  serialization omit it while direct `error.fieldPath` access remains available.
 
 ### Tests
 
@@ -754,14 +760,21 @@ the kebab-case field id refused at `/data`.
 `crates/registry-breg/src/problem_location.rs` pins the rendered and
 accepted grammar, and
 `crates/registry-breg-client/tests/write_http_boundary.rs`:
-`record_and_query_problem_paths_are_closed_bounded_and_discarded` pins the
-client's closed forms.
+`record_and_query_problem_paths_are_closed_bounded_and_retained_without_rendering`
+pins the client's closed forms, retains every permitted location through the
+explicit accessor, rejects malformed or code-incompatible locations, and proves
+that retained locations do not enter rendered errors. The Node.js refusal tests
+likewise retain action, record, and query locations through direct attribute
+access while proving that default inspection and console formatting omit them.
 
 ### Accepted residuals
 
 - A located refusal tells the caller which of its own admitted fields or
   parameters was wrong, and that a required field it may write is missing.
   Both are already in the caller's filtered contract.
+- Application code using a typed client receives that validated location as a
+  separate machine-readable attribute. It never receives arbitrary response
+  text or a location that failed the closed grammar and problem-code pairing.
 - Ingestion chunk items still answer an unlocated `request.invalid`.
 
 
@@ -1061,8 +1074,9 @@ replay assertions with normal activation initialization.
 ### Accepted residuals
 
 This corrects future action commits. It does not fabricate historical commit
-positions for revisions that an earlier runtime left unindexed. The existing rebaseline command continues to refuse a retained journal head
-that has no commit member; this change supplies no repair for those rows.
+positions for revisions that an earlier runtime left unindexed. The existing
+rebaseline command continues to refuse a retained journal head that has no
+commit member; this change supplies no repair for those rows.
 
 Affected pre-1.0 development databases containing unindexed action revisions
 must be rebuilt before relying on snapshots or coverage rebaselining.

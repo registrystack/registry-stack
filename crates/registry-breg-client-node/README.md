@@ -32,7 +32,7 @@ exchange per method, never follows redirects, never uses ambient proxy
 configuration, never retries, and never follows links automatically.
 
 Failures are `BaseRegistryClientError` values with a stable `kind` and, where
-available, `code`, `planRefusal`, `refusalCode`, `status`, `traceId`,
+available, `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `traceId`,
 `transportKind`, and `tokenKind`. Errors do not expose token, private-key,
 record, or lifecycle payload values.
 

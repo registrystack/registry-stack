@@ -48,8 +48,10 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_partial_unique \
     --test postgres_constraint_races \
     --test postgres_read \
+    --test postgres_read_cancellation \
     --test postgres_access_log \
     --test postgres_read_dependencies \
+    --test postgres_derived_values \
     --test postgres_record_profile_conformance \
     --test postgres_client_capabilities \
     --test postgres_client_relationships \
