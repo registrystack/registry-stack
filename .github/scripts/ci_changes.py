@@ -499,6 +499,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/check-built-analytics.mjs",
         "docs/site/scripts/check-built-links.mjs",
         "docs/site/scripts/check-evidence-links.mjs",
+        "docs/site/scripts/check-llms-contract.mjs",
         "docs/site/scripts/check-llms.mjs",
         "docs/site/scripts/check-seo.mjs",
         "docs/site/scripts/configuration-reference.mjs",
