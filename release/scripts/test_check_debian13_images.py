@@ -579,39 +579,52 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                             failures,
                         )
 
-    def test_first_release_operator_tools_cannot_be_optional(self) -> None:
-        relative = Path("release/docker/Dockerfile.messaging")
-        contract = POLICY.HTTP_PROBE_DOCKERFILES[relative]
-        self.assertTrue(contract["tool_required"])
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.repository_copy(root)
-            dockerfile = root / relative
-            tool = contract["tool"]
-            command = (
-                f"install -m 0755 /workspace/image-bin/{tool} "
-                f"/workspace/runtime-root/usr/local/bin/{tool}"
-            )
-            dockerfile.write_text(
-                dockerfile.read_text(encoding="utf-8").replace(
-                    f"    && {command} \\\n",
-                    f"    && if [ -e /workspace/image-bin/{tool} ]; then \\\n"
-                    f"        {command}; \\\n"
-                    "    fi \\\n",
-                ),
-                encoding="utf-8",
-            )
+    def test_required_operator_tools_cannot_be_optional(self) -> None:
+        required = [
+            Path("release/docker/Dockerfile.breg"),
+            Path("release/docker/Dockerfile.messaging"),
+        ]
+        self.assertEqual(
+            required,
+            [
+                relative
+                for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items()
+                if contract.get("tool_required")
+            ],
+        )
+        for relative in required:
+            contract = POLICY.HTTP_PROBE_DOCKERFILES[relative]
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self.repository_copy(root)
+                    dockerfile = root / relative
+                    tool = contract["tool"]
+                    command = (
+                        f"install -m 0755 /workspace/image-bin/{tool} "
+                        f"/workspace/runtime-root/usr/local/bin/{tool}"
+                    )
+                    text = dockerfile.read_text(encoding="utf-8")
+                    mutated = text.replace(
+                        f"    && {command} \\\n",
+                        f"    && if [ -e /workspace/image-bin/{tool} ]; then \\\n"
+                        f"        {command}; \\\n"
+                        "    fi \\\n",
+                    )
+                    self.assertNotEqual(text, mutated)
+                    dockerfile.write_text(mutated, encoding="utf-8")
 
-            failures = POLICY.check_repository(root)
+                    failures = POLICY.check_repository(root)
 
-            self.assertTrue(
-                any(
-                    str(relative) in failure
-                    and "must be required by every release image build" in failure
-                    for failure in failures
-                ),
-                failures,
-            )
+                    self.assertTrue(
+                        any(
+                            str(relative) in failure
+                            and "must be required by every release image build"
+                            in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
 
     def test_operator_tool_never_becomes_the_image_entrypoint(self) -> None:
         for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():
