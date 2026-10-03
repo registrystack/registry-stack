@@ -111,7 +111,6 @@ mod descriptor {
     pub(crate) struct EntryStat {
         file_type: FileType,
         len: u64,
-        mode: u32,
         dev: u64,
         ino: u64,
     }
@@ -131,12 +130,6 @@ mod descriptor {
 
         pub(crate) fn len(self) -> u64 {
             self.len
-        }
-
-        /// The permission bits, for the owner-only and unchanged-permission
-        /// checks the project-migration surface applies.
-        pub(crate) fn permission_bits(self) -> u32 {
-            self.mode & 0o7777
         }
 
         /// Report whether an opened descriptor is the same file this entry
@@ -251,7 +244,6 @@ mod descriptor {
             Ok(EntryStat {
                 file_type: FileType::from_raw_mode(stat.st_mode as _),
                 len: u64::try_from(stat.st_size).unwrap_or(u64::MAX),
-                mode: stat.st_mode as u32,
                 dev: stat.st_dev as u64,
                 ino: stat.st_ino as u64,
             })
@@ -269,18 +261,6 @@ mod descriptor {
         /// Rename within this directory, replacing an existing destination.
         pub(crate) fn rename(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
             renameat(&self.fd, from, &self.fd, to).map_err(io::Error::from)
-        }
-
-        /// Rename an entry out of this directory into `destination`, replacing
-        /// an existing entry there. Both ends are descriptors, so neither side
-        /// can be redirected by a path change.
-        pub(crate) fn rename_into(
-            &self,
-            from: &OsStr,
-            destination: &SafeDir,
-            to: &OsStr,
-        ) -> io::Result<()> {
-            renameat(&self.fd, from, &destination.fd, to).map_err(io::Error::from)
         }
 
         /// Rename within this directory, refusing to replace an existing
@@ -658,10 +638,6 @@ mod descriptor {
             match self.0 {}
         }
 
-        pub(crate) fn permission_bits(self) -> u32 {
-            match self.0 {}
-        }
-
         pub(crate) fn is_same_file_as(self, _metadata: &Metadata) -> bool {
             match self.0 {}
         }
@@ -727,15 +703,6 @@ mod descriptor {
         }
 
         pub(crate) fn rename(&self, _from: &OsStr, _to: &OsStr) -> io::Result<()> {
-            match self.0 {}
-        }
-
-        pub(crate) fn rename_into(
-            &self,
-            _from: &OsStr,
-            _destination: &SafeDir,
-            _to: &OsStr,
-        ) -> io::Result<()> {
             match self.0 {}
         }
 
