@@ -3308,6 +3308,135 @@ async fn real_postgres_status_reads_the_ledger_without_the_apply_lock() {
     database.cleanup().await;
 }
 
+/// A database an earlier release adopted keeps an `adopted` row at the head
+/// of its ledger, and no release rewrites it. Status reports the row as
+/// recorded, the recorded state binds the active package and its catalog
+/// verifies as startup verifies it, and a successor activates over it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_ledger_an_earlier_release_adopted_is_served_and_succeeded() {
+    let (database, initial) = initial_package_database().await;
+    let base = compile_variant(Variant::Base);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates");
+    let adopted_activation =
+        Uuid::parse_str(&active.activation_id).expect("the activation id is a UUID");
+    let adopted = database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+             SET plan_kind = 'adopted'
+             WHERE activation_id = $1 AND predecessor_package_digest IS NULL",
+            &[&adopted_activation],
+        )
+        .await
+        .expect("administrator records the activation as an adoption");
+    assert_eq!(adopted, 1);
+
+    let status = read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        timeouts(),
+    )
+    .await
+    .expect("status reads")
+    .expect("the database is activated");
+    assert_eq!(status.identity, active);
+    assert_eq!(status.maintenance_status, "ready");
+    assert_eq!(status.ledger.len(), 1);
+    let entry = status.active_entry().expect("the active entry is recorded");
+    assert_eq!(entry.plan_kind, "adopted");
+    assert_eq!(entry.predecessor_package_digest, None);
+    assert_eq!(entry.package_digest, initial.package_digest());
+
+    let recorded = recorded_state(&database, &initial)
+        .await
+        .expect("the recorded state reads")
+        .expect("an adopted database records its state");
+    assert_eq!(
+        recorded,
+        RecordedRegistryState {
+            identity: active.clone(),
+            ready: true,
+            activation_applied: true,
+        }
+    );
+    bind_active_package(&recorded.identity, initial.package_digest(), deployment())
+        .expect("the adopted active package binds");
+    let pool = database.runtime_config.build_pool().unwrap();
+    let runtime = pool.get_for_test().await.unwrap();
+    verify_catalog_identity_for_catalog(
+        &**runtime,
+        &active,
+        &ExpectedManagedCatalog::compiled(&base),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("the adopted catalog verifies");
+    drop(runtime);
+    drop(pool);
+
+    let candidate = compile_variant(Variant::BatchAddedRequired);
+    let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
+    let source = added_required_source(
+        "add-required-over-adoption",
+        &active,
+        &base,
+        &candidate,
+        &target_fingerprint,
+        0,
+    );
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::BatchAddedRequired,
+        &target_fingerprint,
+        source,
+    );
+    let activated = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("a successor activates over the adopted package");
+    assert_eq!(activated.package_digest, package.package_digest());
+
+    let rows = database
+        .admin
+        .query(
+            "SELECT plan_kind, predecessor_package_digest, outcome
+             FROM registry_internal.registry_migrations
+             ORDER BY apply_order",
+            &[],
+        )
+        .await
+        .expect("the ledger reads");
+    let ledger = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<_, String>(0),
+                row.get::<_, Option<String>>(1),
+                row.get::<_, String>(2),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ledger,
+        vec![
+            ("adopted".to_owned(), None, "applied".to_owned()),
+            (
+                "successor".to_owned(),
+                Some(initial.package_digest().to_owned()),
+                "applied".to_owned()
+            ),
+        ]
+    );
+    database.cleanup().await;
+}
+
 async fn plan(
     database: &TestDatabase,
     package: &VerifiedPackage,
