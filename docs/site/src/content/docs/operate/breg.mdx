@@ -1258,12 +1258,19 @@ codes are:
   [external attachment verification](../../reference/breg-configuration/#external-attachment-verification)
   describes
 - `review.worker.iteration_failed`, a review worker iteration that failed and will be retried
-- `review.result_feeds.unavailable` and `review.result_lookups.unavailable`, a pass on which at
-  least one review authority's result feed, or one due result lookup, could not be read
+- `review.result_lookups.unavailable`, a pass on which at least one due review result lookup
+  could not be read
 - `metrics.queue_sample.failed`, a scrape that could not read the queue ages
 
 These records are warnings, and the process keeps serving. A failed retention pass writes an error
 record without a `code`.
+
+A review authority's result feed that cannot be read writes no `code`. It backs off per authority:
+the first failure writes the warning `BReg review result feed is unavailable; retrying with backoff`
+with the configured `authority` identifier and `retry_in_seconds`, later failures log only at debug
+level, and the first successful fetch writes the warning `BReg review result feed is available
+again` with `authority` and `failed_fetches`. Match on the message and `authority` to alert on a
+feed outage.
 
 When a worker or the metrics listener panics, or returns before shutdown is requested, the process
 writes one error record whose code names it, `webhook.worker.panicked`,
@@ -1281,7 +1288,8 @@ worker to investigate; raising the restart budget only repeats the outage.
     crates/registry-breg/src/startup.rs, OperationalEvent, background_task_stop_code(),
     WebhookStateTransitionCode, SupervisedTask, and finish_prepared_server();
     crates/registry-breg/src/main.rs;
-    crates/registry-breg/src/review_store.rs, ReviewWorker;
+    crates/registry-breg/src/review_store.rs, ReviewWorker and
+    ReviewAuthorityRegistry::record_feed_outcome();
     crates/registry-breg/src/attachment_verification_worker.rs;
     crates/registry-breg/src/attachment_store.rs, verification_retry_waiting();
     crates/registry-breg/src/subject_access_log.rs, run_retention();
