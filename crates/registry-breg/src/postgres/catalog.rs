@@ -1230,23 +1230,7 @@ pub(crate) async fn verify_managed_catalog(
     .await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog, runtime_role).await?;
-    let actual = fingerprint_catalog(
-        client,
-        runtime_role,
-        CatalogFingerprintVersion::NamedTableColumns,
-    )
-    .await?;
-    // Existing signed packages retain their original fingerprint and physical
-    // column-order checks. Never reinterpret an old hash as a normalized hash.
-    if actual != expected.schema_fingerprint
-        && fingerprint_catalog(
-            client,
-            runtime_role,
-            CatalogFingerprintVersion::LegacyPhysicalColumns,
-        )
-        .await?
-            != expected.schema_fingerprint
-    {
+    if fingerprint_catalog(client, runtime_role).await? != expected.schema_fingerprint {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())
@@ -1811,41 +1795,13 @@ pub async fn managed_schema_fingerprint(
     .await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog, runtime_role).await?;
-    fingerprint_catalog(
-        client,
-        runtime_role,
-        CatalogFingerprintVersion::NamedTableColumns,
-    )
-    .await
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum CatalogFingerprintVersion {
-    LegacyPhysicalColumns,
-    NamedTableColumns,
-}
-
-/// Produce the pre-normalization fingerprint for compatibility regression tests.
-#[cfg(feature = "postgres-test")]
-#[doc(hidden)]
-pub async fn legacy_schema_fingerprint_for_test(
-    client: &impl GenericClient,
-    runtime_role: &SqlIdentifier,
-) -> Result<String> {
-    fingerprint_catalog(
-        client,
-        runtime_role,
-        CatalogFingerprintVersion::LegacyPhysicalColumns,
-    )
-    .await
+    fingerprint_catalog(client, runtime_role).await
 }
 
 async fn fingerprint_catalog(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
-    version: CatalogFingerprintVersion,
 ) -> Result<String> {
-    let named_table_columns = version == CatalogFingerprintVersion::NamedTableColumns;
     let prior_search_path: String = client
         .query_one("SELECT pg_catalog.current_setting('search_path')", &[])
         .await?
@@ -1876,9 +1832,9 @@ async fn fingerprint_catalog(
              WHERE n.nspname = ANY($1::text[])
                AND c.relkind IN ('r', 'v', 'S')
              ORDER BY n.nspname, c.relname,
-                      CASE WHEN $2 AND c.relkind = 'r' THEN a.attname END COLLATE \"C\",
+                      CASE WHEN c.relkind = 'r' THEN a.attname END COLLATE \"C\",
                       a.attnum",
-            &[&MANAGED_SCHEMAS, &named_table_columns],
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let constraint_rows = client
@@ -1992,12 +1948,9 @@ async fn fingerprint_catalog(
     // appends physical slots, whereas a fresh install uses compiler field order.
     // v5 hashes the same named table schema for both histories, including after
     // dropped-column gaps. View/sequence order and every other catalog input
-    // remain covered. The distinct domain preserves exact legacy verification.
-    hasher.update(if named_table_columns {
-        b"breg/catalog/v5/columns"
-    } else {
-        b"breg/catalog/v3/columns"
-    });
+    // remain covered. The versioned domain keeps a hash of physical column
+    // order from ever matching this one.
+    hasher.update(b"breg/catalog/v5/columns");
     for row in column_rows {
         for index in [0, 1, 2, 7, 8, 10] {
             hash_text(&mut hasher, &row.get::<_, String>(index));
@@ -2005,7 +1958,7 @@ async fn fingerprint_catalog(
         for index in [3, 4, 5, 9] {
             hash_bool(&mut hasher, row.get(index));
         }
-        if !named_table_columns || row.get::<_, &str>(2) != "r" {
+        if row.get::<_, &str>(2) != "r" {
             hasher.update(row.get::<_, i16>(6).to_be_bytes());
         }
     }
@@ -2042,17 +1995,13 @@ async fn fingerprint_catalog(
         }
         hash_bool(&mut hasher, row.get(5));
     }
-    // The named-table algorithm leaves runtime grants out of the hash, so one
+    // The fingerprint leaves runtime grants out of the hash, so one
     // package fingerprint holds in single-role and split-role mode, where the
     // owner holds the runtime grants itself. Every runtime grant is still
     // compared exactly with the closed catalog before a fingerprint is taken.
-    hasher.update(if named_table_columns {
-        b"breg/catalog/v6/acl"
-    } else {
-        b"breg/catalog/v3/acl"
-    });
+    hasher.update(b"breg/catalog/v6/acl");
     for row in acl_rows {
-        if named_table_columns && row.get::<_, &str>(2) == "runtime" {
+        if row.get::<_, &str>(2) == "runtime" {
             continue;
         }
         for index in 0..4 {

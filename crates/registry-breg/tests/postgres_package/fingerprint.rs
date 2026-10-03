@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use registry_breg::postgres::legacy_schema_fingerprint_for_test;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes() {
+async fn package_fingerprint_starts_refuses_drift_and_upgrades_without_rewriting_package_bytes() {
     let database = TestDatabase::create(1).await;
     let (mut migration, task) = database.connect_migration().await;
     let registry = compile_fixture_registry(PlanChoice::Schema);
@@ -12,20 +11,16 @@ async fn legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes(
     install_compiled_schema(&transaction, &registry, &database.runtime_role)
         .await
         .unwrap();
-    let legacy = legacy_schema_fingerprint_for_test(&transaction, &database.runtime_role)
-        .await
-        .unwrap();
-    let named = managed_schema_fingerprint(
+    let fingerprint = managed_schema_fingerprint(
         &transaction,
         &database.runtime_role,
         &ExpectedManagedCatalog::compiled(&registry),
     )
     .await
     .unwrap();
-    assert_ne!(legacy, named, "the algorithms have distinct hash domains");
     transaction.rollback().await.unwrap();
 
-    let baseline = PackageFixture::build(None, legacy.clone(), PlanChoice::Schema);
+    let baseline = PackageFixture::build(None, fingerprint.clone(), PlanChoice::Schema);
     let original_bytes = fs::read(baseline.root.path().join("package.json")).unwrap();
     let package = load_package(baseline.root.path(), &baseline.context()).unwrap();
     let active = apply_package(
@@ -37,11 +32,11 @@ async fn legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes(
     )
     .await
     .unwrap();
-    assert_eq!(active.schema_fingerprint, legacy);
+    assert_eq!(active.schema_fingerprint, fingerprint);
     assert_startup_and_drift_refusal(&database, &baseline, &package).await;
 
-    // A real successor moves from the old fingerprint to the named-column
-    // algorithm. Measurement uses a fresh isolated database, not live DDL.
+    // A real successor moves to the fingerprint of its own catalog.
+    // Measurement uses a fresh isolated database, not live DDL.
     let rehearsal = TestDatabase::create(1).await;
     let (target_connection, target_task) = rehearsal.connect_migration().await;
     let target = compile_fixture_registry(PlanChoice::SecondTable);
@@ -172,7 +167,7 @@ async fn assert_startup(database: &TestDatabase, fixture: &PackageFixture, allow
     if allowed {
         assert!(
             result.is_ok(),
-            "exact legacy or named-column catalog must start: {:?}",
+            "the exact catalog must start: {:?}",
             result.err()
         );
     } else {
