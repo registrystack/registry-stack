@@ -576,6 +576,9 @@ SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
     ".github/workflows/evidence-dev.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),
+    ".github/workflows/nightly-release.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
     ".github/workflows/nightly-security.yml": frozenset(
         {"evidence_assurance", "platform", "release_tool"}
     ),

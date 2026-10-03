@@ -298,7 +298,13 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'discoveryctl', 'breg', 'bregctl', "
             "'casework', 'caseworkctl', 'scheduling', 'schedulingctl', 'messaging', "
             "'messagingctl', 'registry-render'):\n"
-            "    (target / binary).write_text('fixture binary\\n')\n",
+            "    path = target / binary\n"
+            "    if binary == 'registry-manifest':\n"
+            "        version = os.environ.get('FAKE_MANIFEST_VERSION') or os.environ.get('REGISTRY_NIGHTLY_TAG') or os.environ['REGISTRY_RELEASE_TAG']\n"
+            "        path.write_text('#!/bin/sh\\nprintf \\\'%s\\\\n\\\' \\\'registry-manifest ' + version.removeprefix('v') + '\\\'\\n')\n"
+            "        path.chmod(0o755)\n"
+            "    else:\n"
+            "        path.write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
         cargo.chmod(0o755)
@@ -315,7 +321,9 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    sys.exit(0)\n"
             "version = args[-1]\n"
             "group = args[-2] if args[-3] == '--group' else 'all'\n"
-            "tag = 'v' + version\n"
+            "nightly_tag = next((arg.split('=', 1)[1] for arg in args "
+            "if arg.startswith('REGISTRY_NIGHTLY_TAG=')), None)\n"
+            "tag = nightly_tag or ('v' + version)\n"
             "root = pathlib.Path(os.environ['FIXTURE_ROOT'])\n"
             "bin_dir = root / 'dist/bin'\n"
             "image_dir = root / 'dist/image-bin'\n"
@@ -377,6 +385,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         *,
         version: str = "0.27.0",
         group: str = "all",
+        nightly_tag: str | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
         # Load the actual functions, stopping before Docker's outer entry
@@ -386,13 +395,22 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         recipe = (self.scripts / BINARY_RECIPE.name).read_text(encoding="utf-8")
         definitions = recipe.split("\n# The outer invocation prepares", 1)[0]
         probe = self.scripts / "probe-build.sh"
-        probe.write_text(definitions + '\nRELEASE_TAG="$tag"\nbuild_payload\n')
+        identity_setup = (
+            'export REGISTRY_NIGHTLY_TAG="$tag"\nunset REGISTRY_RELEASE_TAG\n'
+            if nightly_tag
+            else 'export REGISTRY_RELEASE_TAG="$tag"\nunset REGISTRY_NIGHTLY_TAG\n'
+        )
+        probe.write_text(
+            definitions + '\nRELEASE_TAG="$tag"\n' + identity_setup + "build_payload\n"
+        )
         self.log.unlink(missing_ok=True)
         for relative in ("dist/bin", "dist/image-bin"):
             directory = self.root / relative
             shutil.rmtree(directory)
             directory.mkdir()
         arguments = ["bash", str(probe)]
+        if nightly_tag:
+            arguments.extend(["--nightly-tag", nightly_tag])
         if group != "all":
             arguments.extend(["--group", group])
         arguments.append(version)
@@ -494,6 +512,27 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(calls_expected, [call["args"] for call in calls])
         self.assertNotIn("tooling", str(expected))
+
+    def test_manifest_version_smoke_rejects_the_wrong_build_identity(self) -> None:
+        result, calls = self.run_payload(
+            group="core",
+            env={**self.env, "FAKE_MANIFEST_VERSION": "v0.0.0"},
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(
+            [["build", "--release", "--locked", "-p", "registry-manifest-cli"]],
+            [call["args"] for call in calls],
+        )
+
+    def test_manifest_version_smoke_accepts_the_full_nightly_identity(self) -> None:
+        version = "0.38.0"
+        nightly_tag = f"v{version}-nightly.20261002.{'1' * 40}"
+        result, _ = self.run_payload(
+            version=version,
+            group="core",
+            nightly_tag=nightly_tag,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_group_builds_keep_the_release_version_gates(self) -> None:
         result, core = self.run_payload(version="0.23.9", group="core")
@@ -737,6 +776,69 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                         f"group={group}\n",
                         (self.root / "dist/RELEASE_BINARY_SHARD").read_text(),
                     )
+
+    def test_nightly_builder_dispatches_every_linux_group_with_full_identity(
+        self,
+    ) -> None:
+        version = "0.38.0"
+        source_sha = "1" * 40
+        nightly_tag = f"v{version}-nightly.20261002.{source_sha}"
+        for group in ("core", "breg", "casework", "scheduling", "messaging"):
+            with self.subTest(group=group):
+                self.docker_log.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [
+                        "bash",
+                        str(self.scripts / BINARY_RECIPE.name),
+                        "--nightly-tag",
+                        nightly_tag,
+                        "--group",
+                        group,
+                        version,
+                    ],
+                    cwd=self.root,
+                    env={
+                        **self.env,
+                        "RELEASE_CARGO_HOME": str(self.root / f".nightly-cargo-{group}"),
+                        "RELEASE_TARGET_DIR": str(self.root / f"nightly-target-{group}"),
+                        "RELEASE_SOURCE_SHA": source_sha,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                run = [
+                    json.loads(line)
+                    for line in self.docker_log.read_text().splitlines()
+                ][1]
+                self.assertIn(f"REGISTRY_NIGHTLY_TAG={nightly_tag}", run)
+                self.assertFalse(
+                    any(arg.startswith("REGISTRY_RELEASE_TAG=") for arg in run)
+                )
+                self.assertEqual(
+                    [
+                        "/workspace/release/scripts/build-release-binaries.sh",
+                        "--nightly-tag",
+                        nightly_tag,
+                        "--group",
+                        group,
+                        version,
+                    ],
+                    run[-6:],
+                )
+                metadata = (self.root / "dist/RELEASE_BINARY_SHARD").read_text()
+                self.assertTrue(
+                    metadata.startswith("registry-stack.release-binary-shard.v2\n")
+                )
+                self.assertIn(f"nightly_tag={nightly_tag}\n", metadata)
+                self.assertTrue(
+                    all(
+                        nightly_tag in path.name
+                        for path in (self.root / "dist/bin").iterdir()
+                        if path.name != "SHA256SUMS"
+                    )
+                )
 
     def test_pre_breg_empty_producer_merges_with_the_core_shard(self) -> None:
         source_sha = "1" * 40
@@ -1037,7 +1139,10 @@ class SourceCheckoutIndependenceTest(unittest.TestCase):
         return path
 
     def run_check(
-        self, *binaries: Path, commit: str | None
+        self,
+        *binaries: Path,
+        commit: str | None,
+        nightly_tag: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         # Load the recipe's definitions, stopping before Docker's outer entry
         # point, and call the staged-payload check the way build_payload does.
@@ -1047,10 +1152,17 @@ class SourceCheckoutIndependenceTest(unittest.TestCase):
         probe.write_text(f"{definitions}\ncheck_source_commit_absent {arguments}\n")
         environment = {name: value for name, value in os.environ.items()}
         environment.pop("RELEASE_SOURCE_COMMIT", None)
+        environment.pop("REGISTRY_NIGHTLY_TAG", None)
+        environment.pop("REGISTRY_RELEASE_TAG", None)
         if commit is not None:
             environment["RELEASE_SOURCE_COMMIT"] = commit
+        invocation = ["bash", str(probe)]
+        if nightly_tag is not None:
+            environment["REGISTRY_NIGHTLY_TAG"] = nightly_tag
+            invocation.extend(["--nightly-tag", nightly_tag])
+        invocation.append("0.33.0")
         return subprocess.run(
-            ["bash", str(probe), "0.33.0"],
+            invocation,
             cwd=self.root,
             env=environment,
             capture_output=True,
@@ -1081,6 +1193,24 @@ class SourceCheckoutIndependenceTest(unittest.TestCase):
         self.assertIn(f"{tainted} embeds the source commit {commit}", result.stderr)
         self.assertNotIn(f"{clean} embeds", result.stderr)
         self.assertIn("source commit check failed for 1 of 2 binaries", result.stderr)
+
+    def test_validated_nightly_identity_may_embed_its_full_source_commit(self) -> None:
+        commit = "4" * 40
+        nightly_tag = f"v0.33.0-nightly.20261002.{commit}"
+        binary = self.staged(
+            "breg",
+            b"\x7fELF registry-stack " + nightly_tag.encode("ascii") + b" payload\n",
+        )
+        result = self.run_check(
+            binary,
+            commit=commit,
+            nightly_tag=nightly_tag,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"nightly tag {nightly_tag} intentionally embeds source commit {commit}",
+            result.stdout,
+        )
 
     def test_unknown_commit_reports_that_the_payload_was_not_checked(self) -> None:
         result = self.run_check(

@@ -661,6 +661,7 @@ RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/mirror-buildkit.yml",
     ".github/workflows/docs-pages.yml",
     ".github/workflows/evidence-dev.yml",
+    ".github/workflows/nightly-release.yml",
     ".github/workflows/nightly-rust-coverage.yml",
     ".github/workflows/nightly-security.yml",
     ".github/workflows/release.yml",
@@ -685,6 +686,9 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
         {"docs", "release_source_proof", "release_tool"}
     ),
     ".github/workflows/evidence-dev.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/nightly-release.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/nightly-security.yml": frozenset(

@@ -21,6 +21,13 @@ A `REGISTRY_RELEASE_TAG` that names a different version fails the build rather
 than downgrading to a development version, because that combination is a
 misconfigured release build and not an ordinary one.
 
+A nightly build sets `REGISTRY_NIGHTLY_TAG` instead. Its exact form is
+`v<version>-nightly.<YYYYMMDD>.<40-character lowercase source SHA>`, and the
+reported version is that full identity without the leading `v`. The base must
+match the Cargo package version, the date must be valid, and the full source SHA
+must be present. Setting both release markers fails the build, so a nightly can
+never report itself as a numbered release.
+
 The Cargo package version is untouched by all of this. It stays canonical
 `MAJOR.MINOR.PATCH` text, which the release manifests, candidate schemas, and
 the Evidence development build all require.

@@ -194,6 +194,7 @@ name = "registry-manifest-cli"
 version = "0.39.0"
 dependencies = [
  "registry-manifest-core",
+ "registry-platform-buildinfo",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -223,6 +224,10 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
 ]
+
+[[package]]
+name = "registry-platform-buildinfo"
+version = "0.39.0"
 
 [[package]]
 name = "registry-platform-canonical-json"

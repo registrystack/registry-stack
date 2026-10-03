@@ -150,7 +150,13 @@ from pathlib import Path
 
 args = sys.argv[1:]
 version = os.environ["FAKE_VERSION"]
-if os.environ.get("REGISTRY_RELEASE_TAG") != f"v{version}":
+release_tag = os.environ.get("REGISTRY_RELEASE_TAG")
+nightly_tag = os.environ.get("REGISTRY_NIGHTLY_TAG")
+if nightly_tag:
+    expected_prefix = f"v{version}-nightly."
+    if release_tag or not nightly_tag.startswith(expected_prefix):
+        raise SystemExit(43)
+elif release_tag != f"v{version}":
     raise SystemExit(43)
 major, minor, patch = (int(part) for part in version.split("."))
 archive_release = major > 0 or minor >= 33
@@ -160,7 +166,8 @@ if archive_release and os.environ.get("MACOSX_DEPLOYMENT_TARGET") != "11.0":
     raise SystemExit(46)
 if not archive_release and os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "1":
     raise SystemExit(45)
-binary_version = os.environ.get("FAKE_BINARY_VERSION", version)
+identity_version = nightly_tag.removeprefix("v") if nightly_tag else version
+binary_version = os.environ.get("FAKE_BINARY_VERSION", identity_version)
 log = Path(os.environ["FAKE_CARGO_LOG"])
 calls = []
 if log.exists():
@@ -310,6 +317,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         binary_version: str | None = None,
         include_casework: bool = False,
         fips_shared: bool = False,
+        nightly_tag: str | None = None,
         breg_services_first_release: tuple[int, int, int] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path, list[list[str]]]:
         stem = name or group
@@ -342,6 +350,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
                 "bash",
                 str(BUILDER),
                 *(["--include-casework"] if include_casework else []),
+                *(["--nightly-tag", nightly_tag] if nightly_tag else []),
                 "--group",
                 group,
                 "--purpose",
@@ -362,6 +371,74 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         if log.exists():
             calls = [json.loads(line) for line in log.read_text().splitlines()]
         return result, output, calls
+
+    def test_nightly_groups_merge_with_full_identity_and_review_only_metadata(
+        self,
+    ) -> None:
+        version = OPERATOR_TOOL_VERSION
+        nightly_tag = f"v{version}-nightly.20261002.{SOURCE_SHA}"
+        shards = {}
+        for group in ("core", "breg", "bregctl", "casework", "scheduling"):
+            result, shard, _ = self.build(
+                group,
+                version=version,
+                nightly_tag=nightly_tag,
+                name=f"nightly-{group}",
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            metadata = (shard / "RELEASE_NATIVE_PLATFORM_SHARD").read_text()
+            self.assertTrue(
+                metadata.startswith("registry-stack.release-native-platform-shard.v3\n")
+            )
+            self.assertIn(f"nightly_tag={nightly_tag}\n", metadata)
+            shards[group] = shard
+
+        output = self.root / "nightly-merged"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MERGER),
+                "--version",
+                version,
+                "--source-sha",
+                SOURCE_SHA,
+                "--nightly-tag",
+                nightly_tag,
+                "--purpose",
+                "review_only",
+                "--core",
+                str(shards["core"]),
+                "--breg",
+                str(shards["breg"]),
+                "--bregctl",
+                str(shards["bregctl"]),
+                "--casework",
+                str(shards["casework"]),
+                "--scheduling",
+                str(shards["scheduling"]),
+                "--output",
+                str(output),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        names = [path.name for path in (output / "platform").iterdir()]
+        self.assertTrue(all(nightly_tag in name for name in names))
+
+    def test_nightly_native_build_rejects_candidate_input(self) -> None:
+        nightly_tag = f"v{VERSION}-nightly.20261002.{SOURCE_SHA}"
+        result, output, calls = self.build(
+            "core",
+            purpose="candidate_input",
+            nightly_tag=nightly_tag,
+            name="nightly-candidate",
+        )
+        self.assertEqual([], calls)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("review_only", result.stderr)
+        self.assertFalse(output.exists())
 
     def test_all_mode_preserves_the_exact_ordered_cargo_invocations(self) -> None:
         result, output, calls = self.build("all")

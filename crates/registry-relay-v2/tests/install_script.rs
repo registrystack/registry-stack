@@ -14,13 +14,19 @@ const BINARIES: [&str; 2] = ["relay", "relayctl"];
 
 #[cfg(unix)]
 #[test]
-fn installer_refuses_to_run_without_a_pinned_release() {
+fn unpinned_installer_resolves_the_latest_numbered_release() {
     let fixture = InstallerFixture::new();
     let output = fixture.command_without_version().output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("RELAY_VERSION"), "stderr: {stderr}");
-    assert!(!fixture.fake_curl_log().exists());
+    assert!(
+        stderr.contains("latest numbered Registry Relay installer"),
+        "stderr: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.fake_curl_log()).unwrap(),
+        "https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh\n"
+    );
 }
 
 #[cfg(unix)]

@@ -27,6 +27,13 @@ fn main() {
 fn run() -> Result<(), String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
+        Some("--version") => {
+            println!(
+                "registry-manifest {}",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            );
+            Ok(())
+        }
         Some("validate") => {
             let path = args.get(1).ok_or_else(usage)?;
             let manifest = load_manifest(path)?;

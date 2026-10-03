@@ -5716,6 +5716,7 @@ name = "registry-manifest-cli"
 version = "0.39.0"
 dependencies = [
  "registry-manifest-core",
+ "registry-platform-buildinfo",
  "serde",
  "serde_json",
  "serde_yaml_ng",
