@@ -751,13 +751,10 @@ naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-The audit-writer transition intentionally retires BReg's `registry_audit` and
-`registry_audit_head` tables and Casework's `casework_audit_outbox`. The rehearsal
-exports every row of those exact tables to private JSON Lines archives and
-checks their row counts before allowing removal; `bregctl apply` itself refuses
-to drop either BReg table while it still holds rows unless the caller passes
-`--acknowledge-retired-audit-discard`, which the rehearsal does only after that
-archive and count check succeeds. It waits for the old Casework
+The audit-writer transition intentionally retires Casework's
+`casework_audit_outbox`. The rehearsal exports every row of that exact table to
+a private JSON Lines archive and checks its row count before allowing removal.
+It waits for the old Casework
 publisher to drain before stopping it. Old Casework and Evidence audit files
 move to separate archives before the new writer starts; Evidence's new stream
 must contain valid current envelopes after the upgraded request. The old
