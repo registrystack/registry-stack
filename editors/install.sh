@@ -30,7 +30,7 @@ updates the active profile unless --profile selects an existing profile. Zed
 requires one final command-palette action because its CLI cannot install a
 local development extension. Configure a product separately with:
   python3 editors/configure.py <product> <project>
-Evidence and Relay also provide their own tooling editor command.
+Evidence also provides its own tooling editor command.
 EOF
 }
 
@@ -117,9 +117,9 @@ verify_registry_stack_cli() {
   [[ -n "${expected_version}" ]] ||
     fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
 
-  # These two adopter CLIs embed the shared server for every supported product.
+  # Evidence tooling embeds the shared server for every supported product.
   # The other product CLIs remain independent of its dependency closure.
-  local -a candidate_names=(evidencectl relayctl)
+  local -a candidate_names=(evidencectl)
   local -a candidate_errors=()
   local candidate_name
 
@@ -134,7 +134,7 @@ verify_registry_stack_cli() {
     fi
     local installed_version="${REGISTRY_STACK_CLI_VERSION}"
 
-    # Both adopter CLIs ship from this same workspace and share its
+    # The adopter CLI ships from this workspace and shares its
     # version. A CLI built from a source checkout reports a development version
     # of the workspace version it was built from, so both spellings match this
     # checkout. Only the version itself has to agree.
@@ -155,7 +155,7 @@ verify_registry_stack_cli() {
   done
 
   if ((${#candidate_errors[@]} == 0)); then
-    fail "required external command 'evidencectl' or 'relayctl' was not found on PATH"
+    fail "required external command 'evidencectl' was not found on PATH"
   fi
 
   local candidate_error

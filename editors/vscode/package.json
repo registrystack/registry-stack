@@ -71,7 +71,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the registry-language-server executable. Relative paths resolve from the workspace folder whose language server is starting. When empty, the extension uses the installer-selected adopter CLI when available, then searches PATH for evidencectl or relayctl matching this extension version. Use an explicit path for the standalone development server."
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the workspace folder whose language server is starting. When empty, the extension uses the installer-selected adopter CLI when available, then searches PATH for evidencectl matching this extension version. Use an explicit path for the standalone development server."
         }
       }
     }

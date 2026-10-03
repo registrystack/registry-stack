@@ -62,7 +62,7 @@ test('registryctl is not a supported language-server launcher', () => {
   });
 });
 
-test('evidencectl is preferred over relayctl', () => {
+test('evidencectl hosts the server while retired relayctl is ignored', () => {
   const directory = pathDirectory();
   const evidencectl = writeHostingCli(directory, 'evidencectl');
   writeHostingCli(directory, 'relayctl');
@@ -72,14 +72,11 @@ test('evidencectl is preferred over relayctl', () => {
   });
 });
 
-test('relayctl hosts the server when evidencectl cannot', () => {
+test('retired relayctl cannot host the server when evidencectl is unavailable', () => {
   const directory = pathDirectory();
   writeLegacyCli(directory, 'evidencectl');
-  const relayctl = writeHostingCli(directory, 'relayctl');
-  assert.deepStrictEqual(findLanguageServerOnPath(expectedVersion), {
-    command: relayctl,
-    args: ['tooling', 'language-server'],
-  });
+  writeHostingCli(directory, 'relayctl');
+  assert.strictEqual(findLanguageServerOnPath(expectedVersion), undefined);
 });
 
 test('an unversioned standalone server on PATH requires an explicit setting', () => {
@@ -106,13 +103,11 @@ test('an empty PATH resolves to nothing', () => {
 });
 
 
-test('a mismatched evidencectl falls through to matching relayctl', () => {
+test('retired relayctl does not bypass the Evidence version requirement', () => {
   const directory = pathDirectory();
   writeHostingCli(directory, 'evidencectl', '0.2.0');
-  const relayctl = writeHostingCli(directory, 'relayctl');
-  assert.deepStrictEqual(findLanguageServerOnPath(expectedVersion), {
-    command: relayctl, args: ['tooling', 'language-server'],
-  });
+  writeHostingCli(directory, 'relayctl');
+  assert.strictEqual(findLanguageServerOnPath(expectedVersion), undefined);
 });
 
 test('a development build of the extension release is accepted', () => {

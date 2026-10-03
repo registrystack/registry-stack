@@ -27,7 +27,6 @@ PRODUCT_FILES = {
     "manifest": "metadata.yaml",
     "render": "manifest.yaml",
     "evidence": "evidence-project.yaml",
-    "relay": "registry.yaml",
 }
 PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
 SCHEMAS = {
@@ -65,7 +64,6 @@ CHECKS = {
     "manifest": ("registry-manifest", "validate", "{document}"),
     "render": ("registry-render", "check", "--bundle", "{project}"),
     "evidence": ("evidencectl", "check", "{project}"),
-    "relay": ("relayctl", "check", "{project}"),
 }
 
 
@@ -377,12 +375,8 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
 
     # The two established authoring CLIs own their schema snapshots and editor mappings.
     # Run them only after validating our settings and task files.
-    if product in ("evidence", "relay"):
-        name = "evidencectl" if product == "evidence" else "relayctl"
-        if product == "relay" and workspace != project:
-            raise SetupError(
-                "relayctl tooling editor cannot write a parent workspace; use the Relay project as --workspace"
-            )
+    if product == "evidence":
+        name = "evidencectl"
         command = matching_cli(name)
         args = [command, "tooling", "editor", str(project)]
         if product == "evidence" and workspace != project:

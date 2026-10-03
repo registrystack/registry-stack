@@ -4,10 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 // Product-owned markers mirror root discovery in registry-language-server.
-// registry.yaml serves two families, so its content must distinguish them.
-export const RELAY_V2_MARKER_FILE = 'registry.yaml';
-export const RELAY_V2_API_VERSION_PREFIX = 'relay.registrystack.org/';
-export const RELAY_V2_CONTRACT_KIND = 'RegistryContract';
+// A registry.yaml root must declare a Base Registry Engine project.
 export const EVIDENCE_MARKER_FILE = 'evidence-project.yaml';
 export const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
 export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
@@ -28,7 +25,6 @@ const MAX_MARKER_BYTES = 1024 * 1024;
 
 export function isProjectRoot(directory: string): boolean {
   if (
-    declaresRelayV2(path.join(directory, RELAY_V2_MARKER_FILE)) ||
     declaresProduct(directory) ||
     declaresExplicitProduct(directory)
   ) {
@@ -40,27 +36,6 @@ export function isProjectRoot(directory: string): boolean {
   return (
     isFile(path.join(directory, EVIDENCE_OPENAPI_FILE)) &&
     isDirectory(path.join(directory, EVIDENCE_QUESTIONS_DIRECTORY))
-  );
-}
-
-// Whether the file at this path is a governed contract. Anything the client
-// cannot read as one reads as "not this family": a file that is not there, one
-// past the ceiling, one that is not text, one naming neither key. Declaring a
-// root on a document the client could not read is what produced the false
-// diagnostics this check removes.
-function declaresRelayV2(candidate: string): boolean {
-  if (!isFile(candidate)) {
-    return false;
-  }
-  const text = readMarker(candidate);
-  if (text === undefined) {
-    return false;
-  }
-  const kind = topLevelScalar(text, 'kind');
-  const apiVersion = topLevelScalar(text, 'apiVersion');
-  return (
-    kind === RELAY_V2_CONTRACT_KIND ||
-    (apiVersion !== undefined && apiVersion.startsWith(RELAY_V2_API_VERSION_PREFIX))
   );
 }
 

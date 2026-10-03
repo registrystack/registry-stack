@@ -9,7 +9,6 @@ Project roots use each product's own authoring marker:
 | Product | Marker |
 |---|---|
 | Base Registry Engine | `registry.yaml` declaring `RegistryProject` |
-| Registry Relay V2 | `registry.yaml` declaring `RegistryContract` |
 | Evidence | `evidence-project.yaml`, or `source.openapi.yaml` beside `questions/` |
 | Registry Casework | `casework.yaml` declaring `CaseworkProject` |
 | Registry Scheduling | `scheduling.yaml` declaring `SchedulingPolicyPackage` |
@@ -42,7 +41,7 @@ and virtual workspaces.
 ## Install and launch
 
 Prerequisites are Node.js 22 or newer, the `code` command-line tool, and a matching
-`evidencectl` or `relayctl`. Both embed the same language server.
+`evidencectl`. Both embed the same language server.
 
 Configure the project's maintained schemas and native validation task from the repository root:
 
@@ -54,7 +53,7 @@ Use the product name from the [shared setup guide](../README.md). For a project 
 opened workspace folder, add `--workspace /path/to/workspace`. Manifest files with a custom name use
 `--document custom.yaml`; Evidence OID4VCI requires `--document wallet-config.yaml`. The configurator
 writes the explicit marker for those two families, adds available schema mappings, and preserves
-existing editor settings and tasks. Relay and Evidence schema setup runs through their matching
+existing editor settings and tasks. Evidence schema setup runs through their matching
 adopter CLI. See the shared guide for products whose validation remains a native CLI check.
 
 1. From the repository root, install the integration into the active VS Code profile:
@@ -90,7 +89,7 @@ adopter CLI. See the shared guide for products whose validation remains a native
 The source VSIX contains the extension runtime and the verified path to the CLI the installer
 selected, not a platform server binary. Its server discovery order is: the explicit
 `registryStack.languageServer.path` setting, the installer-selected CLI,
-`evidencectl` or `relayctl` on `PATH` matching the extension release version.
+`evidencectl` on `PATH` matching the extension release version.
 A source build reporting the same version with `-dev` is also accepted.
 The explicit setting runs the executable directly. Installer-selected and PATH adopter CLIs run
 `<cli> tooling language-server`; the standalone server runs directly.
@@ -139,7 +138,7 @@ and verifies that the VSIX contains no external `node_modules` runtime.
   Workspace Trust**, trust the reviewed project, and run **Registry Stack: Restart Language
   Server** if needed.
 - If startup reports that no server was found, set `registryStack.languageServer.path` to the
-  standalone executable built for source iteration. Otherwise, ensure a matching `evidencectl` or `relayctl` is on the environment inherited by VS
+  standalone executable built for source iteration. Otherwise, ensure a matching `evidencectl` is on the environment inherited by VS
   Code and restart the language server. The output message names the project folder that failed.
 - If navigation is absent, confirm the file's VS Code language mode is YAML or JSON and inspect the output
   channel named for that workspace folder.

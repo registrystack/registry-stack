@@ -60,17 +60,12 @@ CONTRACTS = {
     ),
     "products/casework/loadtest/run.sh": ("DYLD_FALLBACK_LIBRARY_PATH",),
     "products/casework/loadtest/down.sh": ("DYLD_FALLBACK_LIBRARY_PATH",),
-    "products/relay-v2/scripts/check-generated.sh": (
-        "RELAYCTL_BIN",
-        "cargo-runtime-library-path.sh",
-        "registry_cargo_build",
-    ),
 }
 
 
 class CargoRuntimeScriptContractTests(unittest.TestCase):
     def test_every_reported_gate_keeps_its_runtime_and_override_contract(self):
-        self.assertEqual(len(CONTRACTS), 17)
+        self.assertEqual(len(CONTRACTS), 16)
         for relative, markers in CONTRACTS.items():
             with self.subTest(script=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8")
