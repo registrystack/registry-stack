@@ -34,10 +34,6 @@ while [[ $# -gt 0 ]]; do
       handoff="$2"
       shift 2
       ;;
-    --token-lifetime-seconds)
-      printf '%s\n' '--token-lifetime-seconds was retired; the stock development issuer owns its bounded token lifetime.' >&2
-      exit 2
-      ;;
     *) usage ;;
   esac
 done
