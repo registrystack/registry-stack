@@ -741,7 +741,9 @@ carries caller-controlled bytes into responses and logs.
   all pass; any other location is a protocol failure. Rust exposes the validated
   value only through the explicit `field_path` accessor, Node.js and Python copy
   it to their explicit error attributes, and no binding renders it through
-  `Debug`, `Display`, or the exception message.
+  `Debug`, `Display`, or the exception message. The Node.js attribute is
+  non-enumerable, so default `util.inspect`, `console.error`, and JSON object
+  serialization omit it while direct `error.fieldPath` access remains available.
 
 ### Tests
 
@@ -761,7 +763,9 @@ accepted grammar, and
 `record_and_query_problem_paths_are_closed_bounded_and_retained_without_rendering`
 pins the client's closed forms, retains every permitted location through the
 explicit accessor, rejects malformed or code-incompatible locations, and proves
-that retained locations do not enter rendered errors.
+that retained locations do not enter rendered errors. The Node.js refusal tests
+likewise retain action, record, and query locations through direct attribute
+access while proving that default inspection and console formatting omit them.
 
 ### Accepted residuals
 
