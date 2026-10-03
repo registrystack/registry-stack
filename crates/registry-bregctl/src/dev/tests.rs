@@ -1439,6 +1439,26 @@ fn a_retained_v1_state_is_invalid_without_mutation() {
 }
 
 #[test]
+fn a_retained_state_of_another_version_is_invalid_without_mutation() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let state_file = root.join("state.json");
+    let mut other: Value =
+        serde_json::from_slice(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap();
+    other["version"] = json!(1);
+    let bytes = serde_json::to_vec(&other).unwrap();
+    private::replace(&state_file, &bytes).unwrap();
+
+    let refusal = read_state(&root).unwrap_err().to_string();
+    assert_eq!(
+        refusal,
+        "retained dev state ownership is invalid; no resources were changed"
+    );
+    assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
+}
+
+#[test]
 fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(1, 1, 2).is_err());
     assert!(ports(0, 2, 3).is_err());
