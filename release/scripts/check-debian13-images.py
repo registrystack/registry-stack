@@ -212,6 +212,7 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.breg"): {
         "binary": "breg",
         "tool": "bregctl",
+        "tool_required": True,
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
         "command": 'CMD ["--runtime-config", "/etc/breg/runtime.yaml"]',
     },

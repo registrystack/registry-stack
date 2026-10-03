@@ -2675,13 +2675,12 @@ class RegistryReleaseTest(TestCase):
             ],
             copy_instructions,
         )
-        # The operator tool is installed beside the runtime when the release
-        # stages it, and nothing else in the image refers to it.
+        # The operator tool is always installed beside the runtime, and nothing
+        # else in the image refers to it.
         self.assertEqual(
             [
-                "&& if [ -e /workspace/image-bin/bregctl ]; then \\",
-                "install -m 0755 /workspace/image-bin/bregctl "
-                + "/workspace/runtime-root/usr/local/bin/bregctl; \\",
+                "&& install -m 0755 /workspace/image-bin/bregctl "
+                + "/workspace/runtime-root/usr/local/bin/bregctl \\",
             ],
             [
                 line.strip()
