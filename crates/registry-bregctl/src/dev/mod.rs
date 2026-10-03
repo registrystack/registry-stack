@@ -152,7 +152,7 @@ struct StartArgs {
     project: PathBuf,
     /// Local clients, profile bindings, and optional seed records (default on
     /// first start: dev-clients.yaml in the project; retained for restarts).
-    #[arg(long, alias = "clients", value_name = "FILE")]
+    #[arg(long, value_name = "FILE")]
     clients_file: Option<PathBuf>,
     /// Registry loopback port on first start (default 8090; retained for restarts).
     #[arg(long)]
