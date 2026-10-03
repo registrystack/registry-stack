@@ -21,6 +21,7 @@ __pycache__/
 /products/evidence/.first-curl/
 /products/evidence/.sd-jwt-vc-demo/
 .breg-history.*/
+.bregctl-data-test-*/
 .breg-restore.*/
 .casework-restore.*/
 
