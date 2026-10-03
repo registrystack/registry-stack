@@ -15,24 +15,15 @@ standards_referenced:
   - shacl
 ---
 
-Use this guide when you operate a Registry Discovery catalog for known Evidence Gateway and
-Registry Relay providers. You maintain provider URLs and evidence-type mappings, package one
-immutable index on demand, then restart the read-only service with that package.
-
 {/* Evidence: products/discovery/README.md describes the operator flow as offline `check`, one
     explicit `package`, immutable-package deployment, then restart. `crates/registry-discoveryctl/src/lib.rs`
     exposes only `check` and `package`; `crates/registry-discovery/src/server.rs` fixes the public routes. */}
 
 ## When to use this
 
-Use Registry Discovery to curate public advertisements from providers your catalog operator has
-already chosen to index. It is useful when an application must find an Evidence Gateway by evidence
-type, or a Registry Relay by its public semantics, before it performs its normal product-specific
-connection.
-
-{/* Evidence: `crates/registry-discovery/src/query.rs` matches Evidence type, Relay semantic-class,
-    and Relay operation-family filters. `products/discovery/ACCEPTANCE-JOURNEYS.md` defines direct
-    native Evidence and Relay invocation after exact selection. */}
+Use this procedure to build and serve an immutable index of approved Evidence Gateway provider
+descriptions. Discovery returns public metadata only; the consuming application owns provider
+trust, credentials, and invocation.
 
 ## Before you start
 
@@ -88,8 +79,8 @@ the release manifest and deploy that digest instead of the mutable tag. The imag
 `/etc/registry-discovery/runtime.yaml` as its default runtime file. Mount that file and the complete
 package directory read-only. Discovery keeps no writable local state.
 
-{/* Evidence: release/scripts/release_candidate.py, _relay_v2_payload_inventory;
-    release/docker/Dockerfile.discovery; release/VERIFY.md. */}
+{/* Evidence: release/scripts/release_roster.py; release/docker/Dockerfile.discovery;
+    release/VERIFY.md. */}
 
 ## Add the approved provider URLs
 
@@ -286,22 +277,11 @@ curl --fail-with-body --get \
 The response has a `catalogRevision` and an `items` array. Each item carries the provider endpoint,
 its advertised capability IDs, and the origin URL, content digest, and fetch time.
 
-For Registry Relay, use `serviceKind=relay` and one or both of `semanticClass` and
-`operationFamily` as repeated query filters. A protected-only Relay can advertise neither public
-semantic class nor operation family.
-
-{/* Evidence: `crates/registry-discovery/openapi.json` defines both calls and the query fields.
-    `crates/registry-discovery/tests/http_journey.rs`,
-    `immutable_index_supports_resolution_and_exact_service_search`, exercises these exact request
-    shapes. `crates/registry-discovery/src/model.rs`, `ServiceRecord`, defines provenance fields.
-    `products/discovery/ACCEPTANCE-JOURNEYS.md` records the protected-only Relay case. */}
-
 ## Hand off to native product trust
 
-Discovery selection is metadata only. Before an application creates a native request, use its own
-Evidence Gateway or Registry Relay trust configuration to accept or reject the selected provider,
-then invoke the selected `endpointUrl` directly with that product's native client. Do not send
-credentials or native request data to Registry Discovery.
+Treat the selected record as inert metadata. The application validates and accepts the Evidence
+Gateway endpoint under its own trust configuration, then calls it with the native Evidence client.
+No credential, evidence request, or assertion passes through Discovery.
 
 {/* Evidence: `crates/registry-discovery-client/src/selection.rs`,
     `discovery_metadata_has_no_trust_or_native_io_capability`, proves that a selection excludes
@@ -312,12 +292,10 @@ credentials or native request data to Registry Discovery.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `discoveryctl check` fails | The origins or mapping document is not in the closed authoring shape. | Correct the schema version, identifiers, and duplicate values, then run the offline check again. |
-| `discoveryctl package` fails | An enabled provider URL could not be fetched safely, did not return the exact profile media type, or the output directory already exists. | Confirm the provider's public description deployment and choose a new output directory. Keep the previous package running until packaging succeeds. |
-| Startup says the package does not match `SHA256SUMS` | A listed file changed, is missing, or an extra file appeared in the package directory. | Redeploy the whole directory produced by `discoveryctl package`. |
-| Startup reports different expected and found package digests | `package.expectedDigest` pins a different package. | Deploy the pinned package or update the pin to the reviewed `packageDigest`. |
-| A search returns no items | The index contains no advertisement that matches every supplied filter. | Inspect the advertised capability IDs and use a narrower or correct filter set. |
-| Native connection is refused | The application did not accept the selected provider under its local product trust configuration. | Resolve the native Evidence Gateway or Registry Relay trust decision before retrying the direct connection. |
+| `discoveryctl check` fails | An origin or mapping does not match the closed authoring schema. | Correct the reported field and rerun the offline check. |
+| Packaging cannot fetch an origin | The approved description is unavailable or violates the fetch policy. | Restore the exact approved publication and package into a new directory. |
+| Startup reports a digest mismatch | The package is incomplete, changed, or different from `expectedDigest`. | Redeploy the complete reviewed package. |
+| Search returns no items | No Evidence advertisement matches every supplied filter. | Review the indexed descriptions and requested identifiers. |
 
 {/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `BuildError`; `crates/registry-discovery/src/query.rs`,
     `service_matches_filters`; `crates/registry-discovery-client/src/selection.rs`, exact selection
@@ -325,7 +303,6 @@ credentials or native request data to Registry Discovery.
 
 ## Next
 
-- [Configure Evidence Gateway](../evidence/) to set the native trust an application uses once
-  Discovery has selected an Evidence provider.
-- [Author a Registry Relay project](../relay/) to set the native trust an application uses once
-  Discovery has selected a Relay provider.
+- [Publish and consume a Discovery index](../../tutorials/publish-and-consume-discovery-index/)
+- [Registry Discovery is an index](../../explanation/discovery-as-an-index/)
+- [Configure Evidence Gateway](../evidence/)

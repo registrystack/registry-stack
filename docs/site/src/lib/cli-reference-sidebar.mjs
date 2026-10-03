@@ -18,8 +18,6 @@ const binaries = [
   'schedulingctl',
   'messaging',
   'messagingctl',
-  'relay',
-  'relayctl',
   'evidence',
   'evidencectl',
   'mint',

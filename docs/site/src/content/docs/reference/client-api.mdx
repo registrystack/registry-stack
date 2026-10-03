@@ -10,16 +10,14 @@ doc_type: reference
 locale: en
 standards_referenced:
   - openapi
-  - sdmx
 ---
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
-Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, `breg` for Base Registry
+Discovery, `evidence` for Evidence Gateway, and `breg` for Base Registry
 Engine (BReg), <DocsetProduct product="registry-messaging" absent>and </DocsetProduct>`casework` for Registry
 Casework<DocsetProduct product="registry-messaging">, and `messaging` for Registry Messaging</DocsetProduct>. Each namespace keeps its own routes,
-authentication, errors, and verification rules, because those contracts differ. Relay and BReg share
-only the neutral `registry-record` types they decode Registry Record responses into.
+authentication, errors, and verification rules, because those contracts differ.
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
 convert native values, construct the Rust client, run one method, and map the validated result or
@@ -81,7 +79,7 @@ The package does not declare that dependency itself, because a JavaScript consum
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
 the facade that re-exports the product clients under `breg`, `casework`, `discovery`,
-`evidence`, <DocsetProduct product="registry-messaging">`messaging`, </DocsetProduct>and `relay` modules; a single-product application can depend on that product's crate
+`evidence`<DocsetProduct product="registry-messaging">, and `messaging`</DocsetProduct> modules; a single-product application can depend on that product's crate
 directly instead.
 
 ```toml
@@ -98,15 +96,15 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
 <DocsetProduct product="registry-messaging">
 
 ```python
-from registry_client import breg, casework, discovery, evidence, messaging, relay
+from registry_client import breg, casework, discovery, evidence, messaging
 ```
 
 ```js
-const { breg, casework, discovery, evidence, messaging, relay } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, messaging } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, casework, discovery, evidence, messaging, relay};
+use registry_stack_client::{breg, casework, discovery, evidence, messaging};
 ```
 
 </DocsetProduct>
@@ -114,21 +112,21 @@ use registry_stack_client::{breg, casework, discovery, evidence, messaging, rela
 <DocsetProduct product="registry-messaging" absent>
 
 ```python
-from registry_client import breg, casework, discovery, evidence, relay
+from registry_client import breg, casework, discovery, evidence
 ```
 
 ```js
-const { breg, casework, discovery, evidence, relay } = require('@registrystack/client');
+const { breg, casework, discovery, evidence } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, casework, discovery, evidence, relay};
+use registry_stack_client::{breg, casework, discovery, evidence};
 ```
 
 </DocsetProduct>
 
-Import only the namespaces an application uses. Nothing crosses a namespace: a Relay error is never
-a BReg error, and a Discovery selection is inert metadata that grants no access to either.
+Import only the namespaces an application uses. Nothing crosses a namespace, and a Discovery
+selection is inert metadata that grants no access.
 
 {/* Evidence: crates/registry-stack-client-node/index.d.ts,
     crates/registry-stack-client-py/python/registry_client/__init__.py,
@@ -218,7 +216,6 @@ is public by construction, so there is no authorization option to set.
 | Resolve a requirement to Evidence Types | `resolve_evidence_types` | `resolve_evidence_types` | `resolveEvidenceTypes` |
 | Search the catalog | `search_services` | `search_services` | `searchServices` |
 | Search Evidence services | `search_evidence_services` | `search_evidence_services` | `searchEvidenceServices` |
-| Search Relay services | `search_relay_services` | `search_relay_services` | `searchRelayServices` |
 
 Only those four operations reach the network. Every selection below is local and offline.
 
@@ -232,7 +229,6 @@ that matched it.
 | --- | --- | --- |
 | One record by identifier and capability | `response.select_exact(request)` | `select_exact` and `selectExact` |
 | One Evidence Gateway service | `response.select_evidence(request)` | `select_evidence_service` and `selectEvidenceService` |
-| One Relay service | `response.select_relay(request)` | `select_relay_service` and `selectRelayService` |
 | One Evidence Type mapping alternative | `response.select_alternative(id)` | `select_evidence_alternative` and `selectEvidenceAlternative` |
 
 Rust supplies the selections as extension traits on the response, `ServiceSearchSelectionExt` and
@@ -344,7 +340,7 @@ this is the one place in the package where they do:
 
 A Python `token` that is neither a string nor an object carrying exactly the one key
 `private_key_jwt` is refused at construction with kind `configuration`. Note that this differs from
-the `authorization` option of the Relay and BReg namespaces, which name the static case explicitly
+the `authorization` option of the BReg namespace, which names the static case explicitly
 in both languages.
 
 The private-key-JWT configuration requires `token_endpoint`, `client_id`, and `client_key` (Node:
@@ -501,250 +497,10 @@ them `status`, `code`, `traceId`, `retryAfterSeconds`, `transportKind`, and `tok
     crates/registry-evidence-client/src/config.rs,
     crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile::from_file, TrustProfile */}
 
-## Registry Relay
-
-The Relay clients cover the fixed Relay V2 HTTP surface without importing a deployment's record,
-selector, filter, artifact, or SDMX schemas.
-
-### Construct a Relay client
-
-```rust
-use registry_relay_client::{RelayClient, RelayClientConfig};
-use url::Url;
-
-let config = RelayClientConfig::new(
-    Url::parse("https://relay.example.invalid/institution-a")?,
-);
-let client = RelayClient::new(config)?;
-```
-
-```python
-from registry_client import relay
-
-client = relay.RelayClient(
-    base_url="https://relay.example.invalid/institution-a",
-    request_timeout_seconds=30,
-    connect_timeout_seconds=10,
-    max_response_bytes=8 * 1024 * 1024,
-)
-```
-
-```js
-const { relay } = require('@registrystack/client');
-
-const client = new relay.RelayClient({
-  baseUrl: 'https://relay.example.invalid/institution-a',
-  requestTimeoutMilliseconds: 30_000,
-  connectTimeoutMilliseconds: 10_000,
-  maxResponseBytes: 8 * 1024 * 1024,
-});
-```
-
-`RelayClientConfig` also provides `with_token_provider`, `with_request_timeout`,
-`with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`, and
-`with_trusted_root_certificates`.
-
-### Relay authentication
-
-Authentication is optional. Probes and OpenAPI never ask a configured token provider for a token and
-never send authorization. Other methods attach a bearer when a provider is configured and Relay
-accepts credentials for that operation.
-
-The supported modes are:
-
-- No bearer: omit `with_token_provider` in Rust or `authorization` in Python and Node.
-- Static bearer: pass `Arc::new(StaticToken::new(token)?)` to `with_token_provider` in Rust,
-  `authorization={"static": token}` in Python, or `authorization: { static: token }` in Node.
-- Private-key JWT: pass `PrivateKeyJwt` as a `TokenProvider` in Rust,
-  `authorization={"private_key_jwt": config}` in Python, or
-  `authorization: { privateKeyJwt: config }` in Node.
-- Custom provider: implement the public `TokenProvider` trait in Rust. Python and Node do not expose
-  custom token providers.
-
-The private-key-JWT configuration names its required members `token_endpoint`, `client_id`, and
-`client_key`. Its optional members are `audience`, `assertion_lifetime_seconds`,
-`refresh_margin_seconds`, `request_timeout_seconds`, `connect_timeout_seconds`, `user_agent`, and
-byte-valued `trusted_root_certificates`. Node wraps the configuration as `{ privateKeyJwt: {...} }`,
-names its required members `tokenEndpoint`, `clientId`, and `clientKey`, spells the timeouts
-`requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, and takes string-valued
-`trustedRootCertificates`. Rust constructs `PrivateKeyJwtConfig`, builds `PrivateKeyJwt`, and passes
-it through `with_token_provider`. Relay and token-endpoint certificate bundles are independent.
-
-The built-in token exchange sends only `grant_type`, `client_assertion_type`, and
-`client_assertion`, exactly as the Evidence one does.
-
-### Relay operations
-
-| Operation | Rust | Python | Node |
-| --- | --- | --- | --- |
-| Process probes | `health`, `ready` | `health`, `ready` | `health`, `ready` |
-| Discovery documents | `openapi`, `service_metadata` | `openapi`, `service_metadata` | `openapi`, `serviceMetadata` |
-| Resource discovery | `resources`, `continue_resources`, `resource` | `resources`, `continue_resources`, `resource` | `resources`, `continueResources`, `resource` |
-| Record list and search | `list_records`, `search_records`, `continue_collection` | `list_records`, `search`, `continue_list_records`, `continue_search` | `listRecords`, `search`, `continueListRecords`, `continueSearch` |
-| Record read | `read_record` | `read_record` | `readRecord` |
-| Governed lookup | `lookup_record` | `lookup` | `lookup` |
-| Generated artifact | `artifact` | `artifact` | `artifact` |
-| SDMX documents | `sdmx_data`, `sdmx_structure` | `sdmx_data`, `sdmx_structure` | `sdmxData`, `sdmxStructure` |
-
-### Relay request arguments
-
-The table uses the wire-level fact name. Python spells multiword keyword arguments in snake case,
-such as `page_size`, `access_profile`, and `dimension_at_observation`. Node places optional request
-facts in an options object and uses camel case, such as `pageSize`, `accessProfile`, and
-`dimensionAtObservation`. Rust uses the request types named in the final column.
-
-`health` and `ready` take no arguments.
-
-| Operation | Required arguments | Optional arguments | Rust request type |
-| --- | --- | --- | --- |
-| OpenAPI, service metadata | None | ETag | `Option<&StrongEtag>` |
-| Resource list | None | Page size from 1 through 100; ETag | `ResourceListRequest` |
-| Resource detail | Resource identifier | ETag | Resource identifier as `&str` |
-| Resource continuation | Complete resource continuation | ETag | `ResourceContinuation` |
-| Record list | Resource identifier | Page size, record options, filters, ETag | `ListRequest` |
-| Record search | Resource identifier, search identifier, bbox | Page size, record options, ETag | `SearchRequest` |
-| Record or search continuation | Complete matching continuation | ETag | `CollectionContinuation` |
-| Record read | Resource and record identifiers | Record options; ETag | `RecordOptions` |
-| Governed lookup | Resource and lookup identifiers; selectors | Record options; ETag | `LookupRequest` |
-| Artifact | Artifact identifier | ETag | Identifier as `&str` |
-| SDMX data | Agency, resource, three-part version | Key, constraints, offset, limit, dimension at observation, format, ETag | `SdmxDataRequest` |
-| SDMX structure | Kind, agency, resource, three-part version | ETag | `SdmxStructureRequest` |
-
-`RecordOptions` contains fields, access profile, and record format. `ListRequest` adds a positive
-page size and a string-to-string filter mapping. `SearchRequest::new` requires a `BoundingBox`
-ordered as `[west, south, east, north]` and can add a positive page size. Python passes list filters
-to `list_records` and requires the bbox keyword on `search`. Node uses `ListOptions` for
-`listRecords` and `SearchOptions`, whose `bbox` member is required, for `search`.
-
-Input record formats are `json`, `json-ld`, `geojson`, and `json-fg` in Python and Node. Rust uses
-`RecordFormat::Json`, `JsonLd`, `GeoJsonRfc7946`, or `JsonFg`.
-
-A lookup selector mapping must contain at least one named string, signed integer, or boolean value.
-Python supplies it as `selectors` and Node as the third `lookup` argument. Rust builds it with one or
-more `LookupRequest::selector` calls.
-
-SDMX data format is `json` or `csv`. The optional constraints are a string-to-string component
-mapping. Python passes all SDMX data facts as arguments to `sdmx_data`; Node passes one
-`SdmxDataRequest` object; Rust constructs `SdmxDataRequest::new(agency, resource, version)` and uses
-its builders. SDMX structure kind is `dataflow` or `datastructure` in Python and Node, and
-`SdmxStructureKind::Dataflow` or `DataStructure` in Rust. Every SDMX version has the exact `x.y.z`
-form.
-
-Every conditional Rust method takes an optional final `&StrongEtag`. Python exposes `etag` as the
-last optional keyword. Node exposes it as the final optional argument after any options or request
-object. Continuation methods accept only the matching complete continuation and optional ETag.
-
-### Relay response outcomes
-
-Process probes return complete responses only. Cacheable operations return one of two outcomes:
-
-- Rust returns `Conditional::Complete(Complete<T>)` or `Conditional::NotModified(NotModified)`.
-- Python returns a mapping with `kind: "complete"`, `value`, `trace_id`, and nullable `etag`, or
-  `kind: "not_modified"`, `etag`, and `trace_id`.
-- Node returns an object with `kind: 'complete'`, `value`, `traceId`, and an `etag` that can be
-  omitted, or `kind: 'notModified'`, `etag`, and `traceId`.
-
-Deployment-defined `domainData` stays dynamic. Python returns nested mappings, lists, and scalars,
-and Node returns plain JSON values for that field. Both binding declarations type the fixed service,
-capability, resource, Record envelope, page, trace, and ETag structures that surround it. Rust owns
-the matching fixed models around the dynamic JSON field.
-
-### Relay continuations
-
-Resource discovery returns this complete continuation projection:
-
-```json
-{
-  "cursor": "<opaque-cursor>"
-}
-```
-
-A record-list continuation has this shape:
-
-```json
-{
-  "route": {
-    "kind": "records",
-    "resource": "<resource>"
-  },
-  "cursor": "<opaque-cursor>",
-  "format": "json",
-  "accessProfile": "<access-profile>"
-}
-```
-
-A search continuation changes `route` to include `kind: "search"` and its exact `search` identifier.
-`accessProfile` is absent when the first request did not select one. `format` is one of `json`,
-`json-ld`, `geojson-rfc7946`, or `json-fg`.
-
-Pass the complete returned projection unchanged to the matching continuation method. Python and Node
-reject a continuation handed to the wrong route-specific method. Rust exposes one typed
-`continue_collection` method and follows the route carried by that continuation. A continuation binds
-the opaque cursor to its resource or search route, representation format, and optional access
-profile. It intentionally does not carry first-page fields, filters, bounding box, or page size. The
-clients reject raw cursor strings, extra members, and attempts to combine a cursor with first-page
-choices.
-
-### Conditional cache contract
-
-A complete cacheable response can carry a validated strong ETag. It has exactly one quoted,
-lowercase SHA-256 value. Pass it through the method's ETag argument to send `If-None-Match`.
-
-A valid `304 Not Modified` response has an empty body, echoes the requested ETag, and carries the
-same strictly validated trace context as a complete response. Reuse a stored body only when it was
-stored with that exact ETag. The clients do not retain bodies or issue conditional requests on their
-own.
-
-### Raw documents
-
-OpenAPI, generated artifacts, SDMX data, and SDMX structures remain raw protocol documents:
-
-| Language | Complete raw response |
-| --- | --- |
-| Rust | `RawDocument` with `media_type()` and `as_bytes()` |
-| Python | `body: bytes` and `media_type: str` |
-| Node | `body: Buffer` and `mediaType: string` |
-
-The client validates exact OpenAPI and SDMX media types before returning bytes. An artifact can
-declare any single syntactically valid media type, which the client preserves. Every raw method
-enforces its body bound. The client does not interpret deployment-defined artifacts or SDMX
-payloads. SDMX versions use the exact `x.y.z` form.
-
-### Relay error contract
-
-Rust returns `RelayClientError` variants for configuration, invalid request, token, transport, Relay
-Problem, and protocol failures. Python raises `relay.RelayClientError` with snake-case attributes.
-Node throws the same named class with camel-case attributes.
-
-| Meaning | Python | Node |
-| --- | --- | --- |
-| Closed failure category | `kind` | `kind` |
-| Registered Problem code | `code` | `code` |
-| Public HTTP status | `status` | `status` |
-| Validated trace identifier | `trace_id` | `traceId` |
-| Bounded `429` delay | `retry_after_seconds` | `retryAfterSeconds` |
-| Transport subcategory | `transport_kind` | `transportKind` |
-| Token subcategory | `token_kind` | `tokenKind` |
-
-Optional error attributes are absent or `None` when the failure does not carry that fact. A Relay
-Problem is accepted only when its document has the exact six common members, without BReg's
-optional `fieldPath`, and its registered code and status, response media type, and header and body
-trace agree. Only a registered `429` Problem can expose a numeric `Retry-After` from 1 through 60
-seconds.
-
-Errors retain fixed local reasons, public status and Problem codes, validated trace identifiers, and
-bounded retry guidance. They do not expose credentials, JWKs, selectors, filters, response bodies,
-header values, URLs, or underlying HTTP error chains.
-
-{/* Evidence: crates/registry-stack-client-node/relay/client.d.ts,
-    crates/registry-relay-client-py/python/registry_relay_client/__init__.pyi,
-    crates/registry-relay-client/src/client.rs, crates/registry-relay-client/src/error.rs */}
-
 ## Base Registry Engine
 
 The BReg client owns BReg routes, query types, Problems, entity tags, capability bindings, and
-lifecycle actions. It is a separate client and a separate transport from Relay; the two share only
-the neutral `registry-record` DTOs for strict Registry Record response decoding.
+lifecycle actions and strict Registry Record response decoding.
 
 ### Construct a BReg client
 
@@ -788,8 +544,7 @@ const client = new breg.BaseRegistryClient({
 operations attach one token when a provider is configured.
 
 `authorization` is optional; a client without it reaches only the probes and whatever the deployment
-serves anonymously. It takes the same two shapes and the same member names as the Relay
-authorization above, and any other shape is refused at construction with kind `configuration`.
+serves anonymously. Any unsupported shape is refused at construction with kind `configuration`.
 
 Write and lifecycle authority stays opaque. `BRegCreateBinding`, `BRegPatchBinding`, and
 `BRegLifecycleAuthority` are selected from `BRegMetadata`, passed back to the client, and expose
@@ -1077,8 +832,8 @@ to send the same action again with the same idempotency key.
 
 ### BReg error contract
 
-`BaseRegistryClientError` is distinct from `RelayClientError`. Its public accessors expose only the
-fixed error kind, status, registered BReg Problem code, validated trace identifier, bounded
+`BaseRegistryClientError` exposes only the fixed error kind, status, registered BReg Problem code,
+validated trace identifier, bounded
 transport or token category, the validated field path an accepted Problem names, and the bounded
 refusal code a declared immediate-action refusal names.
 
@@ -1491,14 +1246,11 @@ Deployment-defined data stays dynamic at the SDK boundary.
 
 - [Query a registry from Python and Node](../../tutorials/query-breg-client/) for a worked BReg run
   against the quickstart.
-- [Query a Relay with Python](../../tutorials/query-relay-client/) for a worked Relay run.
 - [Request evidence from an application](../../tutorials/request-evidence-from-an-application/) for a
   worked Evidence run.
 - [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
 - [Registry Casework API](../apis/registry-casework/) for the Casework HTTP, header, and problem
   contracts.
-- [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
-- [Relayctl command reference](../relayctl/) for Relay project authoring and package commands.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.
 - [Control access per profile](../../configure/breg-access/) for the profiles and capability bindings
   a BReg selection matches against.

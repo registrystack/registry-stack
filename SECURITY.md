@@ -23,8 +23,8 @@ identifiers.
 Known pilot limitations such as no revocation service, no
 `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
 workflow should be reported as product gaps unless they create an exploitable
-security or privacy issue beyond the documented limitation. Registry Relay
-owns source connectivity and transformation; deployments must enforce its
+security or privacy issue beyond the documented limitation. Evidence Gateway
+owns its source connectivity and transformation; deployments must enforce its
 documented outbound-network and credential boundaries.
 
 ## Verifying release signatures and provenance

@@ -5,7 +5,6 @@ wide: true
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
   - registry-stack
   - registry-platform
   - registry-manifest
@@ -51,39 +50,12 @@ standard.
 The table is generated from `src/data/standards.yaml`.
 For selected external validator results, see [ITB and SEMIC evidence](../itb-semic-evidence/).
 
-## Relay spatial wire-format profile
+## Historical Relay profiles
 
-Relay uses GeoJSON and JSON-FG as optional wire formats for the same governed Registry Record.
-The profile is one classified Point in CRS84, with an exact bounded bbox query on a
-separately named `consultation.search` operation. The operation's access profile remains the
-authorization and maximum-disclosure boundary. This does not claim Open Geospatial Consortium API
-Features support.
-
-## Relay SDMX read profile
-
-Relay aligns with the [SDMX REST 2.2.2](https://github.com/sdmx-twg/sdmx-rest/tree/v2.2.2),
-[SDMX-JSON 2.1.0](https://github.com/sdmx-twg/sdmx-json/tree/v2.1.0), and
-[SDMX-CSV 2.1.0](https://github.com/sdmx-twg/sdmx-csv/tree/v2.1.0) primary specifications through a
-governed read subset over pre-aggregated snapshots. This is an `aligns_with` claim, not a
-conformance, compatibility, or certification claim.
-
-The subset contains these `GET` routes:
-
-- `/sdmx/v2/data/dataflow/{agencyID}/{resourceID}/{version}/{key}`
-- `/sdmx/v2/data/dataflow/{agencyID}/{resourceID}/{version}`, with the omitted key equivalent to `*`
-- `/sdmx/v2/structure/dataflow/{agencyID}/{resourceID}/{version}`
-- `/sdmx/v2/structure/datastructure/{agencyID}/{resourceID}/{version}`
-
-Data responses use `application/vnd.sdmx.data+json;version=2.1.0` or
-`application/vnd.sdmx.data+csv;version=2.1.0`. Structure responses use
-`application/vnd.sdmx.structure+json;version=2.1.0` and the
-[official 2.1.0 schemas](https://json.sdmx.org/2.1.0/). The profile exposes no schema or
-availability placeholders, other structure types, maintenance routes, or dynamic aggregation.
-
-Each statistical dataset has one fixed access rule and does not accept the Record-oriented
-`accessProfile` request parameter. The complete synthetic project and its expected HTTP exchanges
-are tracked at
-[`products/relay-v2/acceptance/labour-statistics`](https://github.com/registrystack/registry-stack/tree/v0.20.0/products/relay-v2/acceptance/labour-statistics).
+Registry Relay previously carried bounded GeoJSON, JSON-FG, and SDMX publication profiles. Those
+profiles ended with Registry Stack 0.38.0 and remain in this register as historical relationships.
+No maintained product replaces or claims conformance for those publication surfaces. The
+[retirement decision](../../decisions/registry-relay-retirement-2026-10-03/) records the boundary.
 
 ## Register
 
@@ -135,17 +107,10 @@ What these levels mean for integrators:
 
 ## Scope boundaries
 
-- OGC API Features and OGC API EDR were feature-gated routes on the retired Relay V1 runtime, and no
-  maintained surface implements them. Both are recorded at `compares_against` with no user, and their
-  pinned V1 tests are kept as the record of a surface that no longer ships. Relay's current spatial
-  surface is the CRS84 Point profile described in [Relay spatial wire-format profile](#relay-spatial-wire-format-profile), which makes no OGC API conformance claim. OGC API Records
-  stays at `emits` because Registry Manifest still publishes static Records item collections; only
-  Relay's live Records adapter went with V1. See
-  [Relay V1 and registryctl retirement](../../decisions/relay-v1-and-registryctl-retirement-2026-08-11/).
-- HL7 FHIR R4 and SP-DCI were reachable only through the retired V1 source model, which read remote
-  sources over HTTP and let project scripts adapt them. The current Relay reads one local read-only
-  SQLite file and makes no outbound source request, so both standards are recorded at
-  `compares_against` with no user.
+- OGC API Features, OGC API EDR, GeoJSON, JSON-FG, SDMX, HL7 FHIR R4, and SP-DCI are historical or
+  comparison-only Relay relationships. No maintained runtime claims those surfaces.
+- OGC API Records stays at `emits` because Registry Manifest publishes static Records item
+  collections.
 - ODRL is still emitted by Registry Manifest as policy metadata, and that metadata is descriptive
   rather than an access grant. No maintained runtime enforces an ODRL constraint. The governed
   evaluation path belonged to Relay V1. Its `registry-platform-pdp` crate was
@@ -155,8 +120,7 @@ What these levels mean for integrators:
   under its frozen assertion profile and does not emit a CCCEV document.
 - Evidence Gateway emits an IETF SD-JWT VC under its frozen draft-18 profile, and the separate
   OID4VCI supporting service transports it. This is not a W3C Verifiable Credentials Data Model 2.0
-  envelope. No maintained component emits a W3C VCDM 2.0 document; Relay does not emit or host one.
+  envelope. No maintained component emits a W3C VCDM 2.0 document.
 - PROV-O is listed as `inspired_by` (`referenced`).
   The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O
   vocabulary terms are emitted as JSON-LD.
-  {/* Confirmed absence: no `prov:` namespace or PROV-O `@context` found in Relay source at reviewed commits. PROV-O influences the design (audit fields, claim provenance struct) but no PROV-O vocabulary is emitted. Keep at inspired_by. */}

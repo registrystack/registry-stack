@@ -1,6 +1,6 @@
 ---
 title: Publish and consume a Registry Discovery index
-description: Package a local Discovery index from Evidence and Relay advertisements, resolve a requirement, and select exact records to hand to native product trust.
+description: Package a local Discovery index from an Evidence advertisement, resolve a requirement, and select an exact record to hand to native product trust.
 status: draft
 owner: registry-docs
 source_repos:
@@ -23,13 +23,12 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Registry Discovery helps an application find which Evidence Gateway or Registry Relay service
-can answer a question. In this tutorial you play every role: two providers publish a short public
-description of their service, an operator packages those descriptions into an index and serves it,
-and a consumer asks the index which services fit a requirement and picks one of each kind.
+Registry Discovery helps an application find which Evidence Gateway service can answer a question.
+In this tutorial you play every role: a provider publishes a short public description, an operator
+packages it into an index and serves it, and a consumer selects a matching service.
 
 <QuickstartMeta
-  outcome="One immutable local package, one resolved requirement, and exact Evidence and Relay selections."
+  outcome="One immutable local package, one resolved requirement, and one exact Evidence selection."
   time="About 15 minutes after the Rust dependencies are available"
   level="Local development with synthetic data"
   prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Local ports 38080 and 38090']}
@@ -64,30 +63,21 @@ index. `discovery` is the runtime that serves one verified package.
 ## Confirm the provider publications
 
 Each provider describes its service in one public JSON-LD file. The checkout carries an example
-description for an Evidence Gateway deployment and one for a Registry Relay deployment. Check that
+description for an Evidence Gateway deployment. Check that
 yours are the files this tutorial was written against:
 
 ```sh
 shasum -a 256 \
-  products/discovery/fixtures/descriptions/evidence.jsonld \
-  products/discovery/fixtures/descriptions/relay.jsonld
+  products/discovery/fixtures/descriptions/evidence.jsonld
 ```
 
 ```text test-expect
 fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905  products/discovery/fixtures/descriptions/evidence.jsonld
-5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7  products/discovery/fixtures/descriptions/relay.jsonld
 ```
 
-The fixture bytes are deterministic examples of the same closed profile the two native products
-derive and package. A provider deploys the exact packaged file at its public description URL; the
+The fixture bytes are a deterministic example of the closed profile. A provider deploys the exact
+packaged file at its public description URL; the
 Discovery runtime does not reconstruct provider metadata.
-
-{/* Evidence: `products/discovery/fixtures/descriptions/evidence.jsonld` and `relay.jsonld` are the
-    product-owned deterministic bytes. `crates/registry-evidence/src/discovery.rs`, test
-    `provider_discovery_description_preserves_evidence_type_profile_correlation`, and
-    `crates/registry-relay-v2/src/artifacts.rs`, test
-    `provider_discovery_description_preserves_semantic_class_operation_family_correlation`, bind
-    the profile to native provider packaging. */}
 
 ## Check the operator project
 
@@ -108,10 +98,6 @@ origins:
     catalogUrl: http://127.0.0.1:38090/evidence.jsonld
     profile: registry-discovery-v1alpha1
     enabled: true
-  - originId: tutorial-relay
-    catalogUrl: http://127.0.0.1:38090/relay.jsonld
-    profile: registry-discovery-v1alpha1
-    enabled: true
 ```
 
 You also decide which kind of evidence satisfies a requirement an application may have.
@@ -130,7 +116,7 @@ alternatives:
       - urn:example:evidence-type:adult-status
 ```
 
-Check both files. Nothing serves the two URLs yet, and the check does not need them to.
+Check both files. Nothing serves the provider URL yet, and the check does not need it to.
 `--allow-loopback` accepts the `http://127.0.0.1` URLs; without it, `discoveryctl` accepts only
 HTTPS origins, which is what a real deployment uses.
 
@@ -139,10 +125,10 @@ discoveryctl check --project discovery-project --allow-loopback
 ```
 
 ```text test-expect
-valid origins=2 mappings=1
+valid origins=1 mappings=1
 ```
 
-`discoveryctl check` validates the files without contacting either URL. The package step in the
+`discoveryctl check` validates the files without contacting the provider URL. The package step in the
 next section is the only step that fetches the descriptions.
 
 {/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test
@@ -152,7 +138,7 @@ next section is the only step that fetches the descriptions.
 
 ## Package the index
 
-Play the two providers by serving their descriptions at the URLs `origins.yaml` approved. The
+Play the provider by serving its description at the URL `origins.yaml` approved. The
 server keeps running, so open a second shell at the root of the checkout and start it there:
 
 ```sh test-background="http://127.0.0.1:38090/evidence.jsonld"
@@ -170,7 +156,7 @@ discoveryctl package \
 ```
 
 ```text test-expect
-packaged packageDigest=sha256:<package-digest> catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
+packaged packageDigest=sha256:<package-digest> catalogRevision=sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963 mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
 ```
 
 The two revisions are content addressed. The catalog revision is a digest of what the provider
@@ -248,7 +234,7 @@ is one alternative with one type.
 
 ## Search for the providers
 
-Search for Evidence services that assert the resolved type:
+Search for Evidence Gateway deployments that assert the resolved type:
 
 ```sh
 curl -s --get \
@@ -259,7 +245,7 @@ curl -s --get \
 
 ```json test-expect
 {
-  "catalogRevision": "sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f",
+  "catalogRevision": "sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963",
   "items": [
     {
       "recordId": "urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5",
@@ -284,48 +270,8 @@ curl -s --get \
 }
 ```
 
-Relay services are found by what they hold and what they let you do with it: a semantic class,
-such as a person, and an operation family, such as a lookup. Search for Relay services that look
-up a person:
-
-```sh
-curl -s --get \
-  --data-urlencode 'serviceKind=relay' \
-  --data-urlencode 'semanticClass=urn:example:class:person' \
-  --data-urlencode 'operationFamily=urn:example:operation:lookup' \
-  http://127.0.0.1:38080/v1/services
-```
-
-```json test-expect
-{
-  "catalogRevision": "sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f",
-  "items": [
-    {
-      "recordId": "urn:registrystack:discovery:record:sha256:aa220c11f493c266bc22adf5dc7ca82fb7a83842e6e887dc0e8e5680f4f84244",
-      "bindingId": "urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6",
-      "serviceId": "urn:example:service:relay",
-      "serviceKind": "relay",
-      "title": "Example Relay",
-      "description": "Public registry query metadata",
-      "endpointUrl": "https://relay.example.org",
-      "operatorId": "urn:example:operator",
-      "registryAuthorityId": "urn:example:authority",
-      "jurisdictions": ["https://publications.europa.eu/resource/authority/territory/DEU"],
-      "conformsTo": ["https://registrystack.org/relay/profile/v2"],
-      "evidenceTypeIds": [],
-      "semanticClassIds": ["urn:example:class:person"],
-      "operationFamilyIds": ["urn:example:operation:lookup"],
-      "originId": "tutorial-relay",
-      "originUrl": "http://127.0.0.1:38090/relay.jsonld",
-      "originContentDigest": "sha256:5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7",
-      "originFetchedAt": "<fetched-at>"
-    }
-  ]
-}
-```
-
-Both answers carry the `catalogRevision` the package step printed, because both come from the one
-index you packaged. Each result names the description it came from, with the same digest you
+The answer carries the `catalogRevision` the package step printed. The result names the description
+it came from, with the same digest you
 checked at the start, and `originFetchedAt`, the time your package step fetched it.
 
 ## Select and hand off
@@ -337,28 +283,18 @@ and to notice when the index changes. A selection is public metadata only. It is
 and it does not make the provider trusted.
 
 Calling the provider is a separate step that does not involve Discovery. The application's own
-Evidence Gateway or Registry Relay configuration decides whether it trusts the selected service.
-If it does, the application calls the service's `endpointUrl` directly with that product's
-client: the Evidence client requests and verifies an assertion, and the Relay client finds the
-matching operation in Relay's own metadata and reads from it. No credential, request, or response
+Evidence Gateway configuration decides whether it trusts the selected service.
+If it does, the application calls the service's `endpointUrl` directly with the Evidence client.
+No credential, request, or response
 passes through Discovery. In an application, the Discovery namespace of the
 [unified Registry Stack client](../../reference/client-api/#registry-discovery) runs these
 searches and saves selections, from Rust, Node.js, or Python.
-
-{/* Tier-C evidence: `crates/registry-discovery-client/src/selection.rs`, test
-    `discovery_metadata_has_no_trust_or_native_io_capability`, excludes trust and native I/O from a
-    selection. `crates/registry-discovery-client/tests/native_journey.rs`, test
-    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves that a
-    mismatched local trust record creates no credentials or provider traffic, then exercises the
-    maintained Evidence and Relay clients after accepted local trust. Maintainer reviewed and
-    accepted this trust-boundary claim on 2026-08-14. */}
 
 ## Assign the maintenance work
 
 | Role | Maintained input | Change trigger | Handoff |
 | --- | --- | --- | --- |
 | Assertion provider | Packaged Evidence public description | Public Evidence endpoint, profile, evidence type, or issuer role changes | Publish the exact packaged bytes at the approved URL |
-| Data publisher | Packaged Relay public description | Public Relay endpoint, profile, semantic class, operation family, or authority role changes | Publish the exact sealed artifact bytes at the approved URL |
 | Operator | `origins.yaml`, mapping files, immutable package, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `package`, deploy the complete package, pin its digest when required, then restart Discovery |
 | Consumer or verifier | Saved exact selection and native product trust | A catalog revision, mapping revision, origin digest, binding, or local trust decision changes | Re-evaluate local trust, then call the selected native endpoint directly |
 
@@ -372,10 +308,7 @@ the process when the change is intentional.
     leaves the prior output unchanged.
     `crates/registry-discovery/src/startup.rs`, test
     `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`, defines the
-    runtime configuration boundary. `crates/registry-discovery-client/tests/native_journey.rs`, test
-    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves the
-    adopter-owned native trust handoff. Maintainer reviewed and accepted this maintenance-boundary
-    claim on 2026-08-14. */}
+    runtime configuration boundary. */}
 
 ## Clean up the local services
 
@@ -390,11 +323,11 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
 
 ## What you built
 
-- The provider roles supplied two deterministic public descriptions.
+- The provider supplied one deterministic public description.
 - The operator checked explicit origins and mappings offline, packaged one immutable index, and
   served it with Discovery.
-- The consumer resolved one requirement and found one Evidence and one Relay service, both from
-  the same catalog revision, ready to save as selections.
+- The consumer resolved one requirement and found one Evidence Gateway deployment ready to save as
+  a selection.
 - Trusting and calling the chosen services stays with the application and the product clients,
   outside Discovery.
 
@@ -409,10 +342,7 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
 | A publication digest differs | The provider bytes do not match the tutorial's reviewed fixture | Restore the clean checkout or review the changed publication before indexing it |
 | Native handoff is refused | The selected binding does not match the adopter-owned product trust record | Keep the selection inert, correct the local trust decision, and retry the native handoff |
 
-{/* Tier-C evidence: `crates/registry-discovery-client/tests/native_journey.rs`, test
-    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves the trust
-    refusal occurs before credential construction and provider traffic.
-    `crates/registry-discoveryctl/tests/build.rs`, test
+{/* Tier-C evidence: `crates/registry-discoveryctl/tests/build.rs`, test
     `failed_origin_fetch_leaves_the_previous_output_untouched`, proves a failed package step
     writes no package, and test `package_refuses_an_existing_output_without_changing_it` proves an
     earlier package is never replaced. Maintainer reviewed and accepted this trust-boundary claim on 2026-08-14. */}
@@ -425,5 +355,3 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
   invocation stay in the native products.
 - [Request Evidence from an application](../request-evidence-from-an-application/) shows the native
   Evidence relying-party workflow.
-- [Publish a governed SQLite registry](../publish-governed-sqlite-registry/) shows the native Relay
-  publication and request workflow.

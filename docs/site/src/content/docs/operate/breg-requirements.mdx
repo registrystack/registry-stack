@@ -54,13 +54,6 @@ on your machine.
 
 ## What it does not need
 
-Records, their history, pending change requests, and the outbox of undelivered events live in
-PostgreSQL. The default audit destination needs a writable local directory per process; alternatively,
-collect the best-effort `stdout` stream through your platform. Webhook delivery
-runs inside the process from that outbox, so there is no message broker. No cache, object store,
-or second service takes part in a request. Registry Relay and Evidence Gateway are separate
-products, not dependencies.
-
 The modeling loop needs none of this. Authoring commands check, explain, and generate a project
 with no database open, so an author can work on a laptop until the project is ready to test.
 

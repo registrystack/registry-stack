@@ -260,7 +260,6 @@ cargo check --locked --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo deny check
-products/relay-v2/scripts/check-contracts.sh
 ```
 
 On macOS, the workspace's FIPS build of AWS-LC is a dynamic library in Cargo's

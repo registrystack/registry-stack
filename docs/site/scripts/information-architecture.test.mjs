@@ -7,7 +7,10 @@ import { test } from 'node:test';
 
 import { cliReferenceSidebar } from '../src/lib/cli-reference-sidebar.mjs';
 import { omittedCliBinaries, productRoutes } from '../src/lib/docset-products.mjs';
-import { RETIRED_RELAY_ROUTE_TARGETS } from '../src/lib/relay-v2-retirement-redirects.mjs';
+import {
+  RELAY_RETIREMENT,
+  RETIRED_RELAY_ROUTES,
+} from '../src/lib/relay-retirement-redirects.mjs';
 import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
@@ -40,10 +43,6 @@ const messagingRedirects = new Function(
   `${messagingRoutesSource}; ${messagingRedirectsSource.replace(/^export /, '')}; return messagingRedirects;`,
 )(productRoutes);
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
-const validationSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
-  'utf8',
-);
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
 assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration');
@@ -51,7 +50,7 @@ assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration'
 // Evaluate the trusted local sidebar expression without loading Astro or
 // requiring generated artifacts. Nested product fixtures exercise the actual
 // config's flattening; the OpenAPI plugin owns its generated tag hierarchy.
-const generatedProducts = new Map(['Relay', 'Manifest', 'Evidence Gateway'].map((label) => [
+const generatedProducts = new Map(['Manifest', 'Evidence Gateway'].map((label) => [
   label,
   {
     label,
@@ -253,7 +252,6 @@ test('uses the product navigation in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
     'Evidence Gateway',
-    'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
     'Registry Scheduling',
@@ -464,7 +462,6 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
 test('seats generated product references directly below Reference without losing leaf attributes', () => {
   const reference = section('Reference');
   for (const [label, product] of [
-    ['Registry Relay', 'Relay'],
     ['Registry Manifest', 'Manifest'],
     ['Evidence Gateway', 'Evidence Gateway'],
   ]) {
@@ -475,15 +472,9 @@ test('seats generated product references directly below Reference without losing
   }
 });
 
-// One product used to carry a different public name on every surface, and the
-// sidebar group that served it carried none of them: a reader told to "use
-// Registry Relay" scanned the navigation and found no such words. Every
-// top-level section that one product serves names that product, with the
-// formal name docs/style-guide.md prescribes.
 test('uses the formal product names for top-level sections', () => {
   for (const product of [
     'Evidence Gateway',
-    'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
     'Registry Scheduling',
@@ -494,13 +485,12 @@ test('uses the formal product names for top-level sections', () => {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
   }
 
-  // Short forms are what made one product look like several. `Relay`, `BReg`,
-  // and `Discovery` are ordinary inside a page that has already named
+  // Short forms are what made one product look like several. `BReg` and
+  // `Discovery` are ordinary inside a page that has already named
   // the product; a top-level label is where a reader arrives, so it carries
   // the full name or none at all.
   for (const label of topLevelLabels(sidebarSource)) {
     for (const [shortForm, formal] of [
-      ['Relay', 'Registry Relay'],
       ['Discovery', 'Registry Discovery'],
       ['Render', 'Registry Render'],
       ['BReg', 'Base Registry Engine'],
@@ -519,7 +509,6 @@ test('publishes one overview route for every section that has one', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
     ['Evidence Gateway', "slug: 'start/evidence-quickstart'"],
-    ['Registry Relay', "slug: 'configure'"],
     ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
     ['Registry Casework', "slug: 'start/casework'"],
     ['Registry Render', "slug: 'start/registry-render'"],
@@ -539,19 +528,6 @@ test('publishes one overview route for every section that has one', () => {
 // reader is on call for a running deployment, not choosing a product, so pages
 // that name a runtime sit beside the ones that do not.
 test('files adoption-time pages under their product', () => {
-  const relay = topLevelSection(sidebarSource, 'Registry Relay');
-  const operate = topLevelSection(sidebarSource, 'Operations');
-  assert.match(
-    relay,
-    /slug: 'operate\/relay' \}/,
-    'running a Relay deployment is a Relay page and belongs in the Relay section',
-  );
-  assert.doesNotMatch(operate, /slug: 'operate\/relay' \}/);
-  // The operator handoff is the entry to the operator's own section, and it
-  // named Relay only because that is where it used to sit.
-  assert.match(operate, /slug: 'operate' \}/);
-  assert.doesNotMatch(relay, /slug: 'operate' \}/);
-
   // Evidence Gateway's security model is product-scoped, so it stays with the
   // product rather than in the cross-product security group.
   const security = topLevelSection(sidebarSource, 'Operations');
@@ -560,54 +536,12 @@ test('files adoption-time pages under their product', () => {
   assert.match(evidence, /slug: 'security\/evidence'/);
 });
 
-test('publishes one Relay reader journey without the retired V1 routes', () => {
+test('publishes the Relay retirement decision without a current product lane', () => {
   const start = topLevelSection(sidebarSource, 'Start');
-  assert.doesNotMatch(
-    start,
-    /slug: 'tutorials\//,
-  );
-  const connect = topLevelSection(sidebarSource, 'Registry Relay');
-  assertOrdered(
-    connect,
-    [
-      "slug: 'explanation/governed-registry-publication'",
-      "slug: 'tutorials/publish-governed-sqlite-registry'",
-      "slug: 'configure/relay'",
-      "slug: 'explanation/relay-semantics-and-disclosure'",
-      "slug: 'operate/relay'",
-    ],
-    'Relay reader journey',
-  );
-  // The section mirrors the Evidence Gateway shape: an overview and the first
-  // hands-on tutorial in the open, then the deeper phases grouped behind the
-  // phase they belong to.
-  assertOrdered(
-    connect,
-    ["label: 'Author a project'", "label: 'Use from applications'"],
-    'Relay phase group',
-  );
-  // The caller's half of Relay is its own group: authoring and operating pages
-  // address the institution publishing the API, not the application calling it.
-  assert.match(connect, /slug: 'reference\/client-api'/);
-  // Relay's operational posture specification is a Relay page, so it is seated
-  // here rather than a second time in the Reference specification register.
-  assert.match(connect, /slug: 'spec\/rs-op-posture'/);
-  // Relay V2 is the only Relay the site documents, so the section carries no
-  // preview group beside the maintained journey and none of the V1 source
-  // tutorials it replaced.
-  assert.doesNotMatch(connect, /label: 'Relay V2 preview'/);
-  for (const retired of [
-    'tutorials/publish-spreadsheet-secured-registry-api',
-    'tutorials/use-your-spreadsheet',
-    'tutorials/author-registry-project',
-    'tutorials/configure-project-script-adapter',
-    'tutorials/verify-opencrvs-claims',
-  ]) {
-    assert.doesNotMatch(sidebarSource, new RegExp(retired));
-    assert.doesNotMatch(homepageSource, new RegExp(retired));
-  }
-  assert.match(homepageSource, /\]\(tutorials\/publish-governed-sqlite-registry\/\)/);
-  assert.doesNotMatch(homepageSource, /tutorials\/verify-claim-registry-api/);
+  assert.doesNotMatch(start, /slug: 'tutorials\//);
+  assert.equal(topLevelSection(sidebarSource, 'Registry Relay'), null);
+  assert.match(sidebarSource, /slug: 'decisions\/registry-relay-retirement-2026-10-03'/);
+  assert.doesNotMatch(homepageSource, /publish-governed-sqlite-registry|query-relay-client/);
 });
 
 test('gives Evidence Gateway a lane on both front doors without a retired Notary path', () => {
@@ -810,10 +744,7 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
   assert.match(evidence, /slug: 'explanation\/integration-patterns'/);
   assert.doesNotMatch(evidence, /first-run-with-solmara-lab|Relay-protected|over a Relay/);
   assert.equal(hasDocForSlug('tutorials/first-run-with-solmara-lab'), false);
-  assert.match(
-    configSource,
-    /'\/tutorials\/first-run-with-solmara-lab\/': internalRedirect\('\/start\/evidence-quickstart\/'\)/,
-  );
+  assert.ok(RETIRED_RELAY_ROUTES.includes('/tutorials/first-run-with-solmara-lab/'));
 });
 
 test('keeps the Casework journey in one product lane', () => {
@@ -835,30 +766,6 @@ test('keeps the Casework journey in one product lane', () => {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Casework journey`);
   }
   assert.match(casework, /\.\.\.openAPISidebarGroups\.slice\(1, 2\)/);
-});
-
-test('keeps validation on the offline relayctl commands', () => {
-  // relayctl has one flat command set and the validation page may present them
-  // in whatever order reads best, so assert presence rather than order.
-  for (const command of ['check', 'test', 'generate', 'diff']) {
-    assert.match(
-      validationSource,
-      new RegExp(`^relayctl ${command}\\b`, 'm'),
-      `validation page must show relayctl ${command}`,
-    );
-  }
-  // The offline claim the page has to keep making, in relayctl's own terms:
-  // the checks read but never write, and ambient product configuration cannot
-  // select a different Registry or deployment.
-  assert.match(validationSource, /read-only/);
-  assert.match(validationSource, /defines no product-specific environment-variable configuration/);
-  // registryctl is retired, and relayctl runs no service: nothing on this page
-  // may present a start, stop, or live-run command as a validation step.
-  assert.doesNotMatch(validationSource, /\bregistryctl\b/);
-  assert.doesNotMatch(
-    validationSource,
-    /\brelayctl (?:start|stop|restart|status|open|smoke|logs|dev|doctor|build|review)\b/,
-  );
 });
 
 test('does not publish the retired pre-1.0 cutover page', () => {
@@ -930,35 +837,20 @@ test('keeps the unseated-page allowlist free of stale entries', () => {
   }
 });
 
-test('legacy first-run entry points redirect to supported 1.0 paths', () => {
+test('legacy Relay entry points redirect to the retirement decision', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
-  assert.match(
-    configSource,
-    /'\/start\/see-it-live\/': internalRedirect\('\/'\)/,
-  );
-  assert.match(
-    configSource,
-    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/publish-governed-sqlite-registry\/'\)/,
-  );
-  assert.match(
-    configSource,
-    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/'\)/,
-  );
-  // The retired V1 source tutorials still resolve: their redirects moved into
-  // the Relay V2 retirement module, so assert that map rather than the config
-  // text, where a search for the old keys would now pass for the wrong reason.
   for (const retired of [
+    '/products/registry-relay/',
+    '/configure/relay/',
+    '/operate/relay/',
+    '/reference/relayctl/',
+    '/spec/rs-pr-relay/',
     '/tutorials/publish-spreadsheet-secured-registry-api/',
-    '/tutorials/use-your-spreadsheet/',
-    '/tutorials/author-registry-project/',
   ]) {
-    assert.equal(
-      RETIRED_RELAY_ROUTE_TARGETS[retired],
-      '/tutorials/publish-governed-sqlite-registry/',
-      `${retired} must redirect to the maintained governed-registry tutorial`,
-    );
+    assert.ok(RETIRED_RELAY_ROUTES.includes(retired), `${retired} must remain redirected`);
   }
-  assert.match(configSource, /buildRelayV2RetirementRedirects\(currentDocsetRedirect\)/);
+  assert.notEqual(RELAY_RETIREMENT, '/');
+  assert.match(configSource, /buildRelayRetirementRedirects\(currentDocsetRedirect\)/);
   assert.match(configSource, /buildNotaryRetirementRedirects\(currentDocsetRedirect\)/);
 });
 
