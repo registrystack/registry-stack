@@ -161,6 +161,24 @@ pub(crate) fn validate_field_value(value: FieldValue<'_>, field_type: &FieldType
     }
 }
 
+/// Validate one operand for the partial text query operators.
+///
+/// Search terms use the query grammar's byte bound and the field's maximum
+/// character bound. They are not complete stored values, so they may be
+/// shorter than a string's `minLength` or name only part of a vocabulary code.
+pub(crate) fn valid_text_search_term(value: &str, field_type: &FieldTypeSource) -> bool {
+    if value.len() > crate::query::MAX_LITERAL_BYTES || value.chars().any(char::is_control) {
+        return false;
+    }
+    match field_type {
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
+            value.chars().count() <= *max_length as usize
+        }
+        FieldTypeSource::VocabularyCode { .. } => true,
+        _ => false,
+    }
+}
+
 fn validate_json_field_value(value: &Value, field_type: &FieldTypeSource) -> bool {
     match field_type {
         FieldTypeSource::Boolean => value.is_boolean(),

@@ -661,6 +661,8 @@ impl ReadFilterOperator {
     }
 }
 
+pub(crate) use crate::data::valid_text_search_term;
+
 #[derive(Clone)]
 pub struct RecordReadRefusal {
     pub method: HttpMethod,
@@ -1041,5 +1043,35 @@ mod attachment_response_tests {
                 "invalid content type accepted"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod filter_operand_tests {
+    use super::valid_text_search_term;
+    use crate::contract::FieldTypeSource;
+
+    #[test]
+    fn text_search_terms_use_query_and_maximum_bounds_without_stored_value_constraints() {
+        let bounded = FieldTypeSource::String {
+            min_length: 8,
+            max_length: 12,
+        };
+        assert!(valid_text_search_term("a", &bounded));
+        assert!(valid_text_search_term("", &bounded));
+        assert!(!valid_text_search_term(&"a".repeat(13), &bounded));
+
+        let vocabulary = FieldTypeSource::VocabularyCode {
+            vocabulary: "status".to_owned(),
+            values: vec!["active".to_owned()],
+        };
+        assert!(valid_text_search_term("ACT", &vocabulary));
+        assert!(valid_text_search_term("", &vocabulary));
+        assert!(!valid_text_search_term(
+            &"a".repeat(crate::query::MAX_LITERAL_BYTES + 1),
+            &vocabulary
+        ));
+        assert!(!valid_text_search_term("line\nbreak", &vocabulary));
+        assert!(!valid_text_search_term("1", &FieldTypeSource::Int64));
     }
 }

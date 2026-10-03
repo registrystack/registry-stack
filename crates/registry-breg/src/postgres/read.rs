@@ -19,10 +19,10 @@ use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::api::{
-    AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue, ReadFilterExpr,
-    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
-    ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest, RecordReadService,
-    RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
+    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue,
+    ReadFilterExpr, ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause,
+    ReadProjectionField, ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest,
+    RecordReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
@@ -2840,11 +2840,16 @@ fn validate_filter_predicate(
         | ReadFilterOperator::Lt
         | ReadFilterOperator::Le
         | ReadFilterOperator::Gt
-        | ReadFilterOperator::Ge
-        | ReadFilterOperator::StartsWith
-        | ReadFilterOperator::Contains => {
+        | ReadFilterOperator::Ge => {
             if predicate.values.len() != 1
                 || validate_field_value(&predicate.values[0], &field_type).is_err()
+            {
+                return Err(());
+            }
+        }
+        ReadFilterOperator::StartsWith | ReadFilterOperator::Contains => {
+            if predicate.values.len() != 1
+                || !valid_text_search_term(&predicate.values[0], &field_type)
             {
                 return Err(());
             }
@@ -3281,11 +3286,17 @@ fn predicate_sql(
         ReadFilterOperator::IsNotNull => Ok(format!("{} IS NOT NULL", field.sql)),
         ReadFilterOperator::StartsWith => {
             let parameter = push_value(values, &format!("{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+            Ok(format!(
+                "{} ILIKE ${parameter}::text ESCAPE '\\'",
+                field.sql
+            ))
         }
         ReadFilterOperator::Contains => {
             let parameter = push_value(values, &format!("%{}%", escape_like(&predicate.values[0])));
-            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+            Ok(format!(
+                "{} ILIKE ${parameter}::text ESCAPE '\\'",
+                field.sql
+            ))
         }
     }
 }

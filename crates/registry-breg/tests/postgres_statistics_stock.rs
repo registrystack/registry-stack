@@ -8,11 +8,32 @@ mod pilot_acceptance_harness;
 #[allow(dead_code)]
 mod postgres_harness;
 
-use axum::http::{Method, StatusCode};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::{to_bytes, Body};
+use axum::http::{Method, Request, Response, StatusCode};
 use chrono::{Days, Utc};
 use pilot_acceptance_harness::{response_json, PilotHarness};
+use registry_breg::api::{
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
+};
+use registry_breg::audit::RegistryAudit;
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::parse_project_json;
+use registry_breg::cursor::CursorCodec;
+use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
+    RegistryStateTestIdentity,
+};
 use registry_breg::statistics::{current_period, PeriodGranularity};
+use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
+use tower::Service as _;
+use zeroize::Zeroizing;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn facility_statistics_match_count_twins_and_release_evaluation_date() {
@@ -193,6 +214,285 @@ async fn facility_statistics_match_count_twins_and_release_evaluation_date() {
     )
     .await;
     harness.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn partial_vocabulary_population_matches_the_authorized_list_count() {
+    let database = postgres_harness::TestDatabase::create(3).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(partial_text_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "statistics-partial-text-registry",
+            database_id: "statistics-partial-text-database",
+            label: "package-statistics-partial-text-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+
+    let today = Utc::now().date_naive();
+    let period = current_period(PeriodGranularity::Month, today).expect("current month resolves");
+    seed_partial_text_permits(&database, &compiled, period.start, &identity.activation_id).await;
+    let app = partial_text_router(
+        database.runtime_config.build_pool().expect("pool builds"),
+        compiled,
+        identity,
+        RegistryLockKey::derive("statistics-partial-text-registry").expect("lock key derives"),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x62; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+    );
+    let claims = partial_text_claims();
+    let population = "startswith(permitType,'a')";
+    let period_filter = format!(
+        "{population} and validFrom ge '{}' and validFrom lt '{}'",
+        period.start, period.end
+    );
+    let encoded_filter: String = period_filter
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect();
+    let counted = partial_text_json(
+        partial_text_send(
+            &app,
+            Method::GET,
+            &format!(
+                "/v1/records/permits?accessProfile=facility-operator&$count=true&$top=1&$filter={encoded_filter}"
+            ),
+            claims.clone(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(counted["count"], 2);
+
+    let statistics = partial_text_json(
+        partial_text_send(
+            &app,
+            Method::GET,
+            &format!(
+                "/v1/statistics/monthly-air-permits:live?accessProfile=facility-operator&from={0}&to={0}",
+                period.code
+            ),
+            claims,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(statistics["dataset"]["population"], population);
+    let total = statistics["cells"]
+        .as_array()
+        .expect("statistics cells are an array")
+        .iter()
+        .find(|cell| cell["dimensions"]["administrative-boundary"] == "_T")
+        .expect("total cell exists");
+    assert_eq!(total["value"], counted["count"]);
+    assert_eq!(total["value"], 2);
+    database.cleanup().await;
+}
+
+fn partial_text_registry() -> registry_breg::CompiledRegistry {
+    let source = json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1",
+        "kind":"RegistryProject",
+        "registry":{
+            "id":"statistics-partial-text-registry","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://statistics-partial-text.example.test"
+        },
+        "entities":[{
+            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+            "fields":[
+                {"id":"permit-type","type":"vocabulary-code","vocabulary":"permit-type","required":true,"classification":"internal"},
+                {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+                {"id":"administrative-boundary","type":"vocabulary-code","vocabulary":"administrative-boundary","required":true,"classification":"internal"}
+            ]
+        }],
+        "accessProfiles":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","permissions":[{
+                "entity":"permit","operations":["list"],
+                "readableFields":["permit-type","valid-from","administrative-boundary"],
+                "filterableFields":["permit-type","valid-from","administrative-boundary"],
+                "allowCount":true,
+                "rowBoundaries":[{"field":"administrative-boundary","claim":"administrative_boundaries","operator":"in"}]
+            }]
+        }],
+        "vocabularies":[
+            {"id":"permit-type","values":["air-emissions","water-discharge"]},
+            {"id":"administrative-boundary","values":["north-district","south-district"]}
+        ],
+        "statisticalDatasets":[{
+            "id":"monthly-air-permits","unit":"permit","population":"startswith(permitType,'a')",
+            "period":{"kind":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
+            "dimensions":["administrative-boundary"],
+            "disclosure":{"minimumCount":2,"roundingBase":2},
+            "live":["facility-operator"]
+        }]
+    });
+    let bytes = serde_json::to_vec(&source).expect("partial-text fixture serializes");
+    let project = parse_project_json(&bytes).expect("partial-text fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("partial-text statistical population compiles")
+}
+
+async fn seed_partial_text_permits(
+    database: &postgres_harness::TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+    valid_from: chrono::NaiveDate,
+    active_package_revision: &str,
+) {
+    let entity = &registry.entities()["permit"];
+    let table = quote_stock_identifier(&entity.physical_table);
+    let permit_type = quote_stock_identifier(&entity.fields["permit-type"].physical_name);
+    let from = quote_stock_identifier(&entity.fields["valid-from"].physical_name);
+    let boundary = quote_stock_identifier(&entity.fields["administrative-boundary"].physical_name);
+    let sql = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, record_revision, record_lifecycle, active_package_revision,
+              {permit_type}, {from}, {boundary})
+         VALUES ($1::text::uuid, 1, 'active', $5, $2, $3, $4)"
+    );
+    for (id, kind, jurisdiction) in [
+        (
+            "00000000-0000-4000-8000-000000000101",
+            "air-emissions",
+            "north-district",
+        ),
+        (
+            "00000000-0000-4000-8000-000000000102",
+            "air-emissions",
+            "north-district",
+        ),
+        (
+            "00000000-0000-4000-8000-000000000103",
+            "water-discharge",
+            "north-district",
+        ),
+        (
+            "00000000-0000-4000-8000-000000000104",
+            "air-emissions",
+            "south-district",
+        ),
+    ] {
+        database
+            .admin
+            .execute(
+                &sql,
+                &[
+                    &id,
+                    &kind,
+                    &valid_from,
+                    &jurisdiction,
+                    &active_package_revision,
+                ],
+            )
+            .await
+            .expect("partial-text permit fixture inserts");
+    }
+}
+
+fn partial_text_router(
+    pool: registry_breg::postgres::RuntimePool,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    audit: RegistryAudit,
+) -> axum::Router {
+    let cursors = Arc::new(
+        CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300))
+            .expect("cursor key is valid"),
+    );
+    let records = Arc::new(PostgresRecordReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+        cursors.clone(),
+    ));
+    let statistics = Arc::new(PostgresStatisticsService::new(
+        pool,
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit,
+    ));
+    router(Arc::new(
+        HttpService::new(
+            registry,
+            ReadRuntimeIdentity {
+                package_revision: identity.activation_id,
+                schema_fingerprint: identity.schema_fingerprint,
+            },
+            records,
+            Arc::new(PartialTextReady),
+            cursors,
+        )
+        .with_statistics(statistics),
+    ))
+}
+
+fn partial_text_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "principal",
+        "partial-text-count-twin",
+        BTreeSet::new(),
+        None,
+        BTreeMap::from([(
+            "administrative_boundaries".to_owned(),
+            VerifiedClaimValue::direct_string_set(["north-district"])
+                .expect("boundary claim is a verified string set"),
+        )]),
+    )
+    .expect("partial-text claims are valid")
+}
+
+async fn partial_text_send(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    claims: VerifiedRequestClaims,
+) -> Response<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())
+        .expect("partial-text request builds");
+    request.extensions_mut().insert(claims);
+    let mut app = app.clone();
+    app.call(request).await.expect("router returns a response")
+}
+
+async fn partial_text_json(response: Response<Body>) -> Value {
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("partial-text response reads");
+    let value: Value = serde_json::from_slice(&bytes).expect("partial-text response is JSON");
+    assert_eq!(status, StatusCode::OK, "{value}");
+    value
+}
+
+fn quote_stock_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+struct PartialTextReady;
+
+impl ReadinessProbe for PartialTextReady {
+    fn is_ready(&self) -> ServiceFuture<'_, bool> {
+        Box::pin(async { true })
+    }
 }
 
 async fn create(

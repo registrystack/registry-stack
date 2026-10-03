@@ -255,19 +255,22 @@ jobs:
               ;;
           esac
           test -s "${image_rows}"
-          while IFS=$'\t' read -r name published_ref index_digest; do
+          # The rows arrive on descriptor 3 so no command in the loop body can
+          # read the remaining image list from standard input.
+          while IFS=$'\t' read -r -u 3 name published_ref published_digest; do
             test -n "${name}"
-            test -n "${published_ref}"
-            [[ "${index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${published_ref}" == "ghcr.io/registrystack/${name}:${TAG}" ]]
+            [[ "${published_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            published_repository="ghcr.io/registrystack/${name}"
             published_layout="proof/image-layouts/${name}-published"
             rebuilt_layout="${GITHUB_WORKSPACE}/proof/image-layouts/${name}-rebuilt"
-            test "$(crane digest "${published_ref}")" = "${index_digest}"
-            crane pull "${published_ref}" "${published_layout}" --format=oci
-            index_blob="${published_layout}/blobs/sha256/${index_digest#sha256:}"
-            test -f "${index_blob}"
-            test "sha256:$(sha256sum "${index_blob}" | awk '{print $1}')" = \
-              "${index_digest}"
-            cp "${index_blob}" "${published_layout}/index.json"
+            # The tag must still name the recorded digest; the pull then uses
+            # the digest itself. crane writes a layout whose index.json names
+            # that digest, an image manifest or an image index, and the
+            # comparator resolves it from there. Never rewrite index.json.
+            test "$(crane digest "${published_ref}")" = "${published_digest}"
+            crane pull "${published_repository}@${published_digest}" \
+              "${published_layout}" --format=oci
             RELEASE_BUILDX_BUILDER="${BUILDER_NAME}" \
               RELEASE_IMAGE_CONTEXT="${GITHUB_WORKSPACE}/source" \
               RELEASE_IMAGE_NO_CACHE=true \
@@ -280,8 +283,9 @@ jobs:
                 "${VERSION}" \
                 "${GITHUB_WORKSPACE}/proof/image-layouts/${name}.metadata.json"
             python3 verifier/release/scripts/compare-release-image-layouts.py \
+              --published-digest "${published_digest}" \
               "${published_layout}" "${rebuilt_layout}"
-          done < "${image_rows}"
+          done 3< "${image_rows}"
 
       - name: Record successful 30-day proof
         env:

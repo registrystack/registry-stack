@@ -40,7 +40,9 @@ pub use context::{
     VerifiedContextError, VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
     VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
-pub(crate) use service::{cursor_query_reference_value, CursorQueryReferenceInput};
+pub(crate) use service::{
+    cursor_query_reference_value, valid_text_search_term, CursorQueryReferenceInput,
+};
 pub use service::{
     ActionTargetConditionsInput, BatchMutationInput, CompiledLookupSelector, CompiledReadQuery,
     ConditionalMutationInput, CreateMutationInput, HeldReadResponse, HttpService,
@@ -3814,7 +3816,7 @@ fn read_filter_predicate(
     } else {
         literals
             .into_iter()
-            .map(|literal| literal_to_field_value(literal, &field_type))
+            .map(|literal| literal_to_filter_value(literal, &field_type, operator))
             .collect::<Result<Vec<_>, _>>()?
     };
     if operator == ReadFilterOperator::In {
@@ -3846,6 +3848,25 @@ fn literal_to_field_value(
     crate::postgres::validate_field_value(&value, field_type)
         .map_err(|_| ReadQueryError::Invalid)?;
     Ok(value)
+}
+
+fn literal_to_filter_value(
+    literal: &strict_query::Literal,
+    field_type: &FieldTypeSource,
+    operator: ReadFilterOperator,
+) -> Result<String, ReadQueryError> {
+    if matches!(
+        operator,
+        ReadFilterOperator::StartsWith | ReadFilterOperator::Contains
+    ) {
+        let strict_query::Literal::String(value) = literal else {
+            return Err(ReadQueryError::Invalid);
+        };
+        return valid_text_search_term(value, field_type)
+            .then(|| value.clone())
+            .ok_or(ReadQueryError::Invalid);
+    }
+    literal_to_field_value(literal, field_type)
 }
 
 fn resolve_order_clause(
@@ -4013,14 +4034,19 @@ fn validate_filter_shape(
                 | ReadFilterOperator::Lt
                 | ReadFilterOperator::Le
                 | ReadFilterOperator::Gt
-                | ReadFilterOperator::Ge
-                | ReadFilterOperator::StartsWith
-                | ReadFilterOperator::Contains => {
+                | ReadFilterOperator::Ge => {
                     if predicate.values.len() != 1 {
                         return Err(ReadQueryError::Invalid);
                     }
                     crate::postgres::validate_field_value(&predicate.values[0], &field_type)
                         .map_err(|_| ReadQueryError::Invalid)?;
+                }
+                ReadFilterOperator::StartsWith | ReadFilterOperator::Contains => {
+                    if predicate.values.len() != 1
+                        || !valid_text_search_term(&predicate.values[0], &field_type)
+                    {
+                        return Err(ReadQueryError::Invalid);
+                    }
                 }
                 ReadFilterOperator::In => {
                     if predicate.values.is_empty()

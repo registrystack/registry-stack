@@ -1092,12 +1092,10 @@ fn population_predicate_valid(predicate: &FilterPredicate, field_type: &FieldTyp
                     .all(|literal| population_literal_valid(literal, field_type))
         }
         FilterPredicate::Function { literal, .. } => {
-            matches!(
-                field_type,
-                FieldTypeSource::String { .. }
-                    | FieldTypeSource::Text { .. }
-                    | FieldTypeSource::VocabularyCode { .. }
-            ) && population_literal_valid(literal, field_type)
+            let Literal::String(value) = literal else {
+                return false;
+            };
+            crate::data::valid_text_search_term(value, field_type)
         }
     }
 }

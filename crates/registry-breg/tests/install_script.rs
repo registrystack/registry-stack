@@ -64,6 +64,11 @@ fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
 
     let output = fixture.run(true);
     assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("injected pointer switch failure"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     for binary in BINARIES {
         assert_eq!(
             fs::read_to_string(fixture.install_dir.join(binary)).unwrap(),
@@ -83,6 +88,11 @@ fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry()
     let output = fixture.run_failing_pointer_switch(1);
 
     assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("injected pointer switch failure"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     for binary in BINARIES {
         assert_eq!(
             fs::read_to_string(fixture.install_dir.join(binary)).unwrap(),
@@ -170,6 +180,20 @@ fn glibc_at_the_floor_installs_both_commands() {
 }
 
 #[test]
+fn current_macos_bundle_installs_both_commands() {
+    let fixture = InstallerFixture::macos();
+
+    let output = fixture.run(false);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_release_toolset_active();
+    fixture.assert_macos_bundle_members_installed();
+}
+
+#[test]
 fn installer_carries_the_shared_glibc_floor() {
     let (major, minor) = glibc_floor();
     let source = fs::read_to_string(installer_path()).unwrap();
@@ -189,6 +213,7 @@ struct InstallerFixture {
     install_dir: PathBuf,
     fake_bin: PathBuf,
     asset_suffix: String,
+    macos_bundle: bool,
     forced_uname: Option<(String, String)>,
 }
 
@@ -201,6 +226,11 @@ impl InstallerFixture {
     /// the Linux-only libc preflight is exercised on macOS as well.
     fn linux() -> Self {
         Self::build(Some(("Linux".to_owned(), "x86_64".to_owned())))
+    }
+
+    /// A fixture for the current macOS archive format, including on Linux CI.
+    fn macos() -> Self {
+        Self::build(Some(("Darwin".to_owned(), "arm64".to_owned())))
     }
 
     fn build(forced_uname: Option<(String, String)>) -> Self {
@@ -249,30 +279,27 @@ printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
 "#,
         );
         let asset_suffix = match &forced_uname {
-            Some(_) => "linux-amd64".to_owned(),
+            Some((system, machine)) => platform_suffix_for(system, machine).to_owned(),
             None => platform_suffix().to_owned(),
         };
+        let macos_bundle = asset_suffix == "macos-arm64";
         if forced_uname.is_some() {
-            // A forced Linux run reaches the installer's GNU pointer switch,
-            // which asks for mv -T. A macOS workstation spells that same
-            // guarantee mv -h, so translate it there and pass it through
-            // untouched on a Linux runner.
+            // Translate the installer's platform-specific atomic replacement
+            // flag when the forced platform differs from the workstation.
             write_executable(
                 &fake_bin.join("mv"),
                 r#"#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$(/usr/bin/uname -s)" != Darwin ]]; then
-  exec /bin/mv "$@"
+real_system="$(/usr/bin/uname -s)"
+forced_system="${FAKE_UNAME_S:-$real_system}"
+if [[ "$real_system" == Darwin && "$forced_system" == Linux && "${1:-}" == -Tf ]]; then
+  shift
+  set -- -f -h "$@"
+elif [[ "$real_system" == Linux && "$forced_system" == Darwin && "${1:-}" == -fh ]]; then
+  shift
+  set -- -Tf "$@"
 fi
-arguments=()
-for argument in "$@"; do
-  case "$argument" in
-    -Tf | -fT) arguments+=(-f -h) ;;
-    -T) arguments+=(-h) ;;
-    *) arguments+=("$argument") ;;
-  esac
-done
-exec /bin/mv "${arguments[@]}"
+exec /bin/mv "$@"
 "#,
             );
         }
@@ -282,6 +309,7 @@ exec /bin/mv "${arguments[@]}"
             install_dir,
             fake_bin,
             asset_suffix,
+            macos_bundle,
             forced_uname,
         };
         fixture.write_release_assets();
@@ -292,72 +320,47 @@ exec /bin/mv "${arguments[@]}"
         let suffix = &self.asset_suffix;
         let mut sums = String::new();
         for binary in BINARIES {
-            let asset = if self.uses_macos_bundle() {
-                format!("{binary}-{TEST_VERSION}-{suffix}.tar.gz")
+            let stem = format!("{binary}-{TEST_VERSION}-{suffix}");
+            let asset = if self.macos_bundle {
+                format!("{stem}.tar.gz")
             } else {
-                format!("{binary}-{TEST_VERSION}-{suffix}")
+                stem.clone()
             };
             let path = self.release_dir.join(&asset);
-            if self.uses_macos_bundle() {
-                self.write_macos_bundle(binary, &path);
+            if self.macos_bundle {
+                self.write_macos_bundle(binary, &stem, &path);
             } else {
-                fs::write(&path, format!("{binary} release binary\n")).unwrap();
+                write_fixture_binary(&path, binary);
             }
             sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
         }
         fs::write(self.release_dir.join("SHA256SUMS"), sums).unwrap();
     }
 
-    fn uses_macos_bundle(&self) -> bool {
-        self.asset_suffix.starts_with("macos-")
-    }
-
-    fn write_macos_bundle(&self, binary: &str, archive: &Path) {
-        let stem = format!("{binary}-{TEST_VERSION}-{}", self.asset_suffix);
-        let bundle = self.root.join("bundle-source").join(binary);
-        fs::create_dir_all(&bundle).unwrap();
+    fn write_macos_bundle(&self, binary: &str, stem: &str, archive: &Path) {
+        let source_dir = self.root.join("bundle-sources").join(binary);
+        fs::create_dir_all(&source_dir).unwrap();
+        write_fixture_binary(&source_dir.join(stem), binary);
+        let library = "libaws_lc_fips_0_14_2_crypto.dylib";
         write_executable(
-            &bundle.join(&stem),
-            &format!(
-                r#"#!/usr/bin/env bash
-set -euo pipefail
-if [[ "${{1:-}}" == "--version" ]]; then
-  printf '%s\n' "{binary} {}"
-  exit 0
-fi
-printf '%s\n' "{binary} release binary"
-"#,
-                TEST_VERSION.trim_start_matches('v')
-            ),
+            &source_dir.join(library),
+            &format!("{binary} fixture library\n"),
         );
-        write_executable(
-            &bundle.join("libaws_lc_fips_fixture.dylib"),
-            "macOS FIPS fixture library\n",
-        );
-        fs::write(
-            bundle.join("THIRD_PARTY_NOTICES"),
-            "macOS installer fixture notices\n",
-        )
-        .unwrap();
-        fs::set_permissions(
-            bundle.join("THIRD_PARTY_NOTICES"),
-            fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
+        fs::write(source_dir.join("THIRD_PARTY_NOTICES"), "fixture notices\n").unwrap();
 
-        let status = Command::new("tar")
+        let output = Command::new("tar")
             .args(["-czf"])
             .arg(archive)
             .arg("-C")
-            .arg(&bundle)
-            .args([
-                stem.as_str(),
-                "libaws_lc_fips_fixture.dylib",
-                "THIRD_PARTY_NOTICES",
-            ])
-            .status()
+            .arg(&source_dir)
+            .args([stem, library, "THIRD_PARTY_NOTICES"])
+            .output()
             .unwrap();
-        assert!(status.success(), "macOS installer fixture archive builds");
+        assert!(
+            output.status.success(),
+            "tar stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn preinstall_previous_toolset(&self) {
@@ -448,6 +451,7 @@ if [[ "$destination" == */.breg-current ]]; then
   count=$((count + 1))
   printf '%s\n' "$count" > "$FAKE_MV_COUNT"
   if [[ "$count" -eq "$FAKE_MV_FAIL_AT" ]]; then
+    printf 'injected pointer switch failure\n' >&2
     exit 73
   fi
 fi
@@ -458,26 +462,34 @@ exec "$REAL_MV" "$@"
 
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
-            let path = self.install_dir.join(binary);
-            if self.uses_macos_bundle() {
-                let version = Command::new(&path).arg("--version").output().unwrap();
-                assert!(version.status.success());
-                assert_eq!(
-                    String::from_utf8(version.stdout).unwrap(),
-                    format!("{binary} {}\n", TEST_VERSION.trim_start_matches('v'))
-                );
-                let payload = Command::new(&path).output().unwrap();
-                assert!(payload.status.success());
-                assert_eq!(
-                    String::from_utf8(payload.stdout).unwrap(),
-                    format!("{binary} release binary\n")
-                );
-            } else {
-                assert_eq!(
-                    fs::read_to_string(path).unwrap(),
-                    format!("{binary} release binary\n")
-                );
-            }
+            let output = Command::new(self.install_dir.join(binary))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{binary} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{binary} release binary\n")
+            );
+        }
+    }
+
+    fn assert_macos_bundle_members_installed(&self) {
+        let library = "libaws_lc_fips_0_14_2_crypto.dylib";
+        for binary in BINARIES {
+            let executable = fs::canonicalize(self.install_dir.join(binary)).unwrap();
+            let bundle_dir = executable.parent().unwrap();
+            assert_eq!(
+                fs::read_to_string(bundle_dir.join(library)).unwrap(),
+                format!("{binary} fixture library\n")
+            );
+            assert_eq!(
+                fs::read_to_string(bundle_dir.join("THIRD_PARTY_NOTICES")).unwrap(),
+                "fixture notices\n"
+            );
         }
     }
 
@@ -505,11 +517,32 @@ fn write_executable(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+fn write_fixture_binary(path: &Path, binary: &str) {
+    write_executable(
+        path,
+        &format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" == --version ]]; then
+  printf '%s\n' '{binary} {version}'
+else
+  printf '%s\n' '{binary} release binary'
+fi
+"#,
+            version = &TEST_VERSION[1..]
+        ),
+    );
+}
+
 fn platform_suffix() -> &'static str {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => "linux-amd64",
-        ("linux", "aarch64") => "linux-arm64",
-        ("macos", "aarch64") => "macos-arm64",
+    platform_suffix_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn platform_suffix_for(system: &str, machine: &str) -> &'static str {
+    match (system, machine) {
+        ("Linux" | "linux", "x86_64" | "amd64") => "linux-amd64",
+        ("Linux" | "linux", "aarch64" | "arm64") => "linux-arm64",
+        ("Darwin" | "macos", "aarch64" | "arm64") => "macos-arm64",
         platform => panic!("installer test runs on a supported platform, got {platform:?}"),
     }
 }

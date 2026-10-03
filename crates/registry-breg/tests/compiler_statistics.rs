@@ -696,6 +696,54 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
 }
 
 #[test]
+fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
+    let mut vocabulary = source();
+    vocabulary["vocabularies"][0]["values"] = json!(["alpha", "beta"]);
+    vocabulary["statisticalDatasets"][0]["population"] = json!("startswith(category,'al')");
+    compile(&vocabulary).expect("a partial vocabulary-code prefix compiles");
+
+    let mut bounded_string = source();
+    bounded_string["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"label","type":"string","minLength":8,"maxLength":12,
+            "required":true,"classification":"internal"
+        }));
+    for profile in [0_usize, 1] {
+        for member in ["readableFields", "filterableFields"] {
+            bounded_string["accessProfiles"][profile]["permissions"][0][member]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("label"));
+        }
+    }
+    bounded_string["statisticalDatasets"][0]["population"] = json!("contains(label,'a')");
+    compile(&bounded_string).expect("a search term shorter than the stored minLength compiles");
+
+    let oversized = "a".repeat(registry_breg::query::MAX_LITERAL_BYTES + 1);
+    for population in [
+        "startswith(active,'t')".to_owned(),
+        "startswith(category,1)".to_owned(),
+        "contains(category,'line\nbreak')".to_owned(),
+        format!("contains(category,'{oversized}')"),
+    ] {
+        assert_refused(
+            |value| value["statisticalDatasets"][0]["population"] = json!(population),
+            "statistical_dataset.population.invalid",
+        );
+    }
+
+    bounded_string["statisticalDatasets"][0]["population"] =
+        json!("contains(label,'thirteenchars')");
+    let failure = compile(&bounded_string).expect_err("a term beyond maxLength is refused");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "statistical_dataset.population.invalid"));
+}
+
+#[test]
 fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
     let compiled = compile(&source()).expect("statistical dataset compiles");
     let effective = artifact_json(&compiled, "compiled/effective-model.json");
