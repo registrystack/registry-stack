@@ -57,13 +57,13 @@ pub use history_read::SnapshotReadFaultPoint;
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
-    covered_field_encryption_fields, field_plaintext_string, prepare_unique_blind_index_preflight,
-    prior_plaintext_projection, read_activation_status, record_unique_blind_index_page,
-    recursive_member_path, set_force_row_security, ActivationStatusRead,
-    DedicatedApplyConnection as VerifiedPackageApplyConnection, FieldEncryptionCoveredField,
-    MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement, ReviewedExecutionOutcome,
-    ReviewedFieldEncryptionContext, ReviewedMigrationProgress, ReviewedPackageExecutionRequest,
-    TransactionEnd,
+    covered_field_encryption_fields, field_plaintext_string, lock_wait_ended,
+    prepare_unique_blind_index_preflight, prior_plaintext_projection, read_activation_status,
+    record_unique_blind_index_page, recursive_member_path, set_force_row_security,
+    ActivationStatusRead, DedicatedApplyConnection as VerifiedPackageApplyConnection,
+    FieldEncryptionCoveredField, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
+    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
+    ReviewedPackageExecutionRequest, TransactionEnd,
 };
 pub(crate) use migration_ledger::{
     statement_checksum, BackupReference, MigrationArtifactBinding, MigrationKind,
@@ -227,6 +227,11 @@ pub enum PostgresKernelError {
     CatalogInvariant(&'static str),
     #[error("Registry is unavailable for record operations")]
     RegistryUnavailable,
+    /// Another session held the registry's exclusive migration lock until
+    /// this session's wait for it timed out: an apply, an adoption, or a
+    /// reconciliation is in progress.
+    #[error("another session holds the registry migration lock")]
+    MigrationLockHeld,
     /// Retained history coverage does not admit a successor package.
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverageIncomplete,

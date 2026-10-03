@@ -34,6 +34,7 @@ use registry_breg::{
     GeneratedArtifacts, RegistryModule, RegistryProject,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::HookHandlerSource;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -569,6 +570,16 @@ struct PackageCandidateArgs {
     _signature_key_id: Option<String>,
 }
 
+/// An `--expected-digest` value is a package digest in the form every command
+/// prints one: `sha256:` and 64 lowercase hex digits.
+fn parse_expected_digest(value: &str) -> Result<String, String> {
+    if registry_platform_config::is_sha256_label(value) {
+        Ok(value.to_owned())
+    } else {
+        Err("`--expected-digest` must be sha256: followed by 64 lowercase hex digits, the package digest as plan and package print it".to_owned())
+    }
+}
+
 // Each retired package flag stays a hidden argument so an operator who still
 // passes it reads a usage error naming its replacement, not an unknown flag.
 // Its value is optional, so a bare flag reaches the same refusal instead of a
@@ -634,13 +645,28 @@ struct TestArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Absolute schema-test credential binding document.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    credentials: PathBuf,
+    /// Absolute schema-test credential binding document. Required unless --fingerprint-only is given.
+    #[arg(
+        long,
+        value_name = "ABSOLUTE_FILE",
+        required_unless_present = "fingerprint_only"
+    )]
+    credentials: Option<PathBuf>,
 
-    /// New canonical schema-test receipt file.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    output: PathBuf,
+    /// New canonical schema-test receipt file. Required unless --fingerprint-only is given.
+    #[arg(
+        long,
+        value_name = "ABSOLUTE_FILE",
+        required_unless_present = "fingerprint_only"
+    )]
+    output: Option<PathBuf>,
+
+    /// Only measure the schema fingerprint a fresh install of the candidate produces, the target a reviewed migration declares. Runs no fixtures and writes no receipt.
+    #[arg(
+        long,
+        conflicts_with_all = ["baseline_package", "reviewed_migrations", "credentials", "output"]
+    )]
+    fingerprint_only: bool,
 }
 
 #[derive(Debug, Args)]
@@ -671,6 +697,10 @@ struct ApplyArgs {
     /// Operator change reference, at most 512 bytes, recorded as a keyed hash in the activation ledger and audit.
     #[arg(long, value_name = "REFERENCE")]
     operator_reference: Option<String>,
+
+    /// Package digest the target package must have, as plan and package print it; apply refuses another package before any database contact.
+    #[arg(long, value_name = "SHA256_DIGEST", value_parser = parse_expected_digest)]
+    expected_digest: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -686,6 +716,10 @@ struct PlanArgs {
     /// Reviewed backup binding to verify as apply would, as BINDING_PATH=BINDING_FILE; without it, the plan lists the bindings apply requires.
     #[arg(long = "backup", value_name = "BINDING_PATH=BINDING_FILE")]
     backups: Vec<String>,
+
+    /// Package digest the target package must have, as package prints it; plan refuses another package before any database contact.
+    #[arg(long, value_name = "SHA256_DIGEST", value_parser = parse_expected_digest)]
+    expected_digest: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1523,6 +1557,7 @@ enum SuggestedAction {
     VerifyPackagePermissions,
     VerifyPackageBinding,
     VerifyPackageIntegrity,
+    RerunPlanOnIntendedPackage,
     ReviewCompiledDiff,
     CorrectPackageBuild,
     SupplySchemaTestReceipt,
@@ -1533,6 +1568,7 @@ enum SuggestedAction {
     RecreateDisposableDatabase,
     ChooseSchemaTestOutput,
     VerifyMigrationAuthority,
+    RetryAfterMigrationLockReleases,
     ReconcileFailedMigration,
     RestorePreActivationBackup,
     ResolveActiveRequestProposals,
@@ -1692,6 +1728,16 @@ struct SchemaTestSuccessReport {
     receipt: ArtifactReport,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaFingerprintReport {
+    ok: bool,
+    command: &'static str,
+    profile: ProfileArg,
+    registry_revision: String,
+    schema_fingerprint: String,
 }
 
 #[derive(Serialize)]
@@ -2239,6 +2285,12 @@ where
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
+        Command::Test(args) if args.fingerprint_only => {
+            return match measure_schema_fingerprint(&args) {
+                Ok(report) => write_schema_fingerprint(&report, format, stdout, stderr),
+                Err(failure) => write_failure(&failure, format, stdout, stderr),
+            };
+        }
         Command::Test(args) => {
             return match test(&args) {
                 Ok(report) => write_schema_test_success(&report, format, stdout, stderr),
@@ -2379,14 +2431,12 @@ where
             let outcome = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| ())
+                .map_err(|_| registry_breg::mutation::MutationError::Unavailable)
                 .and_then(|runtime| {
-                    runtime
-                        .block_on(registry_breg::action_evidence_maintenance::erase_expired(
-                            &args.runtime_config,
-                            &args.before,
-                        ))
-                        .map_err(|_| ())
+                    runtime.block_on(registry_breg::action_evidence_maintenance::erase_expired(
+                        &args.runtime_config,
+                        &args.before,
+                    ))
                 });
             return match outcome {
                 Ok(erased) => {
@@ -2394,13 +2444,17 @@ where
                         serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
                             .map_err(io::Error::other).and_then(|()| writeln!(stdout))
                     } else {
-                        render_report("Erased expired action Evidence.", &[("erased", erased.to_string())], stdout)
+                        render_report(
+                            "Erased expired action Evidence.",
+                            &[("erased", erased.to_string())],
+                            stdout,
+                        )
                     };
                     write_result(result, stderr)
                 }
-                Err(()) => write_failure(&source_failure("evidence-retention erase-expired",
-                    diagnostic("evidence_retention.unavailable", "evidenceRetention", "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff."),
-                    DiagnosticArtifact::EvidenceRetentionOperation, SuggestedAction::VerifyEvidenceRetentionOperation), format, stdout, stderr),
+                Err(error) => {
+                    write_failure(&evidence_retention_failure(error), format, stdout, stderr)
+                }
             };
         }
         Command::ReviewRecovery(args) => {
@@ -2668,39 +2722,101 @@ fn request_retention_erase(
     })
 }
 
+fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> FailureReport {
+    let command = "evidence-retention erase-expired";
+    match error {
+        registry_breg::mutation::MutationError::MigrationLockHeld => source_failure(
+            command,
+            diagnostic(
+                "evidence_retention.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was erased. Retry the same erasure once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+        ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
+            command,
+            "evidence_retention.package.refused",
+            "package",
+            &mismatch,
+        ),
+        _ => source_failure(
+            command,
+            diagnostic(
+                "evidence_retention.unavailable",
+                "evidenceRetention",
+                "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff.",
+            ),
+            DiagnosticArtifact::EvidenceRetentionOperation,
+            SuggestedAction::VerifyEvidenceRetentionOperation,
+        ),
+    }
+}
+
 fn request_retention_failure(
     command: &'static str,
     error: RequestRetentionCliError,
 ) -> FailureReport {
-    let (code, message) = match error {
+    let (code, path, message, artifact, action) = match error {
+        RequestRetentionCliError::PackagePinMismatch(mismatch) => {
+            return package_pin_failure(
+                command,
+                "request_retention.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
+        RequestRetentionCliError::MigrationLockHeld => (
+            "request_retention.in_progress",
+            "database",
+            "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. A detail erasure that committed before the wait stays erased, which `request-retention dry-run` shows. Retry the same operation once it releases",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+        ),
         RequestRetentionCliError::Operator => (
             "request_retention.operation.refused",
+            "requestRetention",
             "the request retention operation was refused",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::ActiveDetailPinned => (
             "request_retention.detail.pinned",
+            "requestRetention",
             "active request detail is still pinned",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::RetainMode => (
             "request_retention.mode.retain",
+            "requestRetention",
             "the request retention policy does not permit operator erasure",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::ErasureUnaudited => (
             "request_retention.erasure.unaudited",
+            "requestRetention",
             "the erasure committed but its audit entry was not recorded; restore the audit destination, then reconcile the erased request against the database",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::AttachmentStorageBindingMismatch => (
             "request_retention.attachment_storage.binding_mismatch",
+            "requestRetention",
             "restore the original attachment storage binding and verification policy before retrying; the registry pin, retained content, or deletion tombstones still require them",
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
         ),
     };
     FailureReport {
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
-            diagnostic(code, "requestRetention", message),
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+            diagnostic(code, path, message),
+            artifact,
+            action,
         )],
     }
 }
@@ -2747,13 +2863,14 @@ fn import_authority_failure(
     error: ImportAuthorityCliError,
 ) -> FailureReport {
     use registry_breg::import_authority::ImportAuthorityError;
-    let (failure_diagnostic, action) = match error {
+    let (failure_diagnostic, artifact, action) = match error {
         ImportAuthorityCliError::RuntimeConfigPath => (
             diagnostic(
                 "import_authority.runtime_config.invalid",
                 "runtimeConfig",
                 "the runtime configuration must be an absolute path",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectCommandUsage,
         ),
         ImportAuthorityCliError::ExpiresIn => (
@@ -2762,6 +2879,7 @@ fn import_authority_failure(
                 "expiresIn",
                 "the authority window must be a whole number of minutes, hours, or days (for example 90m, 12h, or 7d), from one minute to at most 30 days",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::AuthorityId => (
@@ -2770,6 +2888,7 @@ fn import_authority_failure(
                 "authorityId",
                 "the authority identifier must be the UUID `import-authority open` or `import-authority list` reported",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::InvalidInput) => (
@@ -2778,6 +2897,7 @@ fn import_authority_failure(
                 "importAuthority",
                 "the request is out of bounds: the entity, profile, operator reference, and reason must be present and free of control characters, the volume at least one, and each pinned input digest 64 lowercase hexadecimal characters, named once, at most 16",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotImportable) => (
@@ -2786,6 +2906,7 @@ fn import_authority_failure(
                 "entity",
                 "the entity and profile do not name an `import` grant of the active package; check them with `bregctl explain access`",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::CorrectImportAuthorityRequest,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen) => (
@@ -2794,6 +2915,7 @@ fn import_authority_failure(
                 "entity",
                 "an import authority is already open for this entity; close it with `bregctl import-authority close` before opening another",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotFound) => (
@@ -2802,6 +2924,7 @@ fn import_authority_failure(
                 "authorityId",
                 "no import authority has this identifier; `bregctl import-authority list` names the recorded ones",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotReady) => (
@@ -2810,7 +2933,25 @@ fn import_authority_failure(
                 "importAuthority",
                 "the registry is not ready for import authority maintenance; apply the configured package first",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::PackagePinMismatch(mismatch)) => {
+            return package_pin_failure(
+                command,
+                "import_authority.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
+        ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld) => (
+            diagnostic(
+                "import_authority.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. No authority changed. Retry the same command once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable) => (
             diagnostic(
@@ -2818,17 +2959,14 @@ fn import_authority_failure(
                 "importAuthority",
                 "the import authority store is unavailable; verify the runtime configuration, the migration authority, the active package binding, and a keyed audit profile",
             ),
+            DiagnosticArtifact::ImportAuthority,
             SuggestedAction::VerifyImportAuthority,
         ),
     };
     FailureReport {
         ok: false,
         command,
-        diagnostics: vec![tool_diagnostic(
-            failure_diagnostic,
-            DiagnosticArtifact::ImportAuthority,
-            action,
-        )],
+        diagnostics: vec![tool_diagnostic(failure_diagnostic, artifact, action)],
     }
 }
 
@@ -2868,6 +3006,15 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             ),
             DiagnosticArtifact::InstanceClaim,
             SuggestedAction::VerifyInstanceClaim,
+        ),
+        InstanceClaimCliError::Claim(InstanceClaimError::MigrationLockHeld) => (
+            diagnostic(
+                "instance_claim.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was adopted and no authority was superseded. Retry the same adoption once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(message)) => (
             diagnostic("instance_claim.package.refused", "package", &message),
@@ -3084,6 +3231,14 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
         HistoryErasureLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history erase", "history.erase", error);
         }
+        HistoryErasureLifecycleError::Package(PackageError::ExpectedDigestMismatch(mismatch)) => {
+            return package_pin_failure(
+                "history erase",
+                "history.erase.package.refused",
+                "package",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -3170,6 +3325,13 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
                 DiagnosticArtifact::HistoryErasure,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
+            registry_breg::history_erasure::HistoryErasureError::MigrationLockHeld => (
+                "history.erase.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was erased. Retry the same erasure once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
+            ),
             registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
             | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
                 "history.erase.unavailable",
@@ -3213,6 +3375,16 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
         }
         HistoryRebaselineLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history rebaseline", "history.rebaseline", error);
+        }
+        HistoryRebaselineLifecycleError::Package(PackageError::ExpectedDigestMismatch(
+            mismatch,
+        )) => {
+            return package_pin_failure(
+                "history rebaseline",
+                "history.rebaseline.package.refused",
+                "package",
+                &mismatch,
+            );
         }
         error => error,
     };
@@ -3314,6 +3486,13 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                  revisions to find it",
                 DiagnosticArtifact::HistoryRebaseline,
                 SuggestedAction::ReviewRetainedHistory,
+            ),
+            registry_breg::history_rebaseline::HistoryRebaselineError::MigrationLockHeld => (
+                "history.rebaseline.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was changed. Retry the same rebaseline once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
             ),
             registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
             | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
@@ -3419,6 +3598,16 @@ fn field_encryption_preflight_failure(
                 "field-encryption preflight",
                 "field_encryption.preflight",
                 error,
+            );
+        }
+        FieldEncryptionPreflightLifecycleError::PredecessorPackage(
+            PackageError::ExpectedDigestMismatch(mismatch),
+        ) => {
+            return package_pin_failure(
+                "field-encryption preflight",
+                "field_encryption.preflight.predecessor_package.refused",
+                "package",
+                &mismatch,
             );
         }
         error => error,
@@ -3562,6 +3751,16 @@ fn field_encryption_erase_history_failure(
                 error,
             );
         }
+        FieldEncryptionEraseHistoryLifecycleError::ActivePackage(
+            PackageError::ExpectedDigestMismatch(mismatch),
+        ) => {
+            return package_pin_failure(
+                "field-encryption erase-history",
+                "field_encryption.erase_history.package.refused",
+                "package",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -3674,6 +3873,13 @@ fn field_encryption_erase_history_failure(
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
+                registry_breg::history_erasure::HistoryErasureError::MigrationLockHeld => (
+                    "field_encryption.erase_history.in_progress",
+                    "database",
+                    "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::RetryAfterMigrationLockReleases,
+                ),
                 registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
                 | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
                     "field_encryption.erase_history.unavailable",
@@ -3723,6 +3929,13 @@ fn field_encryption_erase_history_failure(
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::ReviewRetainedHistory,
                 ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::MigrationLockHeld => (
+                    "field_encryption.erase_history.in_progress",
+                    "database",
+                    "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::RetryAfterMigrationLockReleases,
+                ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
                 | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
                     "field_encryption.erase_history.rebaseline.unavailable",
@@ -3732,6 +3945,13 @@ fn field_encryption_erase_history_failure(
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
             },
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::MigrationLockHeld => (
+                "field_encryption.erase_history.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
+            ),
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::Unavailable => (
                 "field_encryption.erase_history.unavailable",
                 "history",
@@ -3841,6 +4061,9 @@ fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
 
 fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
+        WebhookLifecycleError::PackagePinMismatch(mismatch) => {
+            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch)
+        }
         WebhookLifecycleError::Event => (
             "webhook.sample.event_refused",
             "event",
@@ -4263,12 +4486,15 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
 }
 
 fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
-    let output = test_lifecycle::preflight_output(&args.output).map_err(test_lifecycle_failure)?;
+    let (Some(credentials), Some(output)) = (&args.credentials, &args.output) else {
+        unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
+    };
+    let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
     let candidate = capture_candidate(&args.candidate, "test", true)?;
     let outcome = test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
-        credentials: &args.credentials,
+        credentials,
         output,
     })
     .map_err(test_lifecycle_failure)?;
@@ -4290,6 +4516,21 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
             .iter()
             .map(baseline_fingerprint_drift_finding)
             .collect(),
+    })
+}
+
+/// Measure the fresh-install schema fingerprint a reviewed migration declares
+/// as its target, without the fixture run or receipt of a full schema test.
+fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, FailureReport> {
+    let candidate = capture_candidate(&args.candidate, "test", false)?;
+    let measurement =
+        test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
+    Ok(SchemaFingerprintReport {
+        ok: true,
+        command: "test",
+        profile: ProfileArg::Production,
+        registry_revision: measurement.registry_revision,
+        schema_fingerprint: measurement.schema_fingerprint,
     })
 }
 
@@ -4565,6 +4806,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         backups: &args.backups,
         acknowledge_retired_audit_discard: args.acknowledge_retired_audit_discard,
         operator_reference: args.operator_reference.as_deref(),
+        expected_digest: args.expected_digest.as_deref(),
     })
     .map_err(apply_lifecycle_failure)?;
     Ok(ApplySuccessReport {
@@ -4587,6 +4829,7 @@ fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, FailureReport> {
         runtime_config: &args.runtime_config,
         package: &args.package,
         backups: &args.backups,
+        expected_digest: args.expected_digest.as_deref(),
     })
     .map_err(|error| lifecycle_failure("plan", error))?;
     Ok(PlanSuccessReport {
@@ -4916,6 +5159,25 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             };
         }
         TestLifecycleError::Rehearsal(error) => return migration_rehearsal_failure(*error),
+        // Both values are schema digests, not secrets: naming them lets the
+        // author tell a stale review from a candidate that changed since.
+        TestLifecycleError::ReviewFingerprint { declared, measured } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "migration.review.fingerprint_mismatch",
+                        "reviewedMigrations",
+                        &format!(
+                            "the reviewed target fingerprint {declared} does not match the schema measured on the disposable database, {measured}; measure the exact candidate with test --fingerprint-only, then correct the review evidence before retrying"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectPackageBuild,
+                )],
+            };
+        }
         TestLifecycleError::Credentials { path, message } => {
             return FailureReport {
                 ok: false,
@@ -4951,13 +5213,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestCandidate,
             SuggestedAction::CorrectSchemaTestCandidate,
         ),
-        TestLifecycleError::ReviewFingerprint => (
-            "migration.review.fingerprint_mismatch",
-            "reviewedMigrations",
-            "the reviewed target fingerprint does not match the schema measured on the disposable database; rehearse the exact candidate and correct the review evidence before retrying",
-            DiagnosticArtifact::DatabaseMigration,
-            SuggestedAction::CorrectPackageBuild,
-        ),
+        TestLifecycleError::ReviewFingerprint { .. } => unreachable!("handled before match"),
         TestLifecycleError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::Database => (
             "test.database.unavailable",
@@ -5100,6 +5356,31 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure(command, "apply", error);
         }
+        ApplyLifecycleError::CurrentPackage(PackageError::ExpectedDigestMismatch(mismatch)) => {
+            return package_pin_failure(
+                command,
+                "apply.package.refused",
+                "package.root",
+                &mismatch,
+            );
+        }
+        ApplyLifecycleError::PackageDigestMismatch { expected, found } => {
+            return FailureReport {
+                ok: false,
+                command,
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "apply.package.digest_mismatch",
+                        "package",
+                        &format!(
+                            "--expected-digest is {expected} but the package at --package is {found}; nothing was changed. Run `bregctl plan` on the intended package and pass the digest it reports"
+                        ),
+                    ),
+                    DiagnosticArtifact::VerifiedPackage,
+                    SuggestedAction::RerunPlanOnIntendedPackage,
+                )],
+            };
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5111,6 +5392,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ApplyLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        ApplyLifecycleError::PackageDigestMismatch { .. } => unreachable!("handled before match"),
         ApplyLifecycleError::TargetPackagePath => (
             "apply.package.path_invalid",
             "package",
@@ -5121,9 +5403,9 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::TargetPackage(error) => (
             "apply.package.refused",
             "package",
-            package_refusal_message(error, "the activation package was refused"),
+            package_refusal_message(&error, "the activation package was refused"),
             DiagnosticArtifact::VerifiedPackage,
-            package_refusal_action(error),
+            package_refusal_action(&error),
         ),
         // The configured active package is refused apart from the target, so
         // the operator reads which of the two directories to fix.
@@ -5139,7 +5421,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 }
             },
             DiagnosticArtifact::VerifiedPackage,
-            package_refusal_action(error),
+            package_refusal_action(&error),
         ),
         ApplyLifecycleError::Uninitialized => (
             "apply.database.uninitialized",
@@ -5347,9 +5629,16 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             registry_breg::migration::MigrationError::DatabaseUnavailable => (
                 "apply.database.unavailable",
                 "database",
-                "the migration database could not be reached, or another apply held the migration lock past the lock timeout, before maintenance began. Nothing was changed. Retry the same apply once the database is reachable and accepts the migration role",
+                "the migration database could not be reached before maintenance began. Nothing was changed. Retry the same apply once the database is reachable and accepts the migration role",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_breg::migration::MigrationError::MigrationLockHeld => (
+                "apply.database.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout before maintenance began, so an apply, an adoption, or a migration reconcile is in progress. Nothing was changed. Retry the same apply once it releases",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::RetryAfterMigrationLockReleases,
             ),
             registry_breg::migration::MigrationError::StatementFailed(failure) => {
                 return source_failure(
@@ -5625,6 +5914,14 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
         ReconcileLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("migration reconcile", "migration.reconcile", error);
         }
+        ReconcileLifecycleError::ActivePackage(PackageError::ExpectedDigestMismatch(mismatch)) => {
+            return package_pin_failure(
+                "migration reconcile",
+                "migration.reconcile.package.refused",
+                "package",
+                &mismatch,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5795,11 +6092,11 @@ fn inspection_failure(
         RuntimePackageInspectionError::RuntimeConfig(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::SharedPackage(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::Package(error) => {
-            let (suffix, action) = package_refusal(error);
+            let (suffix, action) = package_refusal(&error);
             (
                 format!("{prefix}.package.{suffix}"),
                 "package",
-                package_refusal_message(error, "the configured package was refused"),
+                package_refusal_message(&error, "the configured package was refused"),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
             )
@@ -5818,7 +6115,7 @@ fn inspection_failure(
 
 /// The diagnostic code suffix and next action for a refused package, shared
 /// by every command that reads one.
-fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
+fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
     match error {
         PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),
         PackageError::Permissions => (
@@ -5828,6 +6125,7 @@ fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
         PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
         PackageError::LegacyFormat => ("legacy_format", SuggestedAction::CorrectPackageBuild),
         PackageError::Envelope
+        | PackageError::ExpectedDigestMismatch(_)
         | PackageError::Closure
         | PackageError::Integrity
         | PackageError::CanonicalJson
@@ -5842,7 +6140,7 @@ fn package_refusal(error: PackageError) -> (&'static str, SuggestedAction) {
     }
 }
 
-fn package_refusal_action(error: PackageError) -> SuggestedAction {
+fn package_refusal_action(error: &PackageError) -> SuggestedAction {
     match error {
         PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
         PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
@@ -5853,10 +6151,31 @@ fn package_refusal_action(error: PackageError) -> SuggestedAction {
 
 /// A package in the retired format is refused with the command that rebuilds
 /// it; every other refusal keeps the caller's value-free sentence.
-fn package_refusal_message(error: PackageError, message: &'static str) -> &'static str {
+fn package_refusal_message(error: &PackageError, message: &'static str) -> &'static str {
     match error {
         PackageError::LegacyFormat => registry_breg::package::LEGACY_PACKAGE_FORMAT,
         _ => message,
+    }
+}
+
+/// The configured active package does not match the runtime file's
+/// `package.expectedDigest` pin. The refusal keeps the command's own package
+/// code and path and names both digests, which are package identities and not
+/// secrets.
+fn package_pin_failure(
+    command: &'static str,
+    code: &str,
+    path: &str,
+    mismatch: &PackageDigestMismatch,
+) -> FailureReport {
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, &mismatch.to_string()),
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackageIntegrity,
+        )],
     }
 }
 
@@ -5874,6 +6193,13 @@ fn active_registry_failure(
             "the database could not be read to find its active registry; check that database.migrationUrlRef reaches PostgreSQL as the migration role, then rerun the command",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ActiveRegistryError::InProgress => (
+            "in_progress",
+            "database",
+            "another session holds the exclusive migration lock, so an apply, an adoption, or a migration reconcile is in progress; rerun the command once it releases",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         ActiveRegistryError::Uninitialized => (
             "uninitialized",
@@ -5917,13 +6243,13 @@ fn active_registry_failure(
 
 /// A `--baseline-package` directory that `test` or `package` refused.
 fn baseline_package_failure(command: &'static str, error: PackageError) -> FailureReport {
-    let (suffix, action) = package_refusal(error);
+    let (suffix, action) = package_refusal(&error);
     candidate_failure(
         command,
         &format!("package.baseline.{suffix}"),
         "baselinePackage",
         package_refusal_message(
-            error,
+            &error,
             "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
         ),
         DiagnosticArtifact::BaselinePackage,
@@ -5969,11 +6295,11 @@ fn runtime_config_failure(
 }
 
 fn package_diff_failure(error: PackageError) -> FailureReport {
-    let (suffix, action) = package_refusal(error);
+    let (suffix, action) = package_refusal(&error);
     diff_failure_with_action(
         &format!("diff.baseline.{suffix}"),
         "baseline",
-        package_refusal_message(error, "the baseline package was refused"),
+        package_refusal_message(&error, "the baseline package was refused"),
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -6392,7 +6718,7 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
 /// revision, with no database, runtime configuration, or test receipt.
 fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
     let inspected = inspect_package_integrity(package_root).map_err(|error| {
-        let (suffix, action) = package_refusal(error);
+        let (suffix, action) = package_refusal(&error);
         FailureReport {
             ok: false,
             command: "check",
@@ -6400,7 +6726,7 @@ fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
                 diagnostic(
                     &format!("check.package.{suffix}"),
                     "package",
-                    package_refusal_message(error, "the package was refused"),
+                    package_refusal_message(&error, "the package was refused"),
                 ),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
@@ -12272,6 +12598,30 @@ fn write_schema_test_success(
     write_result(result, stderr)
 }
 
+fn write_schema_fingerprint(
+    report: &SchemaFingerprintReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            "Measured the schema a fresh install of the candidate produces. No fixtures ran and no receipt was written.",
+            &[
+                ("profile", "production".to_owned()),
+                ("registry revision", report.registry_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+            ],
+            stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_apply_success(
     report: &ApplySuccessReport,
     format: OutputFormat,
@@ -15866,6 +16216,80 @@ fn an_instance_claim_package_refusal_keeps_the_pin_sentence_it_names() {
 
 #[cfg(test)]
 #[test]
+fn an_active_package_pin_mismatch_names_both_digests() {
+    let pin = || {
+        PackageError::ExpectedDigestMismatch(PackageDigestMismatch {
+            expected: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                .to_owned(),
+            found: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                .to_owned(),
+        })
+    };
+    let sentence = "package.expectedDigest is sha256:1111111111111111111111111111111111111111111111111111111111111111 but the package at package.root is sha256:2222222222222222222222222222222222222222222222222222222222222222; deploy the pinned package or update package.expectedDigest";
+    for (report, command, code, path) in [
+        (
+            lifecycle_failure("apply", ApplyLifecycleError::CurrentPackage(pin())),
+            "apply",
+            "apply.package.refused",
+            "package.root",
+        ),
+        (
+            lifecycle_failure("plan", ApplyLifecycleError::CurrentPackage(pin())),
+            "plan",
+            "apply.package.refused",
+            "package.root",
+        ),
+        (
+            reconcile_lifecycle_failure(ReconcileLifecycleError::ActivePackage(pin())),
+            "migration reconcile",
+            "migration.reconcile.package.refused",
+            "package",
+        ),
+        (
+            history_erasure_lifecycle_failure(HistoryErasureLifecycleError::Package(pin())),
+            "history erase",
+            "history.erase.package.refused",
+            "package",
+        ),
+        (
+            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Package(pin())),
+            "history rebaseline",
+            "history.rebaseline.package.refused",
+            "package",
+        ),
+        (
+            field_encryption_preflight_failure(
+                FieldEncryptionPreflightLifecycleError::PredecessorPackage(pin()),
+            ),
+            "field-encryption preflight",
+            "field_encryption.preflight.predecessor_package.refused",
+            "package",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::ActivePackage(pin()),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.package.refused",
+            "package",
+        ),
+    ] {
+        assert!(!report.ok);
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, path);
+        assert_eq!(diagnostic.message, sentence, "{command}");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::VerifiedPackage);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::VerifyPackageIntegrity
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
 fn apply_chain_refusals_name_the_operators_next_command() {
     use registry_breg::migration::MigrationError;
 
@@ -16060,6 +16484,240 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
     );
 }
 
+/// A held migration lock has its own `apply.database.in_progress` code for
+/// `apply` and `plan` alike: its sentence names the session holding the
+/// lock, and neither it nor its suggested action sends the operator to check
+/// that the database is reachable.
+#[cfg(test)]
+#[test]
+fn apply_reports_a_held_migration_lock_as_an_activation_in_progress() {
+    for command in ["apply", "plan"] {
+        let report = lifecycle_failure(
+            command,
+            ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::MigrationLockHeld),
+        );
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, "apply.database.in_progress");
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases
+        );
+        for fragment in [
+            "another session held the exclusive migration lock",
+            "before maintenance began",
+            "Nothing was changed",
+            "Retry the same apply once it releases",
+        ] {
+            assert!(
+                diagnostic.message.contains(fragment),
+                "{fragment}: {}",
+                diagnostic.message
+            );
+        }
+        for fragment in ["reachable", "migrationUrlRef", "reconciliation"] {
+            assert!(
+                !diagnostic.message.contains(fragment),
+                "{fragment}: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn an_active_registry_read_reports_a_held_migration_lock_as_in_progress() {
+    for (command, prefix) in [
+        ("history erase", "history.erase"),
+        ("history rebaseline", "history.rebaseline"),
+        ("migration reconcile", "migration.reconcile"),
+    ] {
+        let report = active_registry_failure(command, prefix, ActiveRegistryError::InProgress);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            format!("{prefix}.active_registry.in_progress")
+        );
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("another session holds the exclusive migration lock"),
+            "{}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("migrationUrlRef"),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+/// A migration lock held when an operator maintenance transaction takes it
+/// has its own `in_progress` code for each command, with the wait-and-retry
+/// action, and is never reported as unavailable storage.
+#[cfg(test)]
+#[test]
+fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
+    use registry_breg::import_authority::ImportAuthorityError;
+    use registry_breg::instance_claim::InstanceClaimError;
+    use registry_breg::mutation::MutationError;
+
+    for (report, command, code) in [
+        (
+            evidence_retention_failure(MutationError::MigrationLockHeld),
+            "evidence-retention erase-expired",
+            "evidence_retention.in_progress",
+        ),
+        (
+            request_retention_failure(
+                "request-retention erase",
+                RequestRetentionCliError::MigrationLockHeld,
+            ),
+            "request-retention erase",
+            "request_retention.in_progress",
+        ),
+        (
+            import_authority_failure(
+                "import-authority open",
+                ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld),
+            ),
+            "import-authority open",
+            "import_authority.in_progress",
+        ),
+        (
+            instance_claim_failure(
+                "instance-claim adopt",
+                InstanceClaimCliError::Claim(InstanceClaimError::MigrationLockHeld),
+            ),
+            "instance-claim adopt",
+            "instance_claim.in_progress",
+        ),
+    ] {
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+            "{code}"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("another session held the exclusive migration lock"),
+            "{code}: {}",
+            diagnostic.message
+        );
+        for fragment in ["unavailable", "migrationUrlRef"] {
+            assert!(
+                !diagnostic.message.contains(fragment),
+                "{code} {fragment}: {}",
+                diagnostic.message
+            );
+        }
+    }
+    let unavailable = evidence_retention_failure(MutationError::Unavailable);
+    assert_eq!(
+        unavailable.diagnostics[0].code,
+        "evidence_retention.unavailable"
+    );
+}
+
+/// A migration lock held when a history maintenance transaction takes it has
+/// its own `in_progress` code for each command, with the wait-and-retry
+/// action, and is never reported as unavailable storage.
+#[cfg(test)]
+#[test]
+fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
+    use registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError;
+    use registry_breg::history_erasure::HistoryErasureError;
+    use registry_breg::history_rebaseline::HistoryRebaselineError;
+
+    for (report, command, code) in [
+        (
+            history_erasure_lifecycle_failure(HistoryErasureLifecycleError::Erasure(
+                HistoryErasureError::MigrationLockHeld,
+            )),
+            "history erase",
+            "history.erase.in_progress",
+        ),
+        (
+            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(
+                HistoryRebaselineError::MigrationLockHeld,
+            )),
+            "history rebaseline",
+            "history.rebaseline.in_progress",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::Erase(
+                    FieldEncryptionHistoryErasureError::MigrationLockHeld,
+                ),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.in_progress",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::Erase(
+                    FieldEncryptionHistoryErasureError::Erasure(
+                        HistoryErasureError::MigrationLockHeld,
+                    ),
+                ),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.in_progress",
+        ),
+        (
+            field_encryption_erase_history_failure(
+                FieldEncryptionEraseHistoryLifecycleError::Erase(
+                    FieldEncryptionHistoryErasureError::Rebaseline(
+                        HistoryRebaselineError::MigrationLockHeld,
+                    ),
+                ),
+            ),
+            "field-encryption erase-history",
+            "field_encryption.erase_history.in_progress",
+        ),
+    ] {
+        assert_eq!(report.command, command);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, "database");
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+            "{code}"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("another session held the exclusive migration lock"),
+            "{code}: {}",
+            diagnostic.message
+        );
+        for fragment in ["unavailable", "migrationUrlRef"] {
+            assert!(
+                !diagnostic.message.contains(fragment),
+                "{code} {fragment}: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 #[test]
 fn apply_reports_actionable_field_encryption_provider_failures() {
@@ -16112,6 +16770,29 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     );
     assert!(!diagnostic.message.contains("registry_data"));
     assert!(diagnostic.message.contains("PostgreSQL ARE syntax"));
+}
+
+#[cfg(test)]
+#[test]
+fn review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint() {
+    let declared = format!("sha256:{}", "a".repeat(64));
+    let measured = format!("sha256:{}", "b".repeat(64));
+    let report = test_lifecycle_failure(TestLifecycleError::ReviewFingerprint {
+        declared: declared.clone(),
+        measured: measured.clone(),
+    });
+    assert_eq!(report.diagnostics.len(), 1);
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "migration.review.fingerprint_mismatch");
+    assert_eq!(diagnostic.path, "reviewedMigrations");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectPackageBuild
+    );
+    assert!(diagnostic.message.contains(&declared));
+    assert!(diagnostic.message.contains(&measured));
+    assert!(diagnostic.message.contains("--fingerprint-only"));
 }
 
 #[cfg(test)]

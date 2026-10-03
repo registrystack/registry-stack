@@ -4135,6 +4135,85 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
 }
 
 #[test]
+fn test_fingerprint_only_needs_only_the_runtime_configuration() {
+    let help = bregctl(&["test", "--help"]);
+    assert!(help.status.success(), "{help:?}");
+    assert!(String::from_utf8(help.stdout)
+        .expect("help is UTF-8")
+        .contains("--fingerprint-only"));
+
+    let project = TestProject::from_registry_source(authoring_fixture());
+    let project_path = path(project.path());
+    let runtime_config = project.path().join("runtime.yaml");
+    let credentials = project.path().join("credentials.yaml");
+    let output = project.path().join("receipt.json");
+    let baseline = project.path().join("baseline");
+    for (flag, value) in [
+        ("--credentials", path(&credentials)),
+        ("--output", path(&output)),
+        ("--baseline-package", path(&baseline)),
+    ] {
+        let conflicting = bregctl(&[
+            "--format",
+            "json",
+            "test",
+            project_path,
+            "--fingerprint-only",
+            "--runtime-config",
+            path(&runtime_config),
+            flag,
+            value,
+        ]);
+        assert_eq!(
+            conflicting.status.code(),
+            Some(2),
+            "{flag}: {conflicting:?}"
+        );
+        assert_eq!(
+            json_stdout(&conflicting)["diagnostics"][0]["code"],
+            "usage.invalid",
+            "{flag}"
+        );
+    }
+
+    let without_receipt_inputs = bregctl(&[
+        "--format",
+        "json",
+        "test",
+        project_path,
+        "--runtime-config",
+        path(&runtime_config),
+    ]);
+    assert_eq!(without_receipt_inputs.status.code(), Some(2));
+    assert_eq!(
+        json_stdout(&without_receipt_inputs)["diagnostics"][0]["code"],
+        "usage.invalid"
+    );
+
+    // Without credentials or an output, the measurement still reaches the
+    // configured database; the fixture names one that is unavailable.
+    let candidate = packaging_project();
+    let candidate_runtime = test_runtime_config(&candidate);
+    let measured = bregctl(&[
+        "--format",
+        "json",
+        "test",
+        path(candidate.path()),
+        "--fingerprint-only",
+        "--runtime-config",
+        path(&candidate_runtime),
+    ]);
+    assert_eq!(measured.status.code(), Some(1), "{measured:?}");
+    let report = json_stdout(&measured);
+    assert_eq!(report["command"], "test");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "test.database.unavailable"
+    );
+    assert!(!candidate.path().join("schema-test-receipt.json").exists());
+}
+
+#[test]
 fn refused_fixture_journeys_name_the_journey_file_and_the_refusal() {
     let project = packaging_project();
     let runtime = test_runtime_config(&project);
@@ -4951,6 +5030,141 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
     );
 }
 
+/// Runs bregctl with the fixture's migration credential set to a database
+/// URL nothing listens on, so a refusal that reaches database contact reports
+/// the database as unavailable.
+fn bregctl_with_unreachable_database(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env(
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+            "postgresql://registry_migration@127.0.0.1:1/breg",
+        )
+        .args(arguments)
+        .output()
+        .expect("bregctl starts")
+}
+
+#[test]
+fn apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    // A successor reads the database's activation ledger before anything
+    // else an apply opens, so reaching the database is the first refusal
+    // after the package checks for both commands.
+    let successor = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        String::from_utf8(package_module_bytes())
+            .unwrap()
+            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .into_bytes(),
+    );
+    let other_digest = fixture.package_digest.as_str();
+    assert_ne!(other_digest, successor.package_digest);
+
+    for command in ["apply", "plan"] {
+        let run = |expected: Option<&str>| {
+            let mut arguments = vec![
+                "--format",
+                "json",
+                command,
+                "--runtime-config",
+                path(&fixture.runtime_config),
+                "--package",
+                path(&successor.package),
+            ];
+            if let Some(expected) = expected {
+                arguments.extend(["--expected-digest", expected]);
+            }
+            bregctl_with_unreachable_database(&arguments)
+        };
+
+        // Without the flag, and with the digest of the package named, the
+        // command reaches the database, which nothing serves.
+        for reached in [run(None), run(Some(successor.package_digest.as_str()))] {
+            assert_eq!(reached.status.code(), Some(1), "{reached:?}");
+            assert_eq!(
+                json_stdout(&reached)["diagnostics"][0]["code"],
+                "apply.database.unavailable",
+                "{command}"
+            );
+        }
+
+        let refused = run(Some(other_digest));
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(refused.stderr.is_empty(), "{refused:?}");
+        let report = json_stdout(&refused);
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["command"], command);
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "apply.package.digest_mismatch");
+        assert_eq!(diagnostic["path"], "package");
+        assert_tool_diagnostic(
+            diagnostic,
+            "verified_package",
+            "rerun_plan_on_intended_package",
+        );
+        let message = diagnostic["message"].as_str().expect("message is text");
+        assert!(message.contains(other_digest), "{message}");
+        assert!(message.contains(&successor.package_digest), "{message}");
+        let rendered = String::from_utf8_lossy(&refused.stdout);
+        for forbidden in [
+            path(&fixture.runtime_config),
+            path(&fixture.package),
+            path(&successor.package),
+            VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+        ] {
+            assert!(!rendered.contains(forbidden), "{rendered}");
+        }
+    }
+}
+
+#[test]
+fn apply_and_plan_take_the_expected_digest_only_as_a_sha256_label() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let digest_hex = fixture
+        .package_digest
+        .strip_prefix("sha256:")
+        .expect("the package digest is a sha256 label");
+    let uppercase = format!("sha256:{}", digest_hex.to_ascii_uppercase());
+    let short = format!("sha256:{}", &digest_hex[1..]);
+    let other_algorithm = format!("sha512:{digest_hex}");
+    for command in ["apply", "plan"] {
+        for malformed in [
+            "",
+            digest_hex,
+            uppercase.as_str(),
+            short.as_str(),
+            other_algorithm.as_str(),
+        ] {
+            let output = bregctl(&[
+                "--format",
+                "json",
+                command,
+                "--runtime-config",
+                path(&fixture.runtime_config),
+                "--package",
+                path(&fixture.package),
+                "--expected-digest",
+                malformed,
+            ]);
+            assert_eq!(output.status.code(), Some(2), "{command} {malformed:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let report = json_stdout(&output);
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(
+                diagnostic["code"], "usage.invalid",
+                "{command} {malformed:?}"
+            );
+            let message = diagnostic["message"].as_str().expect("message is text");
+            assert!(
+                message.contains("--expected-digest")
+                    && message.contains("sha256: followed by 64 lowercase hex digits"),
+                "{message}"
+            );
+        }
+    }
+}
+
 #[test]
 fn apply_refuses_a_stale_shared_envelope_before_database_authority() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
@@ -5637,6 +5851,147 @@ fn runtime_bound_package_refusals_are_exact_and_value_free_for_both_commands() {
             ],
         );
     }
+}
+
+#[test]
+fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let pinned = format!("sha256:{}", "0".repeat(64));
+    let wrong_pin = fixture.variant(
+        "wrong-pin",
+        &format!("  root: {}", path(&fixture.package)),
+        &format!(
+            "  root: {}\n  expectedDigest: {pinned}",
+            path(&fixture.package)
+        ),
+    );
+    let successor = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        String::from_utf8(package_module_bytes())
+            .unwrap()
+            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .into_bytes(),
+    );
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&wrong_pin),
+        "--package",
+        path(&successor.package),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "apply.package.refused");
+    assert_eq!(diagnostic["path"], "package.root");
+    assert_eq!(diagnostic["suggestedAction"], "verify_package_integrity");
+    assert_eq!(
+        diagnostic["message"],
+        format!(
+            "package.expectedDigest is {pinned} but the package at package.root is {}; deploy the pinned package or update package.expectedDigest",
+            fixture.package_digest
+        )
+    );
+    let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
+    for forbidden in [
+        path(&wrong_pin),
+        path(&fixture.package),
+        path(&successor.package),
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+    ] {
+        assert!(!rendered.contains(forbidden));
+    }
+}
+
+/// Run one operator command against a runtime file whose
+/// `package.expectedDigest` pins another package than the one at
+/// `package.root`, and require the refusal to name both digests under the
+/// command's package code before any database is reached.
+fn assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+    command: &[&str],
+    arguments: &[&str],
+    code: &str,
+) {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let pinned = format!("sha256:{}", "0".repeat(64));
+    let wrong_pin = fixture.variant(
+        "wrong-pin",
+        &format!("  root: {}", path(&fixture.package)),
+        &format!(
+            "  root: {}\n  expectedDigest: {pinned}",
+            path(&fixture.package)
+        ),
+    );
+    let mut invocation = vec!["--format", "json"];
+    invocation.extend_from_slice(command);
+    invocation.extend_from_slice(&["--runtime-config", path(&wrong_pin)]);
+    invocation.extend_from_slice(arguments);
+
+    let output = bregctl(&invocation);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], code, "{report}");
+    assert_eq!(diagnostic["path"], "package");
+    assert_tool_diagnostic(diagnostic, "verified_package", "verify_package_integrity");
+    assert_eq!(
+        diagnostic["message"],
+        format!(
+            "package.expectedDigest is {pinned} but the package at package.root is {}; deploy the pinned package or update package.expectedDigest",
+            fixture.package_digest
+        )
+    );
+    let rendered = String::from_utf8(output.stdout).expect("operator refusal is UTF-8");
+    for forbidden in [
+        path(&wrong_pin),
+        path(&fixture.package),
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+    ] {
+        assert!(!rendered.contains(forbidden));
+    }
+}
+
+#[test]
+fn webhook_operations_name_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["webhook", "list"],
+        &[],
+        "webhook.package.refused",
+    );
+}
+
+#[test]
+fn request_retention_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["request-retention", "list"],
+        &[],
+        "request_retention.package.refused",
+    );
+}
+
+#[test]
+fn import_authority_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["import-authority", "list"],
+        &[],
+        "import_authority.package.refused",
+    );
+}
+
+#[test]
+fn evidence_retention_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["evidence-retention", "erase-expired"],
+        &["--before", "2020-01-01T00:00:00Z"],
+        "evidence_retention.package.refused",
+    );
 }
 
 #[test]

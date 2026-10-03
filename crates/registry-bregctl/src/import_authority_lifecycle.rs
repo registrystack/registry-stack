@@ -16,7 +16,7 @@ use registry_breg::import_authority::{
 };
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ImportAuthorityCliError {
     RuntimeConfigPath,
     ExpiresIn,

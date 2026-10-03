@@ -1057,10 +1057,11 @@ impl<S: DeliverySeams> DeliveryWorker<S> {
             if *shutdown.borrow() {
                 return;
             }
-            if service.deliver_once().await.is_err() {
-                service
+            match service.deliver_once().await {
+                Ok(_) => service.seams().iteration_succeeded(),
+                Err(_) => service
                     .seams()
-                    .operational_event(DeliveryOperationalEvent::IterationFailed);
+                    .operational_event(DeliveryOperationalEvent::IterationFailed),
             }
             tokio::select! {
                 changed = shutdown.changed() => {
@@ -1946,6 +1947,10 @@ mod tests {
             self.events.lock().expect("events lock").push(event);
         }
 
+        fn iteration_succeeded(&self) {
+            panic!("an iteration whose connection was refused is never a success");
+        }
+
         async fn apply_proposal(
             &self,
             _application: ProposalApplication<'_>,
@@ -2793,6 +2798,7 @@ mod tests {
         url: String,
         handler_digest: String,
         audit: Arc<Mutex<Vec<RecordedAudit>>>,
+        successes: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     #[async_trait::async_trait]
@@ -2833,6 +2839,10 @@ mod tests {
 
         fn operational_event(&self, _event: DeliveryOperationalEvent) {}
 
+        fn iteration_succeeded(&self) {
+            self.successes.fetch_add(1, Ordering::Relaxed);
+        }
+
         async fn apply_proposal(
             &self,
             _application: ProposalApplication<'_>,
@@ -2854,6 +2864,49 @@ mod tests {
         ) -> Result<Option<ProposalOutcome>, DeliveryError> {
             Ok(None)
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn the_worker_loop_notes_an_idle_iteration_without_failure_as_a_success() {
+        let url = std::env::var("HOOKS_TEST_DATABASE_URL")
+            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL test");
+        let schema = "hooks_delivery_success_test";
+        let client = connect_test_database(&url).await;
+        client
+            .batch_execute(&format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"
+            ))
+            .await
+            .expect("reset the test schema");
+        delivery_schema::install(&client, schema)
+            .await
+            .expect("install the delivery schema");
+        let successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let service = DeliveryService::new(
+            RealDbSeams {
+                url,
+                handler_digest: String::new(),
+                audit: Arc::new(Mutex::new(Vec::new())),
+                successes: Arc::clone(&successes),
+            },
+            DeliveryConfig {
+                schema: schema.to_owned(),
+                idempotency_domain: b"hooks-delivery-success-test-v1".to_vec(),
+                delivery_source: STORED_SOURCE.to_owned(),
+            },
+        );
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(DeliveryWorker::new(service).run(shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        shutdown_tx
+            .send(true)
+            .expect("the shutdown receiver is alive");
+        handle.await.expect("the worker task joins");
+        assert!(
+            successes.load(Ordering::Relaxed) >= 1,
+            "an idle iteration that completed without failure is noted as a success"
+        );
     }
 
     #[tokio::test]
@@ -2941,6 +2994,7 @@ mod tests {
                 url,
                 handler_digest: handler_digest.to_owned(),
                 audit: Arc::clone(&audit),
+                successes: Arc::default(),
             },
             DeliveryConfig {
                 schema: schema.to_owned(),

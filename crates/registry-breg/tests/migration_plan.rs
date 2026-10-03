@@ -9,11 +9,10 @@ use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
-    RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
-    ReviewedMigrationDescriptor, ReviewedMigrationError, ReviewedMigrationFile,
-    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
-    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
+    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationError,
+    ReviewedMigrationFile, ReviewedMigrationObject, ReviewedMigrationObjectKind,
+    ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, inspect_package_integrity, prepare_package,
@@ -145,6 +144,56 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
     assert_eq!(
         registry_breg::migration::required_backup_binding_paths(&destructive_plan),
         vec![backup_path]
+    );
+}
+
+#[test]
+fn reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let mut source = artifacts.source();
+    let mut receipt = serde_json::to_value(&artifacts.receipt).expect("receipt serializes");
+    receipt["proofs"] = serde_json::json!({
+        "lockTimeout": true,
+        "chunkResume": true,
+        "destructiveResume": false,
+    });
+    let receipt_file = source
+        .files
+        .iter_mut()
+        .find(|file| file.path == artifacts.descriptor.rehearsal_receipt_path)
+        .expect("source carries the rehearsal receipt");
+    receipt_file.bytes = canonical(&receipt);
+    let prepared = prepare_reviewed_package(Variant::RequiredField, previous, vec![source])
+        .expect("a package the previous release built with receipt proofs prepares");
+
+    let root = tempfile::Builder::new()
+        .prefix("registry-migration-plan-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("temporary package parent");
+    let package = root.path().join("package");
+    prepared
+        .publish_to_directory(&package)
+        .expect("reviewed package publishes");
+    let inspected =
+        inspect_package_integrity(&package).expect("reviewed package with receipt proofs loads");
+    assert_eq!(
+        inspected.package_digest(),
+        prepared
+            .package_digest()
+            .expect("prepared package plans its digest")
+    );
+    let published_receipt = fs::read(package.join(&artifacts.descriptor.rehearsal_receipt_path))
+        .expect("published receipt reads");
+    assert_eq!(
+        published_receipt,
+        canonical(&receipt),
+        "the receipt keeps its proofs bytes, so the package digest is unchanged"
     );
 }
 
@@ -964,14 +1013,10 @@ fn backfill_artifacts(
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
-        receipt: receipt(
-            false,
-            true,
-            vec![RehearsalRowAssertion {
-                step_id: "backfill".to_owned(),
-                affected_rows: 10,
-            }],
-        ),
+        receipt: receipt(vec![RehearsalRowAssertion {
+            step_id: "backfill".to_owned(),
+            affected_rows: 10,
+        }]),
         step_sql,
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
@@ -1037,7 +1082,7 @@ fn destructive_artifacts(
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
-        receipt: receipt(true, false, Vec::new()),
+        receipt: receipt(Vec::new()),
         step_sql: format!(
             "ALTER TABLE registry_data.{} DROP COLUMN {}",
             entity.physical_table, field.physical_name
@@ -1130,14 +1175,10 @@ fn encryption_flip_artifacts(
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
-        receipt: receipt(
-            false,
-            true,
-            vec![RehearsalRowAssertion {
-                step_id: "backfill".to_owned(),
-                affected_rows: 10,
-            }],
-        ),
+        receipt: receipt(vec![RehearsalRowAssertion {
+            step_id: "backfill".to_owned(),
+            affected_rows: 10,
+        }]),
         step_sql: Vec::new(),
         pre_sql: assertion_sql.clone(),
         post_sql: assertion_sql,
@@ -1147,11 +1188,7 @@ fn encryption_flip_artifacts(
     artifacts
 }
 
-fn receipt(
-    destructive_resume: bool,
-    chunk_resume: bool,
-    row_assertions: Vec<RehearsalRowAssertion>,
-) -> MigrationRehearsalReceipt {
+fn receipt(row_assertions: Vec<RehearsalRowAssertion>) -> MigrationRehearsalReceipt {
     MigrationRehearsalReceipt {
         prior_package_digest: PRIOR_REVISION.to_owned(),
         prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
@@ -1167,11 +1204,7 @@ fn receipt(
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume,
-            destructive_resume,
-        },
+        proofs: None,
     }
 }
 

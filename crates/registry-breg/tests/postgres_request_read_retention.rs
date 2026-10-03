@@ -774,6 +774,87 @@ async fn request_detail_erasure_changes_nothing_when_the_audit_writer_refuses_it
     database.cleanup().await;
 }
 
+/// A migration lock another session holds past the lock timeout is reported
+/// as held, never as unavailable storage. The erasure answers its request
+/// entry as failed and erases nothing, the dry run reports the same lock,
+/// and the same erasure commits once the lock releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_detail_erasure_reports_a_held_migration_lock_and_erases_nothing() {
+    let database = TestDatabase::create(6).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(&database, &registry).await;
+    let app = request_router(&database, registry.clone(), identity.clone());
+    let operator = claims("operator", "operator-principal");
+    let request_id = applied_correction_request(&app, operator, "lock-held-erasure").await;
+    let scope = RequestDetailErasureScope {
+        request_entity_id: "correction-request",
+        request_id: Uuid::parse_str(&request_id).expect("request id parses"),
+        proposal_version: 1,
+    };
+    let (audit, capture) = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x8f; 32].into())
+            .expect("test audit profile is keyed"),
+    );
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let retention = RequestRetentionOperatorService::new_for_test(
+        registry.as_ref().clone(),
+        identity.clone(),
+        ExpectedManagedCatalog::compiled(&registry),
+        lock_key,
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        audit,
+    );
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("a second session takes the migration lock");
+
+    assert_eq!(
+        retention.erase(scope.clone()).await,
+        Err(RequestRetentionError::MigrationLockHeld)
+    );
+    assert_eq!(
+        retention.dry_run(scope.clone()).await.map(|_| ()),
+        Err(RequestRetentionError::MigrationLockHeld)
+    );
+    let failed = capture.entries();
+    assert_eq!(failed.len(), 2, "{failed:?}");
+    assert_eq!(failed[0]["phase"], "request");
+    assert_eq!(failed[1]["phase"], "response");
+    assert_eq!(failed[1]["record"]["outcome"], "failed");
+    assert_eq!(failed[0]["correlation"], failed[1]["correlation"]);
+
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the second session releases the migration lock");
+    assert!(
+        !retention
+            .dry_run(scope.clone())
+            .await
+            .expect("the detail still plans")
+            .detail_erased,
+        "the refused erasure erased nothing"
+    );
+    retention
+        .erase(scope)
+        .await
+        .expect("the erasure commits once the lock releases");
+    let entries = capture.entries();
+    assert_eq!(entries.len(), 4, "{entries:?}");
+    assert_eq!(entries[3]["record"]["outcome"], "committed");
+
+    drop(holder);
+    holder_task.abort();
+    database.cleanup().await;
+}
+
 /// A committed request-detail erasure is recorded as soon as its commit is
 /// confirmed. The external-deletion retry that follows cannot hold the
 /// committed erasure's response back: the retry here waits for the registry

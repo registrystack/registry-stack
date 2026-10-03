@@ -251,6 +251,47 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
     );
 }
 
+#[test]
+fn the_active_package_loaders_name_both_digests_of_a_package_pin_mismatch() {
+    let fixture = RuntimeFixture::new();
+    fs::write(
+        fixture.package_root.join("package.json"),
+        b"governed-package\n",
+    )
+    .expect("governed package placeholder writes");
+    let written = write_sum_file(
+        &fixture.package_root,
+        Some("source-1"),
+        &PackageLimits::default(),
+        "bregctl package",
+    )
+    .expect("shared package envelope writes");
+    let wrong = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        &format!("  root: {}\n", fixture.package_root.display()),
+        &format!(
+            "  root: {}\n  expectedDigest: {wrong}\n",
+            fixture.package_root.display()
+        ),
+    );
+    let config = parse_runtime_config(&raw).expect("runtime with a well-formed wrong pin parses");
+    let expected = format!(
+        "package.expectedDigest is {wrong} but the package at package.root is {}; \
+         deploy the pinned package or update package.expectedDigest",
+        written.digest()
+    );
+    let active = config
+        .load_active_package()
+        .err()
+        .expect("the active package loader refuses a wrong pin");
+    assert_eq!(active.to_string(), expected);
+    let predecessor = config
+        .load_active_predecessor_package()
+        .err()
+        .expect("the active predecessor loader refuses a wrong pin");
+    assert_eq!(predecessor.to_string(), expected);
+}
+
 fn event_destination_binding(
     logical_id: &str,
     origin: &str,

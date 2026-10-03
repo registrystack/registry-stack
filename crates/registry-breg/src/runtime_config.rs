@@ -341,6 +341,21 @@ impl From<SecretError> for RuntimeConfigError {
 
 pub type Result<T> = std::result::Result<T, RuntimeConfigError>;
 
+/// The configured package's envelope refusal, as the active package loaders
+/// report it. A `package.expectedDigest` pin that names another package keeps
+/// both digests, which are package identities and not secrets; every other
+/// envelope refusal stays value free, since it can name files in the package.
+fn active_package_envelope_error(
+    error: registry_platform_config::package::PackageError,
+) -> PackageError {
+    match error.kind() {
+        registry_platform_config::package::PackageErrorKind::DigestMismatch(mismatch) => {
+            PackageError::ExpectedDigestMismatch(mismatch.clone())
+        }
+        _ => PackageError::Envelope,
+    }
+}
+
 pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
     load_runtime_config_with_env(path, |name| std::env::var(name).ok())
 }
@@ -999,7 +1014,7 @@ impl RuntimeConfig {
     pub fn load_active_package(&self) -> std::result::Result<VerifiedPackage, PackageError> {
         let shared = self
             .verify_package_envelope()
-            .map_err(|_| PackageError::Envelope)?;
+            .map_err(active_package_envelope_error)?;
         load_package_with_verified_envelope(
             self.package().root(),
             &self.package_load_context(),
@@ -1014,7 +1029,7 @@ impl RuntimeConfig {
     ) -> std::result::Result<VerifiedPredecessorPackage, PackageError> {
         let shared = self
             .verify_package_envelope()
-            .map_err(|_| PackageError::Envelope)?;
+            .map_err(active_package_envelope_error)?;
         load_predecessor_package_with_verified_envelope(
             self.package().root(),
             &self.package_load_context(),

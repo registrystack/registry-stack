@@ -34,8 +34,9 @@ configuration, and the upgrade and rollback paths. Authoring help lives in
 Pre-change servers refuse a wasm-handler package at `load` because they do not
 recognize the handler kind. A current build without the `wasm` feature also
 refuses the whole package at load: integrity inspection rederives the package,
-the compiler reports `action.handler.wasm_build_unsupported`, and rederivation
-fails. Neither path activates the package, so no action can be invoked and no
+the compiler reports `action.handler.wasm_build_unsupported` for a WASM action
+handler or `hook.handler.wasm_build_unsupported` for a WASM hook handler, and
+rederivation fails. Neither path activates the package, so no action can be invoked and no
 attempt audit entry is written. The no-feature compiler suite pins the diagnostic;
 the package integrity suite pins rederivation as a load prerequisite.
 
@@ -140,7 +141,8 @@ complementing admission-time enforcement.
    the resulting dependency tree omits Wasmtime.
 4. Verify package loading before serving traffic. A feature-off build refuses
    wasm-handler packages during rederivation and refuses authoring them with
-   `action.handler.wasm_build_unsupported`.
+   `action.handler.wasm_build_unsupported` or, for a WASM hook handler,
+   `hook.handler.wasm_build_unsupported`.
 
 ## Operational notes
 

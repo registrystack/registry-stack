@@ -16,7 +16,7 @@ use registry_platform_audit::AuditWriter;
 use registry_platform_oidc::JwksFetcher;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_postgres::{Client, GenericClient};
 use tracing_subscriber::filter::LevelFilter;
 
@@ -27,7 +27,7 @@ use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
 use crate::auth::RegistryAuthenticator;
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use crate::metrics::{self, Metrics};
+use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{
@@ -166,6 +166,8 @@ pub enum StartupError {
     Listener,
     #[error("the Registry shutdown signal failed")]
     Shutdown,
+    #[error("a Registry background task stopped before shutdown was requested")]
+    BackgroundTaskStopped,
     #[error("the Registry operational log level was refused")]
     Logging,
 }
@@ -221,6 +223,68 @@ impl WebhookStateTransitionCode {
     }
 }
 
+/// The closed set of background tasks `serve` runs beside the HTTP listener.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackgroundTask {
+    WebhookWorker,
+    AttachmentVerificationWorker,
+    ReviewWorker,
+    SubjectAccessLogRetention,
+    MetricsListener,
+}
+
+impl BackgroundTask {
+    /// Every supervised task, used by exhaustive operational-log contract
+    /// tests.
+    pub const ALL: [Self; 5] = [
+        Self::WebhookWorker,
+        Self::AttachmentVerificationWorker,
+        Self::ReviewWorker,
+        Self::SubjectAccessLogRetention,
+        Self::MetricsListener,
+    ];
+}
+
+/// How a supervised background task ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackgroundTaskStop {
+    Panicked,
+    Returned,
+}
+
+impl BackgroundTaskStop {
+    /// Both ways a task can end, used by exhaustive operational-log contract
+    /// tests.
+    pub const ALL: [Self; 2] = [Self::Panicked, Self::Returned];
+}
+
+const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskStop) -> &'static str {
+    match (task, stop) {
+        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
+        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
+            "attachment_verification.worker.panicked"
+        }
+        (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Returned) => {
+            "attachment_verification.worker.returned"
+        }
+        (BackgroundTask::ReviewWorker, BackgroundTaskStop::Panicked) => "review.worker.panicked",
+        (BackgroundTask::ReviewWorker, BackgroundTaskStop::Returned) => "review.worker.returned",
+        (BackgroundTask::SubjectAccessLogRetention, BackgroundTaskStop::Panicked) => {
+            "subject_access_log.retention.panicked"
+        }
+        (BackgroundTask::SubjectAccessLogRetention, BackgroundTaskStop::Returned) => {
+            "subject_access_log.retention.returned"
+        }
+        (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
+            "metrics.listener.panicked"
+        }
+        (BackgroundTask::MetricsListener, BackgroundTaskStop::Returned) => {
+            "metrics.listener.returned"
+        }
+    }
+}
+
 /// A rendered operational event. Its fields are an allowlist of low-cardinality,
 /// value-free process state. It is deliberately unrelated to Registry audit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -271,12 +335,22 @@ pub enum OperationalEvent {
     WebhookWorkerIterationFailed,
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
+    ReviewWorkerIterationFailed,
+    /// At least one due review result lookup could not reach its authority on
+    /// this pass.
+    ReviewResultLookupsUnavailable,
+    /// The queue ages could not be read for one metrics scrape, so that
+    /// scrape publishes none.
+    MetricsQueueSampleFailed,
     WebhookStateTransitionFailed(WebhookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
     PostgresBaselineAdvisory(BaselineAdvisory),
     /// The role mode the runtime file selects, logged once at startup.
     RoleMode(RoleMode),
+    /// A supervised background task panicked, or returned before shutdown
+    /// was requested. The code names the task and how it ended.
+    BackgroundTaskStopped(BackgroundTask, BackgroundTaskStop),
 }
 
 impl OperationalEvent {
@@ -349,12 +423,47 @@ impl OperationalEvent {
                 error: None,
                 code: Some("attachment_verification.retry_pending"),
             },
+            Self::ReviewWorkerIterationFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::review",
+                message: "review worker iteration failed",
+                error: None,
+                code: Some("review.worker.iteration_failed"),
+            },
+            Self::ReviewResultLookupsUnavailable => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::review",
+                message: "BReg review result lookups are temporarily unavailable",
+                error: None,
+                code: Some("review.result_lookups.unavailable"),
+            },
+            Self::MetricsQueueSampleFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::metrics",
+                message: "queue ages could not be sampled for this metrics scrape",
+                error: None,
+                code: Some("metrics.queue_sample.failed"),
+            },
             Self::WebhookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::webhook",
                 message: "webhook state transition failed",
                 error: None,
                 code: Some(code.as_str()),
+            },
+            Self::BackgroundTaskStopped(task, stop) => OperationalLogRecord {
+                level: OperationalLogLevel::Error,
+                target: "registry_breg::startup",
+                message: match stop {
+                    BackgroundTaskStop::Panicked => {
+                        "a Base Registry Engine background task panicked"
+                    }
+                    BackgroundTaskStop::Returned => {
+                        "a Base Registry Engine background task returned before shutdown was requested"
+                    }
+                },
+                error: None,
+                code: Some(background_task_stop_code(*task, *stop)),
             },
             Self::PostgresBaselineAdvisory(advisory) => OperationalLogRecord {
                 level: match advisory.severity() {
@@ -370,7 +479,10 @@ impl OperationalEvent {
     }
 
     /// Emit one record through the production JSON tracing subscriber. This is
-    /// the only production tracing entry point in Base Registry Engine.
+    /// the entry point for the closed operational event vocabulary. It is not
+    /// the only production tracing call in Base Registry Engine: some modules
+    /// call `tracing` macros directly, and those records are outside this
+    /// vocabulary and its value-free contract test.
     pub fn emit(&self) {
         let record = self.record();
         match self {
@@ -383,6 +495,12 @@ impl OperationalEvent {
             }
             Self::Stopped => {
                 tracing::error!(target: "registry_breg::startup", message = record.message);
+            }
+            Self::BackgroundTaskStopped(..) => {
+                let code = record
+                    .code
+                    .expect("background task stop records have a code");
+                tracing::error!(target: "registry_breg::startup", code, message = record.message);
             }
             Self::StoppedWithError(StartupError::AuditDestination(reason)) => {
                 let error = record
@@ -407,6 +525,14 @@ impl OperationalEvent {
                     .code
                     .expect("verification warning records have a code");
                 tracing::warn!(target: "registry_breg::attachment_verification", code, message = record.message);
+            }
+            Self::ReviewWorkerIterationFailed | Self::ReviewResultLookupsUnavailable => {
+                let code = record.code.expect("review warning records have a code");
+                tracing::warn!(target: "registry_breg::review", code, message = record.message);
+            }
+            Self::MetricsQueueSampleFailed => {
+                let code = record.code.expect("metrics warning records have a code");
+                tracing::warn!(target: "registry_breg::metrics", code, message = record.message);
             }
             Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
                 let code = record.code.expect("webhook warning records have a code");
@@ -492,6 +618,9 @@ impl StartupError {
             }
             Self::Listener => "the Registry listener could not be started",
             Self::Shutdown => "the Registry shutdown signal failed",
+            Self::BackgroundTaskStopped => {
+                "a Registry background task stopped before shutdown was requested"
+            }
             Self::Logging => "the Registry operational log level was refused",
         }
     }
@@ -543,7 +672,7 @@ pub struct PreparedServer {
     webhook_worker: Option<WebhookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
-    access_log_retention_pool: Option<RuntimePool>,
+    access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -592,6 +721,15 @@ impl PreparedServer {
         self.fixture_pool.clone()
     }
 
+    /// The metrics listener's Router, when the runtime file configured one,
+    /// so a test can scrape the registry the verified startup path built.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn metrics_app_for_test(&self) -> Option<Router> {
+        self.metrics.as_ref().map(|metrics| metrics.app.clone())
+    }
+
     /// Return the Router and PostgreSQL pool only when both were assembled by
     /// the verified startup path. Raw test-part constructors deliberately
     /// carry no such capability, so fixture receipt code cannot attest canned
@@ -614,7 +752,7 @@ impl PreparedServer {
             webhook_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
-            access_log_retention_pool: None,
+            access_log_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -641,7 +779,7 @@ impl PreparedServer {
             webhook_worker: Some(webhook_worker),
             attachment_verification_worker: None,
             review_worker: None,
-            access_log_retention_pool: None,
+            access_log_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -1150,7 +1288,9 @@ async fn finish_prepared_server(
     let telemetry_pool = pool.clone();
     // Retention runs only where the storage exists; a Registry that collects
     // a subject access log is never verified without it.
-    let access_log_retention_pool = startup.subject_access_log_installed().then(|| pool.clone());
+    let access_log_retention = startup
+        .subject_access_log_installed()
+        .then(|| (pool.clone(), Arc::<LastSuccess>::default()));
     let event_destinations = Arc::new(
         config
             .activate_event_destinations(&registry)
@@ -1315,6 +1455,7 @@ async fn finish_prepared_server(
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
+    let webhook_progress = webhook_delivery.last_success();
     let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
     let evidence = config
         .activate_evidence(&registry)
@@ -1415,9 +1556,27 @@ async fn finish_prepared_server(
     // The metrics registry exists only when the operator configured the
     // separate metrics listener; when absent, no series are recorded and no
     // metrics surface is served at all.
-    let telemetry_metrics = config
-        .metrics_listener()
-        .map(|_| Arc::new(Metrics::new(telemetry_pool)));
+    let telemetry_metrics = config.metrics_listener().map(|_| {
+        let mut registry = Metrics::new(telemetry_pool)
+            .with_active_package(startup.package().package_digest())
+            .with_worker_progress(ProgressWorker::Webhook, webhook_progress);
+        if let Some(worker) = &attachment_verification_worker {
+            registry = registry.with_worker_progress(
+                ProgressWorker::AttachmentVerification,
+                worker.last_success(),
+            );
+        }
+        if let Some(worker) = &review_worker {
+            registry = registry.with_worker_progress(ProgressWorker::Review, worker.last_success());
+        }
+        if let Some((_, last_success)) = &access_log_retention {
+            registry = registry.with_worker_progress(
+                ProgressWorker::SubjectAccessLogRetention,
+                Arc::clone(last_success),
+            );
+        }
+        Arc::new(registry)
+    });
     let app = with_request_timeout(
         authenticated_router(service, authenticator),
         config.operational_timeouts().http_request,
@@ -1437,7 +1596,7 @@ async fn finish_prepared_server(
         webhook_worker,
         attachment_verification_worker,
         review_worker,
-        access_log_retention_pool,
+        access_log_retention,
         metrics,
         postgres_advisories,
         role_mode: RoleMode::from_roles(
@@ -1646,7 +1805,7 @@ pub async fn serve_until_shutdown(
         webhook_worker,
         attachment_verification_worker,
         review_worker,
-        access_log_retention_pool,
+        access_log_retention,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -1668,28 +1827,63 @@ pub async fn serve_until_shutdown(
     };
     OperationalEvent::Listening.emit();
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
-    let mut verification_worker = attachment_verification_worker
-        .map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
-    let mut review_worker =
-        review_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
-    let mut access_log_worker = access_log_retention_pool.map(|pool| {
-        tokio::spawn(crate::subject_access_log::run_retention(
-            pool,
+    let (task_stopped_tx, mut task_stopped_rx) = mpsc::unbounded_channel();
+    let mut verification_worker = attachment_verification_worker.map(|worker| {
+        SupervisedTask::spawn(
+            BackgroundTask::AttachmentVerificationWorker,
+            worker.run(worker_shutdown_rx.clone()),
             worker_shutdown_rx.clone(),
-        ))
+            task_stopped_tx.clone(),
+        )
     });
-    let mut worker = webhook_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx)));
+    let mut review_worker = review_worker.map(|worker| {
+        SupervisedTask::spawn(
+            BackgroundTask::ReviewWorker,
+            worker.run(worker_shutdown_rx.clone()),
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
+    });
+    let mut access_log_worker = access_log_retention.map(|(pool, last_success)| {
+        SupervisedTask::spawn(
+            BackgroundTask::SubjectAccessLogRetention,
+            crate::subject_access_log::run_retention(
+                pool,
+                last_success,
+                worker_shutdown_rx.clone(),
+            ),
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
+    });
+    let mut worker = webhook_worker.map(|worker| {
+        SupervisedTask::spawn(
+            BackgroundTask::WebhookWorker,
+            worker.run(worker_shutdown_rx.clone()),
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
+    });
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let (metrics_shutdown_tx, metrics_shutdown_rx) = oneshot::channel::<()>();
     let mut metrics_server = metrics.map(|(metrics_app, metrics_listener)| {
-        tokio::spawn(async move {
-            axum::serve(metrics_listener, metrics_app)
-                .with_graceful_shutdown(async move {
-                    let _ = metrics_shutdown_rx.await;
-                })
-                .await
-        })
+        SupervisedTask::spawn(
+            BackgroundTask::MetricsListener,
+            async move {
+                axum::serve(metrics_listener, metrics_app)
+                    .with_graceful_shutdown(async move {
+                        let _ = metrics_shutdown_rx.await;
+                    })
+                    .await
+            },
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
     });
+    // Only the supervisors hold senders, so the stop branch below is disabled
+    // once every supervised task has finished, and absent when none runs.
+    drop(worker_shutdown_rx);
+    drop(task_stopped_tx);
     let mut server = tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
@@ -1700,9 +1894,10 @@ pub async fn serve_until_shutdown(
     let exit = tokio::select! {
         result = &mut server => ServeExit::BReg(result),
         signal = shutdown => ServeExit::Signal(signal),
+        Some(_) = task_stopped_rx.recv() => ServeExit::TaskStopped,
     };
     let mut server_joined = matches!(exit, ServeExit::BReg(_));
-    let _ = worker_shutdown_tx.send(true);
+    worker_shutdown_tx.send_replace(true);
     let _ = shutdown_tx.send(());
     let _ = metrics_shutdown_tx.send(());
     let graceful = async {
@@ -1713,21 +1908,26 @@ pub async fn serve_until_shutdown(
                 server_joined = true;
                 signal.and(server_result)
             }
+            ServeExit::TaskStopped => {
+                let server_result = map_server_result((&mut server).await);
+                server_joined = true;
+                server_result.and(Err(StartupError::BackgroundTaskStopped))
+            }
         };
         if let Some(worker) = worker.as_mut() {
-            let _ = worker.await;
+            worker.join().await;
         }
         if let Some(worker) = verification_worker.as_mut() {
-            let _ = worker.await;
+            worker.join().await;
         }
         if let Some(worker) = review_worker.as_mut() {
-            let _ = worker.await;
+            worker.join().await;
         }
         if let Some(worker) = access_log_worker.as_mut() {
-            let _ = worker.await;
+            worker.join().await;
         }
         if let Some(metrics_server) = metrics_server.as_mut() {
-            let _ = metrics_server.await;
+            metrics_server.join().await;
         }
         result
     };
@@ -1739,24 +1939,19 @@ pub async fn serve_until_shutdown(
                 let _ = (&mut server).await;
             }
             if let Some(metrics_server) = metrics_server.as_mut() {
-                metrics_server.abort();
-                let _ = metrics_server.await;
+                metrics_server.abort_and_join().await;
             }
             if let Some(worker) = worker.as_mut() {
-                worker.abort();
-                let _ = worker.await;
+                worker.abort_and_join().await;
             }
             if let Some(worker) = verification_worker.as_mut() {
-                worker.abort();
-                let _ = worker.await;
+                worker.abort_and_join().await;
             }
             if let Some(worker) = review_worker.as_mut() {
-                worker.abort();
-                let _ = worker.await;
+                worker.abort_and_join().await;
             }
             if let Some(worker) = access_log_worker.as_mut() {
-                worker.abort();
-                let _ = worker.await;
+                worker.abort_and_join().await;
             }
             Err(StartupError::Shutdown)
         }
@@ -1767,6 +1962,81 @@ pub async fn serve_until_shutdown(
 enum ServeExit {
     BReg(std::result::Result<std::result::Result<(), std::io::Error>, tokio::task::JoinError>),
     Signal(Result<()>),
+    TaskStopped,
+}
+
+/// One background task `serve` owns. The task runs under a supervisor that
+/// reports how it ended; serve cancels the task itself and joins the
+/// supervisor, so a joined supervisor means the task has stopped too.
+struct SupervisedTask {
+    task: BackgroundTask,
+    supervisor: tokio::task::JoinHandle<()>,
+    cancel: tokio::task::AbortHandle,
+    joined: bool,
+}
+
+impl SupervisedTask {
+    /// Run `future` under a supervisor. A panic is always reported. A return
+    /// before `shutdown` turns true is reported and sent on `stopped`, which
+    /// ends serve; a return after it is the requested stop. Only the shutdown
+    /// grace timeout cancels a task, and serve reports that timeout itself.
+    /// A task's own output, such as the metrics listener's accept error,
+    /// counts as a return.
+    fn spawn<F>(
+        task: BackgroundTask,
+        future: F,
+        shutdown: watch::Receiver<bool>,
+        stopped: mpsc::UnboundedSender<BackgroundTask>,
+    ) -> Self
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let running = tokio::spawn(future);
+        let cancel = running.abort_handle();
+        let supervisor = tokio::spawn(async move {
+            let stop = match running.await {
+                Ok(_) => BackgroundTaskStop::Returned,
+                Err(error) if error.is_panic() => BackgroundTaskStop::Panicked,
+                Err(_) => return,
+            };
+            let requested = *shutdown.borrow();
+            if requested && stop == BackgroundTaskStop::Returned {
+                return;
+            }
+            OperationalEvent::BackgroundTaskStopped(task, stop).emit();
+            if !requested {
+                // serve holds the receiver until it has joined every
+                // supervisor, so a refused send means serve is already
+                // stopping and has nothing left to end.
+                let _ = stopped.send(task);
+            }
+        });
+        Self {
+            task,
+            supervisor,
+            cancel,
+            joined: false,
+        }
+    }
+
+    /// Wait for the supervisor once. A supervisor that panicked is reported
+    /// as its task panicking.
+    async fn join(&mut self) {
+        if self.joined {
+            return;
+        }
+        let joined = (&mut self.supervisor).await;
+        self.joined = true;
+        if joined.is_err() {
+            OperationalEvent::BackgroundTaskStopped(self.task, BackgroundTaskStop::Panicked).emit();
+        }
+    }
+
+    async fn abort_and_join(&mut self) {
+        self.cancel.abort();
+        self.join().await;
+    }
 }
 
 async fn shutdown_signal() -> Result<()> {

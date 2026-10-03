@@ -2,6 +2,7 @@
 
 //! Bounded, durable verification work. Uploads never wait for this worker.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_audit::AuditEntry;
@@ -13,6 +14,7 @@ use crate::attachment_storage::AttachmentStorage;
 use crate::attachment_store::{self, VerificationJob};
 use crate::attachment_verification::{AttachmentVerification, AttachmentVerificationVerdict};
 use crate::audit::RegistryAudit;
+use crate::metrics::LastSuccess;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 
 #[derive(Clone)]
@@ -24,6 +26,7 @@ pub struct AttachmentVerificationWorker {
     audit: RegistryAudit,
     storage: AttachmentStorage,
     verification: AttachmentVerification,
+    last_success: Arc<LastSuccess>,
 }
 
 /// The audit schema of the attachment-verification attempt and outcome
@@ -35,6 +38,22 @@ pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verifica
 pub struct VerificationWorkerError;
 
 type Result<T> = std::result::Result<T, VerificationWorkerError>;
+
+/// What one pass did with the work it found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Iteration {
+    /// No job was due, and no job an earlier attempt failed waits for its
+    /// retry.
+    Idle,
+    /// No job was due, but a job an earlier attempt failed waits for its
+    /// retry.
+    RetryWaiting,
+    /// The verifier answered, and its verdict committed or was discarded as
+    /// stale.
+    Verdict,
+    /// The content or the verifier failed, and the job waits for a retry.
+    RetryPending,
+}
 
 impl AttachmentVerificationWorker {
     #[must_use]
@@ -56,7 +75,15 @@ impl AttachmentVerificationWorker {
             audit,
             storage,
             verification,
+            last_success: Arc::default(),
         }
+    }
+
+    /// The handle this worker notes each iteration that reached a verdict, or
+    /// found no due job while no failed job waits for its retry.
+    #[must_use]
+    pub fn last_success(&self) -> Arc<LastSuccess> {
+        Arc::clone(&self.last_success)
     }
 
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
@@ -69,8 +96,17 @@ impl AttachmentVerificationWorker {
                     if changed.is_err() || *shutdown.borrow() { return; }
                 }
                 result = self.run_once() => {
-                    if result.is_err() {
-                        crate::startup::OperationalEvent::AttachmentVerificationIterationFailed.emit();
+                    let worked = match result {
+                        Ok(worked) => worked,
+                        Err(_) => {
+                            crate::startup::OperationalEvent::AttachmentVerificationIterationFailed.emit();
+                            false
+                        }
+                    };
+                    // A job just finished, so another may be due: claim it
+                    // without waiting. Only an idle or failed pass waits.
+                    if worked {
+                        continue;
                     }
                 }
             }
@@ -88,18 +124,29 @@ impl AttachmentVerificationWorker {
     /// request; the verdict commits before its `response` entry is appended.
     /// A refused attempt entry, a failed verdict commit, or a cancellation
     /// before that commit leaves a lease which another worker can retry.
+    /// Returns whether a job was claimed, and notes a success only for a pass
+    /// that reached a verdict, or that found no due job while no failed job
+    /// waits for its retry. A pass that left its job pending for a retry, or
+    /// found nothing due while a failed job waits, is never a success.
     pub async fn run_once(&self) -> Result<bool> {
         // The durable lease is four minutes. A whole iteration, including
         // database waits and both external services, gets at most three, so a
         // timed-out worker cannot commit an approval after its lease expires.
-        tokio::time::timeout(Duration::from_secs(180), self.run_once_inner())
+        let iteration = tokio::time::timeout(Duration::from_secs(180), self.run_once_inner())
             .await
-            .map_err(unavailable)?
+            .map_err(unavailable)??;
+        if matches!(iteration, Iteration::Idle | Iteration::Verdict) {
+            self.last_success.record();
+        }
+        Ok(matches!(
+            iteration,
+            Iteration::Verdict | Iteration::RetryPending
+        ))
     }
 
-    async fn run_once_inner(&self) -> Result<bool> {
+    async fn run_once_inner(&self) -> Result<Iteration> {
         let AttachmentVerification::Http(verifier) = &self.verification else {
-            return Ok(false);
+            return Ok(Iteration::Idle);
         };
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = self.admitted(&mut client).await?;
@@ -108,8 +155,18 @@ impl AttachmentVerificationWorker {
                 .await
                 .map_err(unavailable)?
         else {
+            let waiting = attachment_store::verification_retry_waiting(
+                &transaction,
+                &self.verification.binding_digest(),
+            )
+            .await
+            .map_err(unavailable)?;
             transaction.commit().await.map_err(unavailable)?;
-            return Ok(false);
+            return Ok(if waiting {
+                Iteration::RetryWaiting
+            } else {
+                Iteration::Idle
+            });
         };
         transaction.commit().await.map_err(unavailable)?;
         drop(client);
@@ -160,7 +217,11 @@ impl AttachmentVerificationWorker {
         if updated && verdict.is_none() {
             crate::startup::OperationalEvent::AttachmentVerificationRetryPending.emit();
         }
-        Ok(true)
+        Ok(if verdict.is_some() {
+            Iteration::Verdict
+        } else {
+            Iteration::RetryPending
+        })
     }
 
     async fn content(&self, job: &VerificationJob) -> Result<Vec<u8>> {

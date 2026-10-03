@@ -438,10 +438,30 @@ outside the new writer's retention directory.
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
+| `history erase`, `history rebaseline`, or `field-encryption erase-history` reports `history.erase.in_progress`, `history.rebaseline.in_progress`, or `field_encryption.erase_history.in_progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An erasure or a rebaseline changed nothing; `erase-history` keeps the records it already erased and can be run again. |
+| `request-retention` or `evidence-retention erase-expired` reports `request_retention.in_progress` or `evidence_retention.in_progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An Evidence erasure erased nothing. A request-detail erasure that committed before its external-deletion retry waited stays erased; `request-retention dry-run` shows whether it did. |
+| `request-retention` or `evidence-retention erase-expired` reports `request_retention.package.refused` or `evidence_retention.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. Nothing was erased. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
 | Readiness or an operation reports audit unavailable | Check destination permissions, free space, and the single-writer lock. Repair the destination and restart a stopped writer. For a mutation whose response failed after commit, inspect its receipt or domain history before retrying. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
+
+{/* Evidence: crates/registry-breg/src/history_maintenance.rs, lock_registry;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs,
+    erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing;
+    crates/registry-bregctl/src/lib.rs,
+    history_maintenance_reports_a_held_migration_lock_as_in_progress;
+    crates/registry-breg/src/request_retention.rs, begin_verified_transaction();
+    crates/registry-breg/src/action_evidence_maintenance.rs, erase_in_transaction();
+    crates/registry-breg/tests/postgres_request_read_retention.rs,
+    request_detail_erasure_reports_a_held_migration_lock_and_erases_nothing;
+    crates/registry-breg/tests/postgres_action_evidence_retention.rs,
+    retention_reports_a_held_migration_lock_and_erases_nothing;
+    crates/registry-bregctl/src/lib.rs,
+    operator_maintenance_reports_a_held_migration_lock_as_in_progress;
+    crates/registry-bregctl/tests/cli.rs,
+    request_retention_names_both_digests_when_the_active_package_misses_its_pin and
+    evidence_retention_names_both_digests_when_the_active_package_misses_its_pin. */}
 
 ## Next
 

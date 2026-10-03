@@ -116,7 +116,9 @@ carries the matching `bregctl` at `/usr/local/bin/bregctl`; the entrypoint stays
 carries no shell, no writable directory, and no healthcheck subcommand. Mount a writable volume for the
 file audit destination; mount the runtime configuration and its package and secret files read-only under
 `/etc/breg`. The orchestrator probes `GET /health` or `GET /healthz` for liveness and `GET /ready`
-for readiness. Activation runs either on a separate operator host with the matching `bregctl`, or
+for readiness. Neither probe reports the background workers: a worker that stops ends the process
+with a nonzero exit status instead, so the orchestrator's restart policy is what brings the registry
+back. Activation runs either on a separate operator host with the matching `bregctl`, or
 from the same image with its entrypoint overridden, as
 [Activate from the image](#activate-from-the-image) shows.
 
@@ -828,6 +830,11 @@ PostgreSQL advisories:
 
 Start the process and check
 `GET /ready` before admitting traffic; `GET /health` reports liveness only.
+`GET /ready` does not reflect the background workers that deliver webhooks, verify attachments,
+advance reviews, and expire the subject access log. When one of them, or the metrics listener,
+stops before shutdown is requested, `breg` stops serving and exits with status 1, so run it under a
+supervisor that restarts it, as
+[Watch the background workers](#watch-the-background-workers) describes.
 
 Restarting this same version with the same runtime file, active package, and database resumes the
 durable review submission, result reconciliation, and automatic application jobs. A restart does
@@ -1080,6 +1087,13 @@ Run `bregctl verify` and `bregctl doctor` against this exact runtime document be
 the container's `GET /ready`, either from a host that reaches the same database and the same
 mounted package, or from the image as the next section shows.
 
+Serve the container under a supervisor that restarts it when it exits with a nonzero status: an
+orchestrator, a systemd unit with `Restart=on-failure`, or Docker's `--restart on-failure` policy
+in place of `--rm`. `breg` exits rather than serving on without a background worker, so without a
+restart the registry stays down. A fault that recurs on every start makes the process restart
+repeatedly and leaves the registry unavailable between attempts; the supervisor's backoff bounds
+how often.
+
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, ListenerConfig and MetricsListenerConfig;
     release/docker/Dockerfile.breg. */}
 
@@ -1115,9 +1129,26 @@ directory. Make the image's non-root user, UID 65532, the owner of every secret 
 serving container, because the resolver refuses a file owned by anyone else. `apply` appends its
 audit entries to a file of its own beside `audit.path`, so the audit volume is mounted writable
 here too. A `--backup` binding file is read inside the container: mount it read-only and name its
-container path. In Kubernetes, run the same
-command as a Job whose container sets `command: ["/usr/local/bin/bregctl"]` and puts the
-subcommand and its flags in `args`.
+container path.
+
+Kubernetes is outside the verified deployment profile, and no release check exercises a
+Kubernetes manifest. A manifest that runs the
+image, for `breg` or for a `bregctl` Job whose container sets
+`command: ["/usr/local/bin/bregctl"]` and puts the subcommand and its flags in `args`, has to
+satisfy the same two loader rules. No component of the runtime document's path may be a symbolic
+link, and every `secret:file/<name>` file must be a regular file, not a symbolic link, with
+exactly one link, owned by the user the container runs as (UID 65532 unless the manifest
+overrides it), with mode `0400` or `0600`. A ConfigMap or Secret volume
+mounted the default way presents each key as a symbolic link, so it fails the symbolic-link rule:
+the runtime document refuses to load, and a secret file refuses to resolve. A secret can come from
+the environment instead: declare `secretProviders.environment` and reference it as
+`secret:env/<NAME>`, as [Write the runtime configuration](#write-the-runtime-configuration)
+describes.
+
+{/* Evidence: release/READINESS.md, the deployment profile item;
+    crates/registry-platform-config/src/loader.rs, reject_symlink_components();
+    crates/registry-platform-config/src/secrets.rs, validate_file_metadata() and read_environment();
+    crates/registry-breg/src/runtime_config.rs, runtime_config_loader(). */}
 
 {/* Evidence: release/docker/Dockerfile.breg, the bregctl install line and the breg ENTRYPOINT;
     release/scripts/check-debian13-images.py, HTTP_PROBE_DOCKERFILES and check_repository();
@@ -1147,12 +1178,20 @@ scraper's network boundary rather than a public one.
 | `breg_http_request_duration_seconds` | histogram | `route`, `method`, `status` |
 | `breg_anonymous_refusals_total` | counter | `route`, `method`, `reason` |
 | `breg_pool_connections` | gauge | `state`: `max_size`, `size`, `available`, `waiting` |
+| `breg_worker_last_success_age_seconds` | gauge | `worker` |
+| `breg_queue_oldest_pending_age_seconds` | gauge | `queue` |
+| `breg_active_package_info` | gauge | `package_digest` |
 
 `route` is the matched route template, such as `/v1/records/placements/{record_id}`, or
 `unmatched`; it never carries a record identifier. `status` is `success`, `client_error`, or
 `server_error` rather than the exact code. The label sets are closed, so a scrape cannot grow
 without bound, and no label carries a principal, a token, or a record value. Pool states are read
-from the connection pool at scrape time.
+from the connection pool at scrape time. `breg_active_package_info` has one sample, value `1`,
+whose `package_digest` is the `sha256:` digest of the package this process verified at startup.
+Startup refuses a package the activation ledger does not name as active, so the digest equals the
+`activePackageDigest` that `bregctl status` reported when the process started; a replica that
+reports an earlier digest after an apply has not restarted onto the successor. Anyone who reaches
+the metrics listener can read that digest.
 
 `breg_anonymous_refusals_total` counts requests that presented no credential and were refused
 before admission: a profile the caller cannot hold, a route it cannot see, an absent scope or
@@ -1175,6 +1214,89 @@ behind an upstream rate limit.
     crates/registry-breg/tests/postgres_anonymous_refusals.rs;
     crates/registry-breg/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-breg/src/startup.rs. */}
+
+### Watch the background workers
+
+Beside the listener, `breg` runs a webhook delivery worker and a review worker, an attachment
+verification worker when the runtime file enables attachment verification, and a subject access
+log retention worker when the active package keeps a subject access log. `GET /ready` does not
+reflect any of them. Watch them through two gauges and the operational records the process writes
+on standard output.
+
+`breg_worker_last_success_age_seconds` gives the seconds since each worker last finished an
+iteration without failure, whether or not that iteration found work. The attachment verification
+worker counts a failed content read or verifier request as a failure, and it does not count an
+idle iteration as a success while a job that failed waits for its retry. `worker` is `webhook`,
+`attachment_verification`, `review`, or `subject_access_log_retention`, and a worker has no sample
+until its first such iteration. The webhook, attachment verification, and review workers wait at
+most a second between iterations, and the retention worker runs once a minute, so an age far
+beyond that means the worker is failing on every iteration or is held inside one.
+
+`breg_queue_oldest_pending_age_seconds` gives the seconds the oldest due item in each queue has
+waited to be claimed, and `0` when nothing is due. `queue` is `webhook_delivery`,
+`review_submission`, or `review_application`; work scheduled for a later retry is not yet due and
+does not count. A webhook delivery or review submission whose lease expired, for example because
+the process that claimed it stopped, counts as waiting from the moment its lease expired. Each scrape reads the three ages at one database instant, with one connection from
+the runtime pool, in a read-only transaction bounded to five seconds, and concurrent scrapes wait
+for each other. When that read fails, the scrape omits every `breg_queue_oldest_pending_age_seconds`
+sample rather than reporting an empty queue, and the process writes `metrics.queue_sample.failed`.
+A queue age that keeps growing while its worker's last success stays recent means the worker runs
+but cannot keep up, or keeps failing the same item.
+
+Each operational record is one JSON line with a `level` and, under `fields`, a `message` and, for
+these events, a `code`; none carries a destination, a record value, or a credential. The worker
+codes are:
+
+- `webhook.worker.iteration_failed`, a webhook delivery iteration that failed and will be retried
+- `webhook.claim.identity_refused`, `webhook.claim.recovery_failed`, `webhook.claim.select_failed`,
+  `webhook.claim.policy_refused`, `webhook.claim.update_failed`, `webhook.claim.audit_failed`, and
+  `webhook.claim.commit_failed`, a webhook delivery claim that failed at the named step
+- `attachment_verification.worker.iteration_failed`, an attachment verification iteration that
+  failed and will be retried
+- `attachment_verification.retry_pending`, a verification attempt that left its file pending for
+  retry, as
+  [external attachment verification](../../reference/breg-configuration/#external-attachment-verification)
+  describes
+- `review.worker.iteration_failed`, a review worker iteration that failed and will be retried
+- `review.result_lookups.unavailable`, a pass on which at least one due review result lookup
+  could not be read
+- `metrics.queue_sample.failed`, a scrape that could not read the queue ages
+
+These records are warnings, and the process keeps serving. A failed retention pass writes an error
+record without a `code`.
+
+A review authority's result feed that cannot be read writes no `code`. It backs off per authority:
+the first failure writes the warning `BReg review result feed is unavailable; retrying with backoff`
+with the configured `authority` identifier and `retry_in_seconds`, later failures log only at debug
+level, and the first successful fetch writes the warning `BReg review result feed is available
+again` with `authority` and `failed_fetches`. Match on the message and `authority` to alert on a
+feed outage.
+
+When a worker or the metrics listener panics, or returns before shutdown is requested, the process
+writes one error record whose code names it, `webhook.worker.panicked`,
+`webhook.worker.returned`, `attachment_verification.worker.panicked`,
+`attachment_verification.worker.returned`, `review.worker.panicked`, `review.worker.returned`,
+`subject_access_log.retention.panicked`, `subject_access_log.retention.returned`,
+`metrics.listener.panicked`, or `metrics.listener.returned`. `breg` then drains in-flight requests
+within the shutdown grace, writes `Base Registry Engine stopped` with the error
+`a Registry background task stopped before shutdown was requested`, and exits with status 1.
+Your supervisor restarts it. If it stops with the same code on every start, the code names the
+worker to investigate; raising the restart budget only repeats the outage.
+
+{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue,
+    Metrics::sample_queue_ages(), read_queue_ages(), and QUEUE_SAMPLE_STATEMENT_TIMEOUT;
+    crates/registry-breg/src/startup.rs, OperationalEvent, background_task_stop_code(),
+    WebhookStateTransitionCode, SupervisedTask, and finish_prepared_server();
+    crates/registry-breg/src/main.rs;
+    crates/registry-breg/src/review_store.rs, ReviewWorker and
+    ReviewAuthorityRegistry::record_feed_outcome();
+    crates/registry-breg/src/attachment_verification_worker.rs;
+    crates/registry-breg/src/attachment_store.rs, verification_retry_waiting();
+    crates/registry-breg/src/subject_access_log.rs, run_retention();
+    crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL;
+    crates/registry-breg/tests/startup_http.rs;
+    crates/registry-breg/tests/postgres_review_executor.rs;
+    crates/registry-breg/tests/postgres_startup.rs. */}
 
 ## Troubleshooting
 

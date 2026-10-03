@@ -123,7 +123,8 @@ pub(crate) fn is_wasm_binary(bytes: &[u8]) -> bool {
 /// Returns the diagnostic code and message for the first violation; the
 /// caller owns the diagnostic path. Runs only in a build with the
 /// `wasm` feature, the only build whose compiler can validate
-/// modules; the default build refuses WASM handlers at admission instead.
+/// modules; a build without the feature refuses WASM handlers at admission
+/// instead.
 #[cfg(feature = "wasm")]
 pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String)> {
     use registry_platform_script::wasm::{Budgets, Executor};

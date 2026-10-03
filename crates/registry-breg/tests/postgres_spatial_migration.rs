@@ -17,10 +17,9 @@ use registry_breg::migration::{
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ExternalBackupBinding, MigrationRehearsalReceipt, RehearsalFixture,
-    RehearsalProofs, ReviewedChangeCover, ReviewedMigrationAssertionDescriptor,
-    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
-    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
-    ReviewedMigrationStepDescriptor,
+    ReviewedChangeCover, ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor,
+    ReviewedMigrationFile, ReviewedMigrationObject, ReviewedMigrationObjectKind,
+    ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
@@ -643,11 +642,7 @@ fn metadata_only_source_between(
         postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: false,
-            destructive_resume: false,
-        },
+        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -739,7 +734,6 @@ fn destructive_source_with_recovery_fault(
         ],
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        destructive_resume: true,
     })
 }
 
@@ -750,7 +744,6 @@ struct ReviewedSourceRequest<'a> {
     steps: Vec<(String, String)>,
     pre: (String, String),
     post: (String, String),
-    destructive_resume: bool,
 }
 
 fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSource {
@@ -761,7 +754,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         steps,
         pre,
         post,
-        destructive_resume,
     } = request;
     let descriptor_path = format!("modules/core/migrations/{}/descriptor.json", descriptor.id);
     let descriptor_bytes = canonical(&descriptor);
@@ -800,11 +792,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: false,
-            destructive_resume,
-        },
+        proofs: None,
     };
     let mut files = steps
         .into_iter()

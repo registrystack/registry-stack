@@ -12,13 +12,15 @@ use std::path::Path;
 
 use registry_breg::audit::RegistryAudit;
 use registry_breg::migration_reconcile::{
-    reconcile_failed_migration, ReconcileError, ReconcileReport, ReconcileRequest,
-    ReconcileTimeouts,
+    reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
+    ReconcileRequest, ReconcileTimeouts,
 };
 use registry_breg::package::{load_package, PackageError};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 
-use crate::active_registry::{recorded_active_identity, ActiveRegistryError};
+use crate::active_registry::{
+    observed_active_identity, recorded_active_identity, ActiveRegistryError,
+};
 use serde::Serialize;
 
 /// The recorded operator reference is a keyed hash in the audit journal, so
@@ -99,7 +101,7 @@ pub(crate) fn run(
     let connection = config
         .migration_database_connection_config()
         .map_err(|_| ReconcileLifecycleError::DatabaseConfiguration)?;
-    config
+    let audit_profile = config
         .audit_profile()
         .map_err(ReconcileLifecycleError::RuntimeConfig)?;
     let timeouts = ReconcileTimeouts::new(
@@ -111,26 +113,49 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| ReconcileLifecycleError::Runtime)?;
-    let current = recorded_active_identity(&runtime, &config, &connection, &active)
-        .map_err(ReconcileLifecycleError::ActiveRegistry)?;
-    let audit = runtime
-        .block_on(RegistryAudit::open_companion(&config))
-        .map_err(|_| ReconcileLifecycleError::Audit)?;
-    let report = runtime
-        .block_on(reconcile_failed_migration(ReconcileRequest {
-            config: &connection,
-            target_package: &target,
-            current: &current,
-            current_registry: active.registry(),
-            migration_role: config.database().roles().migration(),
-            runtime_role: config.database().roles().runtime(),
-            timeouts,
-            audit: &audit,
-            operator_reference: request.operator_reference,
-            execute: request.execute,
-        }))
-        .map_err(ReconcileLifecycleError::Reconcile)?;
+    let reconcile = |current, audit| {
+        runtime
+            .block_on(reconcile_failed_migration(ReconcileRequest {
+                config: &connection,
+                target_package: &target,
+                current: &current,
+                current_registry: active.registry(),
+                migration_role: config.database().roles().migration(),
+                runtime_role: config.database().roles().runtime(),
+                timeouts,
+                audit,
+                operator_reference: request.operator_reference,
+            }))
+            .map_err(ReconcileLifecycleError::Reconcile)
+    };
+    let report = if request.execute {
+        let current = recorded_active_identity(&runtime, &config, &connection, &active)
+            .map_err(execute_preflight_refusal)?;
+        let audit = runtime
+            .block_on(RegistryAudit::open_companion(&config))
+            .map_err(|_| ReconcileLifecycleError::Audit)?;
+        reconcile(current, ReconcileAudit::Execute(&audit))?
+    } else {
+        // Assessment writes nothing, so it reads the active identity without
+        // the exclusive lock and opens no audit writer. The reconciliation
+        // takes the lock and re-reads the identity under it, refusing a
+        // snapshot that no longer matches.
+        let current = observed_active_identity(&runtime, &config, &connection, &active)
+            .map_err(ReconcileLifecycleError::ActiveRegistry)?;
+        reconcile(current, ReconcileAudit::Assess(&audit_profile))?
+    };
     Ok(outcome_report(report))
+}
+
+/// Execution performs only a transition an assessment under the lock named,
+/// so a lock another session holds refuses it as in progress.
+fn execute_preflight_refusal(error: ActiveRegistryError) -> ReconcileLifecycleError {
+    match error {
+        ActiveRegistryError::InProgress => ReconcileLifecycleError::Reconcile(
+            ReconcileError::NotExecutable(ReconcileOutcome::InProgress),
+        ),
+        _ => ReconcileLifecycleError::ActiveRegistry(error),
+    }
 }
 
 fn outcome_report(report: ReconcileReport) -> ReconcileLifecycleOutcome {
@@ -164,7 +189,20 @@ fn validate_operator_reference(reference: &str) -> Result<(), ReconcileLifecycle
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_breg::migration_reconcile::ReconcileOutcome;
+
+    #[test]
+    fn execution_refuses_a_held_migration_lock_as_in_progress() {
+        assert!(matches!(
+            execute_preflight_refusal(ActiveRegistryError::InProgress),
+            ReconcileLifecycleError::Reconcile(ReconcileError::NotExecutable(
+                ReconcileOutcome::InProgress
+            ))
+        ));
+        assert!(matches!(
+            execute_preflight_refusal(ActiveRegistryError::Unavailable),
+            ReconcileLifecycleError::ActiveRegistry(ActiveRegistryError::Unavailable)
+        ));
+    }
 
     #[test]
     fn the_report_names_package_digests_as_digests() {

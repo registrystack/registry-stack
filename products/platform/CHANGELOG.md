@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `registry-platform-hooks` lets a product's `DeliverySeams` note each worker
+  iteration that completed without failure, idle or not, through the defaulted
+  `iteration_succeeded` method, so the product can report how recently its
+  delivery worker made progress. The default notes nothing.
+
 ## v0.38.0 - 2026-10-01
 
 - Add `registry-platform-activation`, the shared PostgreSQL activation ledger,

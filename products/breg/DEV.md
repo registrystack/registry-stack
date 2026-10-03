@@ -64,6 +64,7 @@ event receipts and seed checkpoints. The audit files are kept. For an initial pa
 database from the same authored project, ports, credentials and package. It also
 lets the next start take edited
 inputs: once no records are retained, a changed package, clients file or port
+([what counts as changed](#retained-state-and-recovery))
 replaces the session with a fresh one that keeps the previous ports and clients
 file and generates new keys. A successor package prepared for retained records
 cannot initialize an empty database after removal: start refuses before Docker.
@@ -582,6 +583,15 @@ credentials and bounded private diagnostic logs. The first start writes a
 out of version control. Preserve it with the retained database while the
 exercise matters. It is local development material, not production key
 provisioning.
+The state document also pins what the session runs: the compiled registry
+revision, the package `sourceRevision`, and the canonical JSON form of
+`tests/journeys.yaml` and the clients file. `dev start`, `dev examples run` and
+`dev prepare-source` compare the project against that pin, so an edit that
+changes only comments, blank lines or key order in a YAML file is not a changed
+input. The compiled revision carries the digest of every Rhai script, WASM
+module and derived SQL file it ships, so any edit to one of those files, a
+comment included, is a changed input. A session started by an earlier release
+holds an earlier pin, which reads as changed inputs.
 Records live in a named `breg-dev-<owner>` Docker volume, so the storage stays
 identifiable and reclaimable once the container is gone.
 
@@ -600,7 +610,7 @@ identifiable and reclaimable once the container is gone.
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |
-| Authored package, clients or ports changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart, or create a fresh project at package sequence 1 for a separate experiment. |
+| Authored package, clients, ports or issuer image changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart with the records, run `dev stop --remove` to discard them and start again from the edited inputs, or copy the authored files to a new project directory, at package sequence 1, to keep the records. |
 | Authored package, clients or ports changed after `--remove` | At sequence 1, replace the session from the edited inputs, keeping previous ports and clients file and generating new keys. A successor still requires retained predecessor records. |
 
 Reclamation is explicit: only `dev stop --remove` discards records, only a start

@@ -24,14 +24,13 @@ use registry_breg::migration::{
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
-    RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
-    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
-    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
-    ReviewedMigrationStepDescriptor,
+    RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
+    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
+    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::migration_reconcile::{
-    reconcile_failed_migration, ReconcileError, ReconcileOutcome, ReconcileReport,
+    reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
     ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
 };
 use registry_breg::package::{
@@ -43,7 +42,8 @@ use registry_breg::package::{
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    MigrationRehearsalError, PostgresFailure, RehearsalOutcome, SuccessorMigrationRehearsal,
+    MigrationRehearsalError, PostgresFailure, RehearsalAssertionPhase, RehearsalOutcome,
+    SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -948,11 +948,12 @@ async fn real_postgres_initial_apply_drops_retired_audit_rows_with_acknowledgeme
     database.cleanup().await;
 }
 
-/// An unreachable database or an apply lock another session holds, before
-/// maintenance begins, changes nothing, so it is reported as the database
-/// being unavailable and never as a failed migration that needs
-/// reconciliation. This holds for an activation and for reading the
-/// recorded registry state alike.
+/// An unreachable database or a migration lock another session holds, before
+/// maintenance begins, changes nothing, so it is never reported as a failed
+/// migration that needs reconciliation. An unreachable database is reported
+/// as unavailable and a held lock as held, never one as the other. This
+/// holds for an activation and for reading the recorded registry state
+/// alike, while the lock-free status read still answers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged() {
     let ActivePackageFixture {
@@ -998,12 +999,21 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
         apply(&database, &initial, ApplyPrecondition::InitialActivation)
             .await
             .err(),
-        MigrationError::DatabaseUnavailable,
+        MigrationError::MigrationLockHeld,
     );
     assert_value_free(
         recorded_state(&database, &initial).await.err(),
-        MigrationError::DatabaseUnavailable,
+        MigrationError::MigrationLockHeld,
     );
+    read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+    )
+    .await
+    .expect("the lock-free status read answers while the lock is held")
+    .expect("the database records an activation");
     holder
         .execute(
             "SELECT pg_catalog.pg_advisory_unlock($1)",
@@ -1220,6 +1230,98 @@ async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refu
     assert!(reverted.executed);
     assert_ready_target(&database, &active).await;
     assert_reconcile_audit_is_minimized(&database, "reverted").await;
+    database.cleanup().await;
+}
+
+/// Another session holding the exclusive migration lock is an apply in
+/// progress, not an unreachable database. Assessment reports it as the
+/// `in_progress` outcome, execution refuses with that outcome instead of
+/// reporting success, and the lock-free read of the recorded activation still
+/// answers while the lock is held. Nothing changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progress() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("in-progress scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-in-progress",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    let before = durable_snapshot(&database).await;
+
+    let lock_key = registry_breg::postgres::RegistryLockKey::derive(&package.manifest().package_id)
+        .expect("package lock key derives");
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("another session holds the migration lock");
+
+    let status = read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+    )
+    .await
+    .expect("the lock-free read answers while the lock is held")
+    .expect("the database records an activation");
+    assert_eq!(status.identity, active);
+    assert_eq!(status.maintenance_status, "failed");
+
+    let assessed = reconcile(&database, &package, &active, &base, false)
+        .await
+        .expect("assessment reports the held lock as an outcome");
+    assert_eq!(assessed.outcome, ReconcileOutcome::InProgress);
+    assert!(!assessed.executed);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("execution refuses while another session holds the lock"),
+        ReconcileError::NotExecutable(ReconcileOutcome::InProgress)
+    );
+
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the other session releases the migration lock");
+    holder_task.abort();
+    assert_eq!(durable_snapshot(&database).await, before);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
     database.cleanup().await;
 }
 
@@ -4223,6 +4325,82 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
     database.cleanup().await;
 }
 
+/// The rehearsal runs a reviewed migration's assertions and steps under the
+/// lock and statement timeouts its descriptor declares, the ones activation
+/// sets, so an assertion that outlasts the declared statement timeout is
+/// refused by the rehearsal as activation refuses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_rehearsal_holds_a_reviewed_migration_to_its_declared_timeouts() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let base = compile_variant(Variant::Base);
+    let base_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &base_fingerprint);
+    let active = target_identity(&initial);
+    let candidate = compile_variant(Variant::RankRequired);
+    let target_fingerprint = initial_fingerprint(&database, &candidate).await;
+    let request = |current| BackfillSourceRequest {
+        id: "rank-outlasts-timeout",
+        current,
+        prior: &base,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        pre: AssertionMode::OutlastsStatementTimeout,
+        post: AssertionMode::True,
+        rehearsed_rows: 0,
+    };
+    let prepared = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source(request(&active)),
+    );
+    let refused = rehearse(&database, &base, &base_fingerprint, &prepared)
+        .await
+        .expect_err("an assertion that outlasts the declared statement timeout is refused");
+    let MigrationRehearsalError::Assertion {
+        migration_id,
+        phase,
+        assertion_id,
+        failure,
+    } = &refused
+    else {
+        panic!("the refusal names the reviewed assertion: {refused:?}");
+    };
+    assert_eq!(migration_id, "rank-outlasts-timeout");
+    assert_eq!(*phase, RehearsalAssertionPhase::Pre);
+    assert_eq!(assertion_id, "pre");
+    assert_eq!(failure.sqlstate.as_deref(), Some("57014"));
+    assert_rehearsal_database_clean(&database).await;
+
+    // Activation sets the same declared timeout and refuses the same plan.
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the timeout scenario's initial package activates");
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(request(&active)),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+
+    database.cleanup().await;
+}
+
 /// A predecessor whose schema the current compiler cannot install is refused;
 /// only a fingerprint difference is advisory.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4948,6 +5126,21 @@ enum Variant {
 enum AssertionMode {
     True,
     False,
+    /// True, but only after it outlasts the statement timeout the migration
+    /// declares, so activation cancels it.
+    OutlastsStatementTimeout,
+}
+
+/// The statement timeout a backfill source declares, and the shorter one it
+/// declares when an assertion is written to outlast it.
+fn declared_statement_timeout_ms(pre: AssertionMode, post: AssertionMode) -> u64 {
+    if matches!(pre, AssertionMode::OutlastsStatementTimeout)
+        || matches!(post, AssertionMode::OutlastsStatementTimeout)
+    {
+        200
+    } else {
+        5_000
+    }
 }
 
 async fn false_assertion_refusals_are_closed() {
@@ -4971,9 +5164,10 @@ async fn false_assertion_refusals_are_closed() {
         let required = compile_variant(Variant::RankRequired);
         let target_fingerprint = required_target_fingerprint(&database, &required).await;
         let source = backfill_source(BackfillSourceRequest {
-            id: match pre {
-                AssertionMode::False => "false-pre",
-                AssertionMode::True => "false-post",
+            id: if matches!(pre, AssertionMode::False) {
+                "false-pre"
+            } else {
+                "false-post"
             },
             current: &active,
             prior: &base,
@@ -5477,14 +5671,26 @@ fn backfill_source_with_steps(
         "SELECT pg_catalog.count(*) = pg_catalog.count({}) FROM registry_data.{}",
         field.physical_name, entity.physical_table
     );
+    // The assertion grammar admits no sleep, so the slow assertion counts a
+    // hundred million rows of a cross join over literal values.
+    let values = "(VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10))";
+    let outlasting = format!(
+        "SELECT pg_catalog.count(*) > 0 FROM {}",
+        ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .map(|alias| format!("{values} AS {alias} (v)"))
+            .join(", ")
+    );
     let pre_sql = match pre {
         AssertionMode::True => true_pre,
         AssertionMode::False => "SELECT false".to_owned(),
+        AssertionMode::OutlastsStatementTimeout => outlasting.clone(),
     };
     let post_sql = match post {
         AssertionMode::True => true_post,
         AssertionMode::False => "SELECT false".to_owned(),
+        AssertionMode::OutlastsStatementTimeout => outlasting,
     };
+    let statement_timeout_ms = declared_statement_timeout_ms(pre, post);
     let object = ReviewedMigrationObject {
         schema: "registry_data".to_owned(),
         table: entity.physical_table.clone(),
@@ -5499,7 +5705,7 @@ fn backfill_source_with_steps(
         covers: vec![ReviewedChangeCover::from(&change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
         lock_timeout_ms: 50,
-        statement_timeout_ms: 5_000,
+        statement_timeout_ms,
         steps: std::iter::once(ReviewedMigrationStepDescriptor::ChunkedBackfill {
             id: "backfill-rank".to_owned(),
             entity_id: "asset".to_owned(),
@@ -5509,7 +5715,7 @@ fn backfill_source_with_steps(
             chunk_size: 2,
             max_total_rows: 10,
             lock_timeout_ms: 50,
-            statement_timeout_ms: 5_000,
+            statement_timeout_ms,
             exact_affected_rows: true,
         })
         .chain(
@@ -5542,7 +5748,6 @@ fn backfill_source_with_steps(
             .collect(),
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
-        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-rank".to_owned(),
             affected_rows: rehearsed_rows,
@@ -5626,7 +5831,6 @@ fn added_required_source(
         steps: vec![(update_path, update_sql)],
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
-        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-batch".to_owned(),
             affected_rows: rehearsed_rows,
@@ -5756,7 +5960,6 @@ fn encrypted_flip_source(request: FlipSourceRequest<'_>) -> ReviewedMigrationSou
         steps: vec![(drop_path, drop_sql)],
         pre: (pre_path, assertion_sql.clone()),
         post: (post_path, assertion_sql),
-        destructive_resume: false,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "seal-secret".to_owned(),
             affected_rows: rehearsed_rows,
@@ -6322,7 +6525,6 @@ fn destructive_source_with_recovery_fault(
         steps: step_files,
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        destructive_resume: true,
         row_assertions: Vec::new(),
     })
 }
@@ -6334,7 +6536,6 @@ struct ReviewedSourceRequest<'a> {
     steps: Vec<(String, String)>,
     pre: (String, String),
     post: (String, String),
-    destructive_resume: bool,
     row_assertions: Vec<RehearsalRowAssertion>,
 }
 
@@ -6346,7 +6547,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         steps,
         pre,
         post,
-        destructive_resume,
         row_assertions,
     } = request;
     let descriptor_path = format!("modules/core/migrations/{}/descriptor.json", descriptor.id);
@@ -6386,17 +6586,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: RehearsalProofs {
-            lock_timeout: true,
-            chunk_resume: descriptor.steps.iter().any(|step| {
-                matches!(
-                    step,
-                    ReviewedMigrationStepDescriptor::ChunkedBackfill { .. }
-                        | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
-                )
-            }),
-            destructive_resume,
-        },
+        proofs: None,
     };
     let mut files = steps
         .into_iter()
@@ -7222,9 +7412,12 @@ async fn reconcile(
         runtime_role: &database.runtime_role,
         timeouts: ReconcileTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
-        audit: &audit,
+        audit: if execute {
+            ReconcileAudit::Execute(&audit)
+        } else {
+            ReconcileAudit::Assess(audit.profile())
+        },
         operator_reference: RECONCILE_OPERATOR_CANARY,
-        execute,
     })
     .await
 }
@@ -7666,7 +7859,6 @@ fn pattern_reviewed_source(
         steps: vec![(step_path, sql)],
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
-        destructive_resume: true,
         row_assertions: Vec::new(),
     })
 }

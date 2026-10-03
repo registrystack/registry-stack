@@ -146,3 +146,7 @@ traceability:
   - {id: BREG-SEC-143, state: enforced, negativeId: BREG-NEG-143, negativeTest: {path: crates/registry-breg/src/derived_sql.rs, name: raw_node_allowlist_refuses_unreviewed_sql_json_xml_and_hidden_descendants}}
   - {id: BREG-SEC-144, state: enforced, negativeId: BREG-NEG-144, negativeTest: {path: crates/registry-breg/tests/postgres_derived_values.rs, name: real_postgres_derived_values_enforce_declared_contracts}}
   - {id: BREG-SEC-145, state: enforced, negativeId: BREG-NEG-145, negativeTest: {path: crates/registry-breg/src/derived_sql.rs, name: casts_rows_and_attribute_notation_stay_inside_the_reviewed_scalar_surface}}
+  - {id: BREG-SEC-146, state: enforced, negativeId: BREG-NEG-146, negativeTest: {path: crates/registry-breg/tests/startup_http.rs, name: a_panicking_background_task_stops_serve_with_a_distinct_error}}
+  - {id: BREG-SEC-147, state: enforced, negativeId: BREG-NEG-147, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progress}}
+  - {id: BREG-SEC-148, state: enforced, negativeId: BREG-NEG-148, negativeTest: {path: crates/registry-bregctl/tests/cli.rs, name: apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact}}
+  - {id: BREG-SEC-149, state: enforced, negativeId: BREG-NEG-149, negativeTest: {path: crates/registry-breg/tests/hook_declaration.rs, name: a_wasm_hook_is_refused_by_a_build_without_wasm_support}}

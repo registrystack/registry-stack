@@ -540,10 +540,9 @@ printf '%s' 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789' >
 adopter_suffix="rsadopter$(date +%s)$$"
 adopter_schema_test_v1_database="breg_test_v1_${adopter_suffix}"
 adopter_schema_test_v2_database="breg_test_v2_${adopter_suffix}"
-adopter_measure_v3_database="breg_measure_v3_${adopter_suffix}"
 adopter_schema_test_v3_database="breg_test_v3_${adopter_suffix}"
 adopter_production_database="breg_prod_${adopter_suffix}"
-adopter_databases=("$adopter_schema_test_v1_database" "$adopter_schema_test_v2_database" "$adopter_measure_v3_database" "$adopter_schema_test_v3_database" "$adopter_production_database")
+adopter_databases=("$adopter_schema_test_v1_database" "$adopter_schema_test_v2_database" "$adopter_schema_test_v3_database" "$adopter_production_database")
 adopter_migration_role="breg_migration_${adopter_suffix}"
 adopter_runtime_role="breg_runtime_${adopter_suffix}"
 adopter_author_role="breg_author_${adopter_suffix}"
@@ -571,7 +570,6 @@ printf '%s' "$adopter_runtime_url" >"$temporary_root/secrets/production-runtime-
 printf '%s' "$adopter_migration_url" >"$temporary_root/secrets/production-migration-url"
 write_database_url_secrets "$adopter_schema_test_v1_database" schema-test-v1-runtime-url schema-test-v1-migration-url
 write_database_url_secrets "$adopter_schema_test_v2_database" schema-test-v2-runtime-url schema-test-v2-migration-url
-write_database_url_secrets "$adopter_measure_v3_database" measure-v3-runtime-url measure-v3-migration-url
 write_database_url_secrets "$adopter_schema_test_v3_database" schema-test-v3-runtime-url schema-test-v3-migration-url
 
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
@@ -865,10 +863,115 @@ fi
 wait "$lock_pid" >/dev/null 2>&1 || true
 lock_pid=""
 
-run_json "$temporary_root/plan-v2-resume.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
+# Another session holding the exclusive migration lock is an activation in
+# progress, never an unreachable database: assessment still answers, and
+# execution and apply refuse as in progress.
+migration_lock_key=$(
+  python3 - "$(json_field "$temporary_root/build-v1/package/package.json" manifest.packageId)" <<'PY'
+import hashlib
+import sys
+digest = hashlib.sha256(b"breg/advisory-lock/v1/" + sys.argv[1].encode()).digest()
+print(int.from_bytes(digest[:8], "big", signed=True))
+PY
+)
+psql "$adopter_production_admin_url" -v ON_ERROR_STOP=1 -q \
+  -c "SELECT pg_advisory_lock($migration_lock_key); SELECT pg_sleep(120);" >/dev/null 2>"$temporary_root/advisory-lock.stderr" &
+lock_pid=$!
+advisory_backend_pid=""
+for _ in $(seq 1 80); do
+  advisory_backend_pid=$(psql "$adopter_production_admin_url" -Atqc \
+    "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) AND ((classid::bigint << 32) | objid::bigint) = ($migration_lock_key::bigint) LIMIT 1")
+  [[ "$advisory_backend_pid" =~ ^[0-9]+$ ]] && break
+  sleep 0.25
+done
+if [[ ! "$advisory_backend_pid" =~ ^[0-9]+$ ]]; then
+  printf '%s\n' 'the competing session did not take the migration lock.' >&2
+  exit 1
+fi
+run_json "$temporary_root/reconcile-v2-in-progress.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-in-progress
+assert_json_ok "$temporary_root/reconcile-v2-in-progress.json" "migration reconcile"
+if [[ "$(json_field "$temporary_root/reconcile-v2-in-progress.json" outcome)" != "in_progress" ]]; then
+  printf '%s\n' 'assessment under a held migration lock did not report in_progress.' >&2
+  exit 1
+fi
+if run_json "$temporary_root/reconcile-v2-in-progress-execute.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-in-progress --execute; then
+  printf '%s\n' 'reconcile execution unexpectedly ran under a held migration lock.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/reconcile-v2-in-progress-execute.json" migration.reconcile.outcome.in_progress
+if run_json "$temporary_root/apply-v2-in-progress.json" apply \
+  --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
+  printf '%s\n' 'successor apply unexpectedly ran under a held migration lock.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/apply-v2-in-progress.json" apply.database.in_progress
+python3 - "$temporary_root/apply-v2-in-progress.json" <<'PY'
+import json
+import sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+messages = [item.get("message", "") for item in document.get("diagnostics", [])]
+if not any("another session held the exclusive migration lock" in message for message in messages):
+    raise SystemExit("apply under a held migration lock did not report it as in progress")
+if any("migrationUrlRef" in message for message in messages):
+    raise SystemExit("apply under a held migration lock reported an unreachable database")
+actions = [item.get("suggestedAction") for item in document.get("diagnostics", [])]
+if "retry_after_migration_lock_releases" not in actions:
+    raise SystemExit(f"apply under a held migration lock suggested {actions}")
+PY
+if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($advisory_backend_pid)")" != "t" ]]; then
+  printf '%s\n' 'the competing migration lock could not be released exactly.' >&2
+  exit 1
+fi
+wait "$lock_pid" >/dev/null 2>&1 || true
+lock_pid=""
+
+# Assessment writes nothing, so an audit destination it cannot write does not
+# refuse it; execution opens the audit writer first and refuses.
+mkdir -p "$temporary_root/audit-read-only"
+python3 - "$temporary_root/runtime-operator-v1.yaml" "$temporary_root/runtime-operator-v1-read-only-audit.yaml" \
+  "$temporary_root/audit/audit.jsonl" "$temporary_root/audit-read-only/audit.jsonl" <<'PY'
+import sys
+from pathlib import Path
+source, output, writable, read_only = sys.argv[1:]
+text = Path(source).read_text(encoding="utf-8")
+if text.count(f"path: {writable}\n") != 1:
+    raise SystemExit("the audit path was not found in the runtime configuration")
+Path(output).write_text(text.replace(f"path: {writable}\n", f"path: {read_only}\n"), encoding="utf-8")
+PY
+chmod 0500 "$temporary_root/audit-read-only"
+run_json "$temporary_root/reconcile-v2-read-only-audit.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v1-read-only-audit.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-read-only-audit
+assert_json_ok "$temporary_root/reconcile-v2-read-only-audit.json" "migration reconcile"
+if run_json "$temporary_root/reconcile-v2-read-only-audit-execute.json" migration reconcile \
+  --runtime-config "$temporary_root/runtime-operator-v1-read-only-audit.yaml" \
+  --package "$temporary_root/build-v2/package" --operator-reference adopter-read-only-audit --execute; then
+  printf '%s\n' 'reconcile execution unexpectedly ran without a writable audit destination.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/reconcile-v2-read-only-audit-execute.json" migration.reconcile.audit.unavailable
+chmod 0700 "$temporary_root/audit-read-only"
+
+run_json "$temporary_root/plan-v2-resume.json" plan --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
+  --expected-digest "$package_digest_v2"
 assert_json_ok "$temporary_root/plan-v2-resume.json" plan
 assert_plan "$temporary_root/plan-v2-resume.json" successor "$package_digest_v2" resumes
-run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package"
+
+# An apply bound to another reviewed digest refuses before any database
+# contact and leaves the pinned target as it was; the digest the plan
+# reported lets the same apply proceed.
+if run_json "$temporary_root/apply-v2-wrong-digest.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
+  --expected-digest "$package_digest_v1"; then
+  printf '%s\n' 'successor apply unexpectedly ran under another expected digest.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/apply-v2-wrong-digest.json" apply.package.digest_mismatch
+run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
+  --expected-digest "$package_digest_v2"
 assert_json_ok "$temporary_root/apply-v2.json" apply
 
 kill "$breg_pid" >/dev/null 2>&1 || true
@@ -945,14 +1048,12 @@ assert_json_failure "$temporary_root/missing-review-v3.json" migration.review.re
 run_json "$temporary_root/diff-v3.json" diff "$temporary_root/project-v3" --runtime-config "$temporary_root/runtime-server-v2.yaml"
 assert_json_ok "$temporary_root/diff-v3.json" diff
 
-# Measure the exact target catalog through the public schema-test command on a
-# separate disposable database: the same project without a baseline. This is
-# not upgrade evidence; the in-place apply and record/disclosure checks follow.
-render_runtime_config "$temporary_root/runtime-measure-v3.yaml" "$temporary_root/empty-package-root" 60000 \
-  "secret:file/measure-v3-runtime-url" "secret:file/measure-v3-migration-url" "127.0.0.1:0"
-run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-v3" \
-  --runtime-config "$temporary_root/runtime-measure-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
-  --output "$temporary_root/measure-receipt-v3.json"
+# Measure the exact target catalog through the public schema-test command: a
+# fresh install of the same project, rolled back, so the schema test below
+# reuses its database. This is not upgrade evidence; the in-place apply and
+# record/disclosure checks follow.
+run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-v3" --fingerprint-only \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml"
 assert_json_ok "$temporary_root/measure-v3.json" test
 schema_fingerprint_v3=$(json_field "$temporary_root/measure-v3.json" schemaFingerprint)
 postgres_major=$(psql "$adopter_production_admin_url" -Atqc 'SELECT current_setting('\''server_version_num'\'')::integer / 10000')
@@ -987,7 +1088,6 @@ receipt = {
     "planSha256": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
     "sqlSha256": [], "assertionSha256": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
     "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
-    "proofs": {"lockTimeout": True, "chunkResume": False, "destructiveResume": False},
 }
 directory = root / "review-v3" / base
 directory.mkdir(parents=True)
@@ -1013,6 +1113,14 @@ if run_json "$temporary_root/mismatched-review-v3.json" test "${reviewed_candida
   exit 1
 fi
 assert_json_failure "$temporary_root/mismatched-review-v3.json" migration.review.fingerprint_mismatch
+python3 - "$temporary_root/mismatched-review-v3.json" "sha256:$(printf '0%.0s' {1..64})" "$schema_fingerprint_v3" <<'PY'
+import json
+import sys
+message = json.load(open(sys.argv[1], encoding="utf-8"))["diagnostics"][0]["message"]
+for fingerprint in sys.argv[2:]:
+    if fingerprint not in message:
+        raise SystemExit(f"the fingerprint refusal does not name {fingerprint}")
+PY
 [[ ! -e "$temporary_root/schema-test-receipt-v3.json" ]]
 cp "$temporary_root/review-receipt-v3.original.json" "$review_receipt"
 run_json "$temporary_root/schema-test-v3.json" test "${reviewed_candidate_args[@]}" \
@@ -1029,7 +1137,7 @@ assert_json_ok "$temporary_root/plan-v3.json" plan
 assert_plan "$temporary_root/plan-v3.json" successor "$package_digest_v3" fresh
 if ! run_json "$temporary_root/apply-v3.json" apply --runtime-config "$temporary_root/runtime-server-v2.yaml" --package "$temporary_root/build-v3/package"; then
   # Compare catalog metadata only. Never print runtime URLs or stored records.
-  measure_admin_url=$(derive_admin_database_url "$adopter_measure_v3_database")
+  measure_admin_url=$(derive_admin_database_url "$adopter_schema_test_v3_database")
   column_order_sql="SELECT string_agg(a.attname, ',' ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = 'registry_data.\"$asset_table\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped"
   if [[ "$(psql "$adopter_production_admin_url" -Atqc "$column_order_sql")" != "$(psql "$measure_admin_url" -Atqc "$column_order_sql")" ]]; then
     printf '%s\n' 'reviewed activation failed: installed column order differs from the fresh target rehearsal.' >&2

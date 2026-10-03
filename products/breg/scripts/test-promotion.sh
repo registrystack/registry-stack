@@ -506,7 +506,6 @@ psql "$promotion_admin_url" -v ON_ERROR_STOP=1 -q \
 staging_database="breg_promo_staging_${promotion_suffix}"
 production_database="breg_promo_production_${promotion_suffix}"
 provision_database "breg_promo_test1_${promotion_suffix}" test-1
-provision_database "breg_promo_measure2_${promotion_suffix}" measure-2
 provision_database "breg_promo_test2_${promotion_suffix}" test-2
 provision_database "$staging_database" staging
 provision_database "$production_database" production
@@ -634,12 +633,11 @@ PY
 run_json "$temporary_root/diff-2.json" diff "$project_2" --package "$package_1"
 assert_json_ok "$temporary_root/diff-2.json" diff
 
-# Measure the target catalog once on a fresh database: the rehearsal a
-# reviewer binds the migration to. It is the same project without a baseline.
-render_runtime_config "$temporary_root/runtime-measure-2.yaml" test measure-2 "$temporary_root/empty-package" 127.0.0.1:0
-run_json "$temporary_root/measure-2.json" test "$project_2" \
-  --runtime-config "$temporary_root/runtime-measure-2.yaml" --credentials "$temporary_root/credentials.yaml" \
-  --output "$temporary_root/measure-receipt-2.json"
+# Measure the target catalog a reviewer binds the migration to. The
+# measurement rolls back, so the schema test below reuses its database.
+render_runtime_config "$temporary_root/runtime-test-2.yaml" test test-2 "$temporary_root/empty-package" 127.0.0.1:0
+run_json "$temporary_root/measure-2.json" test "$project_2" --fingerprint-only \
+  --runtime-config "$temporary_root/runtime-test-2.yaml"
 assert_json_ok "$temporary_root/measure-2.json" test
 schema_fingerprint_2=$(json_field "$temporary_root/measure-2.json" schemaFingerprint)
 postgres_major=$(psql "$(derive_database_url "$staging_database")" -Atqc "SELECT current_setting('server_version_num')::integer / 10000")
@@ -691,7 +689,6 @@ receipt = {
     "fixtureInventory": [{"id": "representative", "path": f"{base}/fixtures/representative.jsonl",
                           "sha256": digest(fixture), "rowCount": 1}],
     "postgresMajor": int(postgres_major), "rowAssertions": [], "finalSchemaFingerprint": final_fingerprint,
-    "proofs": {"lockTimeout": True, "chunkResume": False, "destructiveResume": True},
 }
 directory = root / "review-2" / base
 for relative, data in {
@@ -706,7 +703,6 @@ PY
 legacy_table=$(<"$temporary_root/legacy-table")
 
 checkpoint "testing and packaging the reviewed successor once"
-render_runtime_config "$temporary_root/runtime-test-2.yaml" test test-2 "$temporary_root/empty-package" 127.0.0.1:0
 run_json "$temporary_root/test-2.json" test "$project_2" \
   --runtime-config "$temporary_root/runtime-test-2.yaml" --credentials "$temporary_root/credentials.yaml" \
   --baseline-package "$package_1" --reviewed-migrations "$temporary_root/review-2" \

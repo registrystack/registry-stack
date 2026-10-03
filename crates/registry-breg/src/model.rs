@@ -563,8 +563,8 @@ pub struct CompiledActionRequirement {
 }
 
 /// The compiled action-handler backend tag, owned by the handler alone. A
-/// build with the `wasm` feature can compile WASM handlers; the
-/// runtime still refuses to execute them.
+/// build with the `wasm` feature compiles and executes WASM handlers; a build
+/// without it refuses them at compile time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompiledActionHandlerKind {

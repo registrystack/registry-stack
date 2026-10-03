@@ -50,6 +50,7 @@ use crate::field_encryption::FieldEncryptionService;
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
+use crate::package::PackageError;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
 use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
@@ -77,8 +78,13 @@ const _: () = assert!(
         == registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
 );
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum WebhookOperatorError {
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them.
+    #[error("{0}")]
+    PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
     #[error("webhook operator request is unavailable")]
     Unavailable,
 }
@@ -97,9 +103,12 @@ pub struct WebhookOperatorService {
 impl WebhookOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
         let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
-        let package = config
-            .load_active_package()
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let package = config.load_active_package().map_err(|error| match error {
+            PackageError::ExpectedDigestMismatch(mismatch) => {
+                WebhookOperatorError::PackagePinMismatch(mismatch)
+            }
+            _ => WebhookOperatorError::Unavailable,
+        })?;
         let connection = config
             .runtime_database_connection_config()
             .map_err(|_| WebhookOperatorError::Unavailable)?;
@@ -196,6 +205,7 @@ struct BregDeliverySeams {
     lock_timeout: Duration,
     audit: RegistryAudit,
     field_encryption: Option<Arc<FieldEncryptionService>>,
+    last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl BregDeliverySeams {
@@ -445,6 +455,10 @@ impl DeliverySeams for BregDeliverySeams {
                 OperationalEvent::WebhookStateTransitionFailed(transition_code(code)).emit();
             }
         }
+    }
+
+    fn iteration_succeeded(&self) {
+        self.last_success.record();
     }
 }
 
@@ -752,6 +766,7 @@ fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
 #[derive(Clone)]
 pub struct WebhookDeliveryService {
     delivery: DeliveryService<BregDeliverySeams>,
+    last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl WebhookDeliveryService {
@@ -803,6 +818,7 @@ impl WebhookDeliveryService {
             idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
             delivery_source: delivery_source(&expected.package_id, instance_id),
         };
+        let last_success = Arc::<crate::metrics::LastSuccess>::default();
         let seams = BregDeliverySeams {
             pool,
             destinations,
@@ -814,10 +830,19 @@ impl WebhookDeliveryService {
             lock_timeout,
             audit,
             field_encryption,
+            last_success: Arc::clone(&last_success),
         };
         Self {
             delivery: DeliveryService::new(seams, config),
+            last_success,
         }
+    }
+
+    /// The handle the delivery worker notes each iteration without failure
+    /// on.
+    #[must_use]
+    pub fn last_success(&self) -> Arc<crate::metrics::LastSuccess> {
+        Arc::clone(&self.last_success)
     }
 
     /// Claim, audit, send, and finalize at most one due delivery.
@@ -915,7 +940,18 @@ enum WebhookWorkerKind {
 #[derive(Clone)]
 pub struct WebhookWorkerLifecycleProbe {
     state: Arc<WebhookWorkerLifecycleState>,
-    hang: bool,
+    mode: WebhookWorkerLifecycleMode,
+}
+
+/// How the probe ends: on the shutdown signal, never, or on its own before
+/// shutdown is requested.
+#[cfg(feature = "postgres-test")]
+#[derive(Clone, Copy)]
+enum WebhookWorkerLifecycleMode {
+    UntilShutdown,
+    Hang,
+    Panic,
+    Return,
 }
 
 #[cfg(feature = "postgres-test")]
@@ -929,13 +965,33 @@ struct WebhookWorkerLifecycleState {
 impl WebhookWorkerLifecycleProbe {
     #[must_use]
     pub fn new(hang: bool) -> Self {
+        Self::with_mode(if hang {
+            WebhookWorkerLifecycleMode::Hang
+        } else {
+            WebhookWorkerLifecycleMode::UntilShutdown
+        })
+    }
+
+    /// A probe that panics as soon as it starts.
+    #[must_use]
+    pub fn panicking() -> Self {
+        Self::with_mode(WebhookWorkerLifecycleMode::Panic)
+    }
+
+    /// A probe that returns as soon as it starts, without a shutdown signal.
+    #[must_use]
+    pub fn returning() -> Self {
+        Self::with_mode(WebhookWorkerLifecycleMode::Return)
+    }
+
+    fn with_mode(mode: WebhookWorkerLifecycleMode) -> Self {
         Self {
             state: Arc::new(WebhookWorkerLifecycleState {
                 started: AtomicBool::new(false),
                 running: AtomicBool::new(false),
                 stopped: AtomicBool::new(false),
             }),
-            hang,
+            mode,
         }
     }
 
@@ -965,8 +1021,11 @@ impl WebhookWorkerLifecycleProbe {
         self.state.started.store(true, Ordering::SeqCst);
         self.state.running.store(true, Ordering::SeqCst);
         let _guard = WebhookWorkerLifecycleGuard(Arc::clone(&self.state));
-        if self.hang {
-            std::future::pending::<()>().await;
+        match self.mode {
+            WebhookWorkerLifecycleMode::UntilShutdown => {}
+            WebhookWorkerLifecycleMode::Hang => std::future::pending::<()>().await,
+            WebhookWorkerLifecycleMode::Panic => panic!("webhook worker lifecycle probe panicked"),
+            WebhookWorkerLifecycleMode::Return => return,
         }
         while !*shutdown.borrow() {
             if shutdown.changed().await.is_err() {
