@@ -184,17 +184,14 @@ The promise is machine-checked where a checker exists:
   describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
   fails when captured domain data or stored revisions change, other captured views differ, or
-  retained tables lose rows. Base Registry Engine rebuilds and applies a successor before serving;
-  its package-bound ETags may change. Audit tables retired by a breaking upgrade must first be
-  preserved in an archive whose row counts are checked. Old audit files are preserved separately
-  from the new entry stream. The rehearsal refuses to start from a release before `v0.33.0`.
-  Scheduling state before `v0.38.0` is not rehearsed because those releases shipped the Scheduling
-  runtime only as a container image. Retiring Scheduling's audit outbox is covered instead by
-  migration 8, which refuses while the outbox holds unpublished rows, and by the operator archiving
-  the old audit file, as
-  [Retention and persistent state](../../operate/retention-and-persistent-state/) describes.
+  retained tables lose rows. Base Registry Engine serves the predecessor's package, then applies an
+  additive successor and serves again; its package-bound ETags may change. The upgraded Casework
+  and Evidence Gateway runtimes continue the audit files the previous release wrote, and the
+  rehearsal fails when a file was empty before the upgrade or holds fewer entries after it than
+  before plus the number the upgraded runtime must write. It refuses to start from a release
+  before `v0.38.0`. Scheduling state is not rehearsed: the rehearsal has no Scheduling leg.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version number permits
 it, together with the deprecation and migration steps required by the
