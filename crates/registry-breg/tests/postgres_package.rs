@@ -1412,61 +1412,26 @@ fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
 }
 
 #[test]
-fn predecessor_package_derives_legacy_temporal_value_kind_from_signed_fields() {
-    let legacy = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
-    rewrite_legacy_temporal_metadata(legacy.root.path(), true, |temporal| {
+fn predecessor_package_refuses_temporal_bindings_without_a_value_kind() {
+    let older = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
+    rewrite_temporal_metadata(older.root.path(), false, |temporal| {
         temporal
             .as_object_mut()
             .expect("temporal binding is an object")
             .remove("valueKind");
     });
-    let active_revision = legacy.digest();
-    let predecessor = load_predecessor_package(legacy.root.path(), &local_context())
-        .expect("legacy temporal predecessor verifies for planning");
-    let temporal = predecessor
-        .migration_baseline()
-        .queries
-        .operations
-        .iter()
-        .find_map(|operation| operation.temporal.as_ref())
-        .expect("temporal query is retained in predecessor baseline");
-    assert_eq!(serde_json::to_value(temporal.value_kind).unwrap(), "date");
-    let successor_module = module_bytes(PlanChoice::TemporalSchema);
-    let successor_module = parse_module_yaml(&successor_module).expect("successor module parses");
-    let successor = prepare_package(build_request(BuildRequestParts {
-        prior_revision: Some(&active_revision),
-        schema_fingerprint: fingerprint(2),
-        project_bytes: project_bytes(&module_digest(&successor_module)),
-        module_bytes: module_bytes(PlanChoice::TemporalSchema),
-        migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
-            prior_baseline: Box::new(predecessor.migration_baseline().clone()),
-        },
-    }))
-    .expect("normalized predecessor baseline prepares a successor package");
-    assert!(successor
-        .manifest()
-        .migration_plan
-        .changes
-        .iter()
-        .all(|change| change.code != CompiledRegistryChangeCode::EntityTemporalChanged));
     assert_eq!(
-        load_error(legacy.root.path(), &local_context(),),
+        predecessor_load_error(older.root.path(), &local_context()),
         PackageError::Derivation
     );
 }
 
 #[test]
-fn predecessor_package_rejects_legacy_temporal_value_kind_mismatch() {
-    let legacy = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
-    rewrite_legacy_temporal_metadata(legacy.root.path(), true, |temporal| {
-        let temporal = temporal
-            .as_object_mut()
-            .expect("temporal binding is an object");
-        temporal.remove("valueKind");
-        temporal.insert("endField".to_owned(), Value::String("person".to_owned()));
-    });
+fn predecessor_package_refuses_temporal_scope_fields() {
+    let older = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
+    rewrite_temporal_metadata(older.root.path(), true, |_| {});
     assert_eq!(
-        predecessor_load_error(legacy.root.path(), &local_context(),),
+        predecessor_load_error(older.root.path(), &local_context()),
         PackageError::Derivation
     );
 }
@@ -3607,15 +3572,11 @@ async fn wait_for_blocked_apply_backend(
     .expect("the dedicated apply backend reaches its deterministic DDL wait")
 }
 
-fn rewrite_legacy_temporal_metadata(
-    root: &Path,
-    add_deprecated_scope_fields: bool,
-    mutate: impl Fn(&mut Value),
-) {
+fn rewrite_temporal_metadata(root: &Path, add_scope_fields: bool, mutate: impl Fn(&mut Value)) {
     let mut effective_model: Value =
         serde_json::from_slice(&fs::read(governed_model_path(root)).expect("governed model reads"))
             .expect("governed model parses");
-    if add_deprecated_scope_fields {
+    if add_scope_fields {
         let membership = effective_model["entities"]["membership"]
             .as_object_mut()
             .expect("membership entity exists");
@@ -3628,7 +3589,7 @@ fn rewrite_legacy_temporal_metadata(
         effective_model
             .get_mut("queryInventory")
             .expect("effective model query inventory exists"),
-        add_deprecated_scope_fields,
+        add_scope_fields,
         &mutate,
     );
     let effective_model_bytes = canonicalize_json(&effective_model).expect("model canonicalizes");
@@ -3637,7 +3598,7 @@ fn rewrite_legacy_temporal_metadata(
     let mut query_inventory: Value =
         serde_json::from_slice(&fs::read(&query_inventory_path).expect("query inventory reads"))
             .expect("query inventory parses");
-    mutate_temporal_query_bindings(&mut query_inventory, add_deprecated_scope_fields, &mutate);
+    mutate_temporal_query_bindings(&mut query_inventory, add_scope_fields, &mutate);
     let query_inventory_bytes =
         canonicalize_json(&query_inventory).expect("query inventory canonicalizes");
 
@@ -3652,7 +3613,7 @@ fn rewrite_legacy_temporal_metadata(
 
 fn mutate_temporal_query_bindings(
     query_inventory: &mut Value,
-    add_deprecated_scope_fields: bool,
+    add_scope_fields: bool,
     mutate: &impl Fn(&mut Value),
 ) {
     for operation in query_inventory
@@ -3665,7 +3626,7 @@ fn mutate_temporal_query_bindings(
             .expect("query operation is an object")
             .get_mut("temporal")
         {
-            if add_deprecated_scope_fields {
+            if add_scope_fields {
                 temporal
                     .as_object_mut()
                     .expect("temporal binding is an object")
