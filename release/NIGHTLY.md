@@ -42,8 +42,11 @@ Linux amd64 is the canonical build platform and contains every current release
 binary group. Linux arm64 contains the binaries supported for that platform by
 the current release inventory. macOS arm64 uses the current native release
 shards, including each binary's adjacent libraries and notices where the shard
-is an archive. An installer exits without changing the install directory when
-its operating system or architecture has no asset in that build.
+is an archive. Each installer installs the toolset its platform publishes in
+that build. The Registry Scheduling runtime is published for Linux amd64 only,
+so on Linux arm64 and macOS arm64 the Scheduling installer installs
+`schedulingctl` alone. An installer exits without changing the install directory
+when its operating system or architecture has no asset in that build.
 
 ## Install the latest successful nightly
 
@@ -77,8 +80,9 @@ installer before running it.
 
 The source installer resolves the `nightly-channel` pointer once and verifies
 the immutable installer named by that build against its `nightly.json` entry.
-The pinned installer then downloads its complete toolset, verifies every asset
-against `SHA256SUMS`, and installs all binaries or none of them. A scheduled or
+The pinned installer then downloads the toolset its platform publishes,
+verifies every asset against `SHA256SUMS`, and installs all of those binaries or
+none of them. A scheduled or
 manual build failure does not change what `--channel nightly` resolves.
 
 An installer downloaded from a numbered GitHub release remains pinned to that

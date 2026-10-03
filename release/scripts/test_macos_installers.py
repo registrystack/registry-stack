@@ -19,6 +19,8 @@ INSTALLERS = (
     ("registry-breg", "BREG", ("breg", "bregctl")),
     ("registry-casework", "CASEWORK", ("casework", "caseworkctl")),
     ("registry-evidencectl", "EVIDENCECTL", ("evidence", "evidencectl", "evidence-oid4vci")),
+    # The Scheduling runtime is Linux amd64 only; macOS publishes schedulingctl.
+    ("registry-scheduling", "SCHEDULING", ("schedulingctl",)),
 )
 LIBRARY = "libaws_lc_fips_0_14_2_crypto.dylib"
 

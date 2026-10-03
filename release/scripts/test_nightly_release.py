@@ -541,10 +541,21 @@ cp "$source" "$destination"
     def test_pinned_installers_follow_the_arm64_platform_rosters(self):
         output = self.assembled()
         names = {path.name for path in output.iterdir()}
-        for os_name, arch, platform in (
-            ("Linux", "aarch64", "linux-arm64"),
-            ("Darwin", "arm64", "macos-arm64"),
-        ):
+        # Each installer installs the toolset its platform publishes, or
+        # refuses the platform (None). Scheduling's runtime is Linux amd64
+        # only, so arm64 gets schedulingctl alone. Real macOS bundle installs
+        # are covered by test_macos_installers.py.
+        toolsets = {
+            ("Linux", "aarch64", "linux-arm64"): {
+                "breg": ("breg", "bregctl"),
+                "relay": None,
+                "evidencectl": ("evidence", "evidencectl", "evidence-oid4vci"),
+                "casework": ("casework", "caseworkctl"),
+                "scheduling": ("schedulingctl",),
+            },
+            ("Darwin", "arm64", "macos-arm64"): {"relay": None},
+        }
+        for (os_name, arch, platform), products in toolsets.items():
             commands = self.root / f"commands-{platform}"
             commands.mkdir()
             scripts = {
@@ -557,19 +568,8 @@ cp "$source" "$destination"
             for name, script in scripts.items():
                 (commands / name).write_text(script)
                 (commands / name).chmod(0o755)
-            for product, (crate, prefix, _) in nightly.INSTALLERS.items():
-                source = (nightly.ROOT / "crates" / crate / "install.sh").read_text()
-                binaries = re.search(r"^binaries=\(([^)]*)\)$", source, re.MULTILINE)[
-                    1
-                ].split()
-                complete = all(
-                    {f"{binary}-{TAG}-{platform}", f"{binary}-{TAG}-{platform}.tar.gz"}
-                    & names
-                    for binary in binaries
-                )
-                if complete and os_name == "Darwin":
-                    # test_macos_installers.py covers real macOS bundles.
-                    continue
+            for product, binaries in products.items():
+                prefix = nightly.INSTALLERS[product][1]
                 with self.subTest(product=product, platform=platform):
                     destination = self.root / f"installed-{product}-{platform}"
                     environment = os.environ | {
@@ -584,25 +584,33 @@ cp "$source" "$destination"
                         text=True,
                         capture_output=True,
                     )
-                    if complete:
-                        self.assertEqual(
-                            result.returncode, 0, result.stdout + result.stderr
-                        )
-                        for binary in binaries:
-                            self.assertEqual(
-                                subprocess.check_output(
-                                    [str(destination / binary), "--version"],
-                                    text=True,
-                                ).strip(),
-                                f"{binary} {TAG[1:]}",
-                            )
-                    else:
-                        # A toolset the platform roster lacks is refused before
-                        # any asset is read or the install directory is touched.
+                    if binaries is None:
+                        # A refused platform is rejected before any asset is
+                        # read or the install directory is touched.
                         self.assertEqual(result.returncode, 1, result.stderr)
                         self.assertIn("No prebuilt", result.stderr)
                         self.assertFalse(destination.exists())
-
+                        continue
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertEqual(
+                        {
+                            path.name
+                            for path in destination.iterdir()
+                            if not path.name.startswith(".")
+                        },
+                        set(binaries),
+                    )
+                    for binary in binaries:
+                        self.assertIn(f"{binary}-{TAG}-{platform}", names)
+                        self.assertEqual(
+                            subprocess.check_output(
+                                [str(destination / binary), "--version"],
+                                text=True,
+                            ).strip(),
+                            f"{binary} {TAG[1:]}",
+                        )
 
 if __name__ == "__main__":
     unittest.main()
