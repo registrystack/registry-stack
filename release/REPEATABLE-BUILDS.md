@@ -74,7 +74,7 @@ remain outside the Linux-only repeatability proof above.
 
 A release binary must be a function of the source tree. Three crates in the
 lock run `git rev-parse HEAD` in their build script and bake the answer into
-what they compile: `cranelift-codegen` writes `0.135.3-<first nine>` into its
+what they compile: `cranelift-codegen` writes `<its version>-<first nine>` into its
 `VERSION` constant, `typst-utils` records `TYPST_COMMIT_SHA`, and
 `wasm-bindgen-shared` records the first nine characters as `WBG_VERSION`. Each
 is meant to read that crate's own development checkout. The first reaches a
