@@ -24,10 +24,10 @@ export AWS_LC_FIPS_SYS_STATIC=1
 target=aarch64-unknown-linux-gnu
 rustup toolchain install 1.95.0 --profile minimal --target "${target}"
 
-# Match the numbered-release arm64 recipe and feature isolation. Relay's
-# runtime, Scheduling's runtime and Messaging have no native arm64 release
+# Match the numbered-release arm64 recipe and feature isolation. Scheduling's
+# runtime and Messaging have no native arm64 release
 # asset; their container images use the canonical Linux amd64 binaries.
-cargo build --release --locked -p registry-relayctl -p registry-evidence \
+cargo build --release --locked -p registry-evidence \
   -p registry-evidencectl -p registry-evidence-oid4vci --target "${target}"
 cargo build --release --locked -p registry-breg --bin breg --features runtime --target "${target}"
 cargo build --release --locked -p registry-bregctl --target "${target}"
@@ -45,9 +45,9 @@ import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path('release/scripts').resolve()))
-from release_candidate import _relay_v2_payload_inventory
+from release_candidate import _release_payload_inventory
 version, tag, target = sys.argv[1:]
-for asset, kind in _relay_v2_payload_inventory(version).items():
+for asset, kind in _release_payload_inventory(version).items():
     if kind != 'binary' or not asset.endswith('-linux-arm64'):
         continue
     binary = asset.split(f'-v{version}-', 1)[0]

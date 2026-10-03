@@ -19,7 +19,7 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-VERSION = "0.38.0"
+VERSION = "0.39.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
@@ -31,8 +31,6 @@ CORE = [
     f"evidencectl-{TAG}-linux-amd64",
     f"evidence-oid4vci-{TAG}-linux-amd64",
     f"registry-manifest-{TAG}-linux-amd64",
-    f"relay-{TAG}-linux-amd64",
-    f"relayctl-{TAG}-linux-amd64",
     f"registry-render-{TAG}-linux-amd64",
 ]
 BREG = [
@@ -67,9 +65,8 @@ IMAGE_SOURCES = {
     "messaging": MESSAGING[0],
     "messagingctl": MESSAGING[1],
     "evidence": CORE[2],
-    "relay": CORE[6],
     "evidence-oid4vci": CORE[4],
-    "registry-render": CORE[8],
+    "registry-render": CORE[6],
 }
 
 
@@ -262,14 +259,22 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         rosters_023, images_023 = MODULE.rosters("0.23.9")
         self.assertEqual([], rosters_023["breg"])
         self.assertFalse(any(name.startswith("discovery-") for name in rosters_023["core"]))
-        self.assertEqual(["evidence", "mint", "relay"], [name for name, _ in images_023])
+        self.assertEqual(
+            ["evidence", "mint", "relay"], [name for name, _ in images_023]
+        )
         rosters_024, images_024 = MODULE.rosters("0.24.0")
         self.assertTrue(rosters_024["core"][0].startswith("discovery-v0.24.0"))
         self.assertEqual([], rosters_024["breg"])
-        self.assertEqual(["discovery", "evidence", "mint", "relay"], [name for name, _ in images_024])
+        self.assertEqual(
+            ["discovery", "evidence", "mint", "relay"],
+            [name for name, _ in images_024],
+        )
         rosters_026, images_026 = MODULE.rosters("0.26.0")
         self.assertEqual(2, len(rosters_026["breg"]))
-        self.assertEqual(["discovery", "breg", "evidence", "mint", "relay"], [name for name, _ in images_026])
+        self.assertEqual(
+            ["discovery", "breg", "evidence", "mint", "relay"],
+            [name for name, _ in images_026],
+        )
         self.assertEqual([], rosters_026["casework"])
         rosters_030, images_030 = MODULE.rosters("0.30.0")
         self.assertEqual(2, len(rosters_030["casework"]))
@@ -366,6 +371,14 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             ],
             [name for name, _ in images_038],
         )
+        rosters_039, images_039 = MODULE.rosters("0.39.0")
+        self.assertFalse(
+            any(name.startswith("relay-") for name in rosters_039["core"])
+        )
+        self.assertFalse(
+            any(name.startswith("relayctl-") for name in rosters_039["core"])
+        )
+        self.assertNotIn("relay", dict(images_039))
 
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
         self,

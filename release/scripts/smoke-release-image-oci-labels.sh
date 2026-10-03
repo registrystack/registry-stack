@@ -6,10 +6,10 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
-images=(relay evidence evidence-oid4vci discovery registry-render breg breg-mcp breg-review casework scheduling messaging)
+images=(evidence evidence-oid4vci discovery registry-render breg breg-mcp breg-review casework scheduling messaging)
 # The stateful product images carry their operator tool beside the runtime.
 operator_tools=(bregctl caseworkctl schedulingctl messagingctl)
-relay_dockerfile="${repo_root}/release/docker/Dockerfile.relay"
+sample_dockerfile="${repo_root}/release/docker/Dockerfile.evidence"
 
 source_label="https://github.com/registrystack/registry-stack"
 revision_label="0123456789abcdef0123456789abcdef01234567"
@@ -128,7 +128,7 @@ for image in "${images[@]}"; do
   python3 "${layout_comparator}" "${first_layout}" "${second_layout}"
 done
 
-correct_layout="${tmp_root}/correct-relay-first"
+correct_layout="${tmp_root}/correct-evidence-first"
 missing_version_layout="${tmp_root}/missing-version"
 wrong_revision_layout="${tmp_root}/wrong-revision"
 
@@ -139,14 +139,14 @@ expect_failure "lower-case image config template" \
     --version "${version_label}" \
     --format-template '{{json .Image.config}}'
 
-build_negative_layout "${relay_dockerfile}" "${missing_version_layout}" "${revision_label}"
+build_negative_layout "${sample_dockerfile}" "${missing_version_layout}" "${revision_label}"
 expect_failure "image missing the version label" \
   python3 "${checker}" "oci-layout://${missing_version_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
     --version "${version_label}"
 
-build_negative_layout "${relay_dockerfile}" "${wrong_revision_layout}" \
+build_negative_layout "${sample_dockerfile}" "${wrong_revision_layout}" \
   "${wrong_revision_label}" "${version_label}"
 expect_failure "image with the wrong revision label" \
   python3 "${checker}" "oci-layout://${wrong_revision_layout}" \

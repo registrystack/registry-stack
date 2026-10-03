@@ -60,7 +60,7 @@ jobs:
           root = pathlib.Path(root_text)
           inventory = runpy.run_path(
               "release/scripts/release_candidate.py"
-          )["_relay_v2_payload_inventory"](version)
+          )["_release_payload_inventory"](version)
           for name in inventory:
               (root / name).write_text(
                   f"release canary placeholder: {name}\n",
@@ -132,7 +132,7 @@ jobs:
           root = pathlib.Path(root_text)
           inventory = runpy.run_path(
               "release/scripts/release_candidate.py"
-          )["_relay_v2_payload_inventory"](version)
+          )["_release_payload_inventory"](version)
           payloads = []
           for name, kind in sorted(inventory.items()):
               payload = (root / name).read_bytes()

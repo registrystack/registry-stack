@@ -329,7 +329,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "image_dir = root / 'dist/image-bin'\n"
             "parsed = tuple(int(part) for part in version.split('.'))\n"
             "core = ['evidence', 'evidencectl', 'evidence-oid4vci', "
-            "'registry-manifest', 'relay', 'relayctl']\n"
+            "'registry-manifest']\n"
             "if parsed >= (0, 24, 0):\n"
             "    core.insert(0, 'discovery')\n"
             "if release_roster.discoveryctl_in_release(parsed):\n"
@@ -348,7 +348,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "for name in selected:\n"
             "    if name != 'scheduling' or group == 'scheduling' or release_roster.scheduling_binary_in_release(parsed):\n"
             "        (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
-            "images = ['discovery', 'breg', 'casework', 'scheduling', 'messaging', 'evidence', 'relay']\n"
+            "images = ['discovery', 'breg', 'casework', 'scheduling', 'messaging', 'evidence']\n"
             "if release_roster.breg_services_in_release(parsed):\n"
             "    images += ['breg-mcp', 'breg-review']\n"
             "if release_roster.evidence_oid4vci_image_in_release(parsed):\n"
@@ -434,7 +434,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
     ) -> dict[str, str]:
         result, calls = self.run_payload(version=version, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(calls), 5)
         paths = calls[0]["env"]
         for call in calls:
             self.assertEqual(call["env"], paths)
@@ -458,17 +458,6 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
     def test_full_and_group_builds_keep_the_exact_cargo_partition(self) -> None:
         expected = [
             ["build", "--release", "--locked", "-p", "registry-manifest-cli"],
-            [
-                "build",
-                "--release",
-                "--locked",
-                "-p",
-                "registry-relay-v2",
-                "--bin",
-                "relay",
-                "--no-default-features",
-            ],
-            ["build", "--release", "--locked", "-p", "registry-relayctl"],
             [
                 "build",
                 "--release",
@@ -504,8 +493,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         ]
         for group, calls_expected in (
             ("all", expected),
-            ("core", expected[:5]),
-            ("breg", expected[5:]),
+            ("core", expected[:3]),
+            ("breg", expected[3:]),
         ):
             with self.subTest(group=group):
                 result, calls = self.run_payload(group=group)
@@ -537,7 +526,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
     def test_group_builds_keep_the_release_version_gates(self) -> None:
         result, core = self.run_payload(version="0.23.9", group="core")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(4, len(core))
+        self.assertEqual(2, len(core))
         self.assertFalse(any("registry-discovery" in call["args"] for call in core))
         result, breg = self.run_payload(version="0.25.9", group="breg")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -873,12 +862,17 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "", (shard_root / "breg/bin/SHA256SUMS").read_text(encoding="utf-8")
         )
         # Historical recovery retains the bytes produced by the old builder.
-        legacy_bin = shard_root / "core/bin" / "mint-v0.25.0-linux-amd64"
-        legacy_bin.write_bytes(b"historical Mint fixture\n")
-        legacy_bin.chmod(0o755)
         sums = shard_root / "core/bin/SHA256SUMS"
         lines = sums.read_text().splitlines(keepends=True)
-        lines.insert(3, f"{hashlib.sha256(legacy_bin.read_bytes()).hexdigest()}  {legacy_bin.name}\n")
+        for binary in ("mint", "relay", "relayctl"):
+            legacy_bin = shard_root / "core/bin" / f"{binary}-v0.25.0-linux-amd64"
+            legacy_bin.write_bytes(f"historical {binary} fixture\n".encode())
+            legacy_bin.chmod(0o755)
+            line = f"{hashlib.sha256(legacy_bin.read_bytes()).hexdigest()}  {legacy_bin.name}\n"
+            if binary == "mint":
+                lines.insert(3, line)
+            else:
+                lines.append(line)
         sums.write_text("".join(lines))
         output = self.root / "merged"
         result = subprocess.run(
@@ -907,30 +901,22 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
 
     def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
         groups_with_messaging = ("core", "breg", "casework", "scheduling", "messaging")
-        for version, groups in (
-            ("0.31.0", ("core", "breg", "casework")),
-            # Messaging has not joined a release, so its shard is empty.
-            ("0.35.0", groups_with_messaging),
-            (
-                "0.38.0",
-                groups_with_messaging,
-            ),
-        ):
+        for version, groups in (("0.39.0", groups_with_messaging),):
             with self.subTest(version=version):
                 self.assert_merged_groups_equivalent_to_all(version, groups)
         self.assertTrue(
-            (self.root / "merge-0.38.0/merged-groups/image-bin/messaging").is_file()
+            (self.root / "merge-0.39.0/merged-groups/image-bin/messaging").is_file()
         )
 
     def test_v0_36_merged_groups_with_operator_tools_are_equivalent_to_all(
         self,
     ) -> None:
         self.assert_merged_groups_equivalent_to_all(
-            "0.36.0", ("core", "breg", "casework", "scheduling")
+            "0.39.0", ("core", "breg", "casework", "scheduling", "messaging")
         )
-        merged = self.root / "merge-0.36.0/merged-groups"
+        merged = self.root / "merge-0.39.0/merged-groups"
         self.assertIn(
-            "schedulingctl-v0.36.0-linux-amd64",
+            "schedulingctl-v0.39.0-linux-amd64",
             (merged / "bin/SHA256SUMS").read_text(),
         )
         self.assertEqual(
@@ -939,12 +925,17 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                 "discovery",
                 "breg",
                 "bregctl",
+                "breg-mcp",
+                "breg-review",
                 "casework",
                 "caseworkctl",
                 "scheduling",
                 "schedulingctl",
+                "messaging",
+                "messagingctl",
                 "evidence",
-                "relay",
+                "evidence-oid4vci",
+                "registry-render",
             ],
             [
                 line.split("  ", 1)[1]

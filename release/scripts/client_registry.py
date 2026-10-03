@@ -60,7 +60,6 @@ CLIENTS = {
         native_binary_stems=(
             "discovery-client",
             "evidence-client",
-            "relay-client",
             "breg-client",
         ),
         pypi_project="registry-stack-client",
@@ -73,7 +72,7 @@ WHEEL_PLATFORMS = (
     "manylinux_2_17_aarch64.manylinux2014_aarch64",
     "macosx_11_0_arm64",
 )
-STACK_PYTHON_NAMESPACES = ("breg", "discovery", "evidence", "relay")
+STACK_PYTHON_NAMESPACES = ("breg", "discovery", "evidence")
 CASEWORK_CLIENT_MINIMUM_VERSION = (0, 30, 0)
 MAXIMUM_ARCHIVE_MEMBERS = 128
 MAXIMUM_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
@@ -132,6 +131,19 @@ def includes_messaging(version: str, *, include_messaging: bool = False) -> bool
     )
 
 
+def includes_relay(version: str) -> bool:
+    """Keep Relay only when validating an immutable historical client release."""
+
+    return release_roster.relay_in_release(release_version(version))
+
+
+def require_supported_client(client: str, version: str) -> None:
+    if client == "relay" and not includes_relay(version):
+        raise ClientRegistryError(
+            f"Relay client packages are retired from {version}; only historical releases are supported"
+        )
+
+
 def native_binary_stems(
     client: str,
     version: str,
@@ -141,6 +153,8 @@ def native_binary_stems(
 ) -> tuple[str, ...]:
     definition = client_definition(client)
     stems = definition.native_binary_stems
+    if client == "stack" and includes_relay(version):
+        stems += ("relay-client",)
     if client == "stack" and includes_casework(
         version, include_casework=include_casework
     ):
@@ -156,6 +170,8 @@ def stack_python_namespaces(
     version: str, *, include_casework: bool = False, include_messaging: bool = False
 ) -> tuple[str, ...]:
     namespaces = STACK_PYTHON_NAMESPACES
+    if includes_relay(version):
+        namespaces += ("relay",)
     if includes_casework(version, include_casework=include_casework):
         namespaces += ("casework",)
     if includes_messaging(version, include_messaging=include_messaging):
@@ -206,6 +222,7 @@ def bind_optional_dependencies(package_json: Path, version: str, client: str) ->
     the manifest that is about to be packed, and validate_npm_packages proves
     it landed by reading the packed tarball back.
     """
+    require_supported_client(client, version)
     definition = client_definition(client)
     try:
         metadata = json.loads(package_json.read_text(encoding="utf-8"))
@@ -314,6 +331,7 @@ def validate_npm_packages(
     include_casework: bool = False,
     include_messaging: bool = False,
 ) -> list[Path]:
+    require_supported_client(client, version)
     definition = client_definition(client)
     expected_optional = expected_optional_dependencies(client, version)
     paths = npm_tarballs(directory, version, client)
@@ -409,6 +427,7 @@ def validate_wheels(
     include_casework: bool = False,
     include_messaging: bool = False,
 ) -> list[Path]:
+    require_supported_client(client, version)
     definition = client_definition(client)
     paths = wheel_paths(directory, version, client)
     for path in paths:
@@ -494,6 +513,7 @@ def validate_distribution(
     include_casework: bool = False,
     include_messaging: bool = False,
 ) -> None:
+    require_supported_client(client, version)
     validate_npm_packages(
         directory,
         version,
@@ -539,6 +559,7 @@ def pypi_registry_state(
     metadata: Any | None,
     client: str,
 ) -> str:
+    require_supported_client(client, version)
     definition = client_definition(client)
     expected = {path.name: sha256_file(path) for path in wheels}
     if metadata is None:

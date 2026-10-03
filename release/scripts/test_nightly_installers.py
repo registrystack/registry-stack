@@ -16,7 +16,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLERS = {
     "breg": ROOT / "crates/registry-breg/install.sh",
-    "relay": ROOT / "crates/registry-relay-v2/install.sh",
     "evidencectl": ROOT / "crates/registry-evidencectl/install.sh",
     "casework": ROOT / "crates/registry-casework/install.sh",
     "scheduling": ROOT / "crates/registry-scheduling/install.sh",

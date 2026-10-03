@@ -17,7 +17,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BASELINE = ROOT / "products" / "relay-v2" / "security" / "advisory-baseline.json"
+DEFAULT_BASELINE = ROOT / "release" / "security" / "evidence-advisory-baseline.json"
 
 SEVERITY_ORDER = {
     "unknown": 0,

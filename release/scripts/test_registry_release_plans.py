@@ -204,6 +204,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("messaging", "messagingctl")
     if REGISTRY_RELEASE.release_roster.render_in_release(version_tuple):
         inventory += ("registry-render",)
+    if version_tuple >= (0, 39, 0):
+        inventory = tuple(name for name in inventory if not name.startswith("relay"))
     data = {
         "stack": {
             "release": release_id,
@@ -817,7 +819,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-messaging-client-node/package.json",
             "crates/registry-messaging-client-node/index.js",
             "crates/registry-messaging-client-py/pyproject.toml",
-            "crates/registry-relay-client-py/pyproject.toml",
+            "crates/registry-breg-client-py/pyproject.toml",
             "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/evidence/fuzz/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
@@ -974,7 +976,7 @@ version = "1.0.0"
                 self.assertEqual(0, corrected.returncode, corrected.stderr)
 
     def test_prepare_rejects_stale_loader_diagnostics_with_current_guards(self) -> None:
-        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
+        for client in ("discovery", "evidence", "breg", "casework", "messaging"):
             with self.subTest(client=client):
                 loader = self.repo.root / f"crates/registry-{client}-client-node/index.js"
                 write(
@@ -1005,7 +1007,7 @@ version = "1.0.0"
         self.assertIn("expected-version diagnostics", result.stderr)
 
     def test_prepare_accepts_the_maintained_generated_loaders(self) -> None:
-        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
+        for client in ("discovery", "evidence", "breg", "casework", "messaging"):
             relative_root = Path(f"crates/registry-{client}-client-node")
             package = json.loads((ROOT / relative_root / "package.json").read_text())
             loader = (ROOT / relative_root / "index.js").read_text()
@@ -1032,7 +1034,7 @@ version = "1.0.0"
         self.assertIn("expected-version diagnostics", stale_wasi.stderr)
 
     def test_prepare_rejects_stale_client_platform_package_version(self) -> None:
-        for client in ("evidence", "relay"):
+        for client in ("evidence", "discovery"):
             with self.subTest(client=client):
                 platform = (
                     self.repo.root
@@ -1200,14 +1202,14 @@ version = "1.0.0"
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
         data = yaml.safe_load(target.read_text())
 
-        data["artifacts"].pop("relay")
+        data["artifacts"].pop("evidence")
         write_yaml(target, data)
-        missing_relay = self.prepare()
-        self.assertEqual(1, missing_relay.returncode)
-        self.assertEqual("", missing_relay.stdout)
-        self.assertIn("missing relay", missing_relay.stderr)
+        missing_evidence = self.prepare()
+        self.assertEqual(1, missing_evidence.returncode)
+        self.assertEqual("", missing_evidence.stdout)
+        self.assertIn("missing evidence", missing_evidence.stderr)
 
-        data["artifacts"]["relay"] = "1.1.0"
+        data["artifacts"]["evidence"] = "1.1.0"
         data["artifacts"]["registryctl"] = "1.1.0"
         write_yaml(target, data)
         incomplete_inventory = self.prepare()

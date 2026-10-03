@@ -173,6 +173,8 @@ def _candidate_image_names(version: str) -> set[str]:
         image_names = image_names | RENDER_RUNTIME_IMAGE_NAMES
     if release_roster.evidence_oid4vci_image_in_release(parsed):
         image_names = image_names | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+    if not release_roster.relay_in_release(parsed):
+        image_names = image_names - {"relay"}
     return image_names
 
 
@@ -344,7 +346,7 @@ def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
     return version >= DOCS_RELEASE_RESUMPTION_VERSION
 
 
-def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
+def _release_payload_inventory(version: str) -> dict[str, str]:
     tag = f"v{version}"
     version_tuple = tuple(int(part) for part in version.split("."))
     inventory = {
@@ -368,6 +370,10 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             "evidence-oid4vci",
         ):
             inventory[f"{name}-{tag}-{platform}"] = "binary"
+    if not release_roster.relay_in_release(version_tuple):
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            inventory.pop(f"relay-{tag}-{platform}", None)
+            inventory.pop(f"relayctl-{tag}-{platform}", None)
     if version_tuple >= MINT_RETIREMENT_VERSION:
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory.pop(f"mint-{tag}-{platform}")
@@ -397,8 +403,8 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             ),
         }
     )
-    if (
-        version_tuple >= RELAY_INSTALLER_MINIMUM_VERSION
+    if version_tuple >= RELAY_INSTALLER_MINIMUM_VERSION and release_roster.relay_in_release(
+        version_tuple
     ):
         inventory[f"relay-{tag}-install.sh"] = "installer"
         inventory["relay-install.sh"] = "installer"
@@ -407,7 +413,8 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
     ):
         inventory[f"registry-docs-{tag}.tar.gz"] = "docs"
     if (
-        version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
+        release_roster.relay_in_release(version_tuple)
+        and version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
         and not unified_client
     ):
         for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
@@ -420,7 +427,10 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION
         and not unified_client
     ):
-        for client in ("evidence", "relay"):
+        clients = ["evidence"]
+        if release_roster.relay_in_release(version_tuple):
+            clients.append("relay")
+        for client in clients:
             inventory[f"registrystack-{client}-client-{version}.tgz"] = (
                 "client-package"
             )
@@ -1397,7 +1407,7 @@ def validate_candidate_manifest(
             "security-evidence payload name must be "
             f"{expected_evidence_name}"
         )
-    expected_payloads = _relay_v2_payload_inventory(version)
+    expected_payloads = _release_payload_inventory(version)
     actual_payloads = {record["name"]: record["kind"] for record in payloads}
     if actual_payloads != expected_payloads:
         missing = sorted(set(expected_payloads) - set(actual_payloads))

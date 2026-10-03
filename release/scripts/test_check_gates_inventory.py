@@ -735,49 +735,7 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
-    def test_missing_relay_v2_product_gates_are_reported(self) -> None:
-        for snippet, replacement, gate in (
-            (
-                "relay-v2-contracts:",
-                "relay-v2-disabled:",
-                "Relay V2 product contract gate",
-            ),
-            (
-                "run: products/relay-v2/scripts/check-contracts.sh",
-                "run: true # Relay V2 contracts disabled",
-                "Relay V2 contract consistency",
-            ),
-            (
-                "run: products/relay-v2/scripts/test-http.sh",
-                "run: true # Relay V2 HTTP disabled",
-                "Relay V2 coequal HTTP journeys",
-            ),
-        ):
-            with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement)
-                self.assertIn(gate, self.module.missing_gates(text))
 
-    def test_missing_relay_client_contract_gates_are_reported(self) -> None:
-        for snippet, replacement, gate in (
-            (
-                "relay-client-contracts:",
-                "relay-client-disabled:",
-                "Relay client contract gate",
-            ),
-            (
-                "run: products/relay-v2/scripts/check-client-contract.sh",
-                "run: true # Relay client contracts disabled",
-                "Relay client contract consistency",
-            ),
-            (
-                "run: products/relay-v2/scripts/check-source-neutrality.sh",
-                "run: true # Relay client neutrality disabled",
-                "Relay client source neutrality",
-            ),
-        ):
-            with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement)
-                self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_breg_product_gates_are_reported(self) -> None:
         for snippet, replacement, gate in (
@@ -1209,12 +1167,12 @@ class GateInventoryTest(unittest.TestCase):
             for step in job["steps"]
             if step.get("name") == "Prove production Linux Node client recipe"
         )
-        self.assertIn("for client in discovery evidence relay", proof)
+        self.assertIn("for client in discovery evidence", proof)
         # The source facade loads every binding from its platform package.
         # Both the build loop and the copy loop must include Messaging.
         self.assertEqual(
             proof.count(
-                "for client in discovery evidence relay breg casework messaging; do"
+                "for client in discovery evidence breg casework messaging; do"
             ),
             2,
         )
@@ -1706,15 +1664,6 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(self.workflow, classifier),
         )
 
-    def test_missing_relay_v2_product_document_path_filter_is_reported(self) -> None:
-        classifier = self.classifier.replace(
-            '"products/relay-v2/CONCEPT.md",',
-            '"products/relay-v2/removed-CONCEPT.md",',
-        )
-        self.assertIn(
-            "Relay V2 product document path filter",
-            self.module.missing_gates(self.workflow, classifier),
-        )
 
 
 if __name__ == "__main__":

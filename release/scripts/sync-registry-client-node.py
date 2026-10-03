@@ -14,7 +14,6 @@ TARGET = ROOT / "crates" / "registry-stack-client-node"
 PRODUCTS = {
     "discovery": ROOT / "crates" / "registry-discovery-client-node",
     "evidence": ROOT / "crates" / "registry-evidence-client-node",
-    "relay": ROOT / "crates" / "registry-relay-client-node",
     "breg": ROOT / "crates" / "registry-breg-client-node",
     "casework": ROOT / "crates" / "registry-casework-client-node",
     "messaging": ROOT / "crates" / "registry-messaging-client-node",

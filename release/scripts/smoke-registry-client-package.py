@@ -16,7 +16,6 @@ def main() -> None:
             registry_client.casework.CaseworkClient,
             registry_client.discovery.DiscoveryClient,
             registry_client.evidence.EvidenceClient,
-            registry_client.relay.RelayClient,
         )
     ):
         raise SystemExit("a Registry Stack client constructor is missing")
@@ -32,8 +31,6 @@ def main() -> None:
         ("discovery", registry_client.discovery.DiscoveryClientError),
         ("evidence", registry_client.evidence.EvidenceClient),
         ("evidence", registry_client.evidence.EvidenceClientError),
-        ("relay", registry_client.relay.RelayClient),
-        ("relay", registry_client.relay.RelayClientError),
     )
     # Messaging joins published wheels in v0.38.0; historical wheels retain
     # their original namespaces. Assembly separately validates the roster.

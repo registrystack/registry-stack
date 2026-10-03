@@ -177,12 +177,22 @@ class BuildLinuxPythonClientTest(unittest.TestCase):
 
     def test_reuses_compiler_paths_for_all_products(self) -> None:
         compilers = []
-        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
+        for client in ("discovery", "evidence", "breg", "casework", "messaging"):
             self.make_client(client)
             result = self.run_build(client=client)
             self.assertEqual(result.returncode, 0, result.stderr)
             compilers.append(json.loads(self.log.read_text())["env"]["HOST_CC"])
         self.assertEqual(len(set(compilers)), 1)
+
+    def test_rejects_retired_relay_before_build(self) -> None:
+        self.make_client("relay")
+        result = self.run_build(client="relay")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "client must be discovery, evidence, breg, casework, or messaging",
+            result.stderr,
+        )
+        self.assertFalse(self.log.exists())
 
     def test_rejects_unpinned_zig_and_unsupported_inputs(self) -> None:
         self.make_client()

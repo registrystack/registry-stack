@@ -26,7 +26,6 @@ NAMESPACES = {
     "casework": ("CaseworkClient", "CaseworkClientError"),
     "discovery": ("DiscoveryClient", "DiscoveryClientError"),
     "evidence": ("EvidenceClient", "EvidenceClientError"),
-    "relay": ("RelayClient", "RelayClientError"),
     "messaging": ("MessagingClient", "MessagingClientError"),
 }
 

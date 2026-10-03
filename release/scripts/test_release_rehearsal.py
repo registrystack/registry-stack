@@ -32,7 +32,6 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "release/scripts/build-release-binaries.sh",
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
-            "products/relay-v2/security/advisory-baseline.json",
         ):
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -55,8 +54,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
             index for index, step in enumerate(steps)
             if step.get("name") == "Setup Node"
         ))
-        # Exercise the current post-Mint inventory, not the v0.30.x roster.
-        env = {**os.environ, "REHEARSAL_VERSION": "0.31.0"}
+        # Exercise the current post-retirement inventory.
+        env = {**os.environ, "REHEARSAL_VERSION": "0.39.0"}
         for advisory, code in (("false", 1), ("true", 0), ("invalid", 2)):
             with self.subTest(advisory=advisory):
                 result = subprocess.run(
@@ -368,7 +367,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
             for step in clients["steps"]
             if step.get("name") == "Build, package, and smoke Linux Node clients"
         )
-        self.assertIn("clients=(discovery evidence relay)", build)
+        self.assertIn("clients=(discovery evidence)", build)
+        self.assertNotIn("registry-relay", build)
         self.assertIn('for client in "${clients[@]}"', build)
         self.assertIn('messaging-in-release "${CLIENT_VERSION}"', build)
         self.assertIn("clients+=(messaging)", build)

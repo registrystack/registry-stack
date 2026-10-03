@@ -55,9 +55,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
+package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
 case "${package}" in
-  relay|evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
+  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -104,9 +104,8 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
    run using the advisory-evidence procedure below; no private image is
    published by the rehearsal. Use the artifact's exact image evidence and the
    procedure in "Renew an image advisory fingerprint" to author and review
-   `release/security/<name>-advisory-baseline.json`. Relay alone uses
-   `products/relay-v2/security/advisory-baseline.json`. Merge the reviewed
-   baseline change.
+   `release/security/<name>-advisory-baseline.json`. Merge the reviewed baseline
+   change.
 7. Run protected-main CI and the strict read-only release rehearsal. Only after
    both pass should you open the version-preparation PR, start the release clock,
    and request the one normal candidate.
@@ -117,6 +116,8 @@ Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `scheduling` joins from `v0.33.0`. The paired `breg-mcp` and `breg-review`
 supporting services, Registry Messaging, Registry Render, and the separate
 `evidence-oid4vci` image join from `v0.38.0`.
+Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
+exclude its image, binaries, installers, and client namespace.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
 `release/scripts/release_roster.py` own those boundaries. The existing
@@ -290,8 +291,8 @@ from v0.23.0, Discovery client projects. Those immutable versions remain
 supported release history. Starting with v0.26.1, a release promotes only the
 unified user-facing clients: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. Their product namespaces carry the version-selected APIs. From v0.38.0,
-these include `discovery`, `evidence`, `relay`, `breg`, `scheduling`, and
-`messaging`. The product-specific native bindings are build inputs, not
+these include `discovery`, `evidence`, `breg`, `scheduling`, and `messaging`
+from `v0.39.0`. The product-specific native bindings are build inputs, not
 additional public projects.
 
 The npm and PyPI publication jobs use GitHub-hosted runners and OpenID Connect
@@ -868,7 +869,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci
+name=evidence # or discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
@@ -897,8 +898,7 @@ Select the matching baseline and confirm its pinned base is still the exact
 prefix of the candidate's authoritative uncompressed DiffIDs:
 
 ```sh
-baseline=products/relay-v2/security/advisory-baseline.json
-# BReg, Casework, Discovery, Evidence, and Messaging use release/security/<name>-advisory-baseline.json.
+baseline="release/security/${name}-advisory-baseline.json"
 jq --slurpfile baseline "${baseline}" -e '
   .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
     == $baseline[0].runtime.layer_ids

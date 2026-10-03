@@ -11,6 +11,10 @@ Discovery packaging CLI beside the existing Discovery runtime binary.
 ``SCHEDULING_BINARY_FIRST_RELEASE`` adds the Scheduling runtime binary beside
 its existing image and operator CLI. Both additions start in v0.38.0.
 
+``RELAY_RETIREMENT_RELEASE`` is the first numbered release that omits Relay.
+Historical numbered releases keep their original Relay inventory; current and
+future release plans use the retained-product roster.
+
 ``BREG_SERVICES_FIRST_RELEASE`` is the single place that decides which release
 first ships the two Base Registry Engine supporting services, the citizen MCP
 gateway ``breg-mcp`` and the citizen review page ``breg-review``. Both join
@@ -41,6 +45,8 @@ SCHEDULING_BINARY_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 RENDER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+
+RELAY_RETIREMENT_RELEASE: tuple[int, int, int] = (0, 39, 0)
 
 VERSION_PATTERN = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
@@ -98,6 +104,12 @@ def evidence_oid4vci_image_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def relay_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether a numbered release retains the historical Relay roster."""
+
+    return tuple(version) < RELAY_RETIREMENT_RELEASE
+
+
 def version_argument(value: str) -> tuple[int, int, int]:
     try:
         return parse_version(value)
@@ -150,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     evidence_oid4vci_image.set_defaults(
         in_release=evidence_oid4vci_image_in_release
     )
+    relay = commands.add_parser(
+        "relay-in-release",
+        help="print true when the numbered release retains Relay, else false",
+    )
+    relay.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    relay.set_defaults(in_release=relay_in_release)
     args = parser.parse_args(argv)
     print("true" if args.in_release(args.version) else "false")
     return 0

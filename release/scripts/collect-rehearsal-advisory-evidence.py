@@ -37,7 +37,6 @@ IMAGE_NAMES = frozenset(
         "evidence-oid4vci",
         "messaging",
         "registry-render",
-        "relay",
         "scheduling",
     }
 )
