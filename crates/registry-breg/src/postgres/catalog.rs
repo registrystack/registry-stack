@@ -948,8 +948,6 @@ pub(crate) async fn install_registry_state_schema(
                  PRIMARY KEY (entity_id, field_id)
              );
              ALTER TABLE registry_internal.registry_field_encryption_flips
-                 ADD COLUMN IF NOT EXISTS history_commit_position bigint;
-             ALTER TABLE registry_internal.registry_field_encryption_flips
                  DROP CONSTRAINT IF EXISTS registry_field_encryption_flip_history_position_positive;
              ALTER TABLE registry_internal.registry_field_encryption_flips
                  ADD CONSTRAINT registry_field_encryption_flip_history_position_positive

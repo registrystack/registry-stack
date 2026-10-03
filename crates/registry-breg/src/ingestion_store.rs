@@ -540,45 +540,6 @@ pub(crate) async fn install(
              CREATE INDEX IF NOT EXISTS registry_ingestion_run_chunk_records_erased_record
                  ON registry_internal.registry_ingestion_run_chunk_records
                      (record_id, record_revision);
-             -- KERNEL INTERNAL SCHEMA MIGRATION (import authorities): a run
-             -- table created before import authorities gains the authority
-             -- reference and the `import_authority_closed` blocked reason and
-             -- attempt outcome.
-             ALTER TABLE registry_internal.registry_ingestion_runs
-                 ADD COLUMN IF NOT EXISTS import_authority_id uuid
-                     REFERENCES registry_internal.registry_import_authorities(authority_id);
-             DO $registry_ingestion_import_authority_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_ingestion_runs'::regclass
-                        AND conname = 'registry_ingestion_runs_blocked_reason_values'
-                        AND pg_catalog.pg_get_constraintdef(oid)
-                            LIKE '%import_authority_closed%'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_ingestion_runs
-                         DROP CONSTRAINT IF EXISTS registry_ingestion_runs_blocked_reason_values,
-                         ADD CONSTRAINT registry_ingestion_runs_blocked_reason_values
-                         CHECK (blocked_reason IS NULL OR blocked_reason IN
-                             ('active_package_changed', 'import_authority_closed'));
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_ingestion_runs'::regclass
-                        AND conname = 'registry_ingestion_runs_attempt_values'
-                        AND pg_catalog.pg_get_constraintdef(oid)
-                            LIKE '%import_authority_closed%'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_ingestion_runs
-                         DROP CONSTRAINT IF EXISTS registry_ingestion_runs_attempt_values,
-                         ADD CONSTRAINT registry_ingestion_runs_attempt_values
-                         CHECK (last_attempt_outcome IS NULL OR last_attempt_outcome IN
-                             ('committed', 'replayed', 'invalid_item', 'refused',
-                              'binding_changed', 'import_authority_closed', 'chunk_mismatch',
-                              'run_not_open', 'unavailable'));
-                 END IF;
-             END
-             $registry_ingestion_import_authority_upgrade$;
              REVOKE ALL ON registry_internal.registry_ingestion_runs,
                  registry_internal.registry_ingestion_run_chunks,
                  registry_internal.registry_ingestion_run_chunk_records FROM PUBLIC;
