@@ -7,10 +7,10 @@
 //! migration, the way a product includes a shipped migration. The statements
 //! are rendered with the adopting product's schema name.
 //!
-//! The statements are an idempotent `CREATE`/`ALTER`/`DO` sequence, so an
-//! existing database upgrades in place. They are ordered: the deliveries
-//! table carries a foreign key into the outbox, so the outbox is created
-//! first.
+//! The statements are an idempotent `CREATE ... IF NOT EXISTS` sequence, so
+//! installing them again over the schema they created changes nothing. They
+//! are ordered: the deliveries table carries a foreign key into the outbox,
+//! so the outbox is created first.
 //!
 //! Installing the statements installs no ACL. Privileges on the delivery
 //! objects stay with the adopting product: it owns every `GRANT` and
@@ -256,398 +256,6 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  ON {schema}.registry_webhook_delivery_state
                      (lease_expires_at, event_id, compiled_delivery_id)
                  WHERE state = 'leased';",
-    // Idempotent upgrades for databases activated by earlier engine builds,
-    // where `CREATE TABLE IF NOT EXISTS` did not evolve these tables: legacy
-    // outbox rows receive the conservative seven-day default from their
-    // original capture time, and a legacy webhook row has no V1 data-schema
-    // binding, so it cannot safely be reinterpreted as a V1 delivery and
-    // requires explicit operator migration.
-    "ALTER TABLE {schema}.registry_outbox
-                 ADD COLUMN IF NOT EXISTS payload_expires_at timestamptz;",
-    "             ALTER TABLE {schema}.registry_outbox
-                 ADD COLUMN IF NOT EXISTS application_reference text
-                     CHECK (application_reference IS NULL OR application_reference <> '');",
-    "             ALTER TABLE {schema}.registry_outbox
-                 DROP CONSTRAINT IF EXISTS registry_outbox_trigger_check;",
-    "             ALTER TABLE {schema}.registry_outbox
-                 ADD CONSTRAINT registry_outbox_trigger_check CHECK (
-                     trigger <> '' AND octet_length(trigger) <= 128
-                 );",
-    "             UPDATE {schema}.registry_outbox
-                SET payload_expires_at = created_at + interval '7 days'
-              WHERE payload_expires_at IS NULL;",
-    // The deliveries/state upgrade blocks refuse pre-V1 webhook history
-    // and restore the per-state shape constraints.
-    "             DO $registry_outbox_upgrade$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid = '{schema}.registry_outbox'::regclass
-                        AND attname = 'payload' AND attnotnull
-                 ) THEN
-                     ALTER TABLE {schema}.registry_outbox
-                         ALTER COLUMN payload DROP NOT NULL;
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = '{schema}.registry_outbox'::regclass
-                        AND conname = 'registry_outbox_payload_check'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_outbox
-                         DROP CONSTRAINT registry_outbox_payload_check;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = '{schema}.registry_outbox'::regclass
-                        AND conname = 'registry_outbox_payload_bounds'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_outbox
-                         ADD CONSTRAINT registry_outbox_payload_bounds CHECK (
-                             payload IS NULL OR
-                             (octet_length(payload) > 0 AND octet_length(payload) <= 2097152)
-                         );
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid = '{schema}.registry_outbox'::regclass
-                        AND attname = 'payload_expires_at' AND NOT attnotnull
-                 ) THEN
-                     ALTER TABLE {schema}.registry_outbox
-                         ALTER COLUMN payload_expires_at SET NOT NULL;
-                 END IF;
-             END
-             $registry_outbox_upgrade$;",
-    "             ALTER TABLE {schema}.registry_webhook_deliveries
-                 ADD COLUMN IF NOT EXISTS data_schema text;",
-    "             DO $registry_webhook_delivery_upgrade$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1
-                       FROM {schema}.registry_webhook_deliveries
-                      WHERE data_schema IS NULL
-                 ) THEN
-                     RAISE EXCEPTION USING
-                         MESSAGE = 'pre-V1 webhook history requires explicit operator migration';
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid =
-                            '{schema}.registry_webhook_deliveries'::regclass
-                        AND attname = 'data_schema' AND NOT attnotnull
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_deliveries
-                         ALTER COLUMN data_schema SET NOT NULL;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_deliveries'::regclass
-                        AND conname = 'registry_webhook_delivery_data_schema_bounds'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_deliveries
-                         ADD CONSTRAINT registry_webhook_delivery_data_schema_bounds CHECK (
-                             data_schema <> '' AND octet_length(data_schema) <= 2048
-                         );
-                 END IF;
-             END
-             $registry_webhook_delivery_upgrade$;",
-    // A database activated before local handler kinds existed holds only
-    // `url` rows: every row it carries names a destination, so the backfill
-    // states what those rows already are and the pairing constraint then
-    // holds for them unchanged.
-    "             ALTER TABLE {schema}.registry_webhook_deliveries
-                 ADD COLUMN IF NOT EXISTS handler_kind text;",
-    "             UPDATE {schema}.registry_webhook_deliveries
-                SET handler_kind = 'url'
-              WHERE handler_kind IS NULL;",
-    "             DO $registry_webhook_delivery_handler_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_deliveries'::regclass
-                        AND conname = 'registry_webhook_delivery_handler_kind_values'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_deliveries
-                         ADD CONSTRAINT registry_webhook_delivery_handler_kind_values CHECK (
-                             handler_kind IN ('url', 'rhai', 'wasm')
-                         );
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid =
-                            '{schema}.registry_webhook_deliveries'::regclass
-                        AND attname = 'handler_kind' AND NOT attnotnull
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_deliveries
-                         ALTER COLUMN handler_kind SET NOT NULL;
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid =
-                            '{schema}.registry_webhook_deliveries'::regclass
-                        AND attname = 'logical_destination_id' AND attnotnull
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_deliveries
-                         ALTER COLUMN logical_destination_id DROP NOT NULL;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_deliveries'::regclass
-                        AND conname = 'registry_webhook_delivery_handler_binding'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_deliveries
-                         ADD CONSTRAINT registry_webhook_delivery_handler_binding CHECK (
-                             (handler_kind = 'url' AND logical_destination_id IS NOT NULL)
-                             OR (handler_kind IN ('rhai', 'wasm')
-                                 AND logical_destination_id IS NULL)
-                         );
-                 END IF;
-             END
-             $registry_webhook_delivery_handler_upgrade$;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS expired_at timestamptz;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS handler_message bytea;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS handler_message_digest bytea;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS dead_letter_reason text;",
-    "             DO $registry_webhook_state_upgrade$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_state_check'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         DROP CONSTRAINT registry_webhook_delivery_state_state_check;
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_check'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         DROP CONSTRAINT registry_webhook_delivery_state_check;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_values'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_values CHECK (
-                             state IN (
-                                 'pending', 'leased', 'delivered', 'dead_lettered', 'expired'
-                             )
-                         );
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_shape'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_shape CHECK (
-                             (state = 'pending'
-                                 AND next_attempt_at IS NOT NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NULL)
-                             OR (state = 'leased'
-                                 AND attempt > 0
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NOT NULL
-                                 AND lease_expires_at > attempt_started_at
-                                 AND lease_token IS NOT NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NULL)
-                             OR (state = 'delivered'
-                                 AND attempt > 0
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NOT NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NULL)
-                             OR (state = 'dead_lettered'
-                                 AND attempt > 0
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NOT NULL)
-                             OR (state = 'expired'
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NOT NULL)
-                         );
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_answer'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         DROP CONSTRAINT registry_webhook_delivery_state_answer;
-                     UPDATE {schema}.registry_webhook_delivery_state
-                        SET handler_message = NULL,
-                            updated_at = transaction_timestamp()
-                      WHERE handler_message IS NOT NULL
-                        AND handler_message_digest IS NOT NULL;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_answer_digest_required'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_answer_digest_required CHECK (
-                             (handler_message IS NULL AND handler_message_digest IS NULL)
-                             OR (state = 'delivered'
-                                 AND handler_message IS NULL
-                                 AND handler_message_digest IS NOT NULL
-                                 AND octet_length(handler_message_digest) = 32)
-                         );
-                 END IF;
-             END
-             $registry_webhook_state_upgrade$;",
-    "             DO $registry_webhook_state_recovery_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_dead_letter_reason_values'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_dead_letter_reason_values
-                         CHECK (
-                             dead_letter_reason IS NULL OR dead_letter_reason IN (
-                                 'http_non_success', 'destination_timeout',
-                                 'invalid_remaining_timeout', 'invalid_frozen_policy',
-                                 'invalid_frozen_request', 'resolution_failed',
-                                 'resolution_capacity_unavailable', 'too_many_resolver_answers',
-                                 'no_resolver_answers', 'resolver_port_mismatch',
-                                 'resolver_address_family_mismatch', 'literal_origin_mismatch',
-                                 'cloud_metadata_denied', 'always_denied_address',
-                                 'private_address_not_allowed', 'non_global_address_denied',
-                                 'development_address_denied', 'tls_material_unavailable',
-                                 'client_build_failed', 'transport_failed',
-                                 'transport_failed_after_connect', 'deadline_exceeded',
-                                 'deadline_exceeded_after_connect', 'too_many_response_headers',
-                                 'response_header_bytes_exceeded', 'destination_policy_refused',
-                                 'destination_binding_refused', 'handler_binding_refused',
-                                 'handler_deadline', 'handler_resource', 'handler_execution',
-                                 'handler_source', 'handler_unavailable', 'payload_refused',
-                                 'worker_interrupted', 'proposal_dead_lettered'
-                             )
-                         );
-                 END IF;
-             END
-             $registry_webhook_state_recovery_upgrade$;",
-    // Proposal bookkeeping: what became of the proposal an accepted answer
-    // carried, readable from the row without reconstructing it from logs. A
-    // delivered row records 'none', 'applied', or 'refused'; a row the
-    // proposal path dead-letters records 'dead_lettered' with its reason.
-    // Legacy rows keep NULL in all four columns, as do rows that dead-letter
-    // without ever accepting an answer.
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS proposal_disposition text;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS proposal_resulting_revision bigint;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS proposal_code text;",
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS proposal_summary text;",
-    "             DO $registry_webhook_state_proposal_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_proposal_values'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_proposal_values CHECK (
-                             proposal_disposition IS NULL
-                             OR proposal_disposition IN ('none', 'applied', 'refused', 'dead_lettered')
-                         );
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_proposal_code_bounds'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_proposal_code_bounds
-                             CHECK (
-                                 proposal_code IS NULL
-                                 OR (proposal_code <> ''
-                                     AND octet_length(proposal_code) <= 128)
-                             );
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_proposal_summary_bounds'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_proposal_summary_bounds
-                             CHECK (
-                                 proposal_summary IS NULL
-                                 OR (proposal_summary <> ''
-                                     AND octet_length(proposal_summary) <= 1024)
-                             );
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_proposal'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_proposal CHECK (
-                             (proposal_disposition IS NULL
-                                 AND proposal_resulting_revision IS NULL
-                                 AND proposal_code IS NULL
-                                 AND proposal_summary IS NULL)
-                             OR (proposal_disposition = 'none'
-                                 AND proposal_resulting_revision IS NULL
-                                 AND proposal_code IS NULL
-                                 AND proposal_summary IS NULL)
-                             OR (proposal_disposition = 'applied'
-                                 AND proposal_resulting_revision IS NOT NULL
-                                 AND proposal_code IS NULL
-                                 AND proposal_summary IS NULL)
-                             OR (proposal_disposition IN ('refused', 'dead_lettered')
-                                 AND proposal_resulting_revision IS NULL
-                                 AND proposal_code IS NOT NULL
-                                 AND proposal_summary IS NOT NULL)
-                         );
-                 END IF;
-             END
-             $registry_webhook_state_proposal_upgrade$;",
 ];
 
 // The persistent objects the statements above create, unqualified. The
@@ -674,8 +282,8 @@ pub async fn install(
     Ok(())
 }
 
-/// The ordered, complete statement list for the delivery tables: creation,
-/// upgrade `ALTER`s, rebuild `DO` blocks, and indexes, each schema-qualified.
+/// The ordered, complete statement list for the delivery tables: creation
+/// and indexes, each schema-qualified.
 ///
 /// # Panics
 ///
@@ -799,9 +407,7 @@ mod tests {
                     && statement.contains("octet_length(payload) <= 2097152")
             })
             .count();
-        // The bound exists both on the fresh creation and in the upgrade
-        // block that rebuilds it on databases from earlier engine builds.
-        assert_eq!(bounds, 2);
+        assert_eq!(bounds, 1);
     }
 
     #[test]
@@ -829,9 +435,7 @@ mod tests {
                     && statement.contains("AND logical_destination_id IS NULL")
             })
             .count();
-        // The pairing exists both on the fresh creation and in the upgrade
-        // block that adds it to databases from earlier engine builds.
-        assert_eq!(pairings, 2);
+        assert_eq!(pairings, 1);
     }
 
     #[test]
@@ -851,37 +455,14 @@ mod tests {
                     && statement.contains("octet_length(handler_message_digest) = 32")
             })
             .count();
-        assert_eq!(answers, 2);
-    }
-
-    #[test]
-    fn the_legacy_answer_upgrade_erases_raw_message_bytes_once() {
-        let statements = rendered(KERNEL_SCHEMA);
-        let upgrade = statements
-            .iter()
-            .find(|statement| {
-                statement.contains("registry_webhook_delivery_state_answer'")
-                    && statement.contains("DROP CONSTRAINT registry_webhook_delivery_state_answer")
-            })
-            .expect("the legacy answer constraint is replaced");
-        assert!(upgrade.contains("SET handler_message = NULL"));
-        assert!(upgrade.contains("WHERE handler_message IS NOT NULL"));
-        assert!(upgrade.contains("AND handler_message_digest IS NOT NULL"));
-        let erase = upgrade
-            .find("SET handler_message = NULL")
-            .expect("the legacy bytes are erased");
-        let install = upgrade
-            .find("ADD CONSTRAINT registry_webhook_delivery_state_answer_digest_required")
-            .expect("the strict replacement constraint is installed");
-        assert!(erase < install);
+        assert_eq!(answers, 1);
     }
 
     #[test]
     fn a_delivery_row_records_what_became_of_its_proposal() {
         // The operator's question is answerable from the row alone: did the
         // accepted answer propose anything, and what became of the proposal?
-        // Four dispositions, each with exactly its own companions, on the
-        // fresh creation and in the upgrade block alike.
+        // Four dispositions, each with exactly its own companions.
         let statements = rendered(KERNEL_SCHEMA);
         let values = statements
             .iter()
@@ -892,10 +473,7 @@ mod tests {
                     )
             })
             .count();
-        assert_eq!(
-            values, 2,
-            "the closed disposition vocabulary exists on creation and on upgrade"
-        );
+        assert_eq!(values, 1, "the closed disposition vocabulary is installed");
         let combinations = statements
             .iter()
             .filter(|statement| {
@@ -906,8 +484,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            combinations, 2,
-            "each disposition carries exactly its own companions, on creation and on upgrade"
+            combinations, 1,
+            "each disposition carries exactly its own companions"
         );
         let joined = statements.join("\n");
         for combination in [
@@ -935,7 +513,7 @@ mod tests {
     #[test]
     fn every_statement_is_qualified_by_the_schema() {
         let statements = rendered(KERNEL_SCHEMA);
-        assert_eq!(statements.len(), 27);
+        assert_eq!(statements.len(), 5);
         for statement in &statements {
             assert!(
                 statement.contains(KERNEL_SCHEMA),
@@ -1039,5 +617,83 @@ mod tests {
     #[should_panic(expected = "delivery schema must be a plain lowercase SQL identifier")]
     fn object_names_refuse_a_schema_that_is_not_a_plain_identifier() {
         let _ = object_names("registry; drop table users");
+    }
+
+    // Every table, column, constraint, and index in `schema`, with the oid of
+    // each relation and constraint, so a rebuilt object reads as a change.
+    async fn installed_catalog(client: &tokio_postgres::Client, schema: &str) -> Vec<String> {
+        client
+            .query(
+                "SELECT format('relation %s %s %s', c.relname, c.relkind, c.oid)
+                   FROM pg_catalog.pg_class c
+                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = $1
+                 UNION ALL
+                 SELECT format('column %s.%s %s %s', c.relname, a.attname,
+                               format_type(a.atttypid, a.atttypmod), a.attnotnull)
+                   FROM pg_catalog.pg_attribute a
+                   JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = $1 AND c.relkind = 'r'
+                    AND a.attnum > 0 AND NOT a.attisdropped
+                 UNION ALL
+                 SELECT format('constraint %s.%s %s %s', c.relname, con.conname, con.oid,
+                               pg_catalog.pg_get_constraintdef(con.oid))
+                   FROM pg_catalog.pg_constraint con
+                   JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = $1
+                  ORDER BY 1",
+                &[&schema],
+            )
+            .await
+            .expect("read the installed delivery catalog")
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn installing_over_an_installed_schema_changes_nothing() {
+        let url = std::env::var("HOOKS_TEST_DATABASE_URL")
+            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL test");
+        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .expect("connect to the local PostgreSQL test database");
+        tokio::spawn(async move {
+            let _closed = connection.await;
+        });
+        let schema = "hooks_delivery_reinstall_test";
+        client
+            .batch_execute(&format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"
+            ))
+            .await
+            .expect("reset the test schema");
+        install(&client, schema)
+            .await
+            .expect("install the delivery schema");
+        let installed = installed_catalog(&client, schema).await;
+        for name in object_names(schema) {
+            let relation = name
+                .strip_prefix(&format!("{schema}."))
+                .expect("object names are schema-qualified");
+            assert!(
+                installed
+                    .iter()
+                    .any(|entry| entry.starts_with(&format!("relation {relation} "))),
+                "{name} is installed"
+            );
+        }
+
+        install(&client, schema)
+            .await
+            .expect("install runs again over the installed schema");
+        assert_eq!(installed_catalog(&client, schema).await, installed);
+        client
+            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE;"))
+            .await
+            .expect("drop the test schema");
     }
 }

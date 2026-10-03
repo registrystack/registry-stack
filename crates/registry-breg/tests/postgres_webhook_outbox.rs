@@ -430,14 +430,13 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
+async fn real_postgres_internal_schema_reinstall_is_idempotent() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    install_pre_v1_webhook_schema(&migration).await;
 
     install_mutation_schema(&migration, &database.runtime_role, false)
         .await
-        .expect("empty pre-V1 webhook schema upgrades");
+        .expect("the internal schema installs");
     let answer_constraint_oid = migration
         .query_one(
             "SELECT oid::bigint
@@ -462,7 +461,7 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
         .get::<_, i64>(0);
     install_mutation_schema(&migration, &database.runtime_role, false)
         .await
-        .expect("the internal schema upgrade is idempotent");
+        .expect("the internal schema reinstalls over itself");
     let reinstalled_answer_constraint_oid = migration
         .query_one(
             "SELECT oid::bigint
@@ -511,7 +510,7 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
             &[],
         )
         .await
-        .expect("migration can inspect upgraded internal columns")
+        .expect("migration can inspect the internal columns")
         .into_iter()
         .map(|row| {
             (
@@ -567,60 +566,45 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message() {
+async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_answer_bytes() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    install_pre_v1_webhook_schema(&migration).await;
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_webhook_deliveries
-                 ADD COLUMN data_schema text NOT NULL;
-             ALTER TABLE registry_internal.registry_webhook_delivery_state
-                 ADD COLUMN expired_at timestamptz,
-                 ADD COLUMN handler_message bytea,
-                 ADD COLUMN handler_message_digest bytea,
-                 ADD CONSTRAINT registry_webhook_delivery_state_answer CHECK (
-                     (handler_message IS NULL AND handler_message_digest IS NULL)
-                     OR (state = 'delivered'
-                         AND handler_message IS NOT NULL
-                         AND octet_length(handler_message) BETWEEN 1 AND 1048576
-                         AND handler_message_digest IS NOT NULL
-                         AND octet_length(handler_message_digest) = 32)
-                 );",
-        )
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
-        .expect("legacy answer columns and constraint install");
+        .expect("the internal schema installs");
     let event_id = Uuid::new_v4();
-    let payload = br#"{"label":"legacy-answer"}"#.to_vec();
+    let payload = br#"{"label":"answer-shape"}"#.to_vec();
     let answer = br#"{"outcome":"accepted"}"#.to_vec();
     let answer_digest = Sha256::digest(&answer).to_vec();
     migration
         .execute(
             "INSERT INTO registry_internal.registry_outbox
                  (event_id, event_type, trigger, entity_id, record_reference,
-                  record_revision, package_revision, schema_fingerprint, payload)
-             VALUES ($1, 'case-created', 'created', 'case', 'legacy-reference',
-                     1, $2, $3, $4)",
+                  record_revision, package_revision, schema_fingerprint, payload,
+                  payload_expires_at)
+             VALUES ($1, 'case-created', 'created', 'case', 'answer-reference',
+                     1, $2, $3, $4, transaction_timestamp() + interval '7 days')",
             &[&event_id, &PACKAGE_REVISION, &SCHEMA_FINGERPRINT, &payload],
         )
         .await
-        .expect("legacy outbox row installs");
+        .expect("outbox row installs");
     migration
         .execute(
             "INSERT INTO registry_internal.registry_webhook_deliveries
-                 (event_id, compiled_delivery_id, logical_destination_id,
+                 (event_id, compiled_delivery_id, handler_kind, logical_destination_id,
                   destination_binding_digest, package_revision, schema_fingerprint,
-                  classification_ceiling, authentication_profile, delivery_mode,
-                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
-                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
-                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
-                  deployed_maximum_attempts, dead_letter, operator_replay, data_schema)
-             VALUES ($1, 'case-created:webhook', $2,
+                  data_schema, classification_ceiling, authentication_profile,
+                  delivery_mode, attempt_timeout_ms, initial_backoff_ms,
+                  maximum_backoff_ms, exponential_backoff_multiplier, maximum_attempts,
+                  retry_delays_ms, maximum_payload_bytes, payload_digest,
+                  deployed_attempt_timeout_ms, deployed_maximum_attempts, dead_letter,
+                  operator_replay)
+             VALUES ($1, 'case-created:webhook', 'url', $2,
                      'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-                     $3, $4, 'restricted', 'hmac_sha256_v1', 'after_commit',
-                     5000, 1000, 8000, 2, 5, ARRAY[1000,2000,4000,8000]::bigint[],
-                     1048576, $5, 5000, 5, 'required', true,
-                     'urn:registrystack:test:legacy-answer')",
+                     $3, $4, 'urn:registrystack:test:answer-shape', 'restricted',
+                     'hmac_sha256_v1', 'after_commit', 5000, 1000, 8000, 2, 5,
+                     ARRAY[1000,2000,4000,8000]::bigint[], 1048576, $5, 5000, 5,
+                     'required', true)",
             &[
                 &event_id,
                 &DESTINATION_ID,
@@ -630,8 +614,9 @@ async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message()
             ],
         )
         .await
-        .expect("legacy delivery row installs");
-    migration
+        .expect("delivery row installs");
+
+    let inserted = migration
         .execute(
             "INSERT INTO registry_internal.registry_webhook_delivery_state
                  (event_id, compiled_delivery_id, generation, state, attempt,
@@ -641,12 +626,36 @@ async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message()
             &[&event_id, &answer, &answer_digest],
         )
         .await
-        .expect("legacy delivered answer installs");
+        .expect_err("a delivered row that keeps its raw answer next to the digest is refused");
+    assert_eq!(
+        inserted.as_db_error().and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer_digest_required")
+    );
 
-    install_mutation_schema(&migration, &database.runtime_role, false)
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt,
+                  delivered_at, handler_message_digest)
+             VALUES ($1, 'case-created:webhook', 1, 'delivered', 1,
+                     transaction_timestamp(), $2)",
+            &[&event_id, &answer_digest],
+        )
         .await
-        .expect("legacy answer schema upgrades");
-
+        .expect("a delivered row that keeps only the answer digest installs");
+    let updated = migration
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET handler_message = $2
+              WHERE event_id = $1 AND compiled_delivery_id = 'case-created:webhook'",
+            &[&event_id, &answer],
+        )
+        .await
+        .expect_err("raw answer bytes cannot be written back onto a delivered row");
+    assert_eq!(
+        updated.as_db_error().and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer_digest_required")
+    );
     let row = migration
         .query_one(
             "SELECT handler_message, handler_message_digest
@@ -655,156 +664,12 @@ async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message()
             &[&event_id],
         )
         .await
-        .expect("upgraded delivery state reads");
+        .expect("delivery state reads");
     assert_eq!(row.get::<_, Option<Vec<u8>>>(0), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(1), Some(answer_digest));
-    let raw_answer = migration
-        .execute(
-            "UPDATE registry_internal.registry_webhook_delivery_state
-                SET handler_message = $2
-              WHERE event_id = $1 AND compiled_delivery_id = 'case-created:webhook'",
-            &[&event_id, &answer],
-        )
-        .await
-        .expect_err("the upgraded constraint refuses every retained raw answer");
-    assert_eq!(
-        raw_answer
-            .as_db_error()
-            .and_then(|error| error.constraint()),
-        Some("registry_webhook_delivery_state_answer_digest_required")
-    );
 
     migration_task.abort();
     database.cleanup().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_pre_v1_webhook_history_refuses_silent_v1_reinterpretation() {
-    let database = TestDatabase::create(4).await;
-    let (migration, migration_task) = database.connect_migration().await;
-    install_pre_v1_webhook_schema(&migration).await;
-    let event_id = Uuid::new_v4();
-    let legacy_body = br#"{"label":"legacy-values-only"}"#.to_vec();
-    migration
-        .execute(
-            "INSERT INTO registry_internal.registry_outbox
-                 (event_id, event_type, trigger, entity_id, record_reference,
-                  record_revision, package_revision, schema_fingerprint, payload)
-             VALUES ($1, 'case-created', 'created', 'case', 'legacy-reference',
-                     1, $2, $3, $4)",
-            &[
-                &event_id,
-                &PACKAGE_REVISION,
-                &SCHEMA_FINGERPRINT,
-                &legacy_body,
-            ],
-        )
-        .await
-        .expect("pre-V1 outbox row installs");
-    migration
-        .execute(
-            "INSERT INTO registry_internal.registry_webhook_deliveries
-                 (event_id, compiled_delivery_id, logical_destination_id,
-                  destination_binding_digest, package_revision, schema_fingerprint,
-                  classification_ceiling, authentication_profile, delivery_mode,
-                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
-                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
-                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
-                  deployed_maximum_attempts, dead_letter, operator_replay)
-             VALUES ($1, 'case-created:webhook', $2,
-                     'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-                     $3, $4, 'restricted', 'hmac_sha256_v1', 'after_commit',
-                     5000, 1000, 8000, 2, 5, ARRAY[1000,2000,4000,8000]::bigint[],
-                     1048576, $5, 5000, 5, 'required', true)",
-            &[
-                &event_id,
-                &DESTINATION_ID,
-                &PACKAGE_REVISION,
-                &SCHEMA_FINGERPRINT,
-                &Sha256::digest(&legacy_body).to_vec(),
-            ],
-        )
-        .await
-        .expect("pre-V1 webhook history installs");
-
-    assert_eq!(
-        install_mutation_schema(&migration, &database.runtime_role, false).await,
-        Err(MutationError::Unavailable),
-        "a missing captured data-schema binding is never synthesized"
-    );
-
-    migration_task.abort();
-    database.cleanup().await;
-}
-
-async fn install_pre_v1_webhook_schema(migration: &tokio_postgres::Client) {
-    migration
-        .batch_execute(
-            "CREATE TABLE registry_internal.registry_outbox (
-                 outbox_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                 event_id uuid NOT NULL UNIQUE,
-                 event_type text NOT NULL,
-                 trigger text NOT NULL,
-                 entity_id text NOT NULL,
-                 record_reference text NOT NULL,
-                 record_revision bigint NOT NULL,
-                 package_revision text NOT NULL,
-                 schema_fingerprint text NOT NULL,
-                 payload bytea NOT NULL CHECK (
-                     octet_length(payload) > 0 AND octet_length(payload) <= 2097152
-                 ),
-                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 UNIQUE (event_id, package_revision, schema_fingerprint)
-             );
-             CREATE TABLE registry_internal.registry_webhook_deliveries (
-                 event_id uuid NOT NULL,
-                 compiled_delivery_id text NOT NULL,
-                 logical_destination_id text NOT NULL,
-                 destination_binding_digest text NOT NULL,
-                 package_revision text NOT NULL,
-                 schema_fingerprint text NOT NULL,
-                 classification_ceiling text NOT NULL,
-                 authentication_profile text NOT NULL,
-                 delivery_mode text NOT NULL,
-                 attempt_timeout_ms bigint NOT NULL,
-                 initial_backoff_ms bigint NOT NULL,
-                 maximum_backoff_ms bigint NOT NULL,
-                 exponential_backoff_multiplier smallint NOT NULL,
-                 maximum_attempts smallint NOT NULL,
-                 retry_delays_ms bigint[] NOT NULL,
-                 maximum_payload_bytes bigint NOT NULL,
-                 payload_digest bytea NOT NULL,
-                 deployed_attempt_timeout_ms bigint NOT NULL,
-                 deployed_maximum_attempts smallint NOT NULL,
-                 dead_letter text NOT NULL,
-                 operator_replay boolean NOT NULL,
-                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (event_id, compiled_delivery_id),
-                 FOREIGN KEY (event_id, package_revision, schema_fingerprint)
-                     REFERENCES registry_internal.registry_outbox
-                         (event_id, package_revision, schema_fingerprint)
-             );
-             CREATE TABLE registry_internal.registry_webhook_delivery_state (
-                 event_id uuid NOT NULL,
-                 compiled_delivery_id text NOT NULL,
-                 generation bigint NOT NULL,
-                 state text NOT NULL,
-                 attempt smallint NOT NULL,
-                 next_attempt_at timestamptz,
-                 attempt_started_at timestamptz,
-                 lease_expires_at timestamptz,
-                 lease_token uuid,
-                 delivered_at timestamptz,
-                 dead_lettered_at timestamptz,
-                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (event_id, compiled_delivery_id),
-                 FOREIGN KEY (event_id, compiled_delivery_id)
-                     REFERENCES registry_internal.registry_webhook_deliveries
-                         (event_id, compiled_delivery_id)
-             );",
-        )
-        .await
-        .expect("pre-V1 webhook internal schema installs");
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
