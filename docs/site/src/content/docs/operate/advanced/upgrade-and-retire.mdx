@@ -146,7 +146,6 @@ Because the release rule holds in both directions, rolling back one product mean
 every product that must match it: Casework refuses a BReg that went back without it.
 
 {/* Evidence: crates/registry-casework/src/store.rs, refuse_newer_schema();
-    crates/registry-bregctl/src/lib.rs, LegacyFormat refused as apply.package.refused;
     crates/registry-bregctl/src/package_lifecycle.rs, PACKAGE_DIRECTORY (the package child of
     --output); crates/registry-breg/src/instance_claim.rs, module docs (a logical copy keeps its
     original's claim; v0.35.0 ships instance-claim adopt);

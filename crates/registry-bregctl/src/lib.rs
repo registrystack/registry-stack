@@ -5281,7 +5281,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::TargetPackage(error) => (
             "apply.package.refused",
             "package",
-            package_refusal_message(&error, "the activation package was refused"),
+            "the activation package was refused",
             DiagnosticArtifact::VerifiedPackage,
             package_refusal_action(&error),
         ),
@@ -5290,14 +5290,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::CurrentPackage(error) => (
             "apply.package.refused",
             "package.root",
-            match error {
-                PackageError::LegacyFormat => {
-                    "the active package at package.root uses the retired package/v1 manifest format: rebuild the deployed project with this release's `bregctl package`, point package.root at the rebuilt package, and run the command again"
-                }
-                _ => {
-                    "the active package at package.root was refused"
-                }
-            },
+            "the active package at package.root was refused",
             DiagnosticArtifact::VerifiedPackage,
             package_refusal_action(&error),
         ),
@@ -5943,7 +5936,7 @@ fn inspection_failure(
             (
                 format!("{prefix}.package.{suffix}"),
                 "package",
-                package_refusal_message(&error, "the configured package was refused"),
+                "the configured package was refused",
                 DiagnosticArtifact::VerifiedPackage,
                 action,
             )
@@ -5970,7 +5963,6 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
             SuggestedAction::VerifyPackagePermissions,
         ),
         PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
-        PackageError::LegacyFormat => ("legacy_format", SuggestedAction::CorrectPackageBuild),
         PackageError::Envelope
         | PackageError::ExpectedDigestMismatch(_)
         | PackageError::Closure
@@ -5993,15 +5985,6 @@ fn package_refusal_action(error: &PackageError) -> SuggestedAction {
         PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
         PackageError::Binding => SuggestedAction::VerifyPackageBinding,
         _ => SuggestedAction::VerifyPackageIntegrity,
-    }
-}
-
-/// A package in the retired format is refused with the command that rebuilds
-/// it; every other refusal keeps the caller's value-free sentence.
-fn package_refusal_message(error: &PackageError, message: &'static str) -> &'static str {
-    match error {
-        PackageError::LegacyFormat => registry_breg::package::LEGACY_PACKAGE_FORMAT,
-        _ => message,
     }
 }
 
@@ -6095,10 +6078,7 @@ fn baseline_package_failure(command: &'static str, error: PackageError) -> Failu
         command,
         &format!("package.baseline.{suffix}"),
         "baselinePackage",
-        package_refusal_message(
-            &error,
-            "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
-        ),
+        "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -6146,7 +6126,7 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
     diff_failure_with_action(
         &format!("diff.baseline.{suffix}"),
         "baseline",
-        package_refusal_message(&error, "the baseline package was refused"),
+        "the baseline package was refused",
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -6573,7 +6553,7 @@ fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
                 diagnostic(
                     &format!("check.package.{suffix}"),
                     "package",
-                    package_refusal_message(&error, "the package was refused"),
+                    "the package was refused",
                 ),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
@@ -12891,27 +12871,18 @@ mod tests {
                 .expect("the failure report serializes");
             report["diagnostics"][0].clone()
         };
-        let target = diagnostic(ApplyLifecycleError::TargetPackage(
-            PackageError::LegacyFormat,
-        ));
+        let target = diagnostic(ApplyLifecycleError::TargetPackage(PackageError::Integrity));
         assert_eq!(target["code"], "apply.package.refused");
         assert_eq!(target["path"], "package");
-        assert_eq!(
-            target["message"],
-            registry_breg::package::LEGACY_PACKAGE_FORMAT
-        );
+        assert_eq!(target["message"], "the activation package was refused");
 
-        // A database a release before the activation ledger activated is
-        // adopted by the package package.root names, and that release's
-        // packages all use the retired format.
-        let active = diagnostic(ApplyLifecycleError::CurrentPackage(
-            PackageError::LegacyFormat,
-        ));
+        let active = diagnostic(ApplyLifecycleError::CurrentPackage(PackageError::Integrity));
         assert_eq!(active["code"], "apply.package.refused");
         assert_eq!(active["path"], "package.root");
-        let message = active["message"].as_str().expect("the message renders");
-        assert!(message.contains("package.root"), "{message}");
-        assert!(message.contains("`bregctl package`"), "{message}");
+        assert_eq!(
+            active["message"],
+            "the active package at package.root was refused"
+        );
 
         let active = diagnostic(ApplyLifecycleError::CurrentPackage(
             PackageError::Permissions,
