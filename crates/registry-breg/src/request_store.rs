@@ -38,66 +38,10 @@ pub(crate) const REQUEST_TABLES: &[(&str, &[&str])] = &[
     ("registry_request_revision_links", &["INSERT", "SELECT"]),
 ];
 
-/// A database that still carries a pre-migration review decision or state
-/// value predates the current review workflow. Installing over it would
-/// either silently drop the legacy decision history (`registry_request_decisions`
-/// is dropped unconditionally below) or fail the state check constraint at an
-/// arbitrary later statement, so install refuses up front instead.
-async fn reject_legacy_review_data(client: &impl GenericClient) -> Result<(), MutationError> {
-    let decisions_table_present = client
-        .query_one(
-            "SELECT to_regclass('registry_internal.registry_request_decisions') IS NOT NULL",
-            &[],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?
-        .get::<_, bool>(0);
-    if decisions_table_present {
-        let decisions_present = client
-            .query_one(
-                "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_request_decisions)",
-                &[],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?
-            .get::<_, bool>(0);
-        if decisions_present {
-            return Err(MutationError::LegacyReviewDataPresent);
-        }
-    }
-
-    let state_table_present = client
-        .query_one(
-            "SELECT to_regclass('registry_internal.registry_request_state') IS NOT NULL",
-            &[],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?
-        .get::<_, bool>(0);
-    if state_table_present {
-        let legacy_state_present = client
-            .query_one(
-                "SELECT EXISTS (
-                     SELECT 1 FROM registry_internal.registry_request_state
-                     WHERE state NOT IN ('draft', 'submitted', 'cancelled', 'applied')
-                 )",
-                &[],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?
-            .get::<_, bool>(0);
-        if legacy_state_present {
-            return Err(MutationError::LegacyReviewDataPresent);
-        }
-    }
-    Ok(())
-}
-
 pub(crate) async fn install(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), MutationError> {
-    reject_legacy_review_data(client).await?;
     client.batch_execute(
         "CREATE TABLE IF NOT EXISTS registry_internal.registry_request_state (
              request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
@@ -186,7 +130,6 @@ pub(crate) async fn install(
              ON registry_internal.registry_request_targets (target_entity_id, target_record_id);
          CREATE INDEX IF NOT EXISTS registry_request_queue
              ON registry_internal.registry_request_state (request_entity_id, state, request_id);
-         DROP TABLE IF EXISTS registry_internal.registry_request_decisions;
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_applications (
              request_entity_id text NOT NULL,
              request_id uuid NOT NULL,
@@ -532,13 +475,8 @@ pub(crate) async fn load(
         .map_err(|_| MutationError::Unavailable)?;
     let current_version = proposal_version(row.get::<_, i64>(2))?;
     let revision = u64::try_from(row.get::<_, i64>(3)).map_err(|_| MutationError::Unavailable)?;
-    let state = RequestState::from_storage(&row.get::<_, String>(1)).map_err(|error| {
-        if error == crate::request_workflow::WorkflowError::OccupiedLegacyApprovalState {
-            MutationError::Conflict
-        } else {
-            MutationError::Unavailable
-        }
-    })?;
+    let state = RequestState::from_storage(&row.get::<_, String>(1))
+        .map_err(|_| MutationError::Unavailable)?;
     let proposals = transaction
         .query(
             "SELECT proposal_version, snapshot FROM registry_internal.registry_request_proposals
@@ -655,13 +593,7 @@ pub(crate) async fn load_header(
         .map_err(|_| MutationError::Unavailable)?
         .ok_or(MutationError::PreconditionFailed)?;
     let state: String = row.get(1);
-    match RequestState::from_storage(&state) {
-        Ok(_) => {}
-        Err(crate::request_workflow::WorkflowError::OccupiedLegacyApprovalState) => {
-            return Err(MutationError::Conflict);
-        }
-        Err(_) => return Err(MutationError::Unavailable),
-    }
+    RequestState::from_storage(&state).map_err(|_| MutationError::Unavailable)?;
     let proposal_version: i64 = row.get(2);
     let workflow_revision: i64 = row.get(3);
     if proposal_version <= 0 || workflow_revision <= 0 {
@@ -1500,67 +1432,8 @@ mod tests {
                 assert!(allowed, "declared runtime table privilege is granted");
             }
         }
-        let obsolete_decisions_absent = migration
-            .query_one(
-                "SELECT to_regclass('registry_internal.registry_request_decisions') IS NULL",
-                &[],
-            )
-            .await
-            .expect("obsolete decision table lookup succeeds")
-            .get::<_, bool>(0);
-        assert!(obsolete_decisions_absent);
         migration_task.abort();
         database.cleanup().await;
-    }
-
-    #[tokio::test]
-    async fn install_refuses_a_database_still_carrying_legacy_review_decisions() {
-        load_postgres_env();
-        let database = TestDatabase::create(1).await;
-        let (migration, migration_task) = database.connect_migration().await;
-        migration
-            .batch_execute(
-                "CREATE TABLE registry_internal.registry_request_decisions (id integer);
-                 INSERT INTO registry_internal.registry_request_decisions (id) VALUES (1);",
-            )
-            .await
-            .expect("legacy decisions fixture installs");
-        assert_eq!(
-            install_mutation_schema(&migration, &database.runtime_role, false).await,
-            Err(MutationError::LegacyReviewDataPresent)
-        );
-        migration_task.abort();
-        database.cleanup().await;
-    }
-
-    #[tokio::test]
-    async fn install_refuses_a_database_still_carrying_legacy_review_states() {
-        load_postgres_env();
-        for legacy_state in ["approved", "superseded"] {
-            let database = TestDatabase::create(1).await;
-            let (migration, migration_task) = database.connect_migration().await;
-            migration
-                .execute(
-                    "CREATE TABLE registry_internal.registry_request_state (state text)",
-                    &[],
-                )
-                .await
-                .expect("legacy state table installs");
-            migration
-                .execute(
-                    "INSERT INTO registry_internal.registry_request_state (state) VALUES ($1)",
-                    &[&legacy_state],
-                )
-                .await
-                .expect("legacy state fixture installs");
-            assert_eq!(
-                install_mutation_schema(&migration, &database.runtime_role, false).await,
-                Err(MutationError::LegacyReviewDataPresent),
-                "{legacy_state}"
-            );
-            migration_task.abort();
-            database.cleanup().await;
-        }
     }
 
     #[tokio::test]

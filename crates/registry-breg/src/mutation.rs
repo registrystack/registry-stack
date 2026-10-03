@@ -2637,12 +2637,6 @@ pub enum MutationError {
     /// with the closed run vocabulary, never with chunk bytes or row values.
     #[error("ingestion run refused the chunk")]
     IngestionRefusal(IngestionRefusal),
-    /// A pre-migration review decision or state value from before the current
-    /// schema is still present. Installing over it would either silently
-    /// drop the legacy decision history or fail the state check constraint,
-    /// so install refuses instead of attempting either outcome.
-    #[error("legacy review decisions or state values are still present")]
-    LegacyReviewDataPresent,
     /// A pre-simplification audit journal table is still present with rows in
     /// it. Migrating over it would silently discard those retained audit
     /// entries, so install refuses unless the operator explicitly
