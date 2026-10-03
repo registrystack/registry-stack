@@ -498,6 +498,15 @@ Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../.
 
 {/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-breg/src/contract.rs, HookSource and EventConditionSource; crates/registry-breg/src/webhook.rs; crates/registry-bregctl/src/lib.rs, webhook_sample(). */}
 
+## Declare count datasets
+
+Add root `statisticalDatasets` when your registry needs exact operational counts and separate disclosure-controlled releases. The compiler checks the population's typed filter, dimension domains, ordinary count grants, and caller-independent publisher visibility across every derived source dependency. Modules cannot contribute dataset declarations.
+
+Follow [publish a statistical series](../breg-statistics/) to declare a dataset and read its released CSV, or review [live counts and statistical releases](../../explanation/breg-statistical-datasets/) before choosing disclosure parameters.
+
+{/* Evidence: crates/registry-breg/src/contract.rs;
+    crates/registry-breg/src/compiler/statistics.rs. */}
+
 ## Troubleshooting
 
 | Symptom | Cause and next move |

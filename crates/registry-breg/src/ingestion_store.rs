@@ -1707,10 +1707,10 @@ mod tests {
         // answer itself stays within its own bound.
         let field_count = crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY;
         let ids: Vec<String> = (0..field_count)
-            .map(|index| format!("f{index:063}"))
+            .map(|index| format!("f{index:08}{}", "x".repeat(55)))
             .collect();
         let api_names: Vec<String> = (0..field_count)
-            .map(|index| format!("m{index:063}"))
+            .map(|index| format!("m{index:08}{}", "x".repeat(55)))
             .collect();
         let fields = ids
             .iter()

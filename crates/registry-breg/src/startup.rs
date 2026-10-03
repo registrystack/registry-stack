@@ -1512,6 +1512,14 @@ async fn finish_prepared_server(
             attachment_verification.clone(),
         ))
     };
+    let statistics = Arc::new(crate::postgres::PostgresStatisticsService::new(
+        pool.clone(),
+        Arc::clone(&registry),
+        expected.clone(),
+        lock_key,
+        config.operational_timeouts().record_lock,
+        audit.clone(),
+    ));
     let mutations = PostgresRecordMutationService::new_with_event_destinations(
         pool,
         Arc::clone(&registry),
@@ -1542,7 +1550,8 @@ async fn finish_prepared_server(
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)
-        .with_postgres_mutations(mutations);
+        .with_postgres_mutations(mutations)
+        .with_statistics(statistics);
     if let Some(receiver) = review_completion_receiver {
         service = service.with_review_completions(receiver);
     }
@@ -1746,6 +1755,11 @@ async fn request_timeout(
     let route = metrics::route_template(&request).to_owned();
     let started = std::time::Instant::now();
     let (correlation, owns_boundary) = crate::correlation::begin_request(&mut request);
+    request
+        .extensions_mut()
+        .insert(crate::correlation::RequestDeadline(
+            tokio::time::Instant::now() + telemetry.timeout,
+        ));
     let response = match tokio::time::timeout(telemetry.timeout, next.run(request)).await {
         Ok(response) => response,
         Err(_) => timeout_problem(),

@@ -133,7 +133,7 @@ from the same image with its entrypoint overridden, as
 
 ## Provision PostgreSQL
 
-Base Registry Engine needs PostgreSQL 17 or newer, with TLS between the server and the database. A
+Base Registry Engine (BReg) needs PostgreSQL 17 or newer, with TLS between the server and the database. A
 project with a `crs84-point` field also needs PostGIS. Create two login
 roles: a migration role that owns the schema and applies packages, and a runtime role the serving
 process uses. Keep the migration credential off the serving host when no activation is in
@@ -1297,6 +1297,20 @@ worker to investigate; raising the restart budget only repeats the outage.
     crates/registry-breg/tests/startup_http.rs;
     crates/registry-breg/tests/postgres_review_executor.rs;
     crates/registry-breg/tests/postgres_startup.rs. */}
+
+## Operate statistical releases
+
+A package declares the datasets and profile grants. Use the HTTP publication command with a publisher access-token file from your institution's scheduler; BReg has no internal release scheduler. Publish only ended periods at or after the declared first period. Keep one idempotency key for each intended publication so a retry can recover a committed response.
+
+Current reads select versions whose definition digest matches the active package. A change to the population, dimensions, derived sources, publisher visibility, or disclosure parameters starts another definition series. Reader-only grant changes preserve the series. Withdrawal removes the version's content while preserving its header and reason; it cannot recall a copy a reader already downloaded.
+
+Every package installs the release store, including a package without dataset declarations. Upgrading across its introduction requires rebuilding against the active baseline and applying the package once because the managed schema fingerprint changes. The upgraded tooling accepts a package without the release-store capability only as the predecessor for that successor apply. Starting the upgraded `breg` before the successor is active instead fails with a generic compiler-derivation error. Stop that runtime, build and apply the successor with the upgraded `bregctl`, then start the upgraded `breg`. The runtime role cannot update or delete release tables; preserve the separate migration credential.
+
+See [publish a statistical series](../../configure/breg-statistics/) and the [API reference](../../reference/breg-api/) for request shapes and refusal handling.
+
+{/* Evidence: crates/registry-breg/src/package.rs;
+    crates/registry-breg/src/postgres/catalog.rs;
+    crates/registry-breg/src/postgres/statistics.rs. */}
 
 ## Troubleshooting
 

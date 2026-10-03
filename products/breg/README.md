@@ -445,3 +445,10 @@ the separately deployed read-only publication product; Evidence remains the
 minimum-disclosure assertion product; Manifest receives a safe one-way
 metadata projection; an operated OIDC issuer supplies configured tokens; and
 PublicSchema is an authoring input rather than a runtime dependency.
+
+## Statistical datasets
+
+Declare bounded count datasets for live analysis under ordinary read profiles
+and immutable, disclosure-controlled releases for separate dashboard readers.
+See [Statistical datasets](STATISTICS.md) for the model, HTTP contract,
+publication lifecycle, and accepted disclosure risks.

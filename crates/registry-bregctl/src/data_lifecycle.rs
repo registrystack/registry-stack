@@ -1283,7 +1283,7 @@ fn import_state_path(checkpoint_path: &Path) -> PathBuf {
     PathBuf::from(state)
 }
 
-fn read_access_token(path: &Path) -> Result<String, DataLifecycleError> {
+pub(crate) fn read_access_token(path: &Path) -> Result<String, DataLifecycleError> {
     if !path.is_absolute() {
         return Err(DataLifecycleError::Token);
     }

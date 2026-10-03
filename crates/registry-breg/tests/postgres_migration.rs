@@ -8,8 +8,12 @@ mod postgres_harness;
 use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
-use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
+use registry_breg::compiler::{
+    compile_project, compile_project_with_assets, module_digest, CompileProfile,
+};
+use registry_breg::contract::{
+    parse_module_yaml, parse_project_yaml, ModuleAssetSource, RegistryProject,
+};
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::field_encryption_backfill::{
     preflight_field_encryption_backfill, FieldEncryptionBackfillPreflightRequest,
@@ -17,10 +21,10 @@ use registry_breg::field_encryption_backfill::{
 };
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
-    read_recorded_registry_state, ActivationDeployment, ActivationPlan,
-    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, PlannedActivation,
-    RecordedRegistryState, ReviewedMigrationFaultPoint,
+    read_recorded_registry_state, successor_plan_is_empty, successor_plan_is_empty_for_predecessor,
+    ActivationDeployment, ActivationPlan, AppliedFieldEncryptionKeySource, ApplyPrecondition,
+    ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence,
+    MigrationError, PlannedActivation, RecordedRegistryState, ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -34,10 +38,11 @@ use registry_breg::migration_reconcile::{
     ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
 };
 use registry_breg::package::{
-    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageBuildRequest,
-    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-    PreparedPackage, VerifiedPackage,
+    compiled_registry_change_set, compiled_registry_change_set_from_baseline, load_package,
+    load_predecessor_package, prepare_package, prepare_package_with_project_assets,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, PreparedPackage, VerifiedPackage, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
@@ -270,6 +275,495 @@ async fn activate_before_subject_access_log(
     drop(migration);
     task.abort();
     (prior, fingerprint, active, old_package)
+}
+
+/// An active package written before the statistics release store existed must
+/// remain recoverable after a successor enters failed maintenance. The current
+/// binary compares the active catalog with the capability declared by the
+/// committed predecessor package, releases the failed target, and can then
+/// apply a corrected successor that installs the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_statistics_active_package_recovers_a_failed_successor_and_applies_the_next_one() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let predecessor = load_person_pre_statistics_package();
+    assert!(!predecessor.statistical_release_store_present());
+    let assets = person_registration_assets();
+    let prior_project = person_registration_project(false);
+    let candidate_project = person_registration_project(true);
+    let prior = compile_person_registration(&prior_project, &assets);
+    let candidate = compile_person_registration(&candidate_project, &assets);
+    assert_eq!(predecessor.package_id(), prior.registry_id());
+
+    // Both target fingerprints are measured before activation, while this
+    // isolated database still has no managed objects.
+    let prior_fingerprint = initial_fingerprint(&database, &prior).await;
+    let candidate_fingerprint = initial_fingerprint(&database, &candidate).await;
+    let initial = prepare_and_load_person_registration(
+        &prior_project,
+        &assets,
+        &prior_fingerprint,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the current package establishes the fixture catalog");
+
+    // Reproduce the catalog and exact package identity retained by the
+    // committed pre-statistics fixture. Later calls use only maintained APIs.
+    let (migration, task) = database.connect_migration().await;
+    migration
+        .batch_execute(
+            "DROP FUNCTION registry_internal.withdraw_statistical_release(text, text, bigint, text);
+             DROP TABLE registry_internal.registry_statistical_release_contents;
+             DROP TABLE registry_internal.registry_statistical_release_withdrawals;
+             DROP TABLE registry_internal.registry_statistical_release_versions;",
+        )
+        .await
+        .expect("the fixture removes the later engine-owned store");
+    let active_catalog = ExpectedManagedCatalog::compiled_predecessor(&prior, false);
+    let legacy_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &active_catalog)
+            .await
+            .expect("the pre-statistics catalog fingerprints against its closed shape");
+    active.package_digest = predecessor.package_digest().to_owned();
+    active.schema_fingerprint.clone_from(&legacy_fingerprint);
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_digest = $1, schema_fingerprint = $2
+              WHERE singleton",
+            &[&active.package_digest, &active.schema_fingerprint],
+        )
+        .await
+        .expect("the fixture records the committed predecessor identity");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET package_digest = $1
+              WHERE activation_id = $2::text::uuid",
+            &[&active.package_digest, &active.activation_id],
+        )
+        .await
+        .expect("the activation ledger names the committed predecessor");
+    drop(migration);
+    task.abort();
+
+    let abandoned_source = person_action_metadata_source(
+        &active,
+        predecessor.migration_baseline(),
+        &candidate,
+        &candidate_fingerprint,
+        false,
+    );
+
+    let abandoned = prepare_and_load_person_registration(
+        &candidate_project,
+        &assets,
+        &candidate_fingerprint,
+        Some(predecessor.package_digest()),
+        PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
+            prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+            prior_schema_fingerprint: legacy_fingerprint.clone(),
+            migrations: vec![abandoned_source],
+        },
+    );
+    let failed = apply(
+        &database,
+        &abandoned,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(failed.err(), MigrationError::ApplyFailed);
+    assert_non_ready_target(&database, &active, &abandoned, "failed").await;
+
+    let assessed = reconcile_with_catalog(&database, &abandoned, &active, &active_catalog, false)
+        .await
+        .expect("the current binary assesses the exact legacy catalog");
+    assert_eq!(
+        assessed.outcome,
+        ReconcileOutcome::Revertible,
+        "legacy reconciliation assessment: {assessed:?}"
+    );
+    assert_eq!(assessed.active_catalog_finding, None);
+    assert!(assessed.target_catalog_finding.is_some());
+    assert_eq!(assessed.durable_step_progress, Some(false));
+
+    let reverted = reconcile_with_catalog(&database, &abandoned, &active, &active_catalog, true)
+        .await
+        .expect("the failed successor is safely released");
+    assert!(reverted.executed);
+    assert_ready_target(&database, &active).await;
+
+    let successor_source = person_action_metadata_source(
+        &active,
+        predecessor.migration_baseline(),
+        &candidate,
+        &candidate_fingerprint,
+        true,
+    );
+    let successor = prepare_and_load_person_registration(
+        &candidate_project,
+        &assets,
+        &candidate_fingerprint,
+        Some(predecessor.package_digest()),
+        PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
+            prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+            prior_schema_fingerprint: legacy_fingerprint,
+            migrations: vec![successor_source],
+        },
+    );
+    let upgraded = apply(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the corrected successor applies after reconciliation");
+    assert_ready_target(&database, &upgraded).await;
+    let store_present: bool = database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.to_regclass(
+                 'registry_internal.registry_statistical_release_versions'
+             ) IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("the upgraded catalog exposes the release store")
+        .get(0);
+    assert!(store_present);
+    let candidate_entity = &candidate.entities()["person"];
+    let added_field = &candidate_entity.fields["migration-note"];
+    let field_present: bool = database
+        .admin
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = 'registry_data'
+                    AND table_name = $1
+                    AND column_name = $2
+             )",
+            &[&candidate_entity.physical_table, &added_field.physical_name],
+        )
+        .await
+        .expect("the corrected successor installs its governed field")
+        .get(0);
+    assert!(field_present);
+    database.cleanup().await;
+}
+
+/// A verified package from before engine capability declarations may have no
+/// authored model delta while the current compiler adds the statistical
+/// release store to its closed catalog. That one capability transition is
+/// real apply work; omitting the verified predecessor binding remains an
+/// ordinary empty-plan refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_statistics_empty_successor_installs_the_release_store_once() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let predecessor = load_person_pre_statistics_package();
+    assert!(!predecessor.statistical_release_store_present());
+    let assets = person_registration_assets();
+    let project = person_registration_project(false);
+    let registry = compile_person_registration(&project, &assets);
+    assert_eq!(predecessor.package_id(), registry.registry_id());
+    let target_fingerprint = initial_fingerprint(&database, &registry).await;
+    let initial = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the current package establishes the fixture catalog");
+
+    let (migration, task) = database.connect_migration().await;
+    migration
+        .batch_execute(
+            "DROP FUNCTION registry_internal.withdraw_statistical_release(text, text, bigint, text);
+             DROP TABLE registry_internal.registry_statistical_release_contents;
+             DROP TABLE registry_internal.registry_statistical_release_withdrawals;
+             DROP TABLE registry_internal.registry_statistical_release_versions;",
+        )
+        .await
+        .expect("the fixture removes the later engine-owned store");
+    let legacy_catalog = ExpectedManagedCatalog::compiled_predecessor(&registry, false);
+    let legacy_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &legacy_catalog)
+            .await
+            .expect("the pre-statistics catalog fingerprints against its closed shape");
+    active.package_digest = predecessor.package_digest().to_owned();
+    active.schema_fingerprint = legacy_fingerprint;
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_digest = $1, schema_fingerprint = $2
+              WHERE singleton",
+            &[&active.package_digest, &active.schema_fingerprint],
+        )
+        .await
+        .expect("the fixture records the predecessor identity");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET package_digest = $1
+              WHERE activation_id = $2::text::uuid",
+            &[&active.package_digest, &active.activation_id],
+        )
+        .await
+        .expect("the activation ledger names the predecessor package");
+    drop(migration);
+    task.abort();
+
+    let successor = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        Some(predecessor.package_digest()),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(registry.clone()),
+        },
+    );
+    assert!(successor_plan_is_empty(&successor));
+    assert!(!successor_plan_is_empty_for_predecessor(
+        &successor,
+        &predecessor
+    ));
+    assert_value_free(
+        apply(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .await
+        .err(),
+        MigrationError::EmptyPlan,
+    );
+
+    let history = predecessor.history_schema_descriptor();
+    let plan = plan_verified_package(
+        request(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_predecessor_migration_baseline(predecessor.migration_baseline())
+        .with_predecessor_history_descriptor(&history)
+        .with_predecessor_engine_capabilities(&predecessor),
+    )
+    .await
+    .expect("the verified legacy capability transition plans");
+    assert_eq!(plan.activation, PlannedActivation::Successor);
+    let upgraded = apply_verified_package(
+        request(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_predecessor_migration_baseline(predecessor.migration_baseline())
+        .with_predecessor_history_descriptor(&history)
+        .with_predecessor_engine_capabilities(&predecessor),
+    )
+    .await
+    .expect("the verified legacy capability transition applies");
+    assert_ready_target(&database, &upgraded).await;
+    verify_catalog_identity_for_catalog(
+        &database.admin,
+        &upgraded,
+        &ExpectedManagedCatalog::compiled(&registry),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("the activated catalog is the exact current catalog");
+    database.cleanup().await;
+}
+
+fn person_registration_acceptance_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/person-registration-rhai")
+}
+
+fn person_registration_project(with_migration_note: bool) -> RegistryProject {
+    let mut project = serde_json::to_value(
+        parse_project_yaml(
+            &fs::read(person_registration_acceptance_root().join("registry.yaml"))
+                .expect("the person-registration acceptance project is present"),
+        )
+        .expect("the person-registration acceptance project parses"),
+    )
+    .expect("the project serializes");
+    project["package"]["sourceRevision"] = serde_json::json!(SOURCE_REVISION);
+    if with_migration_note {
+        project["entities"][0]["fields"]
+            .as_array_mut()
+            .expect("person fields are an array")
+            .push(serde_json::json!({
+                "id": "migration-note",
+                "type": "string",
+                "required": false,
+                "maxLength": 32,
+                "classification": "internal"
+            }));
+    }
+    serde_json::from_value(project).expect("the test project remains valid source")
+}
+
+fn person_registration_assets() -> Vec<PackageSourceFile> {
+    [
+        "scripts/register-person.rhai",
+        "scripts/register-person-with-registration.rhai",
+    ]
+    .into_iter()
+    .map(|path| PackageSourceFile {
+        path: path.to_owned(),
+        bytes: fs::read(person_registration_acceptance_root().join(path))
+            .unwrap_or_else(|error| panic!("the handler script {path} is present: {error}")),
+    })
+    .collect()
+}
+
+fn compile_person_registration(
+    project: &RegistryProject,
+    assets: &[PackageSourceFile],
+) -> CompiledRegistry {
+    let compiler_assets = assets
+        .iter()
+        .map(|asset| ModuleAssetSource {
+            module: None,
+            path: asset.path.clone(),
+            bytes: asset.bytes.clone(),
+        })
+        .collect::<Vec<_>>();
+    compile_project_with_assets(project, &[], &compiler_assets, CompileProfile::Production)
+        .expect("the person-registration project compiles")
+}
+
+fn person_action_metadata_source(
+    current: &ExpectedRegistryIdentity,
+    baseline: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistry,
+    final_fingerprint: &str,
+    precondition_succeeds: bool,
+) -> ReviewedMigrationSource {
+    let changes =
+        compiled_registry_change_set_from_baseline(baseline, candidate, &current.package_digest);
+    let mut covers = changes
+        .changes
+        .iter()
+        .filter(|change| change.code == CompiledRegistryChangeCode::ActionChanged)
+        .map(ReviewedChangeCover::from)
+        .collect::<Vec<_>>();
+    covers.sort();
+    assert_eq!(
+        covers.len(),
+        2,
+        "the current compiler identifies both predecessor action metadata changes"
+    );
+    assert!(changes.changes.iter().all(|change| {
+        change.class == CompiledRegistryChangeClass::CompatibleAdditive
+            || change.code == CompiledRegistryChangeCode::ActionChanged
+    }));
+    let id = if precondition_succeeds {
+        "legacy-actions-successor"
+    } else {
+        "legacy-actions-abandoned"
+    };
+    let base = format!("modules/core/migrations/{id}");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
+        covers,
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 50,
+        statement_timeout_ms: 5_000,
+        steps: Vec::new(),
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path.clone(),
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path.clone(),
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: None,
+    };
+    reviewed_source(ReviewedSourceRequest {
+        descriptor,
+        current,
+        final_fingerprint,
+        steps: Vec::new(),
+        pre: (
+            pre_path,
+            if precondition_succeeds {
+                "SELECT true".to_owned()
+            } else {
+                "SELECT false".to_owned()
+            },
+        ),
+        post: (post_path, "SELECT true".to_owned()),
+        row_assertions: Vec::new(),
+    })
+}
+
+fn load_person_pre_statistics_package() -> VerifiedPredecessorPackage {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/person-registration-rhai-package-pre-statistics");
+    load_predecessor_package(&root, &local_context())
+        .expect("the committed pre-statistics package verifies as a predecessor")
+}
+
+fn prepare_and_load_person_registration(
+    project: &RegistryProject,
+    assets: &[PackageSourceFile],
+    fingerprint: &str,
+    from_package_digest: Option<&str>,
+    migration_plan: PackageMigrationPlanInput,
+) -> VerifiedPackage {
+    let prepared = prepare_package_with_project_assets(
+        PackageBuildRequest {
+            from_package_digest: from_package_digest.map(str::to_owned),
+            compiler_source_revision: SOURCE_REVISION.to_owned(),
+            schema_fingerprint: fingerprint.to_owned(),
+            project: PackageSourceFile {
+                path: "source/registry.yaml".to_owned(),
+                bytes: serde_json::to_vec(project).expect("the project serializes"),
+            },
+            modules: Vec::new(),
+            fixture_journeys: PackageSourceFile {
+                path: "tests/journeys.yaml".to_owned(),
+                bytes: fs::read(person_registration_acceptance_root().join("tests/journeys.yaml"))
+                    .expect("the person-registration fixture journeys are present"),
+            },
+            migration_plan,
+        },
+        assets.to_vec(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "the person-registration package prepares (from {:?}): {error:?}",
+            from_package_digest
+        )
+    });
+    publish_and_load(prepared, local_context())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7399,6 +7893,18 @@ async fn reconcile(
     current_registry: &CompiledRegistry,
     execute: bool,
 ) -> Result<ReconcileReport, ReconcileError> {
+    let current_catalog =
+        registry_breg::postgres::ExpectedManagedCatalog::compiled(current_registry);
+    reconcile_with_catalog(database, package, current, &current_catalog, execute).await
+}
+
+async fn reconcile_with_catalog(
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+    current: &ExpectedRegistryIdentity,
+    current_catalog: &ExpectedManagedCatalog,
+    execute: bool,
+) -> Result<ReconcileReport, ReconcileError> {
     let audit = database.audit(
         AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
             .expect("test owns a keyed audit profile"),
@@ -7407,7 +7913,7 @@ async fn reconcile(
         config: &database.migration_config,
         target_package: package,
         current,
-        current_registry,
+        current_catalog,
         migration_role: &database.migration_role,
         runtime_role: &database.runtime_role,
         timeouts: ReconcileTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))

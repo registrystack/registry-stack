@@ -23,9 +23,9 @@ use registry_breg::{
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
-        initialize_registry_state_for_catalog_test, install_compiled_schema,
-        ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
-        PostgresRecordReadService, RegistryLockKey, RegistryStateTestIdentity,
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
+        ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+        RegistryLockKey, RegistryStateTestIdentity,
     },
 };
 use registry_platform_audit::AuditProfile;
@@ -78,10 +78,10 @@ async fn setup_in(
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .unwrap();
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE,
             database_id: "requirements-database",

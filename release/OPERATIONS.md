@@ -714,9 +714,11 @@ registry package with records and revisions, a Casework queue with answered
 and in-flight work, and an Evidence audit stream with the old binaries, using a
 disposable loopback PostgreSQL container. It then runs the documented upgrade
 steps with the PR's binaries and fails when any captured view is served
-differently or any retained table holds fewer rows. BReg rebuilds and applies
-a signed successor before serving with the new catalog; its package-bound ETags
-change, while record data and stored revisions must remain identical. Require
+differently or any retained table holds fewer rows. BReg rebuilds its package
+with the current compiler before serving. A signing-era database follows the
+adoption path; a database with an activation ledger applies a successor when
+the rebuilt digest changes. Its package-bound ETags may change, while record
+data and stored revisions must remain identical. Require
 that run to succeed before
 merging the release PR. To rehearse without a release PR, dispatch it by hand:
 

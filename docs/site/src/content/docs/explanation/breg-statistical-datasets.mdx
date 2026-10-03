@@ -1,0 +1,68 @@
+---
+title: Live counts and statistical releases
+description: How governed count datasets separate operational analysis from released statistics, and which inference risks their disclosure method accepts.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sdmx
+---
+
+If you need statistics from records held by Base Registry Engine (BReg), you can declare a count dataset with a fixed population, calendar periods, and closed dimensions. The expanded dimension cells for one period, including totals and null codes, must fit the 10,000-cell cap. PostgreSQL computes the counts. Separate profiles control operational analysis, publication, and access to released JSON or CSV.
+
+## Choose the population once
+
+A dataset belongs to the registry project. Its declaration fixes the unit entity, typed population filter, period rule, dimension domains, and disclosure parameters. A consumer chooses periods and representation. Consumers cannot supply SQL, introduce a grouping, or change the population through the statistical API.
+
+A flow counts rows whose configured date falls in the period. A stock counts rows valid on its reference date, using temporal validity or explicit date fields. Ended periods use their final day; the current period uses today's UTC date. Day, month, quarter, and year are calendar periods with explicit start and end dates.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs;
+    crates/registry-breg/src/statistics.rs;
+    crates/registry-breg/src/postgres/statistics.rs. */}
+
+## Keep three access decisions separate
+
+A live profile sees exact counts under its ordinary record-list policy. The compiler requires a count-capable list grant and permission to read and filter every field the dataset uses. The statistical computation uses that policy's row, membership, purpose, and visibility predicates. A cell is a count the same profile could obtain through the corresponding list query.
+
+A publisher produces a statistical release for other readers. Its source visibility must be independent of the caller on the unit and every entity read by a referenced derived definition. A claim-bound source would let two publishers create different populations under the same dataset identity, so the compiler refuses it.
+
+A released-data reader needs access to the dataset, without needing access to its records. The reader sees transformed cells and version metadata. All three roles use authenticated access profiles, and a request selects one profile.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs;
+    crates/registry-breg/src/api/statistics.rs;
+    crates/registry-breg/src/postgres/read.rs. */}
+
+## Publish a stable version
+
+A release contains the transformed cells and a snapshot reference when history coverage is available. After erasure or another coverage invalidation, `snapshot` is `null` and publication continues from current data. History rebaseline can restore bookmarks for subsequent releases, but it is not a publication prerequisite. Publication computes against one source snapshot, then verifies the active package and freshness before assigning a version. Versions increase per dataset and period. A final release can be corrected by another final release; it prevents a later provisional release for that definition.
+
+A definition digest identifies the population, source definitions, publisher visibility, dimensions, and disclosure parameters. Current reads serve only that definition's versions. Changing readers alone preserves the series. Changing the population creates another definition series without reusing version numbers.
+
+Withdrawal records a reason and removes the stored content atomically. The immutable header remains. A direct version read returns 410; latest reads fall back to the preceding eligible version. An identical publication or withdrawal retry uses its idempotency key to recover the original response.
+
+{/* Evidence: crates/registry-breg/src/postgres/statistics.rs;
+    crates/registry-breg/src/statistics_store.rs;
+    crates/registry-breg/src/idempotency.rs. */}
+
+## Review disclosure risks before publishing
+
+Released cells suppress positive counts below the declared minimum. Other positive counts round to a declared multiple, with halves rounded up. Exact zeros remain zero. Every total is transformed independently, so totals need not equal the sum of visible cells.
+
+Suppression does not guarantee that a cell stays unknown. With minimum five and rounding base five, two suppressed cells of four each publish a rounded total of ten. Each cell must be between one and four; the total constrains their sum to eight through twelve. Together those bounds reveal that both cells equal four. Seven suppressed positive cells and a rounded total of five similarly reveal seven ones.
+
+Deterministic rounding permits differencing across versions or overlapping populations. Zeros reveal absence and may reveal group attributes. BReg supplies no cumulative privacy budget or differential privacy. Review the release cadence, dimensions, reader population, and other available information as part of the institution's disclosure decision.
+
+{/* Evidence: crates/registry-breg/tests/statistics.rs;
+    products/breg/STATISTICS.md. */}
+
+## Connect a dashboard through the released API
+
+Released JSON carries dataset, period, dimension, cell, and disclosure metadata. CSV carries `period`, `periodStart`, `periodEnd`, dimension codes, `value`, and `status`. A blank suppressed value is distinct from zero. Use `periodStart` as the chart's date, select the intended dimension codes, and keep the status when handling missing values.
+
+Both formats carry an HTTP representation digest for their exact bytes. A version header separately identifies the canonical stored JSON. BReg's count document is a native API using standard JSON and CSV; it does not implement Relay's SDMX read profile or full SDMX REST conformance. Verify your chosen dashboard connector's OAuth authentication against your deployed issuer before relying on it.
+
+Next, [publish a statistical series](../../configure/breg-statistics/) or consult the [API reference](../../reference/breg-api/).

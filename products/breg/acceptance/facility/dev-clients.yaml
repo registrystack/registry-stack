@@ -1,0 +1,39 @@
+version: 1
+clients:
+  - id: facility-operator
+    accessProfiles:
+      - facility-operator
+    scopes:
+      - registry:facility:operate
+    claims:
+      administrative_boundaries:
+        - north-district
+      registry_principal: synthetic-facility-operator
+      registry_purpose: facility-registry
+  - id: facility-south-operator
+    accessProfiles:
+      - facility-operator
+    scopes:
+      - registry:facility:operate
+    claims:
+      administrative_boundaries:
+        - south-district
+      registry_principal: synthetic-facility-operator
+      registry_purpose: facility-registry
+    testBindings:
+      - journeyId: bounded-facility-and-batch-validation
+        stepId: south-district-claim-cannot-see-north-record
+  - id: statistics-publisher
+    accessProfiles:
+      - statistics-publisher
+    scopes:
+      - registry:facility:statistics:publish
+    claims:
+      registry_principal: synthetic-statistics-publisher
+  - id: statistics-reader
+    accessProfiles:
+      - statistics-reader
+    scopes:
+      - registry:facility:statistics:read
+    claims:
+      registry_principal: synthetic-statistics-reader

@@ -14,11 +14,29 @@ pub struct BRegProbeStatus {
 pub struct BRegRawDocument {
     media_type: String,
     bytes: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    representation_digest: Option<BRegRepresentationDigest>,
 }
 
 impl BRegRawDocument {
     pub(crate) fn new(media_type: String, bytes: Vec<u8>) -> Self {
-        Self { media_type, bytes }
+        Self {
+            media_type,
+            bytes,
+            representation_digest: None,
+        }
+    }
+
+    pub(crate) fn with_representation_digest(
+        media_type: String,
+        bytes: Vec<u8>,
+        representation_digest: Option<BRegRepresentationDigest>,
+    ) -> Self {
+        Self {
+            media_type,
+            bytes,
+            representation_digest,
+        }
     }
 
     #[must_use]
@@ -30,6 +48,12 @@ impl BRegRawDocument {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// The verified RFC 9530 `Repr-Digest` value for these exact bytes.
+    #[must_use]
+    pub fn representation_digest(&self) -> Option<&BRegRepresentationDigest> {
+        self.representation_digest.as_ref()
+    }
 }
 
 impl fmt::Debug for BRegRawDocument {
@@ -38,7 +62,28 @@ impl fmt::Debug for BRegRawDocument {
             .debug_struct("BRegRawDocument")
             .field("media_type", &self.media_type)
             .field("body_bytes", &self.bytes.len())
+            .field(
+                "representation_digest",
+                &self.representation_digest.is_some(),
+            )
             .finish_non_exhaustive()
+    }
+}
+
+/// One strictly parsed RFC 9530 SHA-256 representation digest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct BRegRepresentationDigest(String);
+
+impl BRegRepresentationDigest {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Borrow the canonical `sha-256=:...:` field value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

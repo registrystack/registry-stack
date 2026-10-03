@@ -4206,6 +4206,199 @@
       },
       "type": "object"
     },
+    "StatisticalDatasetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disclosure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatisticalDisclosureSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "live": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "period": {
+          "$ref": "#/$defs/StatisticalPeriodSource"
+        },
+        "population": {
+          "type": "string"
+        },
+        "releases": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatisticalReleasesSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "unit",
+        "population",
+        "period",
+        "dimensions"
+      ],
+      "type": "object"
+    },
+    "StatisticalDisclosureSource": {
+      "additionalProperties": false,
+      "properties": {
+        "minimumCount": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roundingBase": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "minimumCount",
+        "roundingBase"
+      ],
+      "type": "object"
+    },
+    "StatisticalPeriodGranularitySource": {
+      "enum": [
+        "day",
+        "month",
+        "quarter",
+        "year"
+      ],
+      "type": "string"
+    },
+    "StatisticalPeriodSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "firstPeriod": {
+              "type": "string"
+            },
+            "granularity": {
+              "$ref": "#/$defs/StatisticalPeriodGranularitySource"
+            },
+            "kind": {
+              "const": "flow",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "granularity",
+            "firstPeriod"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firstPeriod": {
+              "type": "string"
+            },
+            "granularity": {
+              "$ref": "#/$defs/StatisticalPeriodGranularitySource"
+            },
+            "kind": {
+              "const": "stock",
+              "type": "string"
+            },
+            "validity": {
+              "$ref": "#/$defs/StatisticalValiditySource"
+            }
+          },
+          "required": [
+            "kind",
+            "granularity",
+            "firstPeriod",
+            "validity"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StatisticalReleasesSource": {
+      "additionalProperties": false,
+      "properties": {
+        "publisher": {
+          "type": "string"
+        },
+        "readers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "publisher",
+        "readers"
+      ],
+      "type": "object"
+    },
+    "StatisticalTemporalValiditySource": {
+      "enum": [
+        "temporal"
+      ],
+      "type": "string"
+    },
+    "StatisticalValidityFieldsSource": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "from"
+      ],
+      "type": "object"
+    },
+    "StatisticalValiditySource": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatisticalTemporalValiditySource"
+        },
+        {
+          "$ref": "#/$defs/StatisticalValidityFieldsSource"
+        }
+      ]
+    },
     "StringFieldKindSchema": {
       "enum": [
         "string"
@@ -4805,6 +4998,13 @@
       "description": "Consent scope codes of removed gated profiles, kept so existing consent\nrows still validate. A retired scope matches nothing.",
       "items": {
         "type": "string"
+      },
+      "type": "array"
+    },
+    "statisticalDatasets": {
+      "description": "Declared count tables computed from governed Registry records.",
+      "items": {
+        "$ref": "#/$defs/StatisticalDatasetSource"
       },
       "type": "array"
     },

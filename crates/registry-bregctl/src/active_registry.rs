@@ -84,11 +84,11 @@ pub(crate) fn recorded_identity_for_digest(
 /// an apply or a reconciliation in progress does not refuse it. The identity
 /// is a snapshot: a caller that acts on it takes the lock and re-reads the
 /// identity under it before acting.
-pub(crate) fn observed_active_identity(
+pub(crate) fn observed_identity_for_digest(
     runtime: &tokio::runtime::Runtime,
     config: &RuntimeConfig,
     connection: &ConnectionConfig,
-    package: &VerifiedPackage,
+    package_digest: &str,
 ) -> Result<ExpectedRegistryIdentity, ActiveRegistryError> {
     let timeouts = ApplyTimeouts::new(
         config.operational_timeouts().migration_lock,
@@ -103,7 +103,7 @@ pub(crate) fn observed_active_identity(
         ))
         .map_err(read_refusal)?
         .ok_or(ActiveRegistryError::Uninitialized)?;
-    bind_recorded_identity(config, status.identity, package.package_digest())
+    bind_recorded_identity(config, status.identity, package_digest)
 }
 
 fn read_refusal(error: MigrationError) -> ActiveRegistryError {

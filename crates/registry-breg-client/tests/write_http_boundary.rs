@@ -1644,6 +1644,9 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         "snapshot",
         "validAt",
         "requestHistoryAfterProposalVersion",
+        "from",
+        "to",
+        "status",
     ] {
         accepted.push((
             response_for(&query_invalid, query_document.clone(), json!(parameter)),
@@ -1669,6 +1672,9 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         json!("idempotency-key"),
         json!("if-match"),
         json!("$select"),
+        json!("from"),
+        json!("to"),
+        json!("status"),
         json!("data"),
         json!(format!("/items/{}", "1".repeat(300))),
     ]
@@ -1751,9 +1757,119 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         assert!(!rendered.contains("/data"));
         assert!(!rendered.contains("/items"));
         assert!(!rendered.contains("$select"));
-        if let Some(path) = accepted_paths.get(index) {
+        if let Some(path) = accepted_paths
+            .get(index)
+            .filter(|path| !matches!(path.as_str(), "from" | "to" | "status"))
+        {
             assert!(!rendered.contains(path));
         }
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
+}
+
+#[tokio::test]
+async fn statistical_dimension_problem_paths_are_closed_code_bound_and_discarded() {
+    let domain = problem_response(BRegProblemCode::StatisticalDatasetDomainViolation);
+    let domain_document: Value = serde_json::from_slice(&domain.body).unwrap();
+    let response_for = |base: &MockResponse, mut value: Value, path: Value| {
+        value["fieldPath"] = path;
+        MockResponse {
+            body: serde_json::to_vec(&value).unwrap(),
+            ..base.clone()
+        }
+    };
+    let valid_path = "statisticalDatasets[id=records-by-category].dimensions[id=category_code]";
+    let maximum_dataset_id = format!("d{}", "a".repeat(63));
+    let maximum_dimension_id = format!("f{}", "b".repeat(63));
+    let maximum_path = format!(
+        "statisticalDatasets[id={maximum_dataset_id}].dimensions[id={maximum_dimension_id}]"
+    );
+    let accepted = [valid_path.to_owned(), maximum_path]
+        .into_iter()
+        .map(|path| response_for(&domain, domain_document.clone(), json!(path)))
+        .collect::<Vec<_>>();
+
+    let malformed = [
+        String::new(),
+        "statisticalDatasets[id=].dimensions[id=category]".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=]".to_owned(),
+        "statisticalDatasets[id=Records].dimensions[id=category]".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=Category]".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=category.secret]".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=category/secret]".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=category][id=secret]".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=category].codes".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=category".to_owned(),
+        "statisticalDatasets[id=records].dimensions[id=category\nsecret]".to_owned(),
+        format!(
+            "statisticalDatasets[id=d{}].dimensions[id=category]",
+            "a".repeat(64)
+        ),
+        format!(
+            "statisticalDatasets[id=records].dimensions[id=f{}]",
+            "b".repeat(64)
+        ),
+    ];
+    let mut refused = malformed
+        .into_iter()
+        .map(|path| response_for(&domain, domain_document.clone(), json!(path)))
+        .collect::<Vec<_>>();
+    for code in [
+        BRegProblemCode::RequestInvalid,
+        BRegProblemCode::QueryInvalid,
+        BRegProblemCode::StatisticalDatasetVersionConflict,
+    ] {
+        let base = problem_response(code);
+        let document: Value = serde_json::from_slice(&base.body).unwrap();
+        refused.push(response_for(&base, document, json!(valid_path)));
+    }
+    refused.push(response_for(&domain, domain_document, json!("from")));
+
+    let accepted_count = accepted.len();
+    let total = accepted_count + refused.len();
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(accepted)
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for index in 0..total {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("statistical-path-problem"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("problem or malformed statistical location is returned");
+        if index < accepted_count {
+            assert_eq!(
+                error.problem_code(),
+                Some(BRegProblemCode::StatisticalDatasetDomainViolation)
+            );
+            assert_eq!(error.status(), Some(500));
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        let rendered = format!("{error:?}: {error}");
+        assert!(!rendered.contains("statisticalDatasets"));
+        assert!(!rendered.contains("category"));
     }
     assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
 }
@@ -1772,6 +1888,10 @@ fn problem_response(code: BRegProblemCode) -> MockResponse {
     });
     if code == BRegProblemCode::ActionRefused {
         body["refusalCode"] = json!(REFUSAL_CODE);
+    } else if code == BRegProblemCode::StatisticalDatasetReleaseRefused {
+        body["refusalCode"] = json!("period-not-ended");
+    } else if code == BRegProblemCode::StatisticalDatasetVersionWithdrawn {
+        body["reasonCode"] = json!("source-data-error");
     }
     MockResponse::json(
         StatusCode::from_u16(code.status()).expect("registered status"),
@@ -1833,6 +1953,18 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::RuntimeNotReady => "Registry runtime is not ready.",
         Code::ServiceUnavailable => "The Registry mutation service is unavailable.",
         Code::SourceUnavailable => "The Registry data service is unavailable.",
+        Code::StatisticalDatasetDomainViolation => {
+            "A statistical dataset contains a code outside its declared domain."
+        }
+        Code::StatisticalDatasetReleaseRefused => {
+            "The statistical dataset release operation is not eligible."
+        }
+        Code::StatisticalDatasetVersionConflict => {
+            "The statistical dataset computation was superseded or its package changed."
+        }
+        Code::StatisticalDatasetVersionWithdrawn => {
+            "The statistical dataset version was withdrawn."
+        }
         Code::UnsupportedMediaType => "The request media type is not supported.",
         _ => panic!("unregistered problem code"),
     }

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: statistical datasets add engine-owned immutable release storage
+  to every package, changing every schema fingerprint. Rebuild the package
+  with the active baseline and apply it once before starting the upgraded
+  runtime. Root projects may declare count datasets with live read profiles,
+  one publisher, and separate released-data readers. The API serves exact live
+  counts and disclosure-controlled immutable JSON/CSV releases, with
+  idempotent publication and atomic withdrawal. Publication remains available
+  after history erasure with an explicitly null snapshot bookmark until history
+  is rebaselined. See `STATISTICS.md` for
+  disclosure risks, definition series, and the seven HTTP operations.
+
 - Derived SQL now accepts only explicitly reviewed raw PostgreSQL grammar
   nodes (#1841). `JSON_VALUE` and `JSON_EXISTS` remain available for scalar
   structured-field access; `JSON_QUERY`, `JSON_TABLE`, `XMLTABLE`, SQL/JSON
@@ -35,6 +46,14 @@
   atomically. Existing import/export continuations keep their earlier package
   and fingerprint binding and must not resume under the successor. A project
   whose SQL uses newly refused constructs must revise that SQL before rebuilding.
+
+- Immediate actions now advance the shared history commit head in the same
+  transaction as their effects (#1856). Each distinct changed record joins
+  one commit, including aliased patch effects. Latest snapshots and coverage
+  rebaselines can therefore observe action writes. Replays and rolled-back
+  actions allocate no commit. Existing unindexed action revisions are not backfilled by this fix and
+  still cause coverage rebaselining to refuse. Rebuild affected pre-1.0
+  development databases before using history snapshots or coverage rebaselining.
 
 - Review-completion callback authentication refusals now return the registered
   `401 authentication.refused` problem and its catalogue type, title, and

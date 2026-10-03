@@ -110,7 +110,7 @@ The table describes the release roster from `v0.31.0`. Registry Mint was publish
     release/scripts/macos_fips_packaging.py, archive_macos_fips_binary;
     crates/registry-stack-client-node/npm/linux-arm64-gnu/package.json. */}
 
-## Base Registry Engine limits
+## Base Registry Engine (BReg) limits
 
 Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
 package an operator activates deliberately. What it asks of a deployment is in
@@ -182,6 +182,18 @@ Encrypted restricted fields carry their own limits, described with the model in
     crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::blind_index();
     crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac() and
     derive_field_index_key(). */}
+
+## BReg statistical releases
+
+BReg's count datasets use explicit calendar periods in UTC and closed boolean or vocabulary dimensions. They do not reconstruct historical registry contents, accept free SQL, or expose microdata. The native JSON/CSV document does not claim full SDMX conformance.
+
+Minimum-count suppression and deterministic rounding can reveal suppressed values through interval arithmetic. For example, two positive suppressed cells under minimum five are each at most four; a rounded total of ten with base five constrains their sum to at least eight, revealing two fours. Exact zeros reveal absence; overlapping populations and successive versions permit differencing. There is no privacy budget or differential privacy.
+
+The [statistical dataset explanation](../breg-statistical-datasets/) describes these residual risks and the separation between live, publisher, and released-reader profiles.
+
+{/* Evidence: crates/registry-breg/tests/statistics.rs;
+    crates/registry-breg/src/compiler/statistics.rs;
+    products/breg/STATISTICS.md. */}
 
 ## Evidence Gateway limits
 

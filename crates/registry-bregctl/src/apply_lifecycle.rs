@@ -8,9 +8,10 @@ use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, operator_reference_is_well_formed,
     plan_verified_package, read_activation_status, read_recorded_registry_state,
-    successor_plan_is_empty, ActivationDeployment, ActivationPlan, ActivationStatus,
-    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, RecordedRegistryState,
+    successor_plan_is_empty_for_predecessor, ActivationDeployment, ActivationPlan,
+    ActivationStatus, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
+    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    RecordedRegistryState,
 };
 use registry_breg::package::{
     load_package, MigrationInspectionSummary, PackageError, VerifiedPredecessorPackage,
@@ -259,15 +260,13 @@ fn execute(
     let current_package = if initial {
         None
     } else {
-        // An empty successor plan is a property of the package alone.
-        if successor_plan_is_empty(&target) {
+        let predecessor = config
+            .load_active_predecessor_package()
+            .map_err(ApplyLifecycleError::CurrentPackage)?;
+        if successor_plan_is_empty_for_predecessor(&target, &predecessor) {
             return Err(ApplyLifecycleError::Apply(MigrationError::EmptyPlan));
         }
-        Some(
-            config
-                .load_active_predecessor_package()
-                .map_err(ApplyLifecycleError::CurrentPackage)?,
-        )
+        Some(predecessor)
     };
     let current_history_descriptor = current_package
         .as_ref()
@@ -402,7 +401,9 @@ fn execute(
         apply = apply.with_operator_reference(reference);
     }
     if let Some(package) = current_package.as_ref().filter(|_| !adoption) {
-        apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
+        apply = apply
+            .with_predecessor_migration_baseline(package.migration_baseline())
+            .with_predecessor_engine_capabilities(package);
     }
     if let Some(descriptor) = current_history_descriptor.as_ref().filter(|_| !adoption) {
         apply = apply.with_predecessor_history_descriptor(descriptor);

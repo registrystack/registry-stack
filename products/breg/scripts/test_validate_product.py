@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 150)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 161)],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -602,7 +602,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         ):
             VALIDATOR.validate_acceptance(errors)
         self.assertIn(
-            "acceptance matrix: must contain BREG-J01 through BREG-J23 exactly once in order",
+            "acceptance matrix: must contain BREG-J01 through BREG-J24 exactly once in order",
             errors,
         )
 

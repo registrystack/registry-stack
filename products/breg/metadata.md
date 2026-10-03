@@ -294,3 +294,13 @@ header naming the engine release that served it, the same value `breg --version`
 prints. It grants nothing and is absent from the concealed 404. Peers that run
 in lock-step with the engine, such as a Casework source adapter, compare it with
 their own release and refuse another release by name.
+
+## Statistical dataset discovery
+
+`/v1/registry` includes `statisticalDatasets` when the selected authenticated
+profile has dataset access. Each entry identifies the unit, period kind and
+granularity, first period, dimension domains and codes, definition digest, and
+permitted operations. The same selection filters `/openapi.json`. A profile
+that only reads releases receives `entities: []` and the released-data
+operations; discovery creates no entity permission. See `STATISTICS.md` for
+the seven operations and the representation contract.

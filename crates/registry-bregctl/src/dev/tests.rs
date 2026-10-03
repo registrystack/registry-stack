@@ -2,6 +2,45 @@
 use super::*;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
+#[test]
+fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
+    let endpoint = url::Url::parse("https://issuer.example.test/oauth2/token").unwrap();
+    let key = registry_platform_crypto::generate_private_jwk(
+        registry_platform_crypto::GeneratedKeyAlgorithm::Ed25519,
+    )
+    .unwrap();
+    let resource = "https://registry.example.test";
+
+    let unscoped = dev_token_provider(
+        endpoint.clone(),
+        "operator".to_owned(),
+        key.clone(),
+        "https://issuer.example.test",
+        resource,
+        Vec::new(),
+    )
+    .expect("an omitted optional scope parameter is valid");
+    assert_eq!(
+        unscoped.configured_resource_and_scopes(),
+        (Some(resource), &[][..])
+    );
+
+    let requested = vec!["registry:records:read".to_owned()];
+    let scoped = dev_token_provider(
+        endpoint,
+        "reader".to_owned(),
+        key,
+        "https://issuer.example.test",
+        resource,
+        requested.clone(),
+    )
+    .expect("an explicit nonempty scope remains configured");
+    assert_eq!(
+        scoped.configured_resource_and_scopes(),
+        (Some(resource), requested.as_slice())
+    );
+}
+
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");

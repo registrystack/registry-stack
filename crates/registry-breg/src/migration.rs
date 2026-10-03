@@ -23,8 +23,8 @@ use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
 use crate::package::{
-    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
-    VerifiedPackage,
+    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan,
+    PackageEngineFeature, PackageFileRole, VerifiedPackage, VerifiedPredecessorPackage,
 };
 use crate::postgres::{
     statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
@@ -174,6 +174,36 @@ pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
     plan.statements.is_empty()
         && package.reviewed_migration_plan().is_none()
         && !verified_metadata_only_plan(plan)
+}
+
+/// Whether a verified successor remains empty after accounting for an
+/// engine-owned capability absent from its verified predecessor. The sole
+/// compatibility exception installs the statistical release store introduced
+/// after packages first became activatable; every ordinary empty successor is
+/// still refused.
+pub fn successor_plan_is_empty_for_predecessor(
+    package: &VerifiedPackage,
+    predecessor: &VerifiedPredecessorPackage,
+) -> bool {
+    successor_plan_is_empty(package) && !installs_statistical_release_store(package, predecessor)
+}
+
+fn installs_statistical_release_store(
+    package: &VerifiedPackage,
+    predecessor: &VerifiedPredecessorPackage,
+) -> bool {
+    package.manifest().package_id == predecessor.package_id()
+        && package
+            .manifest()
+            .migration_plan
+            .from_package_digest
+            .as_deref()
+            == Some(predecessor.package_digest())
+        && !predecessor.statistical_release_store_present()
+        && package
+            .manifest()
+            .engine_features
+            .contains(&PackageEngineFeature::StatisticalReleaseStore)
 }
 
 fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
@@ -656,6 +686,7 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     backup_evidence: &'a [DestructiveBackupEvidence<'a>],
     predecessor_history_descriptor: Option<&'a HistorySchemaDescriptor>,
     predecessor_migration_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
+    predecessor_engine_capabilities: Option<&'a VerifiedPredecessorPackage>,
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
     field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
     fault_after_committed_chunks: Option<u64>,
@@ -703,6 +734,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             backup_evidence: &[],
             predecessor_history_descriptor: None,
             predecessor_migration_baseline: None,
+            predecessor_engine_capabilities: None,
             event_destination_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
@@ -733,6 +765,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             backup_evidence: &[],
             predecessor_history_descriptor: None,
             predecessor_migration_baseline: None,
+            predecessor_engine_capabilities: None,
             event_destination_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
@@ -782,6 +815,19 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         baseline: &'a CompiledRegistryMigrationBaseline,
     ) -> Self {
         self.predecessor_migration_baseline = Some(baseline);
+        self
+    }
+
+    /// Bind engine-owned successor work to the hash-covered capabilities of
+    /// the verified predecessor package. This grants no predecessor SQL or
+    /// runtime authority; it only distinguishes a closed legacy capability
+    /// transition from an ordinary empty package plan.
+    #[must_use]
+    pub fn with_predecessor_engine_capabilities(
+        mut self,
+        predecessor: &'a VerifiedPredecessorPackage,
+    ) -> Self {
+        self.predecessor_engine_capabilities = Some(predecessor);
         self
     }
 
@@ -1058,7 +1104,15 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     } else {
         None
     };
-    if current.is_some() && !role_change && successor_plan_is_empty(request.package) {
+    let engine_capability_only_upgrade = successor_plan_is_empty(request.package)
+        && request
+            .predecessor_engine_capabilities
+            .is_some_and(|predecessor| {
+                installs_statistical_release_store(request.package, predecessor)
+            });
+    let empty_successor =
+        successor_plan_is_empty(request.package) && !engine_capability_only_upgrade;
+    if current.is_some() && !role_change && empty_successor {
         return Err(MigrationError::EmptyPlan);
     }
 
@@ -1069,6 +1123,14 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
         _ => package_ledger_entry(request.package, current, request.roles, &compiler_checksums)?,
     };
+    if engine_capability_only_upgrade {
+        // The package binds a successor activation but carries no authored
+        // compiler statement: the engine reconciles its own control plane and
+        // the final activation verifies the exact expanded catalog. Record it
+        // with the same no-statement ledger shape as other package-only
+        // capability changes, never with a synthetic DDL checksum.
+        ledger.migration_kind = MigrationKind::MetadataOnly;
+    }
     ledger
         .validate_plan()
         .map_err(|_| MigrationError::PackageBinding)?;
@@ -2524,6 +2586,7 @@ mod tests {
             registry_version: "1".to_owned(),
             registry_revision: "ignored-descriptor-revision".to_owned(),
             entities: BTreeMap::new(),
+            statistical_datasets: BTreeMap::new(),
             physical_names: PhysicalNameInventory {
                 entities: BTreeMap::new(),
             },

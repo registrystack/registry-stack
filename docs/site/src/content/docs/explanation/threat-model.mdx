@@ -484,7 +484,7 @@ stays in released code until it is resolved.
 
 ## Field encryption draws a boundary inside the database
 
-Base Registry Engine field encryption adds one boundary the other products do not have, drawn inside
+Base Registry Engine (BReg) field encryption adds one boundary the other products do not have, drawn inside
 the database rather than at a service edge. A restricted field the project declares `encrypted`
 stores its values as AES-256-GCM envelopes under a data-encryption key the process wraps and
 unwraps through Vault or OpenBao Transit, so the value is protected against a reader of the
@@ -590,6 +590,20 @@ These are the risks the design does *not* close:
   posture endpoint, or a configuration apply path. Relay serves a fixed route set with no
   administrative surface at all, and Evidence Gateway has none either. A configuration change is
   a new reviewed revision and a restart, in both cases.
+
+## BReg statistical publication boundary
+
+A BReg publisher can turn record-derived counts into a release readable by profiles without record access. The compiler confines the population and dimension domains and requires caller-independent source visibility across the entire derived dependency closure. Live reads reuse ordinary list predicates. The runtime verifies package activation and freshness before committing an immutable version; current definition digests fence released reads.
+
+The runtime cannot update or delete release tables. A migration-owned PostgreSQL function records a withdrawal and deletes its content atomically. Audit gates cover request attempts and returned bytes and contain references and lifecycle metadata, never cell values or unit counts.
+
+Suppression and deterministic rounding accept inference through totals, interval arithmetic, zeros, differencing, and auxiliary information. They supply no cumulative privacy budget. See [live counts and statistical releases](../breg-statistical-datasets/) before deciding which populations may be released.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs;
+    crates/registry-breg/src/postgres/statistics.rs;
+    crates/registry-breg/src/statistics_store.rs;
+    crates/registry-breg/src/audit.rs;
+    crates/registry-breg/tests/statistics.rs. */}
 
 ## What is explicitly out of scope
 

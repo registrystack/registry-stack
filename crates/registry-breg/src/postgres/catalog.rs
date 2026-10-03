@@ -136,6 +136,51 @@ pub struct ExpectedManagedCatalog {
 }
 
 impl ExpectedManagedCatalog {
+    /// Exact active catalog for a verified predecessor package. The current
+    /// compiler supplies the business-schema inventory; the verified
+    /// predecessor manifest decides whether the later statistical release
+    /// store is part of that historical catalog.
+    #[must_use]
+    pub fn compiled_predecessor(
+        registry: &CompiledRegistry,
+        statistical_release_store_present: bool,
+    ) -> Self {
+        let catalog = Self::compiled(registry);
+        if statistical_release_store_present {
+            catalog
+        } else {
+            catalog.without_statistical_release_store()
+        }
+    }
+
+    fn without_statistical_release_store(mut self) -> Self {
+        let tables = crate::statistics_store::STATISTICS_TABLES
+            .iter()
+            .map(|(table, _)| format!("registry_internal.{table}"))
+            .collect::<BTreeSet<_>>();
+        self.objects.retain(|object| {
+            !tables.contains(&object.name)
+                && object.name != crate::statistics_store::WITHDRAWAL_FUNCTION
+        });
+        self
+    }
+
+    fn add_statistical_release_store(&mut self) {
+        for (table, privileges) in crate::statistics_store::STATISTICS_TABLES {
+            self.table(
+                &format!("registry_internal.{table}"),
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
+        }
+        self.function(
+            crate::statistics_store::WITHDRAWAL_FUNCTION,
+            Some("EXECUTE"),
+            None,
+        );
+    }
+
     /// Exact catalog of the release before subject access-log storage existed.
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
@@ -307,6 +352,7 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        catalog.add_statistical_release_store();
         for (table, privileges) in crate::import_authority::IMPORT_AUTHORITY_TABLES {
             let name = format!("registry_internal.{table}");
             catalog.table(
@@ -1309,6 +1355,14 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                AND p.provolatile = 'v'
                                AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
                                AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
+                           OR (n.nspname = 'registry_internal'
+                               AND p.proname = 'withdraw_statistical_release'
+                               AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'text, text, bigint, text'
+                               AND p.prorettype = 'boolean'::regtype
+                               AND NOT p.proretset AND p.prosecdef
+                               AND p.provolatile = 'v'
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
                        )
                  ),
                  EXISTS (
@@ -2126,5 +2180,14 @@ mod tests {
                 "the managed catalog does not inventory the delivery object {object}"
             );
         }
+    }
+
+    #[test]
+    fn predecessor_catalog_removes_the_statistical_release_store_as_one_closed_capability() {
+        let legacy = ExpectedManagedCatalog::base();
+        let mut current = legacy.clone();
+        current.add_statistical_release_store();
+        assert_ne!(current, legacy);
+        assert_eq!(current.without_statistical_release_store(), legacy);
     }
 }

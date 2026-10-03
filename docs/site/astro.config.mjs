@@ -562,6 +562,8 @@ export default defineConfig({
                 { label: 'Governed actions', slug: 'explanation/governed-registry-actions' },
                 { label: 'Native field patterns', slug: 'explanation/native-field-patterns' },
                 { label: 'Field encryption', slug: 'explanation/breg-field-encryption' },
+                { label: 'Live counts and statistical releases', slug: 'explanation/breg-statistical-datasets' },
+                { label: 'Publish a statistical series', slug: 'configure/breg-statistics' },
                 { label: 'Membership and consent read boundaries', slug: 'explanation/membership-read-boundaries' },
                 { label: 'Deriving from a model', slug: 'explanation/deriving-a-registry-from-a-model' },
               ],
