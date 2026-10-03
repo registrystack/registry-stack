@@ -211,8 +211,9 @@ pub(super) fn run(
 ///
 /// Only the Rhai backend runs here. A WASM handler compiles, is explained by
 /// `explain actions`, and executes on a `breg` server built with the `wasm`
-/// feature, but bregctl installs no WASM execution runtime, so its module has
-/// nothing to run in. Naming that here, before the synthetic fixture is read,
+/// feature (and in the `bregctl test` rehearsal, which installs the same
+/// runtime), but this command installs no WASM execution runtime, so its
+/// module has nothing to run in. Naming that here, before the synthetic fixture is read,
 /// keeps the refusal a statement about the command rather than an execution
 /// failure that reads like a fault in the authored handler.
 fn handler_identity(

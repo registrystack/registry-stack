@@ -22,7 +22,24 @@ workspace = true
 rhai.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-# Pinned LTS Wasmtime release (line 48, EOL 2028-08-20). The non-default
-# `pulley` feature is required to select the pulley64 compilation target on a
-# host with a Cranelift backend; it rides along whenever the runtime is on.
-wasmtime = { version = "=48.0.5", features = ["pulley"], optional = true }
+# Pinned LTS Wasmtime release (line 48, EOL 2028-08-20), built without its
+# default features: the default `cache` feature links `wasmtime-internal-cache`,
+# whose build script keys the module cache on the enclosing git commit, and
+# the rest add surfaces the executor never uses (without `gc`, a guest using
+# GC types, exception handling, or `externref` is refused). Each feature kept
+# is one the executor calls: `cranelift` compiles modules (and brings `std`), `runtime`
+# instantiates and runs them, `pulley` selects the pulley64 compilation target,
+# `threads` provides the `Config::wasm_threads` switch the executor turns off
+# (so the proposal stays off even if another crate unifies the feature on), and
+# `parallel-compilation` keeps multi-MiB handler modules from compiling on one
+# thread. Text-format parsing (`wat`) is a dev-dependency only.
+wasmtime = { version = "=48.0.5", default-features = false, features = [
+    "cranelift",
+    "parallel-compilation",
+    "pulley",
+    "runtime",
+    "threads",
+], optional = true }
+
+[dev-dependencies]
+wat = "1.259.0"

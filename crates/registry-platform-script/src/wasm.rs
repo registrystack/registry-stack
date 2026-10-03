@@ -961,6 +961,21 @@ mod tests {
     }
 
     #[test]
+    fn module_rejection_summary_keeps_the_summary_limit_not_the_name_limit() {
+        // A rejected binary reports only the engine's outer context, which is
+        // shorter than the name limit, so the error surface is proven with a
+        // host error longer than both limits: the summary must survive past
+        // the 64-byte name limit and stop at its own 256-byte limit.
+        let long = wasmtime::Error::msg("x".repeat(SUMMARY_LIMIT + 1));
+        match super::invalid_module(long) {
+            super::InvokeError::InvalidModule { summary } => {
+                assert_eq!(summary.as_str().len(), SUMMARY_LIMIT);
+            }
+            err => panic!("wrong error: {err}"),
+        }
+    }
+
+    #[test]
     fn truncation_never_splits_a_utf8_character() {
         // 4-byte characters: every cut lands inside one.
         let text = "\u{1F600}".repeat(100);

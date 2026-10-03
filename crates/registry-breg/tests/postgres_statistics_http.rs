@@ -187,6 +187,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         }
         for path in [
             "/v1/statistics/records-by-category:live",
+            "/v1/statistics/unknown-id-canary:live",
             "/v1/statistics/unknown/route/garbage",
         ] {
             let anonymous = send(&app, Method::GET, path, None, &[], Vec::new()).await;
@@ -199,6 +200,31 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         );
     }
     database.audit_capture().restore();
+    for path in [
+        "/v1/statistics/unknown-id-canary:live",
+        "/v1/statistics/unknown/route/garbage",
+    ] {
+        let before = database.audit_records().len();
+        let unknown = send(
+            &app,
+            Method::GET,
+            path,
+            Some(claims("reader", false)),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+        let records = database.audit_records();
+        assert_eq!(
+            records.len(),
+            before + 1,
+            "authenticated unknown routes are journaled"
+        );
+        let refusal = records.last().unwrap();
+        assert_eq!(refusal["phase"], "refusal");
+        assert!(!refusal.to_string().contains("unknown-id-canary"));
+    }
 
     let analyst = claims("analyst", true);
     let count = send(

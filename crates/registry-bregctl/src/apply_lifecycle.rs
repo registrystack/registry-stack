@@ -25,6 +25,12 @@ pub(crate) enum ApplyLifecycleError {
     TargetPackagePath,
     CurrentPackage(PackageError),
     TargetPackage(PackageError),
+    /// The target package is not the one `--expected-digest` names. Both
+    /// values are package digests, which are identities and not secrets.
+    PackageDigestMismatch {
+        expected: String,
+        found: String,
+    },
     Uninitialized,
     EventDestinations,
     FieldEncryptionConfiguration,
@@ -52,6 +58,7 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
     pub backups: &'a [String],
     pub acknowledge_retired_audit_discard: bool,
     pub operator_reference: Option<&'a str>,
+    pub expected_digest: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +92,7 @@ pub(crate) struct PlanLifecycleRequest<'a> {
     pub runtime_config: &'a Path,
     pub package: &'a Path,
     pub backups: &'a [String],
+    pub expected_digest: Option<&'a str>,
 }
 
 pub(crate) fn run(
@@ -111,6 +119,7 @@ pub(crate) fn plan(
             backups: request.backups,
             acknowledge_retired_audit_discard: false,
             operator_reference: None,
+            expected_digest: request.expected_digest,
         },
         LifecycleMode::Plan,
     )? {
@@ -211,6 +220,16 @@ fn execute(
 
     let target = load_package(request.package, &config.package_load_context())
         .map_err(ApplyLifecycleError::TargetPackage)?;
+    // The operator's reviewed digest binds the command to one package before
+    // any database authority is resolved, so a mismatch changes nothing.
+    if let Some(expected) = request.expected_digest {
+        if expected != target.package_digest() {
+            return Err(ApplyLifecycleError::PackageDigestMismatch {
+                expected: expected.to_owned(),
+                found: target.package_digest().to_owned(),
+            });
+        }
+    }
     let identity = config.identity();
     let deployment = ActivationDeployment::new(
         identity.environment(),

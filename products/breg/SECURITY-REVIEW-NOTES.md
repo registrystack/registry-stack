@@ -1043,6 +1043,499 @@ immediate-action PostgreSQL suites still pass on an `en_US.utf8` server.
   runtime's own contexts; no test sets a hand-built context with an extra
   field as the runtime role. That backstop predates this change.
 
+## Background task supervision and worker progress metrics
+
+The change makes a stopped background task end the process
+(`SupervisedTask` and `serve` in `crates/registry-breg/src/startup.rs`, the
+exit in `crates/registry-breg/src/main.rs`), reports failed review worker
+iterations (`ReviewWorker` in `crates/registry-breg/src/review_store.rs`),
+and adds three series to the metrics listener
+(`crates/registry-breg/src/metrics.rs`): how long ago each worker last
+completed an iteration, how long the oldest due item in each queue has
+waited, and the package digest the process verified at startup. Successful
+webhook iterations reach BReg through
+`DeliverySeams::iteration_succeeded` in
+`crates/registry-platform-hooks/src/delivery/seams.rs`. It changes a
+deployment default: a worker or metrics listener that panics or returns
+before shutdown is requested no longer leaves `breg` serving, and the
+process exits with status 1. Its invariant row is BREG-SEC-146.
+
+### Threat
+
+A worker that dies while the process serves silently halts webhook
+delivery, attachment verification, review submission and application, or
+subject access log retention, and the last of these is a data-minimization
+control. The process keeps answering `GET /ready`, so nothing outside it
+notices. The added metrics could disclose data or credentials, or let a
+scrape exhaust the runtime pool or hold locks the workers need.
+
+### Enforcement and defaults
+
+- `serve` supervises the webhook, attachment verification, review, and
+  subject access log retention workers it starts, and the metrics listener.
+  A task that panics or returns before shutdown is requested emits a closed,
+  value-free `<task>.panicked` or `<task>.returned` error event, shuts the
+  rest down within the shutdown grace, and returns
+  `StartupError::BackgroundTaskStopped`; `main` logs
+  `Base Registry Engine stopped` and exits 1. A requested shutdown reports
+  no stop. `breg` does not restart a task in process, and `/ready` does not
+  reflect worker state; recovery is the supervisor's restart.
+- A failed review worker pass emits `review.worker.iteration_failed` instead
+  of counting as idle, and the worker returns when its shutdown sender is
+  dropped. The lookup outage warning joins the closed vocabulary as
+  `review.result_lookups.unavailable` and drops its count field. The result
+  feed's outage warnings stay outside that vocabulary: they back off per
+  authority, warn only on a transition, and name the configured authority
+  identifier.
+- `breg_worker_last_success_age_seconds` carries only a closed `worker`
+  label and an age; it is absent until the worker first succeeds. The
+  attachment verification worker notes a success only for a pass that
+  reached a verdict, or that found no due job while no job an earlier
+  attempt failed waits for its retry. A pass whose content read or verifier
+  request failed and left its job pending for a retry is never a success,
+  and neither is an idle pass during that retry wait.
+- `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
+  label (`webhook_delivery`, `review_submission`, `review_application`) and
+  an age. Each scrape takes one runtime pool connection, serialized across
+  scrapes by a mutex, inside a read-only transaction whose statement timeout
+  is 5 seconds, and runs one aggregate statement that reads only
+  `next_attempt_at`, state, lease, and attempt columns, never a row id,
+  payload, or record value. A failed sample omits every queue line and
+  emits the value-free `metrics.queue_sample.failed`. A webhook delivery
+  whose lease expired is claimable again, so the webhook age counts it from
+  `lease_expires_at`, and a process that stopped holding a lease cannot
+  hide its delivery from the queue age. A review submission claim extends
+  `lease_until` without advancing `next_attempt_at`, so the review
+  submission age counts a claimable row from the later of the two.
+- `breg_active_package_info` publishes the `package_digest` startup already
+  verified against the activation ledger, a `sha256:` digest of the package
+  bytes, and nothing else.
+
+### Tests
+
+`crates/registry-breg/tests/startup_http.rs`:
+`a_panicking_background_task_stops_serve_with_a_distinct_error`,
+`an_early_returning_background_task_stops_serve_with_a_distinct_error`,
+`a_requested_shutdown_reports_no_background_task_stop`, and
+`every_operational_event_renders_exact_closed_value_free_json_fields`,
+which covers every stop code and the review and metrics events.
+`crates/registry-breg/tests/postgres_review_executor.rs`:
+`review_worker_returns_when_its_shutdown_sender_is_dropped`,
+`a_failed_review_worker_iteration_emits_closed_value_free_operational_events`,
+`an_idle_review_worker_iteration_records_its_last_success`,
+`a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited`,
+`a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_work`,
+`a_scrape_counts_an_expired_webhook_lease_as_waiting_delivery_work`,
+`a_scrape_ages_an_expired_review_submission_lease_from_its_expiry`,
+and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event`.
+`crates/registry-breg/tests/postgres_webhook_delivery.rs`:
+`real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.
+`crates/registry-breg/tests/postgres_change_requests.rs`:
+`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`,
+`real_postgres_attachment_verification_worker_records_no_success_while_the_verifier_fails`,
+and `real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting`.
+`crates/registry-breg/tests/postgres_access_log.rs`:
+`a_retention_tick_without_failure_records_its_last_success`.
+`crates/registry-breg/tests/postgres_startup.rs`:
+`prepared_server_wires_services_and_static_jwks_readiness_tracks_database`
+scrapes a real startup's metrics listener as the runtime role and expects
+exactly the verified package digest and every queue.
+`crates/registry-breg/src/metrics.rs`:
+`worker_last_success_age_is_absent_until_the_worker_first_succeeds`,
+`every_progress_worker_carries_a_distinct_snake_case_label`,
+`queue_ages_are_published_only_for_a_sampled_scrape`,
+`every_pending_queue_carries_a_distinct_snake_case_label`, and
+`the_active_package_digest_is_published_once_as_an_info_series`.
+`crates/registry-platform-hooks/src/delivery/service.rs`:
+`the_worker_loop_notes_an_idle_iteration_without_failure_as_a_success`.
+Each test the change adds was written first and failed, or did not compile,
+against the code before it; the operational event test is extended with the
+added codes.
+
+### Accepted residuals
+
+- **Crash loop.** A fault that recurs on every start, such as a worker that
+  panics on the same queued item, makes the process restart repeatedly and
+  takes reads and writes down between attempts, where earlier releases kept
+  serving reads without the worker. The supervisor's restart backoff bounds
+  how often; the stop code names the worker.
+- **Package digest on the metrics listener.** Anyone who reaches the
+  metrics listener can read the active package digest. It identifies the
+  deployed package bytes, not their content, and `bregctl status` already
+  reports it to an operator. The metrics listener carries no
+  authentication, and the runtime file refuses a `metricsListener.bind`
+  that is not a loopback or private address.
+- **Scrape load.** A scrape holds one runtime pool connection for up to the
+  5-second statement timeout, and a request waiting for a connection can
+  wait behind it. Scrapes do not run concurrently, so a scraper cannot hold
+  more than one connection, and the transaction is read-only and takes no
+  row locks.
+- **Readiness.** `/ready` does not reflect worker state, so a load balancer
+  keeps routing to a process until it exits. Between a task stopping and the
+  exit, the process drains within the shutdown grace.
+- **Attachment queue.** The attachment verification queue is not sampled by
+  `breg_queue_oldest_pending_age_seconds`, because its row policy admits
+  only a transaction the attachment worker has admitted; its worker progress
+  age is published.
+- **Retention failures.** A failed subject access log retention pass still
+  writes a raw error record without a closed `code`; only its last-success
+  age and its stop code are closed.
+
+## Migration lock contention and lock-free reconcile assessment
+
+The change keeps a migration lock another session holds distinct from an
+unreachable database (`MigrationLockHeld` in
+`crates/registry-breg/src/postgres/mod.rs` and
+`crates/registry-breg/src/migration.rs`, raised by `acquire_inner` in
+`crates/registry-breg/src/postgres/interlock.rs`), reads the active identity
+for a `migration reconcile` assessment without the lock
+(`observed_active_identity` in
+`crates/registry-bregctl/src/active_registry.rs`), and opens the audit writer
+only under `--execute` (`ReconcileAudit` in
+`crates/registry-breg/src/migration_reconcile.rs`). It touches the activation
+interlock and audit integrity. Its invariant row is BREG-SEC-147.
+
+### Threat
+
+The bregctl preflight that bound the configured active package took the
+exclusive lock and folded every failure into one unavailable refusal, so a
+lock held by an apply, an adoption, or another reconcile sent the operator
+to check `database.migrationUrlRef`, and `in_progress` could not be
+reported. A lock-free read could instead let a reconciliation act on an
+identity an apply is changing, and an assessment that writes nothing could
+still be refused by an audit destination it never uses.
+
+### Enforcement and defaults
+
+- The lock statement alone maps PostgreSQL's lock timeout (`55P03`) and a
+  shorter statement timeout (`57014`) to `MigrationLockHeld`; every other
+  failure keeps its existing refusal. `refusal_before_maintenance` keeps it
+  apart from `DatabaseUnavailable`, so `apply` and `plan` still change
+  nothing and report `apply.database.in_progress`, with a sentence that names
+  the held lock and the `retry_after_migration_lock_releases` suggested
+  action. An unreachable database keeps `apply.database.unavailable`.
+- The lock-free assessment preflight is safe because it authorizes nothing.
+  It reads one committed snapshot of the state row and binds the configured
+  package and database id to it exactly as the locked read did.
+  `reconcile_failed_migration` then takes the exclusive lock, re-reads the
+  maintenance snapshot under it, and refuses a snapshot whose identity
+  differs from the one the preflight read before it assesses anything. The
+  locked preflight released its lock before that step too, so the re-read
+  under the lock was already the only fence.
+- `--execute` keeps the locked preflight unchanged. A lock held there, or at
+  the reconciliation's own acquisition, refuses as
+  `migration.reconcile.outcome.in_progress` and changes nothing; an
+  assessment reports `in_progress` as its outcome.
+- An assessment holds only the keyed audit profile it validates the operator
+  reference under. `--execute` opens the companion audit writer after the
+  locked preflight and before any database change, and refuses as
+  `migration.reconcile.audit.unavailable` when it cannot.
+- `history erase`, `history rebaseline`, `field-encryption preflight`, and
+  `field-encryption erase-history` keep the locked preflight and report a
+  held lock as `<prefix>.active_registry.in_progress`.
+- The history maintenance transactions take the exclusive lock through
+  `lock_registry` in `crates/registry-breg/src/history_maintenance.rs`, which
+  reads the lock wait with the same `lock_wait_ended` rule as
+  `acquire_inner`. A held lock there refuses as `MigrationLockHeld` before the
+  transaction changes anything, and `bregctl` reports it as
+  `history.erase.in_progress`, `history.rebaseline.in_progress`, or
+  `field_encryption.erase_history.in_progress` with the
+  `retry_after_migration_lock_releases` suggested action. Its request entry is
+  answered `unfinished`, as for any other refusal. An `erase-history` run
+  refused part way keeps the records it already erased, each in its own
+  committed transaction, and can be run again. `field-encryption preflight`
+  takes no advisory lock, so it has no such refusal.
+- Action Evidence retention, request retention, import authority
+  maintenance, and instance claim adoption take the exclusive lock through
+  the same `lock_registry`. A held lock refuses as `MigrationLockHeld` before
+  their transaction changes anything, and `bregctl` reports it as
+  `evidence_retention.in_progress`, `request_retention.in_progress`,
+  `import_authority.in_progress`, or `instance_claim.in_progress` with the
+  same suggested action. The Evidence erasure, the request-detail erasure,
+  and the adoption answer their request entry `failed`, as for an outage;
+  import authority maintenance records only committed transitions, so a
+  refusal records nothing. A request-detail erasure that committed keeps its
+  `committed` response when the external-deletion retry after it meets the
+  held lock, and the command still reports `request_retention.in_progress`.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_migration.rs`:
+`real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progress`
+and `real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged`.
+`crates/registry-breg/src/postgres/interlock.rs`: the competing lock
+assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
+`crates/registry-breg/tests/postgres_history_rebaseline.rs`:
+`erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing`.
+`crates/registry-breg/tests/postgres_action_evidence_retention.rs`:
+`retention_reports_a_held_migration_lock_and_erases_nothing`.
+`crates/registry-breg/tests/postgres_request_read_retention.rs`:
+`request_detail_erasure_reports_a_held_migration_lock_and_erases_nothing`.
+`crates/registry-breg/tests/postgres_import_authority.rs`:
+`a_held_migration_lock_is_reported_and_no_authority_changes` and
+`adopting_under_a_held_migration_lock_is_reported_and_supersedes_nothing`.
+`crates/registry-bregctl/src/lib.rs`:
+`apply_reports_a_held_migration_lock_as_an_activation_in_progress`,
+`an_active_registry_read_reports_a_held_migration_lock_as_in_progress`,
+`history_maintenance_reports_a_held_migration_lock_as_in_progress`, and
+`operator_maintenance_reports_a_held_migration_lock_as_in_progress`.
+`crates/registry-bregctl/src/request_retention.rs`:
+`a_held_migration_lock_stays_distinct_from_a_refused_operation`.
+`crates/registry-bregctl/src/active_registry.rs`:
+`a_held_migration_lock_reads_as_in_progress_not_as_unavailable`.
+`crates/registry-bregctl/src/reconcile_lifecycle.rs`:
+`execution_refuses_a_held_migration_lock_as_in_progress`.
+`products/breg/scripts/test-adopter-workflow.sh` holds the advisory lock from
+a second session and proves assessment answers `in_progress` while
+`--execute` refuses and `apply` refuses with `apply.database.in_progress`
+and the wait-and-retry action, then proves assessment answers with a
+read-only audit directory while `--execute` refuses. Each test the change
+adds was written first and failed, or did not compile, against the code
+before it.
+
+### Accepted residuals
+
+- **The assessment snapshot can be stale.** An apply may start or finish
+  between the lock-free read and the locked assessment; the assessment then
+  refuses the changed identity or reports what the lock-time snapshot holds.
+- **A statement timeout is read as contention.** On the lock statement only,
+  a statement timeout shorter than the lock timeout ends the wait first, so
+  it is reported as a held lock. That statement waits for nothing else.
+- **Execution outcomes without a transition.** `--execute` on a registry
+  assessed as `ready`, or one whose identity changed under the lock, still
+  answers with `executed: false` rather than a refusal.
+
+## Expected package digest for apply and plan
+
+The change adds `--expected-digest` to `bregctl apply` and `bregctl plan`
+(`parse_expected_digest` and `lifecycle_failure` in
+`crates/registry-bregctl/src/lib.rs`, and the check in `execute` in
+`crates/registry-bregctl/src/apply_lifecycle.rs`), and keeps the runtime
+file's `package.expectedDigest` mismatch sentence when the active package
+loaders refuse the configured package (`active_package_envelope_error` in
+`crates/registry-breg/src/runtime_config.rs`). It touches activation and
+release provenance. Its invariant row is BREG-SEC-148.
+
+### Threat
+
+`apply` activated whichever verified package `--package` named. A directory
+replaced or rebuilt between the review of `plan` and the `apply`, or a deploy
+job pointed at another build, activated a package nobody reviewed, and
+nothing tied the reviewed `packageDigest` to the activation. Separately, the
+active package loaders reduced a `package.expectedDigest` mismatch to the
+generic envelope refusal, so `apply`, `plan`, and the maintenance lifecycles
+named neither digest and the operator could not tell a pin mismatch from a
+damaged package.
+
+### Enforcement and defaults
+
+- `--expected-digest` takes only `sha256:` and 64 lowercase hex digits, the
+  form `package` and `plan` print. Any other value is a clap usage error,
+  exit status 2, `usage.invalid` in JSON mode.
+- The comparison runs right after the target package is verified and before
+  `DatabaseAccess::resolve`, so a mismatch resolves no database secret,
+  opens no connection, takes no lock, and writes no audit entry. Both
+  commands refuse with `apply.package.digest_mismatch` and the
+  `rerun_plan_on_intended_package` suggested action. The message names the
+  expected and the found digest; both are package identities, not secrets.
+- Without the flag, behaviour is unchanged. The activation audit entry
+  (`ActivationAttempt::begin` in `crates/registry-breg/src/migration.rs`)
+  already records `packageDigest` and `predecessorPackageDigest`, so the
+  flag adds no audit field.
+- A `package.expectedDigest` mismatch on the configured active package keeps
+  each command's code and path, for example `apply.package.refused` at
+  `package.root`, and its message is the platform sentence naming the pinned
+  and the found digest. Every other envelope refusal stays value free.
+
+### Tests
+
+`crates/registry-bregctl/tests/cli.rs`:
+`apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact`
+runs both commands against an unreachable database URL and proves that no
+flag and a matching digest reach the database while a mismatched digest
+refuses first; `apply_and_plan_take_the_expected_digest_only_as_a_sha256_label`
+covers malformed values; and
+`apply_names_both_digests_when_the_active_package_misses_its_pin` covers the
+pin sentence end to end. `crates/registry-bregctl/src/lib.rs`:
+`an_active_package_pin_mismatch_names_both_digests` covers the six lifecycle
+renderers. `crates/registry-breg/tests/runtime_config.rs`:
+`the_active_package_loaders_name_both_digests_of_a_package_pin_mismatch`.
+Each test the change adds was written first and failed against the code
+before it.
+
+### Accepted residuals
+
+- **The flag is opt-in.** An `apply` without `--expected-digest` is bound to
+  no reviewed digest and activates whichever verified package `--package`
+  names, as before. A deploy job must pass the digest its review recorded.
+- **The digest binds bytes, not authorship.** Packages are unsigned; a
+  matching digest proves the reviewed bytes are the ones activated, not who
+  built them.
+- **The `breg` operational log keeps its closed refusal class.** `breg`
+  startup keeps the pin sentence in its startup error, but its production
+  operational log renders only `the Registry package was refused`, without
+  the digests. `bregctl doctor` and `bregctl verify` against the same runtime
+  file report the sentence.
+
+## Reviewed migration rehearsal evidence
+
+The change holds the `test` rehearsal of a reviewed migration to the lock and
+statement timeouts its descriptor declares (`rehearse_assertions` and
+`rehearse_reviewed_steps` in `crates/registry-breg/src/postgres/rehearsal.rs`),
+retires the rehearsal receipt's `proofs` member
+(`MigrationRehearsalReceipt` in `crates/registry-breg/src/migration_plan.rs`),
+and names both schema fingerprints in `migration.review.fingerprint_mismatch`,
+measured with `bregctl test --fingerprint-only`
+(`measure` in `crates/registry-bregctl/src/test_lifecycle.rs`). It touches the
+evidence a reviewed migration carries into a package, not activation:
+`apply` already ran each reviewed statement under the declared timeouts and
+never read `proofs`, so no security invariant row changes.
+
+### Threat
+
+A rehearsal that ran every reviewed statement under a fixed 5 second lock and
+300 second statement timeout passed a migration that activation, under a
+shorter declared bound, cancels, so `package` published a plan that fails in
+maintenance. The `proofs` booleans read as evidence of lock-timeout and resume
+behavior while proving neither: the parser accepted them only when they
+equalled what the descriptor already fixed.
+
+### Enforcement and defaults
+
+- Before a migration's assertions and before each reviewed step, the rehearsal
+  sets the descriptor's `lockTimeoutMs` and `statementTimeoutMs`, or a
+  backfill step's own, through the same bounded setter activation uses, and
+  restores the compiler's bound for the generated statements.
+- A newly captured receipt that carries `proofs` is refused by `bregctl`
+  with `migration.review.receipt_proofs_retired`. A package the previous
+  release built with one keeps loading, with the member ignored, so an
+  active package survives the upgrade; nothing reads its values, and that
+  acceptance is removed in the next release.
+- The mismatch refusal and the `--fingerprint-only` report carry schema
+  fingerprints only, which are catalog digests and already appear in `test`
+  reports and package manifests. `--fingerprint-only` takes no credentials,
+  runs no fixtures, writes no receipt, and rolls its install back.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_migration.rs`:
+`real_postgres_rehearsal_holds_a_reviewed_migration_to_its_declared_timeouts`
+(SQLSTATE `57014` in the rehearsal, then the same package refused by `apply`).
+`crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
+`reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
+`crates/registry-breg/tests/migration_plan.rs`:
+`reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads`.
+`crates/registry-bregctl/src/lib.rs`:
+`review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint`.
+`crates/registry-bregctl/tests/wasm_test_lifecycle.rs`:
+`public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds`.
+`products/breg/scripts/test-adopter-workflow.sh` asserts that the refusal
+names both fingerprints.
+
+### Accepted residuals
+
+- The rehearsal runs over empty tables and does not load reviewed fixtures,
+  which are bound by digest only, so a timeout that only real rows reach is
+  found by the operator's own rehearsal on a restored copy and by `apply`.
+- The receipt's `postgresMajor` is not compared with the server the rehearsal
+  or `apply` runs on.
+
+## Wasmtime build features
+
+The change builds the pinned Wasmtime release behind the WebAssembly handler
+executor without its default features
+(`crates/registry-platform-script/Cargo.toml`). It keeps `cranelift`,
+`runtime`, `pulley`, `threads`, and `parallel-compilation`, and moves
+text-format parsing (`wat`) to a dev-dependency. It touches release
+provenance, because a default feature linked a build script that embedded the
+source commit into release binaries, and the deployment default for which
+WebAssembly proposals a handler module may use.
+
+### Threat
+
+1. A release binary embeds the commit it was built from, so the image
+   advisory baseline built from one commit never matches the candidate built
+   from the next (`release/REPEATABLE-BUILDS.md`, "The source tree, not the
+   checkout").
+2. Engine surfaces the executor never calls (the module cache, GC, component
+   model, profiling, debugging, coredumps, and the text parser) widen what a
+   reviewed but hostile or careless module can reach.
+
+### Enforcement and defaults
+
+- `wasmtime-internal-cache`, whose build script keys the module cache on the
+  enclosing git commit, is no longer in `Cargo.lock`. `cranelift-codegen`
+  still reads the commit for its `VERSION` constant and stays behind the
+  `GIT_CEILING_DIRECTORIES=/workspace` contract in
+  `release/scripts/build-release-binaries.sh`.
+- The executor admits WebAssembly binaries only; WebAssembly text is refused
+  by the engine as well as by BREG's binary magic check.
+- Without `gc`, a module using GC types, exception handling, or `externref`
+  is refused at prepare, and therefore at compile time for action and hook
+  handlers. Funcref tables and indirect calls stay admitted. `threads` is
+  kept only so `Config::wasm_threads(false)` holds the proposal off.
+
+### Tests
+
+`crates/registry-platform-script/tests/wasm_executor_wat.rs`:
+`wat_text_is_refused`, `gc_exceptions_and_externref_are_refused`, and
+`funcref_tables_and_indirect_calls_are_admitted`, on both backends.
+`crates/registry-platform-script/src/wasm.rs`:
+`module_rejection_summary_keeps_the_summary_limit_not_the_name_limit`. The
+first two failed against the default-feature build (it accepted text and
+those proposals on the native backend).
+
+### Accepted residuals
+
+- **No gate pins the feature set.** Re-enabling `cache`, directly or through
+  another crate unifying Wasmtime features, would bring the commit-reading
+  build script back. The release build's full-commit read-back check and the
+  git ceiling still apply, and `gc_exceptions_and_externref_are_refused`
+  fails if `gc` is unified back on.
+- **The handler SDK workspace is separate.** `products/breg/wasm-handler-sdk`
+  has its own lock and builds Wasmtime with its default features for guest
+  preinitialization; it ships in no release binary.
+
+## WASM hook handlers in a build without WASM support
+
+The change makes a build of `registry-breg` without the `wasm` feature refuse
+a WASM hook handler at compile time, the way it already refuses a WASM action
+handler (`validate_hook_assets` in `crates/registry-breg/src/compiler.rs`).
+It changes which packages such a build activates, a deployment default.
+
+### Threat
+
+1. A feature-off build compiles a project, or loads a package, that declares a
+   WASM hook. The hook is activated with no executor to run it, and each event
+   it handles fails late with a source failure instead of the package being
+   refused before it serves (BREG-SEC-149).
+
+### Enforcement and defaults
+
+- Without the `wasm` feature, every WASM hook handler yields
+  `hook.handler.wasm_build_unsupported` at `entities[].hooks[].handler.kind`
+  before its module is looked up, so the refusal names the build rather than
+  the module and no module diagnostic is reported.
+- Package loading rederives the package through the same compiler, so the
+  build refuses to load a package a wasm-enabled build produced.
+- Default builds carry the `wasm` feature and are unchanged. The runtime's
+  late refusal of a WASM hook in `hook_handler.rs` stays as a second line.
+
+### Tests
+
+`crates/registry-breg/tests/hook_declaration.rs`:
+`a_wasm_hook_is_refused_by_a_build_without_wasm_support`, run under
+`--no-default-features --features runtime,tooling` in the CI WASM refusal
+suite. It was written first and failed against the code before the change,
+which compiled the hook. The wasm-enabled hook admission tests in the same
+file run only in builds with the feature.
+
+### Accepted residuals
+
+- **Refusal at load, not at the hook.** A deployment that switches to a
+  feature-off build with a WASM-hook package active cannot load that package;
+  the operator replaces it or deploys a build with the feature.
+
 ## Immediate action history commit allocation
 
 ### Threat
@@ -1087,7 +1580,7 @@ must be rebuilt before relying on snapshots or coverage rebaselining.
 A count can disclose records beyond the caller's ordinary read authority. A
 published release can expose small populations, depend on caller-specific
 visibility, retain hidden true counts, or be silently rewritten after readers
-have used it. The statistical invariants are BREG-SEC-146 through BREG-SEC-156.
+have used it. The statistical invariants are BREG-SEC-150 through BREG-SEC-160.
 
 ### Enforcement and defaults
 
@@ -1125,6 +1618,8 @@ Both are sent with no-store cache policy.
 
 Anonymous refusals return before authenticated refusal auditing, preventing
 unauthenticated requests from filling that journal or observing sink health.
+Authenticated unknown datasets and ungranted profiles enter refusal auditing;
+unknown IDs use a fixed route identity so caller input cannot enter the journal.
 Caller-filtered OpenAPI names only the selected profile; its query selector
 still follows the runtime's actual default admission rules.
 

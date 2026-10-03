@@ -4610,6 +4610,18 @@ fn validate_hook_assets(
                 HookHandlerSource::Wasm { module, .. } => (module.as_str(), true),
                 HookHandlerSource::Url { .. } => continue,
             };
+            #[cfg(not(feature = "wasm"))]
+            if is_wasm {
+                // Refuse the declared backend explicitly, before the module is
+                // looked up: this build carries no WASM executor, so a hook it
+                // compiled could only fail when it fires.
+                errors.push(Diagnostic::error(
+                    "hook.handler.wasm_build_unsupported",
+                    "entities[].hooks[].handler.kind",
+                    "this build of the compiler does not admit WASM hook handlers",
+                ));
+                continue;
+            }
             let module = hook_origins
                 .get(&(entity.id.clone(), hook.id.clone()))
                 .cloned()
@@ -4690,7 +4702,8 @@ fn validate_hook_module_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
 }
 
 /// Structural admission runs only where the wasm executor is linked in; a
-/// build without it still holds the bound and binary shape above.
+/// build without it refuses every WASM hook in `validate_hook_assets` before
+/// its module is read, so the no-op below is never reached with a module.
 #[cfg(feature = "wasm")]
 fn validate_hook_module_structure(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
     if let Some((_, message)) = crate::wasm_handler::structural_violation(bytes) {

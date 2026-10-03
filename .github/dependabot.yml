@@ -166,6 +166,10 @@ updates:
       - dependency-name: "jsonwebtoken"
         update-types:
           - "version-update:semver-major"
+      # jsonschema moves once, to the current release, across every crate (#1655).
+      - dependency-name: "jsonschema"
+        update-types:
+          - "version-update:semver-major"
       # The RustCrypto and rand generation moves together: ed25519-dalek 3,
       # p256 0.14, pkcs8 0.11, and rand/rand_core/rand_chacha 0.10 (#1695).
       - dependency-name: "ed25519-dalek"

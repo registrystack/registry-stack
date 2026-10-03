@@ -2349,14 +2349,132 @@ fn a_first_start_reads_the_projects_dev_clients_without_a_flag() {
     assert!(refusal.contains("--clients-file"), "{refusal}");
 }
 
+/// Replace the one occurrence of `from` in an authored file with `to`.
+fn edit_authored(path: &Path, from: &str, to: &str) {
+    let text = fs::read_to_string(path).unwrap();
+    assert_eq!(
+        text.matches(from).count(),
+        1,
+        "{from} in {}",
+        path.display()
+    );
+    fs::write(path, text.replace(from, to)).unwrap();
+}
+
+/// Append a comment line to an authored file, changing its bytes only.
+fn append_comment(path: &Path, comment: &str) {
+    let mut bytes = fs::read(path).unwrap();
+    bytes.extend_from_slice(comment.as_bytes());
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn the_source_pin_follows_the_compiled_meaning_not_the_authored_bytes() {
+    let (_temporary, project) = write_init_project();
+    let pin = |client_bytes: &[u8]| capture(&project, client_bytes).unwrap().digest;
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let original = pin(&client_bytes);
+
+    // Comments, blank lines and key order spell the same registry, journeys
+    // and clients, so they leave the pin where it was.
+    append_comment(&project.join("registry.yaml"), "\n# edited comment\n");
+    append_comment(
+        &project.join("modules/record-notes/module.yaml"),
+        "\n# edited comment\n",
+    );
+    append_comment(&project.join("tests/journeys.yaml"), "\n# edited comment\n");
+    edit_authored(
+        &project.join("registry.yaml"),
+        "  id: generic-registry\n  version: 0.1.0\n",
+        "  version: 0.1.0\n  id: generic-registry\n",
+    );
+    let mut commented_clients = client_bytes.clone();
+    commented_clients.extend_from_slice(b"\n# edited comment\n");
+    assert_eq!(pin(&commented_clients), original);
+
+    // A change of meaning in any pinned input moves the pin.
+    for (path, from, to) in [
+        // The compiled registry revision.
+        ("registry.yaml", "  version: 0.1.0\n", "  version: 0.2.0\n"),
+        // The package identity, which the compiled revision does not name.
+        (
+            "registry.yaml",
+            "sourceRevision: generic-registry-0.1.0",
+            "sourceRevision: generic-registry-0.1.1",
+        ),
+        // The journeys the session rehearses before it builds a package.
+        (
+            "tests/journeys.yaml",
+            "data: {code: group-a, label: Example group}",
+            "data: {code: group-a, label: Edited group}",
+        ),
+    ] {
+        edit_authored(&project.join(path), from, to);
+        assert_ne!(pin(&commented_clients), original, "{path}: {to}");
+        edit_authored(&project.join(path), to, from);
+        assert_eq!(pin(&commented_clients), original, "{path}: {from}");
+    }
+    let edited_clients = String::from_utf8(client_bytes)
+        .unwrap()
+        .replace(
+            "registry_principal: generic-registry-reader",
+            "registry_principal: generic-registry-other-reader",
+        )
+        .into_bytes();
+    assert_ne!(pin(&edited_clients), original);
+}
+
+#[test]
+fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes() {
+    // The compiled registry carries the digest of the exact script bytes it
+    // runs, so the pin treats any script edit, a comment included, as a
+    // change of what the session would ship.
+    let (_temporary, project) = write_init_project();
+    edit_authored(
+        &project.join("registry.yaml"),
+        "    permissions:\n      - entity: record-group\n        rowBoundaries: []\n        \
+         operations: [create, get, list]\n",
+        "    permissions:\n      - action: create-record-group\n        operations: [invoke]\n        \
+         targets: [{entity: record-group, rowBoundaries: []}]\n        results: [group]\n      \
+         - entity: record-group\n        rowBoundaries: []\n        \
+         operations: [create, get, list]\n",
+    );
+    append_comment(
+        &project.join("registry.yaml"),
+        "\nactions:\n  - id: create-record-group\n    inputs:\n      \
+         - {id: code, type: string, required: true, maxLength: 64, classification: public}\n    \
+         handler:\n      kind: rhai\n      script: scripts/create-record-group.rhai\n      \
+         abi: registry.action-handler/v1\n      writes:\n        - id: group\n          \
+         target: {entity: record-group}\n          operation: create\n          \
+         fields: [code, label]\n",
+    );
+    fs::create_dir_all(project.join("scripts")).unwrap();
+    fs::write(
+        project.join("scripts/create-record-group.rhai"),
+        "fn handle(ctx) {\n    #{effects: [#{id: \"group\", set: #{code: ctx.inputs.code, \
+         label: ctx.inputs.code}}]}\n}\n",
+    )
+    .unwrap();
+    let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let original = capture(&project, &clients).unwrap().digest;
+    append_comment(&project.join("registry.yaml"), "\n# edited comment\n");
+    assert_eq!(capture(&project, &clients).unwrap().digest, original);
+    append_comment(
+        &project.join("scripts/create-record-group.rhai"),
+        "\n// edited comment\n",
+    );
+    assert_ne!(capture(&project, &clients).unwrap().digest, original);
+}
+
 #[test]
 fn changed_inputs_are_refused_while_the_session_holds_records() {
     let (_temporary, project) = write_init_project();
     let state = retained_session(&project, Some("c".repeat(64)));
-    let registry = project.join("registry.yaml");
-    let mut edited = fs::read(&registry).unwrap();
-    edited.extend_from_slice(b"\n# edited after the first start\n");
-    fs::write(&registry, edited).unwrap();
+    edit_authored(
+        &project.join("registry.yaml"),
+        "  version: 0.1.0\n",
+        "  version: 0.2.0\n",
+    );
 
     let refusal = format!(
         "{:#}",
@@ -2373,6 +2491,41 @@ fn changed_inputs_are_refused_while_the_session_holds_records() {
 }
 
 #[test]
+fn a_byte_only_edit_keeps_the_session_that_holds_records() {
+    // A comment changes no compiled meaning, so the retained session and its
+    // records stay; the start goes on to look for the breg binary.
+    let (_temporary, project) = write_init_project();
+    let state = retained_session(&project, Some("c".repeat(64)));
+    append_comment(
+        &project.join("registry.yaml"),
+        "\n# edited while the records are retained\n",
+    );
+    append_comment(
+        &project.join("tests/journeys.yaml"),
+        "\n# edited while the records are retained\n",
+    );
+    append_comment(
+        &project.join("dev-clients.yaml"),
+        "\n# edited while the records are retained\n",
+    );
+
+    let failure = format!(
+        "{:#}",
+        start_without_binaries(&project).expect_err("no breg binary")
+    );
+    assert!(!failure.contains("dev stop --remove"), "{failure}");
+    let kept = read_state(&state.root()).unwrap();
+    assert_eq!(kept.owner, state.owner);
+    assert_eq!(kept.container_id, state.container_id);
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    assert_eq!(
+        kept.source_digest,
+        capture(&project, &client_bytes).unwrap().digest
+    );
+    assert_eq!(kept.source_digest, state.source_digest);
+}
+
+#[test]
 fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     // After `dev stop --remove` nothing remains for the source pin to protect,
     // so an edited project starts a fresh session on the retained ports.
@@ -2385,12 +2538,14 @@ fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     state.save().unwrap();
     let previous_key =
         fs::read(state.root().join("credentials/operator/assertion-key.jwk")).unwrap();
-    let registry = project.join("registry.yaml");
-    let mut edited = fs::read(&registry).unwrap();
-    edited.extend_from_slice(b"\n# edited after the records were discarded\n");
-    fs::write(&registry, edited).unwrap();
+    edit_authored(
+        &project.join("registry.yaml"),
+        "  version: 0.1.0\n",
+        "  version: 0.2.0\n",
+    );
     let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let expected = capture(&project, &client_bytes).unwrap().digest;
+    assert_ne!(expected, state.source_digest);
 
     // The start fails only once it looks for the breg binary, after the
     // replaced session is on disk.

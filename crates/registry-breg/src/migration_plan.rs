@@ -249,7 +249,11 @@ pub struct MigrationRehearsalReceipt {
     pub postgres_major: u16,
     pub row_assertions: Vec<RehearsalRowAssertion>,
     pub final_schema_fingerprint: String,
-    pub proofs: RehearsalProofs,
+    /// Accepted only so a package the previous release built keeps loading;
+    /// nothing reads it, and `bregctl` refuses a captured receipt that
+    /// carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proofs: Option<RehearsalProofs>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -275,6 +279,8 @@ pub struct RehearsalRowAssertion {
     pub affected_rows: u64,
 }
 
+/// The previous release's receipt `proofs` member, kept in its exact shape so
+/// its bytes still round-trip canonically. Nothing reads its values.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RehearsalProofs {
@@ -1151,7 +1157,6 @@ fn validate_receipt(
                 .iter()
                 .map(|fixture| fixture.id.as_str()),
         )
-        || !receipt.proofs.lock_timeout
     {
         return Err(ReviewedMigrationError::Evidence);
     }
@@ -1174,19 +1179,6 @@ fn validate_receipt(
         {
             return Err(ReviewedMigrationError::Evidence);
         }
-    }
-    let has_chunks = steps.iter().any(|step| {
-        matches!(
-            step.descriptor,
-            ReviewedMigrationStepDescriptor::ChunkedBackfill { .. }
-                | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
-        )
-    });
-    let destructive =
-        descriptor.change_class == CompiledRegistryChangeClass::DestructiveOrIrreversible;
-    if receipt.proofs.chunk_resume != has_chunks || receipt.proofs.destructive_resume != destructive
-    {
-        return Err(ReviewedMigrationError::Evidence);
     }
     let expected_row_steps = steps
         .iter()

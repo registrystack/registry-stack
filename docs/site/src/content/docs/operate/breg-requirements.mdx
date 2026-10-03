@@ -71,10 +71,15 @@ with no database open, so an author can work on a laptop until the project is re
 
 Each release publishes the `breg` runtime and the `bregctl` authoring tool as reproducible
 binaries, with an installer that verifies them against the release checksums and installs them
-together or not at all. Each release also publishes a
-container image built on a distroless base with no shell,
-running as a non-root user, that holds the runtime binary and nothing else; configuration, package,
-and secrets mount read-only into it. File audit needs a separate writable volume.
+together or not at all. Each release also publishes a container image on the distroless
+`cc-debian13` base, which has no shell or HTTP client, with pinned Debian `libc6` and `libssl3t64`
+packages laid over it. The image runs as the non-root user with UID 65532, holds the `breg`
+runtime and the `bregctl` operator tool with their licenses, and starts
+`breg --runtime-config /etc/breg/runtime.yaml`; you run `bregctl` by overriding the entrypoint.
+The runtime configuration, package, secrets, and migration credential are deployment inputs you
+mount read-only. The image carries no writable directory, so file audit needs a writable volume
+mounted at `audit.path`, and it declares no health check: probe `GET /health` from outside the
+container.
 
 The release ships no Helm chart, Compose file, or hosted offering. Scheduling, TLS termination,
 and the proxy in front of the listener are yours. The Docker use in the first tutorial is a
@@ -127,6 +132,17 @@ limit of its own, so a registry that admits anonymous reads belongs behind one.
 
 ## Stability
 
+Base Registry Engine is pre-1.0 Beta software. Its APIs, package formats, and deployment
+contracts may change between minor releases, and each break carries a `BREAKING:` entry in
+`products/breg/CHANGELOG.md` at the release tag you operate. A pilot holds three conditions: run
+`breg` under a process supervisor that restarts it on failure, as
+[Serve the container image](../breg/#serve-the-container-image) describes; treat the holder of the
+migration credential as the activation gate, because packages carry no signature and most access
+changes apply with no reviewed evidence, as
+[Test and package the successor](../breg-changes/#test-and-package-the-successor) describes; and
+keep to the verified deployment profile, which leaves out Kubernetes, as
+[Activate from the image](../breg/#activate-from-the-image) describes.
+
 Registry Stack is pre-1.0, so a minor release may contain breaking changes, announced in the
 release note, and security fixes land only in the latest release; see
 [API stability](../../reference/api-stability/) and the
@@ -134,7 +150,11 @@ release note, and security fixes land only in the latest release; see
 alpha version. The security posture is fixed: the product's invariant matrix names each package,
 role, row, and claim boundary with the negative test that enforces it.
 
-{/* Evidence: docs/site/src/content/docs/reference/api-stability.mdx;
+{/* Evidence: README.md, the status note;
+    products/breg/CHANGELOG.md, the BREAKING entries;
+    docs/site/src/content/docs/operate/breg.mdx, the supervisor and Kubernetes paragraphs;
+    crates/registry-breg/src/package.rs, compiler_applicable_without_review();
+    docs/site/src/content/docs/reference/api-stability.mdx;
     docs/site/src/content/docs/security/support-window.mdx;
     crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION;
     products/breg/contracts/security-invariant-matrix.yaml. */}

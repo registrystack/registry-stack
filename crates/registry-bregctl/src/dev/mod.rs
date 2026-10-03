@@ -18,6 +18,7 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
+use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -244,6 +245,9 @@ struct State {
     #[serde(default)]
     webhook_port: Option<u16>,
     clients_file: PathBuf,
+    /// The pin `capture` derives from what the session runs: the compiled
+    /// registry revision, the package identity, and the canonical journeys
+    /// and clients. A change of spelling alone leaves it unchanged.
     source_digest: String,
     sequence: u64,
     baseline_runtime: Option<PathBuf>,
@@ -889,16 +893,26 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     )
     .map_err(|_| anyhow::anyhow!("local development requires bounded tests/journeys.yaml"))?;
     files.insert("tests/journeys.yaml".into(), journeys);
+    // The pin is what the session runs, not how its files are spelled. The
+    // compiled revision covers the effective model, including the digest of
+    // every script, WASM module and module closure it ships; the package
+    // identity, the journeys and the clients file lie outside it and are
+    // pinned by their canonical JSON form.
+    let package = canonicalize_json(&serde_json::to_value(identity)?)
+        .map_err(|_| anyhow::anyhow!("package identity must canonicalize"))?;
+    let journeys = canonical_yaml(&files["tests/journeys.yaml"], "tests/journeys.yaml")?;
+    let clients = canonical_yaml(client_bytes, "clients file")?;
     let mut hasher = Sha256::new();
-    hasher.update(b"breg-dev-source/v1\0");
-    for (path, bytes) in &files {
-        hasher.update((path.len() as u64).to_be_bytes());
-        hasher.update(path.as_bytes());
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
+    hasher.update(b"breg-dev-source/v2\0");
+    for part in [
+        compiled.revision().as_bytes(),
+        &package,
+        &journeys,
+        &clients,
+    ] {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part);
     }
-    hasher.update((client_bytes.len() as u64).to_be_bytes());
-    hasher.update(client_bytes);
     let digest = crate::hex_lower(&hasher.finalize());
     Ok(CapturedSource {
         files,
@@ -908,6 +922,16 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
         // the instance id grammar, as its runtime `identity.instanceId`.
         instance_id: compiled.registry_id().to_owned(),
         source_revision: identity.source_revision.clone(),
+    })
+}
+
+/// The canonical JSON form of one authored YAML document, so comments, layout
+/// and key order do not distinguish two spellings of the same content.
+fn canonical_yaml(bytes: &[u8], name: &str) -> Result<Vec<u8>> {
+    let value: Value =
+        serde_norway::from_slice(bytes).with_context(|| format!("{name} must parse as YAML"))?;
+    canonicalize_json(&value).map_err(|_| {
+        anyhow::anyhow!("{name} must hold only values with an exact canonical JSON form")
     })
 }
 

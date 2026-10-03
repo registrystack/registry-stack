@@ -219,6 +219,11 @@ authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
 | `doctor` reports `startup.instance_id.pending_deliveries` | Pending deliveries were captured under the event source of a previous `identity.instanceId`, and the worker would dead-letter them under the new one. Restore the instance id that ends the stored source the diagnostic names until `webhook list` shows them drained, then change it. |
 | A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
 | Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
+| `webhook list`, `replay`, or `discard` reports `webhook.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. |
+
+{/* Evidence: crates/registry-breg/src/webhook.rs, WebhookOperatorService::from_runtime_config;
+    crates/registry-bregctl/tests/cli.rs,
+    webhook_operations_name_both_digests_when_the_active_package_misses_its_pin. */}
 
 ## Next
 

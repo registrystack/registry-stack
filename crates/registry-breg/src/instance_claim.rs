@@ -200,6 +200,7 @@ mod operator {
 
     use super::{identity_from, live_identity, InstanceIdentity};
     use crate::audit::RegistryAudit;
+    use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
     use crate::postgres::{
         verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
         ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
@@ -213,6 +214,8 @@ mod operator {
     pub enum InstanceClaimError {
         #[error("the instance claim is unavailable")]
         Unavailable,
+        #[error("another session held the exclusive migration lock past the lock timeout")]
+        MigrationLockHeld,
         /// The package the runtime file names was refused before any
         /// database was reached. The message names the rule and the fix, such
         /// as an `expectedDigest` pin the package root does not match, and
@@ -472,13 +475,14 @@ mod operator {
                 .await
                 .map_err(|_| InstanceClaimError::Unavailable)?;
             self.set_local_timeouts(&transaction).await?;
-            transaction
-                .execute(
-                    "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-                    &[&self.lock_key.get()],
-                )
+            lock_registry(&transaction, self.lock_key)
                 .await
-                .map_err(|_| InstanceClaimError::Unavailable)?;
+                .map_err(|error| match error {
+                    HistoryMaintenanceError::MigrationLockHeld => {
+                        InstanceClaimError::MigrationLockHeld
+                    }
+                    _ => InstanceClaimError::Unavailable,
+                })?;
             verify_catalog_identity_for_catalog(
                 &transaction,
                 &self.expected,

@@ -23,8 +23,8 @@ use uuid::Uuid;
 use crate::audit::RegistryAudit;
 use crate::history_commit::{lock_history_head, HistoryCommitError};
 use crate::history_maintenance::{
-    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
-    verify_ready_identity, HistoryMaintenanceError,
+    append_maintenance_entries, begin_maintenance_request, lock_registry, profile_is_keyed,
+    set_local_timeouts, verify_ready_identity, HistoryMaintenanceError,
 };
 use crate::idempotency::{tombstone_erased_cached_responses, IdempotencyError};
 use crate::postgres::{
@@ -110,6 +110,8 @@ pub enum HistoryErasureError {
     HistoryNotReady,
     #[error("history erasure found a cached response no JSON reader accepts")]
     CachedResponseUnreadable,
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
     #[error("history erasure storage is unavailable")]
     Unavailable,
 }
@@ -138,6 +140,7 @@ impl From<HistoryMaintenanceError> for HistoryErasureError {
         match error {
             HistoryMaintenanceError::InvalidInput => Self::InvalidInput,
             HistoryMaintenanceError::MigrationAuthority => Self::MigrationAuthority,
+            HistoryMaintenanceError::MigrationLockHeld => Self::MigrationLockHeld,
             HistoryMaintenanceError::Unavailable => Self::Unavailable,
         }
     }
@@ -218,13 +221,7 @@ async fn erase_record_history_scoped(
         .await
         .map_err(|_| HistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
-    transaction
-        .execute(
-            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-            &[&request.lock_key.get()],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
+    lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
 
     let head = lock_history_head(&transaction).await?;

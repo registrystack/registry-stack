@@ -34,7 +34,7 @@ use crate::postgres::SqlIdentifier;
 use crate::request_workflow::ProposalSnapshot;
 
 const APPLICATION_LEASE_MINIMUM_SECONDS: i64 = 30;
-const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
+pub(crate) const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
 const APPLICATION_ATTEMPTS_EXHAUSTED: &str = "application-attempts-exhausted";
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
@@ -53,13 +53,27 @@ pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 /// pass. `verify_retained_bindings` shares this predicate: a job it would not
 /// let the worker claim is not durable work either, so it does not pin the
 /// review authority or executor binding it used, and an operator may drop
-/// that binding. `q` names the candidate job row in every query this is
-/// spliced into.
-const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
+/// that binding. The metrics queue-age sample shares it too, so a job left
+/// `queued` this way does not age the application queue. `q` names the
+/// candidate job row in every query this is spliced into.
+pub(crate) const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
         SELECT 1 FROM registry_internal.registry_request_review_results r
          WHERE (r.request_entity_id,r.request_id,r.proposal_version)
                =(q.request_entity_id,q.request_id,q.proposal_version)
            AND r.status='approved' AND r.available_until <= transaction_timestamp()))";
+
+/// A review submission is claimable once it is due and no live lease holds
+/// it: a `submitting` claim stays with its holder until its lease expires,
+/// and a `cancelling` row is free when it has no lease or an expired one.
+/// The worker selects its authorities and backs off token failures with this
+/// predicate, and the metrics queue-age sample shares it, so a submission
+/// the worker would claim always ages the review submission queue. Column
+/// names are unqualified: every query this is spliced into reads only the
+/// submissions table.
+pub(crate) const REVIEW_SUBMISSION_CLAIMABLE: &str = "next_attempt_at <= transaction_timestamp()
+        AND (state<>'submitting' OR lease_until < transaction_timestamp())
+        AND (state<>'cancelling' OR lease_until IS NULL
+             OR lease_until < transaction_timestamp())";
 
 fn outbound_lease_seconds(request_timeout: Duration) -> i64 {
     // The claim lease must outlive the outbound call it guards: an expiry
@@ -690,13 +704,12 @@ impl ReviewAuthorityRegistry {
             .collect::<Vec<_>>();
         let rows = client
             .query(
-                "SELECT authority,min(next_attempt_at) AS ready_at
-                   FROM registry_internal.registry_request_review_submissions
-                  WHERE state=ANY($1) AND next_attempt_at <= transaction_timestamp()
-                    AND (state<>'submitting' OR lease_until < transaction_timestamp())
-                    AND (state<>'cancelling' OR lease_until IS NULL
-                         OR lease_until < transaction_timestamp())
-                  GROUP BY authority ORDER BY ready_at,authority",
+                &format!(
+                    "SELECT authority,min(next_attempt_at) AS ready_at
+                       FROM registry_internal.registry_request_review_submissions
+                      WHERE state=ANY($1) AND {REVIEW_SUBMISSION_CLAIMABLE}
+                      GROUP BY authority ORDER BY ready_at,authority"
+                ),
                 &[&states],
             )
             .await
@@ -722,16 +735,14 @@ impl ReviewAuthorityRegistry {
             .collect::<Vec<_>>();
         client
             .execute(
-                "UPDATE registry_internal.registry_request_review_submissions
-                    SET state=CASE WHEN state='submitting' THEN 'uncertain' ELSE state END,
-                        lease_until=NULL,last_error_code='token-unavailable',
-                        next_attempt_at=transaction_timestamp()+interval '5 seconds',
-                        updated_at=transaction_timestamp()
-                  WHERE authority=$1 AND state=ANY($2)
-                    AND next_attempt_at <= transaction_timestamp()
-                    AND (state<>'submitting' OR lease_until < transaction_timestamp())
-                    AND (state<>'cancelling' OR lease_until IS NULL
-                         OR lease_until < transaction_timestamp())",
+                &format!(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state=CASE WHEN state='submitting' THEN 'uncertain' ELSE state END,
+                            lease_until=NULL,last_error_code='token-unavailable',
+                            next_attempt_at=transaction_timestamp()+interval '5 seconds',
+                            updated_at=transaction_timestamp()
+                      WHERE authority=$1 AND state=ANY($2) AND {REVIEW_SUBMISSION_CLAIMABLE}"
+                ),
                 &[&authority, &states],
             )
             .await
@@ -964,10 +975,7 @@ impl ReviewAuthorityRegistry {
             match outcome {
                 Ok(true) => {
                     if unavailable_lookups > 0 {
-                        tracing::warn!(
-                            unavailable = unavailable_lookups,
-                            "BReg review result lookups are temporarily unavailable"
-                        );
+                        crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
                     }
                     return Ok(true);
                 }
@@ -1001,10 +1009,7 @@ impl ReviewAuthorityRegistry {
             }
         }
         if unavailable_lookups > 0 {
-            tracing::warn!(
-                unavailable = unavailable_lookups,
-                "BReg review result lookups are temporarily unavailable"
-            );
+            crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
         }
         if authority_unavailable {
             Err(MutationError::Unavailable)
@@ -1230,6 +1235,7 @@ pub struct ReviewWorker {
     pool: crate::postgres::RuntimePool,
     authorities: Option<Arc<ReviewAuthorityRegistry>>,
     executors: Option<Arc<ReviewExecutorRegistry>>,
+    last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl ReviewWorker {
@@ -1242,7 +1248,14 @@ impl ReviewWorker {
             pool,
             authorities,
             executors,
+            last_success: Arc::default(),
         }
+    }
+
+    /// The handle this worker notes each iteration without failure on.
+    #[must_use]
+    pub fn last_success(&self) -> Arc<crate::metrics::LastSuccess> {
+        Arc::clone(&self.last_success)
     }
 
     pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
@@ -1250,12 +1263,17 @@ impl ReviewWorker {
             if *shutdown.borrow() {
                 return;
             }
+            let mut failed = false;
             let worked = match self.pool.get().await {
                 Ok(mut client) => {
-                    let housekeeping_worked = erase_expired_review_completions(&**client)
-                        .await
-                        .unwrap_or(0)
-                        > 0;
+                    let housekeeping_worked =
+                        match erase_expired_review_completions(&**client).await {
+                            Ok(erased) => erased > 0,
+                            Err(_) => {
+                                failed = true;
+                                false
+                            }
+                        };
                     // A source apply whose response was lost is retried against
                     // BReg before another Casework exchange. The source's
                     // idempotency receipt is the application authority.
@@ -1263,9 +1281,13 @@ impl ReviewWorker {
                         false
                     } else {
                         match &self.executors {
-                            Some(executors) => {
-                                executors.run_one(&mut client).await.unwrap_or(false)
-                            }
+                            Some(executors) => match executors.run_one(&mut client).await {
+                                Ok(worked) => worked,
+                                Err(_) => {
+                                    failed = true;
+                                    false
+                                }
+                            },
                             None => false,
                         }
                     };
@@ -1276,22 +1298,36 @@ impl ReviewWorker {
                         false
                     } else {
                         match &self.authorities {
-                            Some(authorities) => {
-                                authorities.run_one(&mut client).await.unwrap_or(false)
-                            }
+                            Some(authorities) => match authorities.run_one(&mut client).await {
+                                Ok(worked) => worked,
+                                Err(_) => {
+                                    failed = true;
+                                    false
+                                }
+                            },
                             None => false,
                         }
                     };
                     housekeeping_worked || application_worked || authority_worked
                 }
-                Err(_) => false,
+                Err(_) => {
+                    failed = true;
+                    false
+                }
             };
+            if failed {
+                crate::startup::OperationalEvent::ReviewWorkerIterationFailed.emit();
+            } else {
+                self.last_success.record();
+            }
             if worked {
                 continue;
             }
             tokio::select! {
-                _ = shutdown.changed() => {},
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { return; }
+                }
+                () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
             }
         }
     }

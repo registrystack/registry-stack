@@ -76,10 +76,15 @@ pub enum MigrationError {
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverage,
     /// Refused before maintenance began: the migration database could not be
-    /// reached, or another session held the apply lock past the lock timeout.
-    /// Nothing was changed, so the same apply may simply be retried.
+    /// reached. Nothing was changed, so the same apply may simply be retried.
     #[error("the migration database was unavailable before maintenance began")]
     DatabaseUnavailable,
+    /// Refused before maintenance began: another session held the exclusive
+    /// migration lock past the lock timeout, so an apply, an adoption, or a
+    /// reconciliation is in progress. Nothing was changed, so the same apply
+    /// may be retried once that session releases the lock.
+    #[error("another session held the migration lock before maintenance began")]
+    MigrationLockHeld,
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
@@ -623,12 +628,16 @@ pub fn bind_active_package(
 /// Maps a failure to reach the migration database or to take the apply lock,
 /// before maintenance begins, to the refusal it is: nothing was changed, so a
 /// lost connection or an apply lock held past the lock timeout may simply be
-/// retried. Every other failure keeps its exact-target reconciliation path.
+/// retried. A held lock stays distinct from an unreachable database. Every
+/// other failure keeps its exact-target reconciliation path.
 fn refusal_before_maintenance(error: crate::postgres::PostgresKernelError) -> MigrationError {
     match error {
         crate::postgres::PostgresKernelError::Connection
         | crate::postgres::PostgresKernelError::RegistryUnavailable => {
             MigrationError::DatabaseUnavailable
+        }
+        crate::postgres::PostgresKernelError::MigrationLockHeld => {
+            MigrationError::MigrationLockHeld
         }
         _ => MigrationError::ApplyFailed,
     }

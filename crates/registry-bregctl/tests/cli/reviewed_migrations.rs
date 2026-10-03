@@ -3,7 +3,7 @@
 
 use super::*;
 use registry_breg::migration_plan::{
-    MigrationRehearsalReceipt, RehearsalProofs, ReviewedChangeCover, ReviewedMigrationDescriptor,
+    MigrationRehearsalReceipt, ReviewedChangeCover, ReviewedMigrationDescriptor,
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{compiled_registry_change_set, CompiledRegistryChangeClass};
@@ -92,11 +92,7 @@ impl ReviewFixture {
             postgres_major: 16,
             row_assertions: vec![],
             final_schema_fingerprint: FINGERPRINT.into(),
-            proofs: RehearsalProofs {
-                lock_timeout: true,
-                chunk_resume: false,
-                destructive_resume: false,
-            },
+            proofs: None,
         };
         let receipt_bytes = canonicalize_json(&serde_json::to_value(receipt).unwrap()).unwrap();
         let review = project.path().join("review");
@@ -537,6 +533,33 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
         json_stdout(&output)["diagnostics"][0]["code"],
         "migration.review.descriptor_refused"
     );
+}
+
+#[test]
+fn reviewed_successor_refuses_a_receipt_that_carries_retired_proofs() {
+    let fixture = ReviewFixture::create();
+    fixture.mutate_json("rehearsal.json", |value| {
+        value["proofs"] = json!({
+            "chunkResume": false,
+            "destructiveResume": false,
+            "lockTimeout": true,
+        })
+    });
+    for command in ["test", "package"] {
+        let output = fixture.run(command, true);
+        assert!(!output.status.success());
+        let diagnostic = &json_stdout(&output)["diagnostics"][0];
+        assert_eq!(
+            diagnostic["code"], "migration.review.receipt_proofs_retired",
+            "{command}: {output:?}"
+        );
+        assert_eq!(diagnostic["path"], format!("{BASE}/rehearsal.json"));
+        let message = diagnostic["message"].as_str().unwrap();
+        assert!(message.contains("proofs"), "{message}");
+        assert!(message.contains("regenerate"), "{message}");
+        assert!(!fixture.project.path().join("build").exists());
+        assert!(!fixture.project.path().join("result.json").exists());
+    }
 }
 
 #[test]

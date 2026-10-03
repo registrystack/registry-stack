@@ -49,6 +49,12 @@ pub(crate) struct TestLifecycleOutcome {
     pub baseline_fingerprint_drift: Option<BaselineFingerprintDrift>,
 }
 
+#[derive(Debug)]
+pub(crate) struct SchemaMeasurement {
+    pub registry_revision: String,
+    pub schema_fingerprint: String,
+}
+
 /// The receipt destination, held as its resolved parent descriptor plus the
 /// final component name. The preflight and the publication act through the same
 /// descriptor, so no component of the operator's path is resolved twice.
@@ -62,7 +68,7 @@ pub(crate) enum TestLifecycleError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
     Candidate,
-    ReviewFingerprint,
+    ReviewFingerprint { declared: String, measured: String },
     Rehearsal(Box<MigrationRehearsalError>),
     Journeys { message: String },
     JourneySyntax { path: String, message: &'static str },
@@ -186,13 +192,16 @@ pub(crate) fn run(
             .await
             .map_err(schema_preparation_error)
     })?;
-    if request
+    if let Some(declared) = request
         .candidate
         .prevalidation_schema_fingerprint
         .as_ref()
-        .is_some_and(|declared| declared != &schema_fingerprint)
+        .filter(|declared| *declared != &schema_fingerprint)
     {
-        return Err(TestLifecycleError::ReviewFingerprint);
+        return Err(TestLifecycleError::ReviewFingerprint {
+            declared: declared.clone(),
+            measured: schema_fingerprint,
+        });
     }
     let rehearsal_baseline = request.candidate.rehearsal_baseline.clone();
     let prepared = request
@@ -235,6 +244,36 @@ pub(crate) fn run(
         receipt_sha256: sha256(&receipt_bytes),
         receipt_bytes: receipt_bytes.len(),
         baseline_fingerprint_drift,
+    })
+}
+
+/// Measure the schema a fresh install of the candidate produces on the
+/// disposable database, rolled back as the full schema test's own measurement
+/// is, without validating journeys, resolving credentials, or writing a
+/// receipt.
+pub(crate) fn measure(
+    candidate: CapturedPackageCandidate,
+    runtime_config: &Path,
+) -> Result<SchemaMeasurement, TestLifecycleError> {
+    let config = load_test_runtime_config(runtime_config)?;
+    candidate
+        .prevalidate()
+        .map_err(|_| TestLifecycleError::Candidate)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| TestLifecycleError::Runtime)?;
+    let schema_fingerprint = runtime.block_on(async {
+        startup::rehearse_schema_fingerprint(&config, candidate.registry())
+            .await
+            .map_err(schema_preparation_error)
+    })?;
+    let prepared = candidate
+        .prepare(schema_fingerprint.clone())
+        .map_err(|_| TestLifecycleError::Candidate)?;
+    Ok(SchemaMeasurement {
+        registry_revision: prepared.registry().revision().to_owned(),
+        schema_fingerprint,
     })
 }
 

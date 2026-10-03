@@ -305,10 +305,17 @@ impl DedicatedApplyConnection {
         if let Some(timeout) = statement_timeout {
             set_session_timeout(&client, "statement_timeout", timeout).await?;
         }
+        // Every failure other than a held lock keeps its own refusal.
         client
             .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
             .await
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            .map_err(|error| {
+                if lock_wait_ended(&error) {
+                    PostgresKernelError::MigrationLockHeld
+                } else {
+                    PostgresKernelError::RegistryUnavailable
+                }
+            })?;
         Ok(Self {
             client,
             connection_task,
@@ -3758,7 +3765,7 @@ pub(crate) async fn set_force_row_security(
     Ok(())
 }
 
-async fn set_local_migration_timeouts(
+pub(super) async fn set_local_migration_timeouts(
     transaction: &impl GenericClient,
     lock_timeout_ms: u64,
     statement_timeout_ms: u64,
@@ -3818,6 +3825,20 @@ fn ensure_verified_package_session(lock_held: bool, role_verified: bool) -> Resu
         ));
     }
     Ok(())
+}
+
+/// Whether a failed advisory lock statement means another session holds the
+/// lock. The lock statement waits only for the lock, so the lock timeout, or
+/// a shorter statement timeout, ending that wait is the only way it fails
+/// with either code. Only a statement that waits for nothing but the lock
+/// may be read this way.
+pub(crate) fn lock_wait_ended(error: &tokio_postgres::Error) -> bool {
+    matches!(
+        error.code(),
+        Some(code)
+            if code == &tokio_postgres::error::SqlState::LOCK_NOT_AVAILABLE
+                || code == &tokio_postgres::error::SqlState::QUERY_CANCELED
+    )
 }
 
 fn validate_timeout(timeout: Duration, maximum: Duration, message: &'static str) -> Result<()> {
@@ -4454,7 +4475,7 @@ mod tests {
         .await;
         assert!(matches!(
             competing_lock,
-            Err(PostgresKernelError::RegistryUnavailable)
+            Err(PostgresKernelError::MigrationLockHeld)
         ));
 
         apply

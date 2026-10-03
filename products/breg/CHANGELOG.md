@@ -59,6 +59,118 @@
   `401 authentication.refused` problem and its catalogue type, title, and
   detail instead of the undocumented
   `review_completion.authentication_refused` code.
+- BREAKING: a reviewed migration's `rehearsal.json` no longer carries
+  `proofs`. Its `lockTimeout`, `chunkResume`, and `destructiveResume`
+  booleans were written by the author and accepted only when they equalled
+  values the descriptor already fixed, so they proved no lock-timeout or
+  resume behavior. `test` and `package` refuse a receipt that still carries
+  the member with `migration.review.receipt_proofs_retired`; remove it and
+  regenerate the receipt. A package the previous release built with such a
+  receipt keeps loading, so an active package survives the upgrade, and its
+  `proofs` values are ignored. That acceptance is removed in the next
+  release; rebuild such a package with `bregctl package` before then.
+- `test` rehearses a reviewed migration's assertions and transactional steps
+  under the lock and statement timeouts its descriptor declares, and a
+  backfill step under its own, as activation does. The rehearsal used a
+  fixed 5 second lock and 300 second statement timeout for every reviewed
+  statement, so a migration activation would cancel could pass it.
+- `bregctl test --fingerprint-only --runtime-config <file>` measures the
+  schema fingerprint a fresh install of the candidate produces, the value a
+  reviewed migration's `finalSchemaFingerprint` declares, and rolls back
+  without running fixtures or writing a receipt, so `--credentials` and
+  `--output` are not needed for it. Measuring the target used to take a full
+  schema test on a separate disposable database. The
+  `migration.review.fingerprint_mismatch` refusal names both the declared and
+  the measured fingerprint.
+- BREAKING: a background worker (webhook delivery, attachment verification,
+  review, or subject access log retention) or the metrics listener that
+  panics or returns before shutdown is requested ends `breg`: the process
+  stops serving, drains within the shutdown grace, logs
+  `Base Registry Engine stopped` with a closed
+  `<task>.panicked` or `<task>.returned` code, and exits with status 1.
+  Earlier releases kept serving without the task. `GET /ready` still does
+  not reflect the workers. Run `breg` under a supervisor that restarts it on
+  failure, such as an orchestrator's restart policy, systemd
+  `Restart=on-failure`, or Docker `--restart on-failure`.
+- A failed review worker iteration writes a warning with the closed code
+  `review.worker.iteration_failed` instead of being discarded as an idle
+  pass. The review result lookup outage warning carries the closed code
+  `review.result_lookups.unavailable` and no longer carries an unavailable
+  count.
+- The attachment verification worker claims the next due job as soon as it
+  finishes one, rather than waiting a second after every job, so a backlog
+  drains at the verifier's pace. It still waits a second after a pass that
+  found no due job or failed.
+- The metrics listener publishes `breg_worker_last_success_age_seconds` by
+  `worker`, `breg_queue_oldest_pending_age_seconds` by `queue` for webhook
+  deliveries, review submissions, and application jobs, and
+  `breg_active_package_info` with the `package_digest` this process verified
+  at startup. A webhook delivery or review submission whose lease expired
+  counts as waiting from the moment its lease expired. The attachment verification worker's age
+  keeps growing while a job whose content read or verifier request failed
+  waits for its retry. A scrape that cannot read the queues omits every
+  queue sample and writes `metrics.queue_sample.failed`. Anyone who reaches the metrics
+  listener can read the package digest.
+- A migration lock another session holds is reported as an activation in
+  progress, never as an unreachable database. `migration reconcile` reads the
+  active identity without the lock, so its assessment reports `in_progress`
+  where it refused with `migration.reconcile.active_registry.unavailable`, and
+  `--execute` refuses with `migration.reconcile.outcome.in_progress`. `apply`
+  and `plan` name the held lock instead of `database.migrationUrlRef`, under
+  the code the next entry gives. `history erase`,
+  `history rebaseline`, `field-encryption preflight`, and
+  `field-encryption erase-history` report a lock held while they read the
+  active identity as `<prefix>.active_registry.in_progress`, for example
+  `history.erase.active_registry.in_progress`, with the suggested action
+  `retry_after_migration_lock_releases`. An assessment opens no audit
+  writer, so it answers when the audit destination cannot be written;
+  `--execute` still refuses with `migration.reconcile.audit.unavailable`.
+- BREAKING: `apply` and `plan` report a migration lock another session held
+  past the lock timeout as `apply.database.in_progress`, with the suggested
+  action `retry_after_migration_lock_releases`, where they reported
+  `apply.database.unavailable`. Automation that matches
+  `apply.database.unavailable` to detect contention must match
+  `apply.database.in_progress`. A database that cannot be reached keeps
+  `apply.database.unavailable`. `history erase`, `history rebaseline`, and
+  `field-encryption erase-history` report a lock held when their maintenance
+  transaction takes it as `history.erase.in_progress`,
+  `history.rebaseline.in_progress`, and
+  `field_encryption.erase_history.in_progress`, with the same suggested
+  action, where they reported `history.erase.unavailable`,
+  `history.rebaseline.unavailable`, and
+  `field_encryption.erase_history.unavailable`. `evidence-retention
+  erase-expired`, the `request-retention` commands, `import-authority open`,
+  `close`, and `close-expired`, and `instance-claim adopt` report the same
+  held lock as `evidence_retention.in_progress`,
+  `request_retention.in_progress`, `import_authority.in_progress`, and
+  `instance_claim.in_progress`, where they reported
+  `evidence_retention.unavailable`, `request_retention.operation.refused`,
+  `import_authority.unavailable`, and `instance_claim.unavailable`.
+  Automation that retries those unavailable codes on contention must match
+  the `in_progress` codes.
+- `bregctl apply` and `bregctl plan` take `--expected-digest`, the
+  `sha256:` package digest `plan` and `package` print. A package at
+  `--package` with another digest is refused with
+  `apply.package.digest_mismatch`, naming both digests, before any database
+  contact, and nothing changes. A malformed value is a usage error. Without
+  the flag, both commands behave as before.
+- A configured active package that `package.expectedDigest` does not pin is
+  refused with the sentence `verify` already gives, naming the pinned and the
+  found package digests, by `apply`, `plan`, `migration reconcile`,
+  `history erase`, `history rebaseline`, `field-encryption preflight`, and
+  `field-encryption erase-history`. Each keeps its code, for example
+  `apply.package.refused` at `package.root`; the message named neither
+  digest before.
+- BREAKING: `webhook list`, `replay`, and `discard`, the `request-retention`
+  commands, the `import-authority` commands, and `evidence-retention
+  erase-expired` refuse that package with the same sentence under
+  `webhook.package.refused`, `request_retention.package.refused`,
+  `import_authority.package.refused`, and
+  `evidence_retention.package.refused` at `package`, where they reported
+  `webhook.operation.refused`, `request_retention.operation.refused`,
+  `import_authority.unavailable`, and `evidence_retention.unavailable` and
+  named neither digest.
+
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers
@@ -130,6 +242,21 @@
   migration rewrites them: once a later package removes or renames that
   action or effect, or changes the effect's operation, that revision's detail
   read and any list page that includes it answer `503 source.unavailable`.
+- BREAKING: `bregctl dev` pins a session on what it runs, not on how its
+  files are spelled: the compiled registry revision, the package
+  `sourceRevision`, and the canonical JSON form of `tests/journeys.yaml` and
+  the clients file. A comment, blank line or key-order edit to a YAML file
+  no longer counts as a changed input, so `dev start`, `dev examples run` and
+  `dev prepare-source` accept it while the session holds records. Any edit
+  to a Rhai script or WASM module, a comment included, still counts, because
+  the compiled revision carries the digest of the exact bytes it ships. A
+  `.breg/dev` session started by an earlier release holds the earlier pin and
+  reads as changed inputs: with records retained, `dev start`,
+  `dev examples run` and `dev prepare-source` refuse it, and `dev start` names
+  `dev stop --remove`; after `--remove`, `dev start` replaces the session as
+  for any edited project. Run `bregctl dev stop --remove` on such a session
+  before starting it with this release; no command carries its records
+  across.
 
 - A record, list, lookup, relationship, attachment, access-log, revision, or
   snapshot read abandoned at the request deadline (`504 request.timeout`) now
@@ -148,6 +275,28 @@
   debug. Previously an unavailable authority was asked for its feed, and
   `BReg review result feeds are temporarily unavailable` was logged, about
   once a second.
+
+- Correction to the v0.36.0 notes: `bregctl dev` does keep a package
+  sequence, in that release and since. Its state starts the sequence at 1 for
+  the first package and advances it by one each time
+  `bregctl dev prepare-source` prepares a successor, and its reports carry it
+  as `packageSequence` beside `packageDigest`.
+- BREAKING: the WebAssembly executor builds Wasmtime without its default
+  features, so a WASM action or hook handler module that uses GC types,
+  exception handling, or `externref` is refused at compile time with
+  `action.handler.module_invalid` or `hook.handler.module_invalid`. Modules
+  that use linear memory, funcref tables, and indirect calls are admitted as
+  before. Rebuild a guest that needs one of those proposals without it.
+  Release binaries no longer link `wasmtime-internal-cache`, whose build
+  script embedded the source commit.
+- BREAKING: a build without the `wasm` feature refuses a WASM hook handler
+  at compile time with `hook.handler.wasm_build_unsupported` at
+  `entities[].hooks[].handler.kind`, as it already refuses a WASM action
+  handler. Such a build compiled the hook and loaded its package, and the
+  hook failed each time it fired. Package loading rederives through the
+  compiler, so the build now refuses that package at load. Deploy a package
+  with WASM hooks only on a build with the `wasm` feature, which default
+  builds carry.
 
 ## v0.38.0 - 2026-10-01
 

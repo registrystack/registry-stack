@@ -24,8 +24,8 @@ use crate::history_commit::{
     allocate_coverage_baseline_commit, lock_history_head, HistoryCommitError,
 };
 use crate::history_maintenance::{
-    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
-    verify_ready_identity, HistoryMaintenanceError,
+    append_maintenance_entries, begin_maintenance_request, lock_registry, profile_is_keyed,
+    set_local_timeouts, verify_ready_identity, HistoryMaintenanceError,
 };
 use crate::history_migration::{
     verify_every_live_row_matches_its_journal_head, HistoryMigrationError,
@@ -78,6 +78,8 @@ pub enum HistoryRebaselineError {
     UnindexedRevisions,
     #[error("history rebaseline requires the retained journal head to reproduce every live row")]
     LiveHistoryMismatch,
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
     #[error("history rebaseline storage is unavailable")]
     Unavailable,
 }
@@ -106,6 +108,7 @@ impl From<HistoryMaintenanceError> for HistoryRebaselineError {
         match error {
             HistoryMaintenanceError::InvalidInput => Self::InvalidInput,
             HistoryMaintenanceError::MigrationAuthority => Self::MigrationAuthority,
+            HistoryMaintenanceError::MigrationLockHeld => Self::MigrationLockHeld,
             HistoryMaintenanceError::Unavailable => Self::Unavailable,
         }
     }
@@ -161,13 +164,7 @@ pub async fn rebaseline_history_coverage(
         .await
         .map_err(|_| HistoryRebaselineError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
-    transaction
-        .execute(
-            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
-            &[&request.lock_key.get()],
-        )
-        .await
-        .map_err(|_| HistoryRebaselineError::Unavailable)?;
+    lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
 
     let outcome = rebaseline_history_coverage_in_transaction(&transaction, &request).await?;

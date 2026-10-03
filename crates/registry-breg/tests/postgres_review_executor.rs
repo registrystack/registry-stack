@@ -16,6 +16,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use registry_breg::metrics::{metrics_app, Metrics};
 use registry_breg::mutation::MutationError;
 use registry_breg::review_store::{
     back_off_review_token_failure_for_test, install_review_storage_for_test, poll_one_result,
@@ -34,6 +35,7 @@ use registry_review_client::{
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
+use tower::ServiceExt as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -122,6 +124,84 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
     fn make_writer(&'writer self) -> Self::Writer {
         self.clone()
     }
+}
+
+thread_local! {
+    static THREAD_LOGS: std::cell::RefCell<Option<CapturedLogs>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Routes each line the binary's global subscriber writes to the capture the
+/// emitting thread installed, and discards the rest.
+#[derive(Clone, Copy)]
+struct ThreadLogs;
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for ThreadLogs {
+    type Writer = tracing_subscriber::fmt::writer::EitherWriter<CapturedLogs, io::Sink>;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        THREAD_LOGS.with(|logs| match logs.borrow().as_ref() {
+            Some(logs) => tracing_subscriber::fmt::writer::EitherWriter::A(logs.clone()),
+            None => tracing_subscriber::fmt::writer::EitherWriter::B(io::sink()),
+        })
+    }
+}
+
+/// Clears this thread's capture when dropped.
+struct ThreadLogsGuard;
+
+impl Drop for ThreadLogsGuard {
+    fn drop(&mut self) {
+        THREAD_LOGS.with(|logs| logs.borrow_mut().take());
+    }
+}
+
+/// Captures the operational events this thread emits until the guard drops.
+///
+/// Tracing caches each callsite's interest process-wide, and a thread-local
+/// `set_default` subscriber missed events here while other tests in this
+/// binary installed and dropped their own. One global subscriber is consulted
+/// from every thread, so it routes by thread instead. What it captures is what
+/// runs on the test thread, as everything a `current_thread` test awaits does.
+fn capture_thread_logs() -> (CapturedLogs, ThreadLogsGuard) {
+    install_test_subscriber();
+    let logs = CapturedLogs::default();
+    THREAD_LOGS.with(|slot| *slot.borrow_mut() = Some(logs.clone()));
+    (logs, ThreadLogsGuard)
+}
+
+/// Installs this test binary's one global subscriber, which may be installed
+/// only once per process, and returns the review store's debug lines.
+///
+/// It carries two layers: the review store's lines at debug from every test,
+/// for [`captured_review_logs`], and JSON lines at info and above routed to the
+/// capture the emitting thread installed, for [`capture_thread_logs`].
+fn install_test_subscriber() -> &'static CapturedLogs {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::Layer as _;
+    static REVIEW_STORE_LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
+    REVIEW_STORE_LOGS.get_or_init(|| {
+        let logs = CapturedLogs::default();
+        let review_store = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(logs.clone())
+            .with_filter(tracing_subscriber::EnvFilter::new(
+                "registry_breg::review_store=debug",
+            ));
+        let thread = tracing_subscriber::fmt::layer()
+            .json()
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_writer(ThreadLogs)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry()
+                .with(review_store)
+                .with(thread),
+        )
+        .expect("one global log subscriber for this test binary");
+        logs
+    })
 }
 
 async fn accept_review_submission(
@@ -5911,18 +5991,7 @@ impl FlakyResultFeed {
 /// would disable them for the whole process. Lines are told apart by the
 /// authority they name.
 fn captured_review_logs() -> &'static CapturedLogs {
-    static LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
-    LOGS.get_or_init(|| {
-        let logs = CapturedLogs::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_env_filter("registry_breg::review_store=debug")
-            .with_writer(logs.clone())
-            .finish();
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("the review log subscriber installs once for this test binary");
-        logs
-    })
+    install_test_subscriber()
 }
 
 /// The captured lines at `level` about `authority`'s result feed.
@@ -6021,6 +6090,465 @@ async fn an_unreachable_result_feed_backs_off_and_warns_only_on_transitions() {
     assert!(warnings[1].contains("available again"));
 
     feed.server.abort();
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_worker_returns_when_its_shutdown_sender_is_dropped() {
+    let database = prepare_review_database().await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(ReviewWorker::new(pool.clone(), None, None).run(shutdown_rx));
+    // An idle pass leaves the worker waiting on its shutdown signal.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(shutdown_tx);
+
+    let joined = tokio::time::timeout(Duration::from_secs(3), worker).await;
+    assert!(
+        matches!(joined, Ok(Ok(()))),
+        "a review worker whose shutdown sender is gone must return instead of spinning"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idle_review_worker_iteration_records_its_last_success() {
+    let database = prepare_review_database().await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = ReviewWorker::new(pool.clone(), None, None);
+    let last_success = worker.last_success();
+    assert!(last_success.age().is_none(), "no iteration has run yet");
+    let worker = tokio::spawn(worker.run(shutdown_rx));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while last_success.age().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "an iteration without failure was never recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    worker.await.expect("worker joins");
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_review_worker_iteration_emits_closed_value_free_operational_events() {
+    let database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa9);
+    seed_accepted_submission(&database, request_id, Uuid::from_u128(0xaa)).await;
+    make_result_poll_due(&database.admin, request_id).await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry_with_token(
+        "casework-a",
+        "producer-a",
+        "sender",
+        "registry-a",
+        Arc::new(UnavailableToken),
+    );
+
+    let (logs, capture) = capture_thread_logs();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = ReviewWorker::new(pool.clone(), Some(authorities), None);
+    let last_success = worker.last_success();
+    let run = worker.run(shutdown_rx);
+    tokio::pin!(run);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        tokio::select! {
+            () = &mut run => break,
+            () = tokio::time::sleep(Duration::from_millis(20)) => {
+                if logs.text().contains("review.worker.iteration_failed") {
+                    shutdown_tx.send(true).expect("signal worker shutdown");
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the failed iteration was never reported"
+                );
+            }
+        }
+    }
+    drop(capture);
+    assert!(
+        last_success.age().is_none(),
+        "a failed iteration is not a success"
+    );
+
+    // The operational events this worker emits. The result feed's own
+    // backoff lines name their authority under the review store's target.
+    let records = logs
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+        .filter(|record| record["target"] == "registry_breg::review")
+        .collect::<Vec<_>>();
+    let codes = records
+        .iter()
+        .filter_map(|record| record["fields"]["code"].as_str())
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"review.result_lookups.unavailable"));
+    assert!(codes.contains(&"review.worker.iteration_failed"));
+    for record in &records {
+        assert_eq!(record["level"], "WARN");
+        assert_eq!(
+            record["fields"]
+                .as_object()
+                .expect("fields are an object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["code", "message"]
+        );
+    }
+    let output = records
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!output.contains("casework-a"));
+    assert!(!logs.text().contains(&request_id.to_string()));
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+/// Scrape the metrics listener once and return its Prometheus text.
+async fn scrape_metrics(metrics: Arc<Metrics>) -> String {
+    let response = metrics_app(metrics)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/metrics")
+                .body(axum::body::Body::empty())
+                .expect("scrape request builds"),
+        )
+        .await
+        .expect("scrape responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("scrape body reads");
+    String::from_utf8(body.to_vec()).expect("scrape body is UTF-8")
+}
+
+fn queue_age(scrape: &str, queue: &str) -> Option<f64> {
+    let prefix = format!("breg_queue_oldest_pending_age_seconds{{queue=\"{queue}\"}} ");
+    scrape
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(|value| value.parse().expect("a queue age is a number of seconds"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    let due = Uuid::from_u128(0xb1);
+    seed_submission(&database.admin, due, "casework-a", "producer-a", "policy-a").await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET next_attempt_at=transaction_timestamp()-interval '90 seconds'
+              WHERE request_id=$1",
+            &[&due],
+        )
+        .await
+        .expect("the submission has been due for ninety seconds");
+    // Work scheduled for later is not yet waiting, however old the row is.
+    let later = Uuid::from_u128(0xb2);
+    seed_submission(
+        &database.admin,
+        later,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET next_attempt_at=transaction_timestamp()+interval '1 hour',
+                    created_at=transaction_timestamp()-interval '1 day'
+              WHERE request_id=$1",
+            &[&later],
+        )
+        .await
+        .expect("the second submission is scheduled for later");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let submission = queue_age(&scrape, "review_submission")
+        .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
+    assert!(
+        (90.0..3600.0).contains(&submission),
+        "the oldest due submission has waited about ninety seconds: {submission}"
+    );
+    assert_eq!(queue_age(&scrape, "webhook_delivery"), Some(0.0));
+    assert_eq!(queue_age(&scrape, "review_application"), Some(0.0));
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_work() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    // A cancellation nobody holds is claimable, so it has been waiting.
+    let unclaimed = Uuid::from_u128(0xb3);
+    seed_submission(
+        &database.admin,
+        unclaimed,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding='{}'::jsonb,
+                    lease_until=NULL,
+                    next_attempt_at=transaction_timestamp()-interval '120 seconds'
+              WHERE request_id=$1",
+            &[&unclaimed],
+        )
+        .await
+        .expect("an unclaimed cancellation has been due for two minutes");
+    // A cancellation under a live lease is in flight, not waiting.
+    let in_flight = Uuid::from_u128(0xb4);
+    seed_submission(
+        &database.admin,
+        in_flight,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding='{}'::jsonb,
+                    lease_until=transaction_timestamp()+interval '30 seconds',
+                    next_attempt_at=transaction_timestamp()-interval '1 hour'
+              WHERE request_id=$1",
+            &[&in_flight],
+        )
+        .await
+        .expect("a claimed cancellation has been due for an hour");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let submission = queue_age(&scrape, "review_submission")
+        .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
+    assert!(
+        (120.0..3600.0).contains(&submission),
+        "the unclaimed cancellation has waited about two minutes: {submission}"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_ages_an_expired_review_submission_lease_from_its_expiry() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    // A claim extends the lease without advancing `next_attempt_at`, so a
+    // submission due an hour ago whose lease expired a minute ago has waited
+    // only since its lease expired.
+    let submitting = Uuid::from_u128(0xb5);
+    seed_submission(
+        &database.admin,
+        submitting,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='submitting',attempt_count=1,
+                    lease_until=transaction_timestamp()-interval '60 seconds',
+                    next_attempt_at=transaction_timestamp()-interval '1 hour'
+              WHERE request_id=$1",
+            &[&submitting],
+        )
+        .await
+        .expect("a submission whose lease expired a minute ago");
+    let cancelling = Uuid::from_u128(0xb6);
+    seed_submission(
+        &database.admin,
+        cancelling,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding='{}'::jsonb,
+                    lease_until=transaction_timestamp()-interval '90 seconds',
+                    next_attempt_at=transaction_timestamp()-interval '1 hour'
+              WHERE request_id=$1",
+            &[&cancelling],
+        )
+        .await
+        .expect("a cancellation whose lease expired ninety seconds ago");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let submission = queue_age(&scrape, "review_submission")
+        .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
+    assert!(
+        (90.0..1800.0).contains(&submission),
+        "the oldest expired lease has waited about ninety seconds since it expired: {submission}"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_counts_an_expired_webhook_lease_as_waiting_delivery_work() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    // The queue age reads only delivery state, so the rows it would join
+    // are not seeded.
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             SET LOCAL session_replication_role = replica;
+             INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt,
+                  next_attempt_at, attempt_started_at, lease_expires_at, lease_token)
+             VALUES
+                 -- A lease that expired two minutes ago is claimable again.
+                 ('00000000-0000-0000-0000-0000000000c1', 'delivery-a', 1, 'leased', 1,
+                  NULL, transaction_timestamp() - interval '5 minutes',
+                  transaction_timestamp() - interval '120 seconds',
+                  '00000000-0000-0000-0000-0000000000d1'),
+                 -- A live lease is in flight, not waiting, however long ago it started.
+                 ('00000000-0000-0000-0000-0000000000c2', 'delivery-a', 1, 'leased', 1,
+                  NULL, transaction_timestamp() - interval '1 hour',
+                  transaction_timestamp() + interval '10 minutes',
+                  '00000000-0000-0000-0000-0000000000d2'),
+                 -- A retry scheduled for later is not yet waiting.
+                 ('00000000-0000-0000-0000-0000000000c3', 'delivery-a', 1, 'pending', 1,
+                  transaction_timestamp() + interval '1 hour', NULL, NULL, NULL);
+             COMMIT;",
+        )
+        .await
+        .expect("webhook delivery state rows");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let webhook = queue_age(&scrape, "webhook_delivery")
+        .unwrap_or_else(|| panic!("the webhook delivery queue is sampled:\n{scrape}"));
+    assert!(
+        (120.0..3600.0).contains(&webhook),
+        "the expired lease has waited about two minutes since it expired: {webhook}"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event() {
+    // No webhook delivery state is installed, so the sample cannot be read.
+    let database = prepare_review_database().await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let (logs, capture) = capture_thread_logs();
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+    drop(capture);
+
+    assert!(scrape.contains("# TYPE breg_queue_oldest_pending_age_seconds gauge\n"));
+    assert!(
+        !scrape.contains("breg_queue_oldest_pending_age_seconds{"),
+        "an unreadable sample publishes no queue age rather than an empty queue:\n{scrape}"
+    );
+    assert!(
+        scrape.contains("breg_pool_connections{state=\"max_size\"}"),
+        "the rest of the scrape is still served"
+    );
+    let records = logs
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "one event per failed sample: {records:?}");
+    assert_eq!(records[0]["level"], "WARN");
+    assert_eq!(records[0]["fields"]["code"], "metrics.queue_sample.failed");
+    assert_eq!(
+        records[0]["fields"]
+            .as_object()
+            .expect("fields are an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["code", "message"]
+    );
+
     drop(pool);
     database.cleanup().await;
 }

@@ -2666,6 +2666,19 @@ pub enum MutationError {
     /// acknowledges discarding them.
     #[error("a retired audit table still carries rows")]
     RetiredAuditRowsPresent,
+    /// Another session held the exclusive migration lock past the lock
+    /// timeout when an operator maintenance transaction took it, so an
+    /// apply, an adoption, or other registry maintenance is in progress.
+    /// Only operator maintenance, such as action Evidence retention, takes
+    /// that lock and can produce this cause.
+    #[error("another session held the exclusive migration lock past the lock timeout")]
+    MigrationLockHeld,
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them. Only operator maintenance
+    /// loads the configured package through this error and can produce it.
+    #[error("{0}")]
+    PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
 }
 
 #[cfg(feature = "postgres-test")]

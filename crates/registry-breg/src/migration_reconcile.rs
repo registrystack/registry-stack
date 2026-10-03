@@ -25,7 +25,7 @@
 
 use std::time::Duration;
 
-use registry_platform_audit::{AuditEntry, AuditRequest};
+use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest};
 use serde_json::{json, Value};
 
 use crate::audit::RegistryAudit;
@@ -93,11 +93,35 @@ pub struct ReconcileRequest<'a> {
     pub migration_role: &'a SqlIdentifier,
     pub runtime_role: &'a SqlIdentifier,
     pub timeouts: ReconcileTimeouts,
-    pub audit: &'a RegistryAudit,
+    /// Whether to perform the transition the assessment names, and the audit
+    /// that transition is recorded through.
+    pub audit: ReconcileAudit<'a>,
     pub operator_reference: &'a str,
-    /// Perform the single safe transition the assessment names. Assessment
-    /// alone writes nothing.
-    pub execute: bool,
+}
+
+/// What a reconciliation holds of the audit journal, which also decides
+/// whether it acts.
+#[derive(Clone, Copy)]
+pub enum ReconcileAudit<'a> {
+    /// Assessment alone writes nothing, so it holds only the keyed profile
+    /// the operator reference is validated under, and no audit writer.
+    Assess(&'a AuditProfile),
+    /// Perform the single safe transition the assessment names, recording it
+    /// through this audit.
+    Execute(&'a RegistryAudit),
+}
+
+impl<'a> ReconcileAudit<'a> {
+    fn profile(self) -> &'a AuditProfile {
+        match self {
+            Self::Assess(profile) => profile,
+            Self::Execute(audit) => audit.profile(),
+        }
+    }
+
+    fn executes(self) -> bool {
+        matches!(self, Self::Execute(_))
+    }
 }
 
 /// The one state a pinned Registry is in, as the durable record and the exact
@@ -175,6 +199,9 @@ impl From<PostgresKernelError> for ReconcileError {
     fn from(error: PostgresKernelError) -> Self {
         match error {
             PostgresKernelError::RoleInvariant(_) => Self::MigrationAuthority,
+            PostgresKernelError::MigrationLockHeld => {
+                Self::NotExecutable(ReconcileOutcome::InProgress)
+            }
             PostgresKernelError::Configuration(_)
             | PostgresKernelError::FieldPatternSyntax { .. }
             | PostgresKernelError::FieldPatternExistingRows { .. }
@@ -202,6 +229,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::EmptyPlan
             | MigrationError::AdoptionNotReady
             | MigrationError::AdoptionFingerprintMismatch { .. } => Self::PackageBinding,
+            MigrationError::MigrationLockHeld => Self::NotExecutable(ReconcileOutcome::InProgress),
             MigrationError::ApplyFailed
             | MigrationError::StatementFailed(_)
             | MigrationError::ActivePackageMismatch
@@ -260,7 +288,12 @@ pub async fn reconcile_failed_migration(
     .await
     {
         Ok(connection) => connection,
-        Err(PostgresKernelError::RegistryUnavailable) => {
+        // Execution performs only a transition an assessment under the lock
+        // named, so a held lock refuses it.
+        Err(PostgresKernelError::MigrationLockHeld) if request.audit.executes() => {
+            return Err(ReconcileError::NotExecutable(ReconcileOutcome::InProgress));
+        }
+        Err(PostgresKernelError::MigrationLockHeld) => {
             return Ok(ReconcileReport {
                 outcome: ReconcileOutcome::InProgress,
                 maintenance_status: None,
@@ -369,13 +402,13 @@ async fn reconcile_under_lock(
         report.unresolvable_reason = Some(unresolvable_reason(progress));
     }
 
-    if !request.execute {
+    let ReconcileAudit::Execute(audit) = request.audit else {
         return Ok(report);
-    }
+    };
     match report.outcome {
         ReconcileOutcome::Completable => {
             let entry = audit_entry(request, target, ledger, "completed", &report)?;
-            let mut attempt = begin_request(request, target, ledger, "completed").await?;
+            let mut attempt = begin_request(audit, request, target, ledger, "completed").await?;
             let transition = connection
                 .activate_verified_package(
                     Some(request.current),
@@ -415,14 +448,14 @@ async fn reconcile_under_lock(
                     Vec::new()
                 }
             };
-            append_after_commit(request.audit, entry).await?;
-            crate::import_authority::append_transitions(request.audit, superseded)
+            append_after_commit(audit, entry).await?;
+            crate::import_authority::append_transitions(audit, superseded)
                 .await
                 .map_err(|_| ReconcileError::Unavailable)?;
         }
         ReconcileOutcome::Revertible => {
             let entry = audit_entry(request, target, ledger, "reverted", &report)?;
-            let mut attempt = begin_request(request, target, ledger, "reverted").await?;
+            let mut attempt = begin_request(audit, request, target, ledger, "reverted").await?;
             let transition = connection
                 .revert_failed_package(
                     request.current,
@@ -445,7 +478,7 @@ async fn reconcile_under_lock(
                     return Err(error.into());
                 }
             }
-            append_after_commit(request.audit, entry).await?;
+            append_after_commit(audit, entry).await?;
         }
         outcome @ (ReconcileOutcome::Ready
         | ReconcileOutcome::InProgress
@@ -496,13 +529,13 @@ fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static 
 /// assessment found it. A reconciliation that ends without a response
 /// writes the `unfinished` outcome when the handle is dropped.
 async fn begin_request(
+    audit: &RegistryAudit,
     request: &ReconcileRequest<'_>,
     target: &ExpectedRegistryIdentity,
     ledger: &MigrationLedgerEntry,
     action: &'static str,
 ) -> Result<AuditRequest, ReconcileError> {
-    request
-        .audit
+    audit
         .begin(
             request_entry(request, target, ledger, action)?,
             outcome_record(request, target, ledger, action, "unfinished")?,

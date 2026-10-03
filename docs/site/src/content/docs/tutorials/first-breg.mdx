@@ -485,11 +485,12 @@ bregctl dev stop tutorial-work/project --remove
 ```
 
 Either way, keep `tutorial-work/`: the next tutorial edits the project inside it.
-After a plain stop, the next start refuses an edited project while the records exist.
+After a plain stop, the next start refuses an edited project while the records exist. An edit that
+changes only comments, blank lines, or key order in a YAML file is not counted as a change.
 After `--remove`, the next start builds the project as it stands, edits included, and generates new
 keys if the project changed.
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop(); products/breg/DEV.md. */}
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop() and capture(); crates/registry-bregctl/src/dev/tests.rs, a_byte_only_edit_keeps_the_session_that_holds_records; products/breg/DEV.md. */}
 
 ## What you built
 

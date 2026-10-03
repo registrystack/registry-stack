@@ -2520,6 +2520,378 @@ async fn real_s3_http_attachments_preserve_proposals_and_complete_operator_erasu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_verification_worker_records_its_last_success_when_idle() {
+    use registry_breg::attachment_storage::AttachmentStorage;
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use std::os::unix::fs::PermissionsExt;
+
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    std::fs::write(root.join("verifier"), "synthetic-verifier-token").unwrap();
+    std::fs::set_permissions(
+        root.join("verifier"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    // No job is queued, so the worker never contacts this endpoint.
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentVerification"] = json!({"kind":"http","endpoint":"http://127.0.0.1:9/verify","authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap();
+    let database = TestDatabase::create(4).await;
+    let registry =
+        Arc::new(compile_project(&attachment_project(), &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let worker = AttachmentVerificationWorker::new(
+        database.runtime_config.build_pool().unwrap(),
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        Duration::from_secs(2),
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x9b; 32].into()).unwrap()),
+        AttachmentStorage::Database,
+        verification,
+    );
+    let last_success = worker.last_success();
+    assert!(last_success.age().is_none(), "no iteration has run yet");
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(worker.run(shutdown_rx));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while last_success.age().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "an idle verification iteration was never recorded as a success"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    task.await.expect("worker joins");
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_verification_worker_records_no_success_while_the_verifier_fails()
+{
+    use registry_breg::attachment_storage::AttachmentStorage;
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // The verifier answers every request as unavailable.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook = axum::Router::new().route(
+        "/verify",
+        axum::routing::post({
+            let calls = calls.clone();
+            move || {
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({})))
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/verify", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, hook).await.unwrap();
+    });
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    std::fs::write(root.join("verifier"), "synthetic-verifier-token").unwrap();
+    std::fs::set_permissions(
+        root.join("verifier"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap();
+    let database = TestDatabase::create(8).await;
+    let registry =
+        Arc::new(compile_project(&attachment_project(), &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_verification(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        AttachmentStorage::Database,
+        None,
+        verification.clone(),
+    ));
+    let steward = claims("steward", "verification-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "verifier-down-site",
+        json!({"tenant":TENANT,"name":"site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "verifier-down-placement",
+        json!({"tenant":TENANT,"site":site.id}),
+    )
+    .await;
+    let draft = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "verifier-down-draft",
+        json!({"tenant":TENANT,"placement":placement.id,"proposedSite":site.id,"reason":"verify"}),
+    )
+    .await;
+    let before = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=submitter",
+            draft.id
+        ),
+        submitter.clone(),
+    )
+    .await;
+    let response = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &format!(
+                "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+                draft.id
+            ),
+            Some(submitter),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "verifier-down-upload"),
+                ("if-match", &before.etag),
+            ],
+            vec![7, 8, 9],
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    let worker = AttachmentVerificationWorker::new(
+        database.runtime_config.build_pool().unwrap(),
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        Duration::from_secs(2),
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x9d; 32].into()).unwrap()),
+        AttachmentStorage::Database,
+        verification,
+    );
+    let last_success = worker.last_success();
+
+    // The failed verification leaves its job pending for a retry; that pass
+    // processed a job but is not a success.
+    assert!(
+        worker.run_once().await.unwrap(),
+        "the due job is claimed and left pending for a retry"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the verifier was asked once"
+    );
+    assert!(
+        last_success.age().is_none(),
+        "a pass whose verifier failed is not a success"
+    );
+
+    // The retried job is not yet due, so the next pass finds no work. A
+    // failed job still waits for its retry, so that idle pass is not a
+    // success either.
+    assert!(
+        !worker.run_once().await.unwrap(),
+        "the retried job is not yet due"
+    );
+    assert!(
+        last_success.age().is_none(),
+        "an idle pass while a failed job waits for its retry is not a success"
+    );
+
+    // Once no failed job waits, an idle pass is a success again.
+    database
+        .admin
+        .batch_execute(
+            "UPDATE registry_internal.registry_attachment_verification SET verdict='approved' WHERE verdict='pending'",
+        )
+        .await
+        .unwrap();
+    assert!(!worker.run_once().await.unwrap(), "no job remains");
+    assert!(
+        last_success.age().is_some(),
+        "an idle pass with no failed job waiting is a success"
+    );
+
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting() {
+    use registry_breg::attachment_storage::AttachmentStorage;
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use std::os::unix::fs::PermissionsExt;
+
+    // The verifier notes when each verification reached it.
+    let reached = Arc::new(std::sync::Mutex::new(Vec::<tokio::time::Instant>::new()));
+    let hook = axum::Router::new().route(
+        "/verify",
+        axum::routing::post({
+            let reached = reached.clone();
+            move || {
+                let reached = reached.clone();
+                async move {
+                    reached.lock().unwrap().push(tokio::time::Instant::now());
+                    (StatusCode::OK, axum::Json(json!({"verdict": "approved"})))
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/verify", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, hook).await.unwrap();
+    });
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    std::fs::write(root.join("verifier"), "synthetic-verifier-token").unwrap();
+    std::fs::set_permissions(
+        root.join("verifier"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap();
+    let database = TestDatabase::create(8).await;
+    let registry =
+        Arc::new(compile_project(&attachment_project(), &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_verification(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        AttachmentStorage::Database,
+        None,
+        verification.clone(),
+    ));
+    let steward = claims("steward", "verification-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "back-to-back-site",
+        json!({"tenant":TENANT,"name":"site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "back-to-back-placement",
+        json!({"tenant":TENANT,"site":site.id}),
+    )
+    .await;
+    // Two drafts each upload distinct bytes, so two verification jobs are due.
+    for (index, bytes) in [vec![1, 2, 3], vec![4, 5, 6]].into_iter().enumerate() {
+        let draft = create_record(
+            &app,
+            "/v1/records/correction-requests?accessProfile=submitter",
+            submitter.clone(),
+            &format!("back-to-back-draft-{index}"),
+            json!({"tenant":TENANT,"placement":placement.id,"proposedSite":site.id,"reason":"verify"}),
+        )
+        .await;
+        let before = get_record(
+            &app,
+            &format!(
+                "/v1/records/correction-requests/{}?accessProfile=submitter",
+                draft.id
+            ),
+            submitter.clone(),
+        )
+        .await;
+        let response = response_parts(
+            send(
+                &app,
+                Method::PATCH,
+                &format!(
+                    "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+                    draft.id
+                ),
+                Some(submitter.clone()),
+                &[
+                    ("content-type", "application/octet-stream"),
+                    ("idempotency-key", &format!("back-to-back-upload-{index}")),
+                    ("if-match", &before.etag),
+                ],
+                bytes,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    }
+    let worker = AttachmentVerificationWorker::new(
+        database.runtime_config.build_pool().unwrap(),
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        Duration::from_secs(2),
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x9c; 32].into()).unwrap()),
+        AttachmentStorage::Database,
+        verification,
+    );
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(worker.run(shutdown_rx));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while reached.lock().unwrap().len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "both due verification jobs reach the verifier"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    task.await.expect("worker joins");
+
+    // An idle worker waits a second before it looks again; one that just
+    // finished a job claims the next at once.
+    let reached = reached.lock().unwrap().clone();
+    assert_eq!(reached.len(), 2, "each due job is verified once");
+    let gap = reached[1] - reached[0];
+    assert!(
+        gap < Duration::from_secs(1),
+        "the second due job waited behind an idle pause: {gap:?}"
+    );
+
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survives_worker_failures(
 ) {
     use registry_breg::attachment_storage::AttachmentStorage;

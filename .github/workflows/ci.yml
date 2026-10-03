@@ -1356,7 +1356,8 @@ jobs:
     # suite (both execution backends), the admission, runtime, and parity
     # suites in one explicit place, the PostgreSQL handler journeys against
     # a disposable PostGIS database, and the no-default refusal suite that
-    # keeps `action.handler.wasm_build_unsupported` proven.
+    # keeps `action.handler.wasm_build_unsupported` and
+    # `hook.handler.wasm_build_unsupported` proven.
     name: Base Registry Engine WASM executor
     needs: changes
     if: needs.changes.outputs.breg_integration == 'true'
@@ -1399,7 +1400,7 @@ jobs:
         run: cargo test --locked -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
 
       - name: Base Registry Engine WASM refusal suite
-        run: cargo test --locked -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler
+        run: cargo test --locked -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler --test hook_declaration
 
       - name: Base Registry Engine tooling WASM suites
         run: cargo test --locked -p registry-bregctl --features wasm

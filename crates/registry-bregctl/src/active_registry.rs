@@ -8,8 +8,8 @@
 //! runs, in the database the runtime configuration names.
 
 use registry_breg::migration::{
-    bind_active_package, read_recorded_registry_state, ActivationDeployment, ApplyTimeouts,
-    MigrationError,
+    bind_active_package, read_activation_status, read_recorded_registry_state,
+    ActivationDeployment, ApplyTimeouts, MigrationError,
 };
 use registry_breg::package::VerifiedPackage;
 use registry_breg::postgres::{ConnectionConfig, ExpectedRegistryIdentity};
@@ -17,8 +17,12 @@ use registry_breg::runtime_config::RuntimeConfig;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ActiveRegistryError {
-    /// The database could not be read under the apply lock.
+    /// The database could not be read.
     Unavailable,
+    /// Another session held the exclusive migration lock past the lock
+    /// timeout: an apply, an adoption, or a migration reconcile is in
+    /// progress.
+    InProgress,
     /// The database records no activated registry for this package id.
     Uninitialized,
     /// The database was installed by a release before the activation ledger
@@ -32,8 +36,9 @@ pub(crate) enum ActiveRegistryError {
     PackageMismatch,
 }
 
-/// Read the identity the database records for the configured active package
-/// and bind that package and the runtime identity to it. Nothing is written.
+/// Read the identity the database records for the configured active package,
+/// under the exclusive apply lock, and bind that package and the runtime
+/// identity to it. Nothing is written.
 pub(crate) fn recorded_active_identity(
     runtime: &tokio::runtime::Runtime,
     config: &RuntimeConfig,
@@ -70,14 +75,53 @@ pub(crate) fn recorded_identity_for_digest(
             config.database().roles().migration(),
             timeouts,
         ))
-        .map_err(|error| match error {
-            MigrationError::PreLedgerDatabase => ActiveRegistryError::PreLedger,
-            _ => ActiveRegistryError::Unavailable,
-        })?
+        .map_err(read_refusal)?
         .ok_or(ActiveRegistryError::Uninitialized)?;
+    bind_recorded_identity(config, recorded.identity, package_digest)
+}
+
+/// As [`recorded_active_identity`], read without the exclusive apply lock, so
+/// an apply or a reconciliation in progress does not refuse it. The identity
+/// is a snapshot: a caller that acts on it takes the lock and re-reads the
+/// identity under it before acting.
+pub(crate) fn observed_identity_for_digest(
+    runtime: &tokio::runtime::Runtime,
+    config: &RuntimeConfig,
+    connection: &ConnectionConfig,
+    package_digest: &str,
+) -> Result<ExpectedRegistryIdentity, ActiveRegistryError> {
+    let timeouts = ApplyTimeouts::new(
+        config.operational_timeouts().migration_lock,
+        config.operational_timeouts().migration_statement,
+    )
+    .map_err(|_| ActiveRegistryError::Unavailable)?;
+    let status = runtime
+        .block_on(read_activation_status(
+            connection,
+            config.database().roles().migration(),
+            timeouts,
+        ))
+        .map_err(read_refusal)?
+        .ok_or(ActiveRegistryError::Uninitialized)?;
+    bind_recorded_identity(config, status.identity, package_digest)
+}
+
+fn read_refusal(error: MigrationError) -> ActiveRegistryError {
+    match error {
+        MigrationError::PreLedgerDatabase => ActiveRegistryError::PreLedger,
+        MigrationError::MigrationLockHeld => ActiveRegistryError::InProgress,
+        _ => ActiveRegistryError::Unavailable,
+    }
+}
+
+fn bind_recorded_identity(
+    config: &RuntimeConfig,
+    recorded: ExpectedRegistryIdentity,
+    package_digest: &str,
+) -> Result<ExpectedRegistryIdentity, ActiveRegistryError> {
     let identity = config.identity();
     bind_active_package(
-        &recorded.identity,
+        &recorded,
         package_digest,
         ActivationDeployment::new(
             identity.environment(),
@@ -89,5 +133,26 @@ pub(crate) fn recorded_identity_for_digest(
         MigrationError::DatabaseMismatch => ActiveRegistryError::DatabaseMismatch,
         _ => ActiveRegistryError::PackageMismatch,
     })?;
-    Ok(recorded.identity)
+    Ok(recorded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_held_migration_lock_reads_as_in_progress_not_as_unavailable() {
+        assert_eq!(
+            read_refusal(MigrationError::MigrationLockHeld),
+            ActiveRegistryError::InProgress
+        );
+        assert_eq!(
+            read_refusal(MigrationError::DatabaseUnavailable),
+            ActiveRegistryError::Unavailable
+        );
+        assert_eq!(
+            read_refusal(MigrationError::PreLedgerDatabase),
+            ActiveRegistryError::PreLedger
+        );
+    }
 }

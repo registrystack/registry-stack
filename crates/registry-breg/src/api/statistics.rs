@@ -300,7 +300,19 @@ async fn dispatch(
         .map(|Extension(c)| c)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(dataset) = service.registry.statistical_datasets().get(&route.dataset) else {
-        return concealed();
+        // Unknown IDs are caller input, so refusal auditing uses the fixed route kind.
+        return refusal(
+            &service,
+            &Route {
+                dataset: String::new(),
+                kind: route.kind,
+            },
+            &claims,
+            None,
+            &correlation,
+            concealed(),
+        )
+        .await;
     };
     let selected = admission_profile(raw.as_deref());
     let Some(context) = authorize(&service, dataset, route.kind, &claims, selected.as_deref())

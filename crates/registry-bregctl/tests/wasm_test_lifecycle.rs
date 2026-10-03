@@ -68,6 +68,64 @@ fn public_bregctl_test_keeps_stdout_for_its_report_when_audit_goes_to_stdout() {
     assert!(receipt.is_some(), "the schema test publishes its receipt");
 }
 
+#[test]
+#[ignore = "requires BREG_TEST_DATABASE_URL and a PostgreSQL administrator"]
+fn public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime builds");
+    let mut database = runtime.block_on(TestDatabase::create());
+    let idp = runtime.block_on(MockIdp::start());
+    let project = ProjectFixture::write(&database, &idp, FixtureAudit::File);
+
+    let measured = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args([
+            "--format",
+            "json",
+            "test",
+            path(&project.project_root),
+            "--fingerprint-only",
+            "--runtime-config",
+            path(&project.runtime_config),
+        ])
+        .output()
+        .expect("bregctl test --fingerprint-only starts");
+    let receipt_after_measure = project.receipt.exists();
+    // The full run installs on the same database, so it also proves the
+    // measurement left nothing behind.
+    let full = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args([
+            "--format",
+            "json",
+            "test",
+            path(&project.project_root),
+            "--runtime-config",
+            path(&project.runtime_config),
+            "--credentials",
+            path(&project.credentials),
+            "--output",
+            path(&project.receipt),
+        ])
+        .output()
+        .expect("bregctl test starts in a fresh process");
+    runtime.block_on(idp.stop());
+    runtime.block_on(database.cleanup());
+
+    assert_command_succeeded(&measured);
+    assert!(!receipt_after_measure, "a measurement writes no receipt");
+    let measured =
+        serde_json::from_slice::<Value>(&measured.stdout).expect("measurement output is JSON");
+    assert_eq!(measured["ok"], true);
+    assert_eq!(measured["command"], "test");
+    assert!(measured.get("successfulJourneyIds").is_none());
+    assert!(measured.get("receipt").is_none());
+    assert_command_succeeded(&full);
+    let full = serde_json::from_slice::<Value>(&full.stdout).expect("test output is JSON");
+    assert_eq!(measured["schemaFingerprint"], full["schemaFingerprint"]);
+    assert_eq!(measured["registryRevision"], full["registryRevision"]);
+}
+
 #[derive(Clone, Copy)]
 enum FixtureAudit {
     File,

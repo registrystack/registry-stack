@@ -685,7 +685,7 @@ impl VerifiedPackage {
 
 /// Value-free failures. Paths, source values, SQL, key material, signatures,
 /// and deployment bindings are deliberately absent from both Display and Debug.
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum PackageError {
     #[error("the package path is unsafe")]
     UnsafePath,
@@ -701,6 +701,11 @@ pub enum PackageError {
     Integrity,
     #[error("the shared package envelope is invalid")]
     Envelope,
+    /// The package at `package.root` is not the one the runtime file's
+    /// `package.expectedDigest` pins. Both digests are package identities,
+    /// not secrets, so the refusal names them.
+    #[error("{0}")]
+    ExpectedDigestMismatch(registry_platform_config::blocks::PackageDigestMismatch),
     /// The package was built in the manifest format that bound one
     /// environment and carried signatures. The same sources rebuild it.
     #[error("{}", LEGACY_PACKAGE_FORMAT)]

@@ -29,7 +29,7 @@ use registry_breg::import_authority::{
     ImportAuthority, ImportAuthorityCloseRequest, ImportAuthorityError, ImportAuthorityOpenRequest,
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
-use registry_breg::instance_claim::InstanceClaimService;
+use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
@@ -187,6 +187,30 @@ impl Harness {
             self.database.runtime_role.clone(),
             self.database.audit(self.audit_profile.clone()),
         )
+    }
+
+    /// Hold the exclusive migration lock from a second session, as an apply,
+    /// an adoption, or a migration reconcile does.
+    async fn hold_migration_lock(&self) -> (tokio_postgres::Client, tokio::task::JoinHandle<()>) {
+        let (holder, holder_task) = self.database.connect_admin().await;
+        holder
+            .execute(
+                "SELECT pg_catalog.pg_advisory_lock($1)",
+                &[&self.lock_key.get()],
+            )
+            .await
+            .expect("a second session takes the migration lock");
+        (holder, holder_task)
+    }
+
+    async fn release_migration_lock(&self, holder: tokio_postgres::Client) {
+        holder
+            .execute(
+                "SELECT pg_catalog.pg_advisory_unlock($1)",
+                &[&self.lock_key.get()],
+            )
+            .await
+            .expect("the second session releases the migration lock");
     }
 
     async fn simulate_restored_copy(&self) {
@@ -985,6 +1009,58 @@ async fn listing_takes_no_registry_lock_and_records_nothing() {
     );
 }
 
+/// A migration lock another session holds past the lock timeout is reported
+/// as held, never as unavailable storage, and opening, closing, and closing
+/// expired authorities change nothing until it releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_migration_lock_is_reported_and_no_authority_changes() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    harness.age_past_expiry(widget.authority_id).await;
+    let (holder, holder_task) = harness.hold_migration_lock().await;
+
+    assert_eq!(
+        harness
+            .operator()
+            .open(open_request("gadget", "loader", 10, &[]))
+            .await
+            .expect_err("opening waits for the held lock"),
+        ImportAuthorityError::MigrationLockHeld
+    );
+    assert_eq!(
+        harness
+            .operator()
+            .close(ImportAuthorityCloseRequest {
+                authority_id: widget.authority_id,
+                operator_reference: "operator-b",
+                reason: "load finished",
+            })
+            .await
+            .expect_err("closing waits for the held lock"),
+        ImportAuthorityError::MigrationLockHeld
+    );
+    assert_eq!(
+        harness
+            .operator()
+            .close_expired()
+            .await
+            .expect_err("closing expired authorities waits for the held lock"),
+        ImportAuthorityError::MigrationLockHeld
+    );
+    assert_eq!(harness.authority(widget.authority_id).await.0, "open");
+    assert_eq!(
+        harness.authority_records(widget.authority_id).await.len(),
+        1,
+        "a refused change records no transition"
+    );
+    assert_eq!(harness.operator().list().await.unwrap().len(), 1);
+
+    harness.release_migration_lock(holder).await;
+    holder_task.abort();
+    assert_eq!(harness.operator().close_expired().await.unwrap().len(), 1);
+    assert_eq!(harness.authority(widget.authority_id).await.0, "expired");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_runtime_role_cannot_open_close_or_reopen_an_authority() {
     let harness = Harness::create().await;
@@ -1293,6 +1369,50 @@ async fn adopting_a_restored_copy_supersedes_every_open_authority() {
     harness
         .refused_run("widgets", "loader", &plan("after-restore", 1))
         .await;
+}
+
+/// An adoption that cannot take the migration lock another session holds
+/// past the lock timeout reports it as held and supersedes nothing; the same
+/// adoption succeeds once it releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adopting_under_a_held_migration_lock_is_reported_and_supersedes_nothing() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    harness.simulate_restored_copy().await;
+    let (holder, holder_task) = harness.hold_migration_lock().await;
+
+    assert_eq!(
+        harness
+            .claims()
+            .adopt()
+            .await
+            .expect_err("adoption waits for the held lock"),
+        InstanceClaimError::MigrationLockHeld
+    );
+    assert_eq!(harness.authority(widget.authority_id).await.0, "open");
+
+    harness.release_migration_lock(holder).await;
+    holder_task.abort();
+    let adoption = harness
+        .claims()
+        .adopt()
+        .await
+        .expect("the operator adopts the copy once the lock releases");
+    assert_eq!(
+        adoption.superseded_import_authorities,
+        [widget.authority_id]
+    );
+    let outcomes: Vec<Value> = harness
+        .database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == "breg-instance-claim-audit/v1" && entry["phase"] == "response"
+        })
+        .map(|entry| entry["record"]["outcome"].clone())
+        .collect();
+    assert_eq!(outcomes.len(), 2, "each adoption is answered once");
+    assert_eq!(outcomes[0], json!("failed"));
 }
 
 /// A physical restore (point-in-time recovery, a snapshot, a base backup)
