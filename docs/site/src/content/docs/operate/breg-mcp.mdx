@@ -192,8 +192,7 @@ The new writer does not verify a hash chain or detect a changed pseudonym key.
 ## Upgrade
 
 When upgrading from the draft chained format, archive its files and configure a fresh audit path.
-Rename `resourceServer.jwks` to `jwksSource`, replace `audit.maximumFileBytes` with `rotateBytes`,
-and set each `listener.bind` explicitly.
+Set each `listener.bind` explicitly.
 
 Run `check` from the new binary against the revised configuration, then replace the
 binary and restart:

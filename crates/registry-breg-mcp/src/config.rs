@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, JwksSource, PrivateListenerConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+    AuditKeyConfig, ConfigBlockError, JwksSource, PrivateListenerConfig, RuntimeConfigLoader,
+    RuntimeEnvelope, SecretProvidersConfig,
 };
 use registry_platform_httputil::{valid_resource_uri, valid_scope_token};
 use serde::Deserialize;
@@ -38,17 +38,6 @@ const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: RUNTIME_API_VERSION,
     kind: RUNTIME_KIND,
 };
-
-const REMOVED_KEYS: &[RemovedKey] = &[
-    RemovedKey {
-        path: "resourceServer.jwks",
-        replacement: "declare resourceServer.jwksSource with kind: discovery, uri, or static",
-    },
-    RemovedKey {
-        path: "audit.maximumFileBytes",
-        replacement: "use audit.rotateBytes",
-    },
-];
 
 /// The operator runtime configuration document.
 #[derive(Clone, Debug, Deserialize)]
@@ -312,7 +301,7 @@ impl RuntimeConfig {
 
     #[must_use]
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(RUNTIME_ENVELOPE).removed_keys(REMOVED_KEYS)
+        RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
     }
 
     /// Parse and validate a document already read.
@@ -694,17 +683,27 @@ rateLimits:
     }
 
     #[test]
-    fn removed_config_keys_name_their_replacements() {
+    fn retired_config_keys_are_refused_as_unknown_fields() {
         let old_jwks = document().replace("jwksSource:", "jwks:");
         let error = load(&old_jwks).expect_err("old JWKS field is refused");
-        assert!(error.to_string().contains("resourceServer.jwksSource"));
+        assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
+        assert!(
+            error.to_string().contains("unknown field `jwks`"),
+            "{error}"
+        );
 
         let old_rotation = document().replace(
             "  path: /var/lib/breg-mcp/audit/audit.jsonl",
             "  path: /var/lib/breg-mcp/audit/audit.jsonl\n  maximumFileBytes: 1048576",
         );
         let error = load(&old_rotation).expect_err("old audit rotation field is refused");
-        assert!(error.to_string().contains("audit.rotateBytes"));
+        assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `maximumFileBytes`"),
+            "{error}"
+        );
     }
 
     #[test]
